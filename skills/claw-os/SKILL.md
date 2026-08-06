@@ -85,6 +85,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `notify` | Notifications |
 | `pkg` | Package management |
 | `power-manager` | UPower status and logind sleep/reboot/shutdown |
+| `printer-manager` | CUPS discovery, capabilities, queues, printing, and cancel |
 | `systemd` | Native system service status and lifecycle control |
 | `system-snapshot` | Snapper, Btrfs, or LVM full-system recovery points |
 | `storage-manager` | UDisks2 mount/eject, SMART, and filesystem health |

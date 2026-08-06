@@ -588,6 +588,14 @@ pub const CATALOG: &[CapMeta] = &[
         Risk::High,
     ),
     CapMeta::new(
+        Verb::DEVICE_PRINTER,
+        ScopeKind::Name,
+        LocalizedStr::new("Use local printers"),
+        LocalizedStr::new("Read print queues/capabilities, submit documents, or cancel owned CUPS jobs."),
+        "🖨",
+        Risk::High,
+    ),
+    CapMeta::new(
         Verb::DEVICE_CAMERA,
         ScopeKind::Name,
         LocalizedStr::new("Use your camera"),

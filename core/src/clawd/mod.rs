@@ -23,6 +23,7 @@ pub mod network;
 pub mod packages;
 pub mod permissions;
 pub mod power;
+pub mod printer;
 pub mod protocol;
 pub mod scheduler;
 pub mod security;

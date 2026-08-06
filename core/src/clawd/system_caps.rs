@@ -55,6 +55,7 @@ pub fn readonly_task_caps() -> CapSet {
         "network-manager",
         "pkg",
         "power-manager",
+        "printer-manager",
         "search",
         "security-center",
         "storage-manager",

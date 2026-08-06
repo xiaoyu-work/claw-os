@@ -14,8 +14,8 @@ use super::state::DaemonState;
 use super::{
     app_sessions, audio, audit, backup, bluetooth, config_editor, containers, context,
     context_events, crash, desktop, event_center, firewall, hardware, memory, network, packages,
-    permissions, power, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
-    transactions, users,
+    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
+    tasks, transactions, users,
 };
 
 #[derive(Debug, Clone)]
@@ -230,6 +230,7 @@ async fn dispatch_result(
         "system.package.control" => packages::control(request.params, client).await,
         "system.package.restore" => packages::restore(request.params, client).await,
         "system.power.control" => power::control(request.params, client).await,
+        "system.printer.control" => printer::control(request.params, client).await,
         "system.security.inspect" => security::inspect(request.params, client).await,
         "system.service.control" => systemd::control(request.params, client).await,
         "system.service.restore" => systemd::restore(request.params, client).await,
@@ -292,6 +293,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.package.control"
             | "system.package.restore"
             | "system.power.control"
+            | "system.printer.control"
             | "system.security.inspect"
             | "system.service.control"
             | "system.service.restore"

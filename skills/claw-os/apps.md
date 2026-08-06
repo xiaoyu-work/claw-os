@@ -425,6 +425,23 @@ changes. User deletion never removes the home directory and is refused while
 the account owns live processes. Private primary groups, shadow aging, shells,
 UID/GID, and supplementary memberships are included in rollback.
 
+## Printer Manager
+
+```bash
+cos app printer-manager status
+cos app printer-manager capabilities office
+cos app printer-manager jobs office
+cos app printer-manager print office /home/cos/document.pdf --copies 2 --sides two-sided-long-edge
+cos app printer-manager cancel office-42 --confirm
+```
+
+Printer Manager talks to CUPS as the requesting user. The broker opens the
+approved source with `O_NOFOLLOW` and passes that pinned file descriptor to
+`lp` stdin, so path replacement cannot print a different file. Printing uses
+`device.printer:print` plus exact `fs.read`; queue inspection and cancellation
+use separate `observe`/`control` scopes. Cancellation is limited to jobs owned
+by the requesting CUPS username.
+
 ## Package Management
 
 ```bash

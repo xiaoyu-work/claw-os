@@ -1,0 +1,15 @@
+{
+  "id": "printer-manager",
+  "version": "0.1.0",
+  "name": {"en": "Printer Manager"},
+  "summary": {"en": "Discover CUPS printers, inspect capabilities/queues, print files, and cancel owned jobs"},
+  "icon": "🖨",
+  "runtime": "python",
+  "operations": {
+    "status": {"label": {"en": "List CUPS printers"}, "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "printing"}}, "why": {"en": "Read configured printer names, state, and default destination."}}]},
+    "capabilities": {"label": {"en": "Inspect printer capabilities"}, "args": [{"name": "printer", "kind": "name", "required": true}], "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "printing"}}, "why": {"en": "Read supported media, duplex, quality, and other CUPS options."}}]},
+    "jobs": {"label": {"en": "Inspect queued print jobs"}, "args": [{"name": "printer", "kind": "name", "required": false}], "needs": [{"verb": "device.printer", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "observe"}}, "why": {"en": "Read job IDs, owners, sizes, and submission times."}}]},
+    "print": {"label": {"en": "Print a file"}, "args": [{"name": "printer", "kind": "name", "required": true}, {"name": "source", "kind": "path", "required": true}], "needs": [{"verb": "device.printer", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "print"}}, "why": {"en": "Submit one bounded document to a selected printer."}}, {"verb": "fs.read", "scope": {"kind": "from-arg", "arg": "source"}, "why": {"en": "Read the exact source file through a pinned file descriptor."}}]},
+    "cancel": {"label": {"en": "Cancel an owned print job"}, "args": [{"name": "job_id", "kind": "name", "required": true}, {"name": "--confirm", "kind": "bool", "required": true}], "needs": [{"verb": "device.printer", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Cancel the exact queued job after verifying its owner."}}]}
+  }
+}

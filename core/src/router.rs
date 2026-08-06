@@ -850,6 +850,64 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__printer" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal printer command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal printer command requires COS_SESSION".to_string())?;
+        let mut printer = None;
+        let mut source = None;
+        let mut job_id = None;
+        let mut title = None;
+        let mut media = None;
+        let mut sides = None;
+        let mut copies = None;
+        let mut confirm = false;
+        let mut index = 2;
+        while index < args.len() {
+            if args[index] == "--confirm" {
+                if confirm {
+                    return Err("duplicate internal printer --confirm".to_string());
+                }
+                confirm = true;
+                index += 1;
+                continue;
+            }
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--printer" => printer = Some(value),
+                "--source" => source = Some(value),
+                "--job-id" => job_id = Some(value),
+                "--title" => title = Some(value),
+                "--media" => media = Some(value),
+                "--sides" => sides = Some(value),
+                "--copies" => copies = Some(value),
+                other => return Err(format!("unknown internal printer flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.printer.control",
+            json!({
+                "session": session,
+                "action": action,
+                "printer": printer,
+                "source": source,
+                "job_id": job_id,
+                "title": title,
+                "media": media,
+                "sides": sides,
+                "copies": copies,
+                "confirm": confirm,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

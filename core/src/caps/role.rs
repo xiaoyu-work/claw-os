@@ -481,6 +481,7 @@ const ADMIN_VERBS: &[Verb] = &[
     Verb::DEVICE_AUDIO,
     Verb::DEVICE_BLUETOOTH,
     Verb::DEVICE_MEDIA_ROUTE,
+    Verb::DEVICE_PRINTER,
     Verb::DEVICE_CAMERA,
     Verb::DEVICE_MICROPHONE,
     Verb::DEVICE_LOCATION,
