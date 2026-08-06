@@ -127,6 +127,8 @@ pub struct Job {
     pub provider: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<crate::agent::runtime::evidence::EvidenceReport>,
     /// uid of the user who submitted the task (via `SO_PEERCRED` on
     /// the clawd unix socket). Used to load the requesting user's
     /// `~/.config/cos/config.json` instead of clawd's root-owned one
@@ -187,6 +189,7 @@ impl Job {
             turns_used: None,
             provider: None,
             model: None,
+            evidence: None,
             owner_uid,
             owner_home,
             recovery_count: 0,
@@ -706,12 +709,14 @@ impl Store {
                 turns_used,
                 provider,
                 model,
+                evidence,
             } => {
                 job.status = JobStatus::Ok;
                 job.response = Some(response);
                 job.turns_used = Some(turns_used);
                 job.provider = Some(provider);
                 job.model = Some(model);
+                job.evidence = evidence;
             }
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
@@ -959,6 +964,7 @@ pub enum FinishOutcome {
         turns_used: u32,
         provider: String,
         model: String,
+        evidence: Option<crate::agent::runtime::evidence::EvidenceReport>,
     },
     Error(String),
     Cancelled,
@@ -1689,6 +1695,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             turns_used: r.turns,
             provider: r.provider,
             model: r.model,
+            evidence: Some(r.evidence),
         },
         Err(e) => FinishOutcome::Error(e.to_string()),
     }
@@ -2169,6 +2176,7 @@ mod tests {
                     turns_used: 2,
                     provider: "mock".into(),
                     model: "mock-model".into(),
+                    evidence: None,
                 },
             )
             .unwrap();
@@ -2342,6 +2350,7 @@ mod tests {
                     turns_used: 1,
                     provider: "m".into(),
                     model: "m".into(),
+                    evidence: None,
                 },
             )
             .unwrap();
@@ -2367,6 +2376,7 @@ mod tests {
                         turns_used: 1,
                         provider: "m".into(),
                         model: "m".into(),
+                        evidence: None,
                     },
                 )
                 .unwrap();
@@ -2513,6 +2523,7 @@ mod tests {
                     turns_used: 1,
                     provider: "mock".into(),
                     model: "mock-model".into(),
+                    evidence: None,
                 },
             )
             .unwrap();
@@ -2545,6 +2556,7 @@ mod tests {
                         turns_used: 1,
                         provider: "m".into(),
                         model: "m".into(),
+                        evidence: None,
                     },
                 )
                 .unwrap();
@@ -2607,6 +2619,7 @@ mod tests {
                     turns_used: 1,
                     provider: "m".into(),
                     model: "m".into(),
+                    evidence: None,
                 },
             )
             .unwrap();

@@ -346,8 +346,12 @@ fn build_child_registry(
 
 fn format_result(result: &AskResult) -> String {
     format!(
-        "delegate finished (provider={}, model={}, turns={})\n---\n{}",
-        result.provider, result.model, result.turns, result.answer
+        "delegate finished (provider={}, model={}, turns={}, evidence={})\n---\n{}",
+        result.provider,
+        result.model,
+        result.turns,
+        result.evidence.status.as_str(),
+        result.answer
     )
 }
 
@@ -661,6 +665,7 @@ mod tests {
     fn format_result_includes_metadata_block() {
         let r = AskResult {
             answer: "the moon".into(),
+            evidence: Default::default(),
             turns: 4,
             provider: "anthropic".into(),
             model: "claude-haiku-4".into(),

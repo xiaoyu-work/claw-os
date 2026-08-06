@@ -2965,6 +2965,7 @@ async fn live_cmd_async(
             let finish = mlock(&sink_obj.last_finish).take();
             Ok(json!({
                 "answer": ask_result.answer,
+                "evidence": ask_result.evidence,
                 "turns": ask_result.turns,
                 "provider": ask_result.provider,
                 "model": ask_result.model,
@@ -3652,6 +3653,27 @@ async fn chat_cmd_async(
                         ask_result.turns,
                         ask_result.model,
                         ask_result.session_id
+                    );
+                }
+                if !matches!(
+                    ask_result.evidence.status,
+                    crate::agent::runtime::evidence::EvidenceStatus::Verified
+                        | crate::agent::runtime::evidence::EvidenceStatus::NotRequired
+                ) {
+                    let _ = writeln!(
+                        stderr.lock(),
+                        "[evidence: {} binding={} claim={}]",
+                        ask_result.evidence.status.as_str(),
+                        ask_result
+                            .evidence
+                            .binding_confidence
+                            .map(|value| format!("{value:.2}"))
+                            .unwrap_or_else(|| "n/a".to_string()),
+                        ask_result
+                            .evidence
+                            .claim_confidence
+                            .map(|value| format!("{value:.2}"))
+                            .unwrap_or_else(|| "n/a".to_string())
                     );
                 }
             }

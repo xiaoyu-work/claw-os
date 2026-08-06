@@ -50,6 +50,8 @@ pub enum AgentError {
 pub struct AskResult {
     /// Final answer text from the model.
     pub answer: String,
+    /// Structural binding between answer citations and exact runtime tool results.
+    pub evidence: super::evidence::EvidenceReport,
     /// Number of turns consumed.
     pub turns: u32,
     /// Provider name used.
@@ -287,7 +289,7 @@ fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
             "system" => Role::System,
             _ => Role::User,
         };
-        let text = flatten_stored_content(&row.content);
+        let text = super::evidence::strip_markers(&flatten_stored_content(&row.content));
         if text.trim().is_empty() {
             continue;
         }
@@ -306,7 +308,8 @@ fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
 /// collapses to `[tool: NAME]` and `[tool_result] body` becomes
 /// `[tool result]\n<truncated body>` because the goal is replay
 /// context, not exact reconstruction. Long tool-result bodies are
-/// truncated to keep the replayed prompt cheap.
+/// truncated to keep the replayed prompt cheap. Runtime evidence markers are
+/// stripped so stale call ids cannot be cited in a later invocation.
 fn flatten_stored_content(content: &str) -> String {
     const MAX_RESULT_PREVIEW_CHARS: usize = 1500;
     let mut out = String::new();
@@ -463,6 +466,7 @@ async fn ask_inner(
         provider.name(),
         cfg.model.clone(),
     );
+    let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
     for turn in 1..=cfg.max_turns {
         if interrupt_handle.check() {
@@ -589,6 +593,7 @@ async fn ask_inner(
                 return Err(e);
             }
         };
+        evidence_ledger.observe(&messages[len_before..]);
 
         // Persist any messages appended by this turn (assistant message and
         // any tool-result message). When `redact_memory_enabled`, scrub the
@@ -621,6 +626,7 @@ async fn ask_inner(
         }
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
+            let evidence = evidence_ledger.verify(user_prompt, &answer);
             // Generate + persist a session title on the first
             // successful turn that produces a final answer. We guard
             // on `title_for() == None` so resuming a long-running
@@ -653,6 +659,7 @@ async fn ask_inner(
             }
             return Ok(AskResult {
                 answer,
+                evidence,
                 turns: turn,
                 provider: provider.name().to_string(),
                 model: cfg.model.clone(),
@@ -754,6 +761,7 @@ async fn ask_inner_streaming(
         provider.name(),
         cfg.model.clone(),
     );
+    let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
     for turn in 1..=cfg.max_turns {
         if interrupt_handle.check() {
@@ -858,6 +866,7 @@ async fn ask_inner_streaming(
                 return Err(e);
             }
         };
+        evidence_ledger.observe(&messages[len_before..]);
 
         if let Some((db, sid)) = recorder {
             for new_msg in &messages[len_before..] {
@@ -884,6 +893,7 @@ async fn ask_inner_streaming(
         }
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
+            let evidence = evidence_ledger.verify(user_prompt, &answer);
             if let Some((db, sid)) = recorder {
                 if matches!(db.title_for(sid), Ok(None)) {
                     let aux = match auxiliary_from_cfg(cfg) {
@@ -905,6 +915,7 @@ async fn ask_inner_streaming(
             }
             return Ok(AskResult {
                 answer,
+                evidence,
                 turns: turn,
                 provider: provider.name().to_string(),
                 model: cfg.model.clone(),
@@ -1321,7 +1332,10 @@ mod tests {
             row("assistant", ""),
             row("assistant", "[tool_use:cos_sysinfo] {}"),
             row("user", "[tool_result] ok"),
-            row("assistant", "all done"),
+            row(
+                "assistant",
+                "all done [evidence:stale_call confidence=0.9]",
+            ),
         ];
         let msgs = rows_to_messages(&rows);
         assert_eq!(msgs.len(), 4, "empty assistant row should be dropped");
@@ -1340,6 +1354,15 @@ mod tests {
             }
             other => panic!("expected text block, got {other:?}"),
         }
+        let final_text = msgs[3]
+            .content
+            .iter()
+            .find_map(|block| match block {
+                crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(final_text, "all done");
     }
 
     #[tokio::test]

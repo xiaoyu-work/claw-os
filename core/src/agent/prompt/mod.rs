@@ -39,7 +39,8 @@ Tool conventions:
 When you respond:
 - Be concise. Match the user's language.
 - Prefer one decisive answer over hedged options.
-- For multi-step jobs, plan briefly, then act. State what you're about to do before issuing destructive tool calls.";
+- For multi-step jobs, plan briefly, then act. State what you're about to do before issuing destructive tool calls.
+- For every claim about observed current system or application state, cite the exact supporting tool call on the same line as `[evidence:<tool_call_id> confidence=<0.00-1.00>]`. Use only tool call IDs from this trajectory. If no runtime evidence supports a system-state claim, state that it is uncertain and identify the missing probe.";
 
 /// Build the system prompt that prefaces every agent turn.
 ///
@@ -148,6 +149,14 @@ mod tests {
             p.contains("desktop.launch"),
             "scaffold should name the cap that gates the launcher path"
         );
+    }
+
+    #[test]
+    fn scaffold_requires_runtime_evidence_citations() {
+        let prompt = build_system_prompt(None);
+        assert!(prompt.contains("[evidence:<tool_call_id>"));
+        assert!(prompt.contains("confidence=<0.00-1.00>"));
+        assert!(prompt.contains("Use only tool call IDs from this trajectory"));
     }
 
     #[test]

@@ -12,7 +12,8 @@
 //! * `tool_use` — `{ "id": "…", "name": "…", "input": …json }` — fully-formed call.
 //! * `tool_result` — `{ "id": "…", "name": "…", "ok": bool, "latency_ms": N, "bytes": N, "preview": "…" }`
 //! * `warning` — `{ "message": "…" }`
-//! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "finish": "…" }`
+//! * `evidence` — structural citation binding and confidence metadata.
+//! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "evidence": …, "finish": "…" }`
 //! * `error` — `{ "error": "…" }`
 
 use std::sync::{Arc, Mutex};
@@ -246,6 +247,10 @@ async fn drive_chat(
     match result {
         Ok(ask) => {
             let finish = sink_obj.snapshot_finish();
+            let _ = tx.send(Ok(bytes::Bytes::from(sse::encode_event(
+                "evidence",
+                &ask.evidence,
+            ))));
             let frame = sse::encode_event(
                 "done",
                 &json!({
@@ -254,6 +259,7 @@ async fn drive_chat(
                     "provider": ask.provider,
                     "turns": ask.turns,
                     "answer": ask.answer,
+                    "evidence": ask.evidence,
                     "finish": finish,
                 }),
             );

@@ -72,3 +72,21 @@ Repeat the evidence that originally demonstrated the problem. Report:
 - how to undo the action.
 
 If evidence remains inconclusive, say so instead of inventing certainty.
+
+## Runtime evidence binding
+
+Every claim about observed current state must cite the exact supporting tool
+call on the same line:
+
+```text
+The root filesystem is 94% full. [evidence:call_abc123 confidence=0.97]
+```
+
+Use only call IDs from the current trajectory and a numeric confidence from
+`0.00` to `1.00`. The runtime verifies that each ID has one unambiguous tool
+result and binds the claim to that result's SHA-256 digest. Missing or invented
+IDs downgrade the final response to `missing`, `partial`, or `invalid`
+evidence. `binding_confidence` reports structural citation coverage;
+`claim_confidence` is the model-declared confidence after error-result caps.
+This proves provenance, not semantic entailment, so the claim must still
+accurately reflect the cited result.
