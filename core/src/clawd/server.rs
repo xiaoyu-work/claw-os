@@ -12,10 +12,10 @@ use super::client_identity::ClientIdentity;
 use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
-    app_sessions, audio, audit, backup, bluetooth, clipboard, config_editor, containers, context,
-    context_events, crash, desktop, event_center, firewall, hardware, memory, network, packages,
-    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
-    tasks, transactions, users,
+    app_sessions, audio, audit, backup, bluetooth, camera, clipboard, config_editor, containers,
+    context, context_events, crash, desktop, event_center, firewall, hardware, memory, network,
+    packages, permissions, power, printer, scheduler, security, snapshots, storage, system_journal,
+    systemd, tasks, transactions, users,
 };
 
 #[derive(Debug, Clone)]
@@ -218,6 +218,7 @@ async fn dispatch_result(
         "system.audio.control" => audio::control(request.params, client).await,
         "system.backup.control" => backup::control(request.params, client).await,
         "system.bluetooth.control" => bluetooth::control(request.params, client).await,
+        "system.camera.control" => camera::control(request.params, client).await,
         "system.clipboard.control" => clipboard::control(request.params, client).await,
         "system.container.control" => containers::control(request.params, client).await,
         "system.config.control" => config_editor::control(request.params, client).await,
@@ -282,6 +283,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "system.audio.control"
             | "system.backup.control"
             | "system.bluetooth.control"
+            | "system.camera.control"
             | "system.clipboard.control"
             | "system.container.control"
             | "system.config.control"

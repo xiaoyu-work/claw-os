@@ -71,6 +71,7 @@ Permission roles and app capability gates are documented in [permissions.md](per
 | `event-center` | Persistent udev, systemd, journal, storage, security, and pidfd events |
 | `firewall-manager` | Scoped nftables allow/drop rules with durable rollback |
 | `calendar` | Events and scheduling (local/Google/Outlook) |
+| `camera-manager` | PipeWire camera discovery and bounded PNG/JPEG capture |
 | `container-manager` | Docker, Podman, containerd lifecycle, logs, cgroups, and namespaces |
 | `config-editor` | Validated atomic /etc edits with durable backup and rollback |
 | `clipboard-manager` | Sensitive Wayland clipboard read, write, types, and clear |

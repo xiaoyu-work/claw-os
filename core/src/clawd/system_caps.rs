@@ -37,6 +37,7 @@ pub fn readonly_task_caps() -> CapSet {
         "backup-center",
         "bluetooth-manager",
         "browser-attached",
+        "camera-manager",
         "crash-doctor",
         "container-manager",
         "config-editor",

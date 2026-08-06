@@ -4,6 +4,7 @@ pub mod audio;
 pub mod audit;
 pub mod backup;
 pub mod bluetooth;
+pub mod camera;
 pub mod client;
 pub mod client_identity;
 pub mod clipboard;

@@ -958,6 +958,51 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
+    if name == "__camera" {
+        let action = args
+            .get(1)
+            .ok_or_else(|| "internal camera command required".to_string())?;
+        let session = env::var("COS_SESSION")
+            .map_err(|_| "internal camera command requires COS_SESSION".to_string())?;
+        let mut node_id = None;
+        let mut expected_serial = None;
+        let mut destination = None;
+        let mut format = None;
+        let mut width = None;
+        let mut height = None;
+        let mut index = 2;
+        while index < args.len() {
+            let value = args
+                .get(index + 1)
+                .ok_or_else(|| format!("{} requires a value", args[index]))?
+                .clone();
+            match args[index].as_str() {
+                "--node-id" => node_id = Some(value),
+                "--expected-serial" => expected_serial = Some(value),
+                "--destination" => destination = Some(value),
+                "--format" => format = Some(value),
+                "--width" => width = Some(value),
+                "--height" => height = Some(value),
+                other => return Err(format!("unknown internal camera flag: {other}")),
+            }
+            index += 2;
+        }
+        let value = request_clawd(
+            "system.camera.control",
+            json!({
+                "session": session,
+                "action": action,
+                "node_id": node_id,
+                "expected_serial": expected_serial,
+                "destination": destination,
+                "format": format,
+                "width": width,
+                "height": height,
+            }),
+        )?;
+        return Ok(Some(value.to_string()));
+    }
+
     // "app" namespace → route to Python apps
     if name == "app" {
         return dispatch_app(&args[1..]);

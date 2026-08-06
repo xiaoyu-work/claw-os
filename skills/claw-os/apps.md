@@ -461,6 +461,21 @@ reported in status when present, but that portal is defined for RemoteDesktop
 sessions; normal COSMIC desktop access uses the installed Wayland data-control
 `wl-clipboard` tools.
 
+## Camera Manager
+
+```bash
+cos app camera-manager status
+cos app camera-manager capture 42 100 /home/cos/Pictures/capture.png png 1920 1080
+```
+
+Camera discovery reads only PipeWire `Video/Source` nodes. Capture requires
+`device.camera:capture` plus exact `fs.write` for a new destination, rechecks
+the node's object serial, and runs a one-frame GStreamer `pipewiresrc`
+pipeline. Output is written to a user-owned temporary file, bounded to 64 MiB,
+fsynced, and atomically persisted without overwriting. Status reports whether
+the XDG Camera portal exists; that portal mediates sandboxed sessions, while
+this host-level manager uses the approved PipeWire node directly.
+
 ## Package Management
 
 ```bash
