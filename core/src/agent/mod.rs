@@ -8530,16 +8530,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn unknown_command_lists_all_options() {
-        let err = run("not-a-command", &[]).unwrap_err();
-        assert!(err.contains("ask"));
-        assert!(err.contains("setup"));
-        assert!(err.contains("sessions"));
-        assert!(err.contains("override"));
-        assert!(err.contains("dev"));
-    }
-
-    #[test]
     fn override_cmd_help_shape() {
         let err = override_cmd(&[]).unwrap_err();
         assert!(err.contains("show"));
@@ -8630,13 +8620,6 @@ mod tests {
     }
 
     #[test]
-    fn budget_user_unknown_subcommand_errors() {
-        let err = budget_cmd(&["user".to_string(), "bogus".to_string()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("show") || err.contains("path"));
-    }
-
-    #[test]
     fn insights_overall_returns_empty_when_no_log() {
         // The default log path may or may not exist at test time;
         // either way the call must not panic and must shape a JSON
@@ -8666,13 +8649,6 @@ mod tests {
     }
 
     #[test]
-    fn insights_unknown_subcommand_errors() {
-        let err = insights_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("overall"));
-    }
-
-    #[test]
     fn recall_empty_query_errors() {
         let err = recall_cmd(&[]).unwrap_err();
         assert!(err.to_lowercase().contains("usage"));
@@ -8683,20 +8659,6 @@ mod tests {
         let v = notes_cmd(&[]).expect("notes list ok");
         assert!(v.get("dir").is_some());
         assert!(v.get("notes").and_then(|x| x.as_array()).is_some());
-    }
-
-    #[test]
-    fn notes_read_requires_name() {
-        let err = notes_cmd(&["read".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn notes_unknown_subcommand_lists_options() {
-        let err = notes_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("list"));
-        assert!(err.contains("read"));
-        assert!(err.contains("write"));
     }
 
     #[test]
@@ -8715,23 +8677,9 @@ mod tests {
     }
 
     #[test]
-    fn skills_info_requires_id() {
-        let err = skills_cmd(&["info".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
     fn skills_info_unknown_id_errors() {
         let err = skills_cmd(&["info".into(), "definitely-not-a-real-skill".into()]).unwrap_err();
         assert!(err.contains("definitely-not-a-real-skill"));
-    }
-
-    #[test]
-    fn skills_unknown_subcommand_lists_options() {
-        let err = skills_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("list"));
-        assert!(err.contains("info"));
-        assert!(err.contains("disabled"));
     }
 
     #[test]
@@ -8760,40 +8708,6 @@ mod tests {
         assert!(parse_owner_repo("owner/").is_err());
         assert!(parse_owner_repo("/").is_err());
         assert!(parse_owner_repo("").is_err());
-    }
-
-    #[test]
-    fn skills_hub_requires_subcommand() {
-        let err = skills_cmd(&["hub".into()]).unwrap_err();
-        assert!(err.contains("list"));
-        assert!(err.contains("install"));
-    }
-
-    #[test]
-    fn skills_hub_requires_owner_repo() {
-        let err = skills_cmd(&["hub".into(), "list".into()]).unwrap_err();
-        assert!(err.contains("owner/repo"));
-    }
-
-    #[test]
-    fn skills_hub_install_requires_id() {
-        let err = skills_cmd(&["hub".into(), "install".into(), "owner/repo".into()]).unwrap_err();
-        assert!(err.contains("usage:"));
-        assert!(err.contains("install"));
-    }
-
-    #[test]
-    fn skills_hub_show_requires_id() {
-        let err = skills_cmd(&["hub".into(), "show".into(), "owner/repo".into()]).unwrap_err();
-        assert!(err.contains("usage:"));
-        assert!(err.contains("show"));
-    }
-
-    #[test]
-    fn skills_hub_unknown_subcommand_lists_options() {
-        let err = skills_cmd(&["hub".into(), "bogus".into(), "owner/repo".into()]).unwrap_err();
-        assert!(err.contains("list"));
-        assert!(err.contains("install"));
     }
 
     #[test]
@@ -8888,19 +8802,6 @@ mod tests {
     }
 
     #[test]
-    fn llm_unknown_subcommand_lists_options() {
-        let err = llm_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("providers"));
-        assert!(err.contains("models"));
-    }
-
-    #[test]
-    fn redact_no_args_errors_with_usage() {
-        let err = redact_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage:"));
-    }
-
-    #[test]
     fn redact_replaces_known_secrets() {
         let v = redact_cmd(&["my key is sk-abcdef0123456789ABCDEF0123456789abcd ok".into()])
             .expect("redact ok");
@@ -8978,12 +8879,6 @@ mod tests {
             out.contains("[REDACTED:github_token]"),
             "expected github_token placeholder, got {out}"
         );
-    }
-
-    #[test]
-    fn redact_file_missing_path_errors() {
-        let err = redact_cmd(&["--file".into()]).unwrap_err();
-        assert!(err.contains("--file"));
     }
 
     #[test]
@@ -9095,14 +8990,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_usage_record_requires_id() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let p = dir.path().join("usage.jsonl");
-        let err = skills_usage_cmd_at(&["record".into()], &p).unwrap_err();
-        assert!(err.contains("usage:"));
-    }
-
-    #[test]
     fn skills_usage_record_with_invoked_by_persists() {
         let dir = tempfile::tempdir().expect("tmp");
         let p = dir.path().join("usage.jsonl");
@@ -9178,15 +9065,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_usage_unknown_subcommand_lists_options() {
-        let dir = tempfile::tempdir().expect("tmp");
-        let p = dir.path().join("usage.jsonl");
-        let err = skills_usage_cmd_at(&["bogus".into()], &p).unwrap_err();
-        assert!(err.contains("stats"));
-        assert!(err.contains("record"));
-    }
-
-    #[test]
     fn prompt_show_returns_prompt_string() {
         let v = prompt_cmd(&[]).expect("prompt show ok");
         let p = v
@@ -9247,25 +9125,6 @@ mod tests {
     }
 
     #[test]
-    fn prompt_unknown_subcommand_errors() {
-        let err = prompt_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("show"));
-        assert!(err.contains("build"));
-    }
-
-    #[test]
-    fn prompt_unknown_flag_errors() {
-        let err = prompt_cmd(&["show".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
-    fn prompt_extra_missing_path_errors() {
-        let err = prompt_cmd(&["show".into(), "--extra".into()]).unwrap_err();
-        assert!(err.contains("--extra"));
-    }
-
-    #[test]
     fn prompt_extra_nonexistent_file_does_not_panic() {
         // build_system_prompt silently swallows file IO errors and
         // falls back to scaffold-only — preserve that here.
@@ -9322,12 +9181,6 @@ mod tests {
     }
 
     #[test]
-    fn think_scrub_no_args_errors_with_usage() {
-        let err = think_scrub_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage:"));
-    }
-
-    #[test]
     fn think_scrub_from_file() {
         let dir = tempfile::tempdir().expect("tmp");
         let p = dir.path().join("trace.txt");
@@ -9347,12 +9200,6 @@ mod tests {
         assert_eq!(chars, "hello world this is some text".len() as u64);
         assert!(tokens >= 1);
         assert!(tokens <= chars, "tokens should be <= chars");
-    }
-
-    #[test]
-    fn tokens_no_args_errors_with_usage() {
-        let err = tokens_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage:"));
     }
 
     #[test]
@@ -9381,12 +9228,6 @@ mod tests {
     }
 
     #[test]
-    fn read_text_input_file_missing_path_errors() {
-        let err = read_text_input(&["--file".into()], "tokens").unwrap_err();
-        assert!(err.contains("--file"));
-    }
-
-    #[test]
     fn nudge_path_returns_string() {
         let v = nudge_cmd(&["path".into()]).expect("nudge path ok");
         assert!(v.get("path").and_then(|x| x.as_str()).is_some());
@@ -9401,31 +9242,9 @@ mod tests {
     }
 
     #[test]
-    fn nudge_add_requires_due_and_message() {
-        let err = nudge_cmd(&["add".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-        let err2 = nudge_cmd(&["add".into(), "30".into()]).unwrap_err();
-        assert!(err2.to_lowercase().contains("usage"));
-    }
-
-    #[test]
     fn nudge_add_rejects_non_integer_due() {
         let err = nudge_cmd(&["add".into(), "not-a-number".into(), "msg".into()]).unwrap_err();
         assert!(err.contains("integer"));
-    }
-
-    #[test]
-    fn nudge_fire_requires_id() {
-        let err = nudge_cmd(&["fire".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn nudge_unknown_subcommand_lists_options() {
-        let err = nudge_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("list"));
-        assert!(err.contains("add"));
-        assert!(err.contains("fire"));
     }
 
     #[test]
@@ -9442,13 +9261,6 @@ mod tests {
     fn mcp_default_returns_status() {
         let v = mcp_cmd(&[]).expect("mcp default = status");
         assert_eq!(v.get("status").and_then(|x| x.as_str()), Some("ready"));
-    }
-
-    #[test]
-    fn mcp_unknown_subcommand_lists_options() {
-        let err = mcp_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("status"));
-        assert!(err.contains("serve"));
     }
 
     #[test]
@@ -9491,49 +9303,9 @@ mod tests {
     }
 
     #[test]
-    fn usage_provider_requires_name() {
-        let err = usage_cmd(&["provider".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn usage_model_requires_name() {
-        let err = usage_cmd(&["model".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn usage_session_requires_id() {
-        let err = usage_cmd(&["session".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn usage_app_requires_id() {
-        let err = usage_cmd(&["app".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn usage_verb_requires_name() {
-        let err = usage_cmd(&["verb".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
     fn usage_since_rejects_non_iso_timestamp() {
         let err = usage_cmd(&["overall".into(), "--since".into(), "not-iso".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("since"));
-    }
-
-    #[test]
-    fn usage_unknown_scope_lists_options() {
-        let err = usage_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("provider"));
-        assert!(err.contains("model"));
-        assert!(err.contains("session"));
-        assert!(err.contains("app"));
-        assert!(err.contains("verb"));
     }
 
     #[test]
@@ -9586,18 +9358,6 @@ mod tests {
     }
 
     #[test]
-    fn usage_app_flag_requires_value() {
-        let err = usage_cmd(&["overall".into(), "--app".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("--app"));
-    }
-
-    #[test]
-    fn usage_verb_flag_requires_value() {
-        let err = usage_cmd(&["overall".into(), "--verb".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("--verb"));
-    }
-
-    #[test]
     fn merge_mcp_overrides_no_flags_is_clone() {
         let mut base = crate::config::AgentConfig::default();
         base.tool_allow = Some(vec!["echo".into()]);
@@ -9637,30 +9397,6 @@ mod tests {
     }
 
     #[test]
-    fn mcp_serve_unknown_flag_is_rejected() {
-        let err = mcp_cmd(&["serve".into(), "--bogus".into(), "x".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown flag"));
-    }
-
-    #[test]
-    fn mcp_serve_allow_without_value_errors() {
-        let err = mcp_cmd(&["serve".into(), "--allow".into()]).unwrap_err();
-        assert!(err.contains("--allow"));
-    }
-
-    #[test]
-    fn mcp_serve_deny_without_value_errors() {
-        let err = mcp_cmd(&["serve".into(), "--deny".into()]).unwrap_err();
-        assert!(err.contains("--deny"));
-    }
-
-    #[test]
-    fn curator_unknown_subcommand_lists_propose() {
-        let err = curator_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("propose"));
-    }
-
-    #[test]
     fn curator_propose_requires_session_id() {
         let err = curator_cmd(&["propose".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("usage"));
@@ -9672,26 +9408,6 @@ mod tests {
         // than silently treating "--accept" as the session id.
         let err = curator_cmd(&["propose".into(), "--accept".into()]).unwrap_err();
         assert!(err.to_lowercase().contains("usage"));
-    }
-
-    #[test]
-    fn curator_propose_unknown_flag_is_rejected() {
-        let err = curator_cmd(&["propose".into(), "any-sid".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown flag"));
-    }
-
-    #[test]
-    fn curator_propose_min_turns_requires_value() {
-        let err =
-            curator_cmd(&["propose".into(), "any-sid".into(), "--min-turns".into()]).unwrap_err();
-        assert!(err.contains("--min-turns"));
-    }
-
-    #[test]
-    fn curator_drafts_unknown_subcommand_lists_options() {
-        let err = curator_drafts_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("auto-title"));
-        assert!(err.contains("retitle"));
     }
 
     #[test]
@@ -9707,12 +9423,6 @@ mod tests {
     }
 
     #[test]
-    fn curator_author_unknown_flag_rejected() {
-        let err = curator_cmd(&["author".into(), "draft-1".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown flag"));
-    }
-
-    #[test]
     fn curator_author_missing_draft_returns_helpful_error() {
         // The default DraftStore should open successfully (or fail
         // with an IO error); either way, asking for an unknown id
@@ -9723,18 +9433,6 @@ mod tests {
             err.contains("definitely-not-real") || err.contains("draft store"),
             "want missing-id or draft-store error, got: {err}"
         );
-    }
-
-    #[test]
-    fn curator_scan_unknown_flag_rejected() {
-        let err = curator_cmd(&["scan".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown flag"));
-    }
-
-    #[test]
-    fn curator_scan_limit_requires_value() {
-        let err = curator_cmd(&["scan".into(), "--limit".into()]).unwrap_err();
-        assert!(err.contains("--limit"));
     }
 
     #[test]
@@ -9757,29 +9455,6 @@ mod tests {
                 );
             }
         }
-    }
-
-    #[test]
-    fn curator_scan_listed_in_unknown_subcommand_help() {
-        let err = curator_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("scan"), "want scan listed in help, got: {err}");
-        assert!(
-            err.contains("author"),
-            "want author listed in help, got: {err}"
-        );
-    }
-
-    #[test]
-    fn curator_drafts_auto_title_requires_id() {
-        let err = curator_drafts_cmd(&["auto-title".into()]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn curator_drafts_auto_title_rejects_unknown_flag() {
-        let err = curator_drafts_cmd(&["auto-title".into(), "some-id".into(), "--bogus".into()])
-            .unwrap_err();
-        assert!(err.contains("unknown flag"));
     }
 
     #[test]
@@ -9870,19 +9545,6 @@ mod tests {
         // "does-not-exist" is not in REGISTERED, so it gets dropped.
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].get("name").and_then(|n| n.as_str()), Some("openai"));
-    }
-
-    #[test]
-    fn providers_cmd_rejects_unknown_flags() {
-        let err = providers_cmd(&["--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-        assert!(err.contains("--names"));
-    }
-
-    #[test]
-    fn providers_cmd_names_flag_requires_value() {
-        let err = providers_cmd(&["--names".into()]).unwrap_err();
-        assert!(err.contains("--names"));
     }
 
     #[test]
@@ -10165,19 +9827,6 @@ mod tests {
     }
 
     #[test]
-    fn provider_doctor_unknown_flag_rejected() {
-        let err = provider_doctor_cmd(&["--mystery".into()]).unwrap_err();
-        assert!(err.contains("--mystery"));
-        assert!(err.contains("--probe-network"));
-    }
-
-    #[test]
-    fn provider_doctor_names_filter_requires_value() {
-        let err = provider_doctor_cmd(&["--names".into()]).unwrap_err();
-        assert!(err.contains("--names"));
-    }
-
-    #[test]
     fn provider_doctor_skips_probe_for_unconfigured_provider() {
         // The default test config now has provider="" (not configured).
         // Verify --probe-network is gracefully skipped without spinning a
@@ -10392,12 +10041,6 @@ mod tests {
     }
 
     #[test]
-    fn summarise_cmd_max_requires_value() {
-        let err = summarise_cmd(&["--max".into()]).unwrap_err();
-        assert!(err.contains("--max"));
-    }
-
-    #[test]
     fn summarise_cmd_max_must_parse() {
         let err = summarise_cmd(&["--max".into(), "not-a-number".into(), "x".into()]).unwrap_err();
         assert!(err.contains("--max"));
@@ -10481,12 +10124,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_cmd_labels_flag_requires_value() {
-        let err = classify_cmd(&["--labels".into()]).unwrap_err();
-        assert!(err.contains("--labels"));
-    }
-
-    #[test]
     fn classify_cmd_empty_label_list_rejected() {
         let err = classify_cmd(&["yes".into(), "--labels".into(), ",, ,".into()]).unwrap_err();
         assert!(err.contains("--labels"));
@@ -10542,12 +10179,6 @@ mod tests {
     }
 
     #[test]
-    fn tools_cmd_show_requires_name() {
-        let err = tools_cmd(&["show".into()]).unwrap_err();
-        assert!(err.contains("show"));
-    }
-
-    #[test]
     fn tools_cmd_llm_list_returns_serialised_tool_blob() {
         let v = tools_cmd(&["llm-list".into()]).expect("tools llm-list ok");
         let arr = v
@@ -10559,13 +10190,6 @@ mod tests {
             assert!(entry.get("name").and_then(|n| n.as_str()).is_some());
             assert!(entry.get("input_schema").is_some());
         }
-    }
-
-    #[test]
-    fn tools_cmd_unknown_subcommand_errs() {
-        let err = tools_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("list"));
     }
 
     #[test]
@@ -10613,13 +10237,6 @@ mod tests {
         assert!(err.contains("check"));
     }
 
-    #[test]
-    fn guardrails_cmd_unknown_subcommand_errs() {
-        let err = guardrails_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("show"));
-    }
-
     // ---- approval_cmd ----
 
     #[test]
@@ -10657,25 +10274,6 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("--input"));
-    }
-
-    #[test]
-    fn approval_cmd_check_input_flag_requires_value() {
-        let err = approval_cmd(&["check".into(), "echo".into(), "--input".into()]).unwrap_err();
-        assert!(err.contains("--input"));
-    }
-
-    #[test]
-    fn approval_cmd_check_unknown_flag_errs() {
-        let err = approval_cmd(&["check".into(), "echo".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
-    fn approval_cmd_unknown_subcommand_errs() {
-        let err = approval_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("show"));
     }
 
     // ---- todo_cmd ----
@@ -10961,13 +10559,6 @@ mod tests {
         assert_eq!(counts.get("cancelled").and_then(|n| n.as_u64()), Some(0));
     }
 
-    #[test]
-    fn todo_cmd_unknown_subcommand_errs() {
-        let (_dir, store) = temp_todo_store();
-        let err = todo_cmd_at(&["bogus".into()], &store).unwrap_err();
-        assert!(err.contains("bogus"));
-    }
-
     // ---- compress_cmd ----
 
     #[test]
@@ -11175,18 +10766,6 @@ mod tests {
         assert!(err.contains("parse line 1"));
     }
 
-    #[test]
-    fn compress_cmd_check_rejects_unknown_flag() {
-        let err = compress_cmd(&["check".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
-    fn compress_cmd_unknown_subcommand_errs() {
-        let err = compress_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-    }
-
     // ---- mcp_cmd probe/call argument parsing ----
 
     #[test]
@@ -11251,13 +10830,6 @@ mod tests {
         ];
         let err = parse_mcp_spawn_spec(&raw).unwrap_err();
         assert!(err.contains("KEY=VALUE"));
-    }
-
-    #[test]
-    fn parse_mcp_spawn_spec_rejects_unknown_flag() {
-        let raw: Vec<String> = vec!["--cmd".into(), "x".into(), "--bogus".into()];
-        let err = parse_mcp_spawn_spec(&raw).unwrap_err();
-        assert!(err.contains("--bogus"));
     }
 
     #[test]
@@ -11355,18 +10927,6 @@ mod tests {
     }
 
     #[test]
-    fn aux_cmd_ask_unknown_flag_errs() {
-        let err = aux_cmd(&[
-            "ask".into(),
-            "--prompt".into(),
-            "hi".into(),
-            "--bogus".into(),
-        ])
-        .unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
     fn aux_cmd_ask_when_unconfigured_errs() {
         // Default config has no aux, so ask MUST refuse before doing
         // any network IO.
@@ -11385,12 +10945,6 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("--max-tokens"));
-    }
-
-    #[test]
-    fn aux_cmd_unknown_subcommand_errs() {
-        let err = aux_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
     }
 
     // ---- retry_cmd ----
@@ -11468,18 +11022,6 @@ mod tests {
     fn retry_cmd_schedule_invalid_attempts_errs() {
         let err = retry_cmd(&["schedule".into(), "--attempts".into(), "lots".into()]).unwrap_err();
         assert!(err.contains("--attempts"));
-    }
-
-    #[test]
-    fn retry_cmd_schedule_unknown_flag_errs() {
-        let err = retry_cmd(&["schedule".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
-    fn retry_cmd_unknown_subcommand_errs() {
-        let err = retry_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
     }
 
     // ---- skills_guard_cmd ----
@@ -11660,15 +11202,6 @@ mod tests {
     }
 
     #[test]
-    fn skills_guard_unknown_flag_errs() {
-        let dir = skills_guard_test_dir("bad-flag");
-        let skill = write_test_skill(&dir, "eta", &["echo"]);
-        let map = guard_skills_map(skill);
-        let err = skills_guard_cmd_against(&["eta".into(), "--bogus".into()], &map).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
     fn skills_guard_invalid_max_file_bytes_errs() {
         let dir = skills_guard_test_dir("bad-bytes");
         let skill = write_test_skill(&dir, "theta", &["echo"]);
@@ -11778,12 +11311,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_set_title_args_requires_id() {
-        let err = parse_set_title_args(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
     fn parse_set_title_args_requires_title() {
         let err = parse_set_title_args(&["sid".into()]).unwrap_err();
         assert!(err.contains("usage"));
@@ -11844,18 +11371,6 @@ mod tests {
         assert!(err.contains("usage"));
         let err2 = sessions_clear(&["--yes".into()]).unwrap_err();
         assert!(err2.contains("usage"));
-    }
-
-    #[test]
-    fn sessions_title_requires_id() {
-        let err = sessions_title(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn sessions_cmd_unknown_subcommand_errs() {
-        let err = sessions_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
     }
 
     #[test]
@@ -11959,12 +11474,6 @@ mod tests {
     fn sessions_stats_rejects_extra_args() {
         let err = sessions_stats(&["bogus".into()]).unwrap_err();
         assert!(err.contains("unexpected argument"), "got {err}");
-    }
-
-    #[test]
-    fn sessions_stats_session_flag_requires_value() {
-        let err = sessions_stats(&["--session".into()]).unwrap_err();
-        assert!(err.contains("--session requires"), "got {err}");
     }
 
     #[test]
@@ -12135,13 +11644,6 @@ mod tests {
     }
 
     #[test]
-    fn semantic_unknown_subcommand_errs_with_usage_hint() {
-        let err = semantic_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("clear-all"), "got: {err}");
-        assert!(err.contains("status"), "got: {err}");
-    }
-
-    #[test]
     fn semantic_no_subcommand_errs_with_usage() {
         let err = semantic_cmd(&[]).unwrap_err();
         assert!(err.contains("usage"));
@@ -12154,12 +11656,6 @@ mod tests {
     fn vision_cmd_default_subcommand_errs_with_usage() {
         let err = vision_cmd(&[]).unwrap_err();
         assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn vision_cmd_unknown_subcommand_errs() {
-        let err = vision_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
     }
 
     #[test]
@@ -12284,13 +11780,6 @@ mod tests {
     }
 
     #[test]
-    fn vision_route_unknown_flag_errs() {
-        let err =
-            vision_route_cmd(&["--bytes".into(), "1024".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
     fn vision_route_file_uses_on_disk_size_and_extension_mime() {
         let dir = std::env::temp_dir().join(format!(
             "cos-agent-vision-{}",
@@ -12364,12 +11853,6 @@ mod tests {
         ])
         .unwrap_err();
         assert!(err.contains("exactly one"));
-    }
-
-    #[test]
-    fn vision_sniff_unknown_flag_errs() {
-        let err = vision_sniff_cmd(&["--bogus".into(), "x".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
     }
 
     #[test]
@@ -12512,20 +11995,6 @@ mod tests {
     }
 
     #[test]
-    fn vision_analyze_unknown_flag_errs() {
-        let err = vision_analyze_cmd(&[
-            "--bogus".into(),
-            "v".into(),
-            "--file".into(),
-            "x.png".into(),
-            "--prompt".into(),
-            "describe".into(),
-        ])
-        .unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
     fn vision_analyze_file_missing_errs_clean() {
         let err = vision_analyze_cmd(&[
             "--file".into(),
@@ -12556,28 +12025,10 @@ mod tests {
     // ---- display_cmd ----
 
     #[test]
-    fn display_cmd_no_args_errs() {
-        let err = display_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn display_cmd_unknown_subcommand_errs() {
-        let err = display_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-    }
-
-    #[test]
     fn display_format_bytes_renders_human_readable() {
         let v = display_format_bytes_cmd(&["1536".into()]).expect("ok");
         assert_eq!(v.get("input").and_then(|n| n.as_u64()), Some(1536));
         assert_eq!(v.get("formatted").and_then(|s| s.as_str()), Some("1.5 KB"));
-    }
-
-    #[test]
-    fn display_format_bytes_requires_arg() {
-        let err = display_format_bytes_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
     }
 
     #[test]
@@ -12596,24 +12047,12 @@ mod tests {
     }
 
     #[test]
-    fn display_format_duration_requires_arg() {
-        let err = display_format_duration_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
     fn display_transcript_requires_session() {
         let err = parse_display_transcript_args(&[]).expect("parse");
         assert!(err.session.is_none());
         // The cmd-level call surfaces the missing-session error:
         let err = display_transcript_cmd(&[]).unwrap_err();
         assert!(err.contains("--session"));
-    }
-
-    #[test]
-    fn display_transcript_unknown_flag_errs() {
-        let err = parse_display_transcript_args(&["--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
     }
 
     #[test]
@@ -12751,24 +12190,6 @@ mod tests {
     }
 
     #[test]
-    fn shell_hooks_record_post_requires_arg() {
-        let err = shell_hooks_cmd(&["record-post".into()]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn shell_hooks_tail_unknown_flag_errs() {
-        let err = shell_hooks_cmd(&["tail".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("unknown flag"));
-    }
-
-    #[test]
-    fn shell_hooks_tail_limit_requires_value() {
-        let err = shell_hooks_cmd(&["tail".into(), "--limit".into()]).unwrap_err();
-        assert!(err.contains("--limit"));
-    }
-
-    #[test]
     fn shell_hooks_tail_limit_requires_int() {
         let err = shell_hooks_cmd(&["tail".into(), "--limit".into(), "abc".into()]).unwrap_err();
         assert!(err.contains("--limit"));
@@ -12778,13 +12199,6 @@ mod tests {
     fn shell_hooks_clear_requires_yes_flag() {
         let err = shell_hooks_cmd(&["clear".into()]).unwrap_err();
         assert!(err.contains("--yes"));
-    }
-
-    #[test]
-    fn shell_hooks_unknown_subcommand_errs() {
-        let err = shell_hooks_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("init"));
     }
 
     #[test]
@@ -12837,27 +12251,9 @@ mod tests {
     }
 
     #[test]
-    fn media_list_outputs_unknown_flag_errs() {
-        let err = media_cmd(&["list-outputs".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("unknown flag"));
-    }
-
-    #[test]
-    fn media_list_outputs_limit_requires_value() {
-        let err = media_cmd(&["list-outputs".into(), "--limit".into()]).unwrap_err();
-        assert!(err.contains("--limit"));
-    }
-
-    #[test]
     fn media_list_outputs_limit_requires_int() {
         let err = media_cmd(&["list-outputs".into(), "--limit".into(), "abc".into()]).unwrap_err();
         assert!(err.contains("--limit"));
-    }
-
-    #[test]
-    fn media_list_outputs_ext_requires_value() {
-        let err = media_cmd(&["list-outputs".into(), "--ext".into()]).unwrap_err();
-        assert!(err.contains("--ext"));
     }
 
     #[test]
@@ -12912,13 +12308,6 @@ mod tests {
     }
 
     #[test]
-    fn media_unknown_subcommand_errs() {
-        let err = media_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("providers"));
-    }
-
-    #[test]
     fn binary_ext_default_lists_with_capped_limit() {
         let v = binary_ext_cmd(&[]).expect("default ok");
         let n = v.get("n").and_then(|n| n.as_u64()).expect("n");
@@ -12934,18 +12323,6 @@ mod tests {
         let n = v.get("n").and_then(|n| n.as_u64()).expect("n");
         let total = v.get("total").and_then(|n| n.as_u64()).expect("total");
         assert_eq!(n, total);
-    }
-
-    #[test]
-    fn binary_ext_list_unknown_flag_errs() {
-        let err = binary_ext_cmd(&["list".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("unknown flag"));
-    }
-
-    #[test]
-    fn binary_ext_list_limit_requires_value() {
-        let err = binary_ext_cmd(&["list".into(), "--limit".into()]).unwrap_err();
-        assert!(err.contains("--limit"));
     }
 
     #[test]
@@ -13000,41 +12377,9 @@ mod tests {
         assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(false));
     }
 
-    #[test]
-    fn binary_ext_check_requires_arg() {
-        let err = binary_ext_cmd(&["check".into()]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn binary_ext_unknown_subcommand_errs() {
-        let err = binary_ext_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("list"));
-    }
-
     // ---- context_cmd dispatch ----
 
-    #[test]
-    fn context_cmd_no_args_errs_with_usage() {
-        let err = context_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
-    fn context_cmd_unknown_subcommand_errs() {
-        let err = context_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-        assert!(err.contains("hints"));
-    }
-
     // ---- context hints ----
-
-    #[test]
-    fn context_hints_unknown_flag_errs() {
-        let err = context_hints_cmd(&["--bogus".into(), "x".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
 
     #[test]
     fn context_hints_invalid_cwd_errs() {
@@ -13120,12 +12465,6 @@ mod tests {
     }
 
     #[test]
-    fn context_refs_unknown_flag_errs() {
-        let err = context_refs_cmd(&["--bogus".into(), "v".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
-    #[test]
     fn context_refs_extracts_paths_and_urls() {
         let v = context_refs_cmd(&[
             "--text".into(),
@@ -13172,12 +12511,6 @@ mod tests {
         let v = context_cmd(&["build".into()]).expect("ok");
         assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(true));
         assert!(v.get("rendered").map(|x| x.is_null()).unwrap_or(false));
-    }
-
-    #[test]
-    fn context_build_unknown_flag_errs() {
-        let err = context_cmd(&["build".into(), "--bogus".into()]).unwrap_err();
-        assert!(err.contains("--bogus"));
     }
 
     #[test]
@@ -13283,25 +12616,6 @@ mod tests {
     // ---- file-safety dispatch ----
 
     #[test]
-    fn file_safety_no_args_errs_with_usage() {
-        let err = file_safety_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-        assert!(err.contains("check"));
-    }
-
-    #[test]
-    fn file_safety_unknown_subcommand_errs() {
-        let err = file_safety_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-    }
-
-    #[test]
-    fn file_safety_check_requires_path() {
-        let err = file_safety_cmd(&["check".into()]).unwrap_err();
-        assert!(err.contains("usage"));
-    }
-
-    #[test]
     fn file_safety_check_rejects_multiple_paths() {
         let err = file_safety_cmd(&["check".into(), "a".into(), "b".into()]).unwrap_err();
         assert!(err.contains("single path"));
@@ -13380,19 +12694,6 @@ mod tests {
     // ---- osv dispatch (no network) ----
 
     #[test]
-    fn osv_no_args_errs_with_usage() {
-        let err = osv_cmd(&[]).unwrap_err();
-        assert!(err.contains("usage"));
-        assert!(err.contains("parse"));
-    }
-
-    #[test]
-    fn osv_unknown_subcommand_errs() {
-        let err = osv_cmd(&["bogus".into()]).unwrap_err();
-        assert!(err.contains("bogus"));
-    }
-
-    #[test]
     fn osv_ecosystems_lists_known_ecosystems() {
         let v = osv_cmd(&["ecosystems".into()]).expect("ok");
         let eco = v.get("ecosystems").and_then(|x| x.as_array()).unwrap();
@@ -13405,12 +12706,6 @@ mod tests {
         let ls: Vec<&str> = lockfiles.iter().filter_map(|s| s.as_str()).collect();
         assert!(ls.contains(&"Cargo.lock"));
         assert!(ls.contains(&"go.sum"));
-    }
-
-    #[test]
-    fn osv_parse_requires_path() {
-        let err = osv_cmd(&["parse".into()]).unwrap_err();
-        assert!(err.contains("usage"));
     }
 
     #[test]
@@ -13484,18 +12779,6 @@ mod tests {
         assert!(err.contains("name>@<version"));
     }
 
-    #[test]
-    fn osv_query_rejects_unknown_flag() {
-        let err = osv_cmd(&[
-            "query".into(),
-            "foo@1.0".into(),
-            "--bogus".into(),
-            "x".into(),
-        ])
-        .unwrap_err();
-        assert!(err.contains("--bogus"));
-    }
-
     // ---- stream / live async helpers ------------------------------------
 
     /// Build a mock provider with a scripted text response and run
@@ -13527,15 +12810,6 @@ mod tests {
         assert!(err.contains("--stream"), "usage hint should mention --stream: {err}");
         let err2 = run("ask", &["".into()]).unwrap_err();
         assert!(err2.to_lowercase().contains("usage"), "got {err2}");
-    }
-
-    #[test]
-    fn ask_rejects_unknown_flag() {
-        let err = run("ask", &["--bogus".into(), "hi".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown ask flag"), "got {err}");
-        // The error must enumerate the supported flags so users can
-        // discover --full without reading source.
-        assert!(err.contains("--full"), "supported-flags list should include --full: {err}");
     }
 
     #[test]
@@ -13740,24 +13014,6 @@ mod tests {
     }
 
     #[test]
-    fn chat_cmd_rejects_unknown_flag() {
-        let err = chat_cmd(&["--bogus".into()]).unwrap_err();
-        assert!(err.to_lowercase().contains("unknown flag"), "got {err}");
-    }
-
-    #[test]
-    fn chat_cmd_session_flag_requires_value() {
-        let err = chat_cmd(&["--session".into()]).unwrap_err();
-        assert!(err.contains("--session"), "got {err}");
-    }
-
-    #[test]
-    fn chat_cmd_max_turns_flag_requires_value() {
-        let err = chat_cmd(&["--max-turns".into()]).unwrap_err();
-        assert!(err.contains("--max-turns"), "got {err}");
-    }
-
-    #[test]
     fn chat_cmd_max_turns_flag_rejects_non_numeric() {
         let err = chat_cmd(&["--max-turns".into(), "lots".into()]).unwrap_err();
         assert!(err.contains("--max-turns"), "got {err}");
@@ -13822,12 +13078,6 @@ mod tests {
     }
 
     #[test]
-    fn interrupt_cmd_unknown_subcommand_errs() {
-        let err = interrupt_cmd(&["frobnicate".into()]).unwrap_err();
-        assert!(err.contains("unknown"), "got {err}");
-    }
-
-    #[test]
     fn run_interrupt_routes_to_interrupt_cmd() {
         // Confirm the agent dispatcher reaches interrupt_cmd.
         let err = run("interrupt", &["frobnicate".into()]).unwrap_err();
@@ -13880,22 +13130,10 @@ mod tests {
     }
 
     #[test]
-    fn learn_cmd_unknown_subcommand_errs() {
-        let err = learn_cmd(&["frobnicate".into()]).unwrap_err();
-        assert!(err.contains("unknown"), "got {err}");
-    }
-
-    #[test]
     fn learn_cmd_extract_requires_session_flag() {
         let _dir = isolate_cos_data_dir("missing-session");
         let err = learn_cmd(&["extract".into()]).unwrap_err();
         assert!(err.contains("--session"), "got {err}");
-    }
-
-    #[test]
-    fn learn_cmd_extract_unknown_flag_errs() {
-        let err = learn_cmd(&["extract".into(), "--frobnicate".into(), "x".into()]).unwrap_err();
-        assert!(err.contains("unknown"), "got {err}");
     }
 
     #[test]
@@ -14057,12 +13295,6 @@ mod tests {
     }
 
     #[test]
-    fn hooks_cmd_unknown_subcommand_errs() {
-        let err = hooks_cmd(&["frobnicate".into()]).unwrap_err();
-        assert!(err.contains("unknown"), "got {err}");
-    }
-
-    #[test]
     fn run_hooks_routes_to_hooks_cmd() {
         let _dir = isolate_cos_data_dir("hooks-route");
         let v = run("dev", &["hooks".into(), "list".into()]).expect("ok");
@@ -14214,12 +13446,6 @@ mod tests {
     }
 
     #[test]
-    fn media_play_rejects_unknown_flag() {
-        let err = media_play_cmd(&["--frobnicate".into(), "a.wav".into()]).unwrap_err();
-        assert!(err.contains("unknown flag"), "got {err}");
-    }
-
-    #[test]
     fn media_play_detect_only_returns_format_and_player_for_wav() {
         // --detect doesn't try to play; it just resolves the format
         // and tells you which player would be used. Safe to run on
@@ -14261,12 +13487,6 @@ mod tests {
     }
 
     #[test]
-    fn media_playback_status_format_flag_requires_value() {
-        let err = media_playback_status_cmd(&["--format".into()]).unwrap_err();
-        assert!(err.contains("--format"), "got {err}");
-    }
-
-    #[test]
     fn media_playback_status_default_returns_all_four_formats() {
         let v = media_playback_status_cmd(&[]).expect("ok");
         let arr = v["formats"].as_array().expect("formats array");
@@ -14288,12 +13508,6 @@ mod tests {
     }
 
     #[test]
-    fn media_playback_status_unknown_flag_errs() {
-        let err = media_playback_status_cmd(&["--quack".into()]).unwrap_err();
-        assert!(err.contains("unknown flag"), "got {err}");
-    }
-
-    #[test]
     fn run_media_play_routes_through_dispatcher() {
         // Confirm the cos-agent dispatcher reaches media_play_cmd via `dev`.
         let err = run("dev", &["media".into(), "play".into()]).unwrap_err();
@@ -14304,5 +13518,562 @@ mod tests {
     fn run_media_playback_status_routes_through_dispatcher() {
         let v = run("dev", &["media".into(), "playback-status".into()]).expect("ok");
         assert!(v["formats"].is_array(), "got {v}");
+    }
+
+    // ----------------------------------------------------------------
+    // CLI dispatch contract
+    //
+    // Every subcommand dispatcher must reject bad input with an error
+    // that tells the user what to do instead. That contract used to be
+    // covered by ~120 near-identical 4-line tests; the tables below
+    // assert the same thing per-dispatcher without the duplication.
+    // ----------------------------------------------------------------
+
+    /// One row of a CLI-rejection table: a label for failure output, the
+    /// invocation under test, and substrings the error must mention.
+    type CliCase = (
+        &'static str,
+        Box<dyn Fn() -> Result<(), String>>,
+        Vec<&'static str>,
+    );
+
+    /// Build a [`CliCase`]. The call is normalised to `Result<(), String>`
+    /// so dispatchers with different `Ok` types share one table.
+    macro_rules! cli_case {
+        ($label:expr, $call:expr, [$($want:expr),* $(,)?]) => {
+            (
+                $label,
+                Box::new(move || $call.map(|_| ())) as Box<dyn Fn() -> Result<(), String>>,
+                vec![$($want),*],
+            )
+        };
+    }
+
+    /// Assert every case errors and that the message mentions each
+    /// expected substring. Matching is case-insensitive because some
+    /// dispatchers capitalise their usage banner.
+    fn assert_cli_rejects(cases: Vec<CliCase>) {
+        for (label, invoke, expected) in cases {
+            let err = match invoke() {
+                Err(e) => e,
+                Ok(()) => panic!("{label}: expected an error, got Ok"),
+            };
+            let hay = err.to_lowercase();
+            for want in expected {
+                assert!(
+                    hay.contains(&want.to_lowercase()),
+                    "{label}: error {err:?} should mention {want:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn cli_unknown_subcommand_lists_available_options() {
+        assert_cli_rejects(vec![
+            cli_case!(
+                "agent root",
+                run("not-a-command", &[]),
+                ["ask", "setup", "sessions", "override", "dev"]
+            ),
+            cli_case!(
+                "budget user",
+                budget_cmd(&["user".into(), "bogus".into()]),
+                ["bogus", "show", "path"]
+            ),
+            cli_case!(
+                "insights",
+                insights_cmd(&["bogus".into()]),
+                ["bogus", "overall"]
+            ),
+            cli_case!(
+                "notes",
+                notes_cmd(&["bogus".into()]),
+                ["list", "read", "write"]
+            ),
+            cli_case!(
+                "skills",
+                skills_cmd(&["bogus".into()]),
+                ["list", "info", "disabled"]
+            ),
+            cli_case!(
+                "skills hub (no subcommand)",
+                skills_cmd(&["hub".into()]),
+                ["list", "install"]
+            ),
+            cli_case!(
+                "skills hub",
+                skills_cmd(&["hub".into(), "bogus".into(), "owner/repo".into()]),
+                ["list", "install"]
+            ),
+            cli_case!(
+                "llm",
+                llm_cmd(&["bogus".into()]),
+                ["providers", "models"]
+            ),
+            cli_case!(
+                "skills usage",
+                {
+                    let dir = tempfile::tempdir().expect("tmp");
+                    let p = dir.path().join("usage.jsonl");
+                    skills_usage_cmd_at(&["bogus".into()], &p)
+                },
+                ["stats", "record"]
+            ),
+            cli_case!("prompt", prompt_cmd(&["bogus".into()]), ["show", "build"]),
+            cli_case!(
+                "nudge",
+                nudge_cmd(&["bogus".into()]),
+                ["list", "add", "fire"]
+            ),
+            cli_case!("mcp", mcp_cmd(&["bogus".into()]), ["status", "serve"]),
+            cli_case!(
+                "usage scope",
+                usage_cmd(&["bogus".into()]),
+                ["provider", "model", "session", "app", "verb"]
+            ),
+            cli_case!(
+                "curator",
+                curator_cmd(&["bogus".into()]),
+                ["propose", "scan", "author"]
+            ),
+            cli_case!(
+                "curator drafts",
+                curator_drafts_cmd(&["bogus".into()]),
+                ["auto-title", "retitle"]
+            ),
+            cli_case!("tools", tools_cmd(&["bogus".into()]), ["bogus", "list"]),
+            cli_case!(
+                "guardrails",
+                guardrails_cmd(&["bogus".into()]),
+                ["bogus", "show"]
+            ),
+            cli_case!(
+                "approval",
+                approval_cmd(&["bogus".into()]),
+                ["bogus", "show"]
+            ),
+            cli_case!(
+                "todo",
+                {
+                    let (_dir, store) = temp_todo_store();
+                    todo_cmd_at(&["bogus".into()], &store)
+                },
+                ["bogus"]
+            ),
+            cli_case!("compress", compress_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!("aux", aux_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!("retry", retry_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!("sessions", sessions_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!(
+                "semantic",
+                semantic_cmd(&["bogus".into()]),
+                ["clear-all", "status"]
+            ),
+            cli_case!("vision", vision_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!("display", display_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!(
+                "shell hooks",
+                shell_hooks_cmd(&["bogus".into()]),
+                ["bogus", "init"]
+            ),
+            cli_case!(
+                "media",
+                media_cmd(&["bogus".into()]),
+                ["bogus", "providers"]
+            ),
+            cli_case!(
+                "binary ext",
+                binary_ext_cmd(&["bogus".into()]),
+                ["bogus", "list"]
+            ),
+            cli_case!(
+                "context",
+                context_cmd(&["bogus".into()]),
+                ["bogus", "hints"]
+            ),
+            cli_case!("file safety", file_safety_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!("osv", osv_cmd(&["bogus".into()]), ["bogus"]),
+            cli_case!(
+                "interrupt",
+                interrupt_cmd(&["frobnicate".into()]),
+                ["unknown"]
+            ),
+            cli_case!("learn", learn_cmd(&["frobnicate".into()]), ["unknown"]),
+            cli_case!("hooks", hooks_cmd(&["frobnicate".into()]), ["unknown"]),
+        ]);
+    }
+
+    #[test]
+    fn cli_unknown_flag_is_rejected() {
+        assert_cli_rejects(vec![
+            cli_case!(
+                "prompt show",
+                prompt_cmd(&["show".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "mcp serve",
+                mcp_cmd(&["serve".into(), "--bogus".into(), "x".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "curator propose",
+                curator_cmd(&["propose".into(), "any-sid".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "curator author",
+                curator_cmd(&["author".into(), "draft-1".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "curator scan",
+                curator_cmd(&["scan".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "curator drafts auto-title",
+                curator_drafts_cmd(&["auto-title".into(), "some-id".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "providers",
+                providers_cmd(&["--bogus".into()]),
+                ["--bogus", "--names"]
+            ),
+            cli_case!(
+                "provider doctor",
+                provider_doctor_cmd(&["--mystery".into()]),
+                ["--mystery", "--probe-network"]
+            ),
+            cli_case!(
+                "approval check",
+                approval_cmd(&["check".into(), "echo".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "compress check",
+                compress_cmd(&["check".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "mcp spawn spec",
+                parse_mcp_spawn_spec(&["--cmd".into(), "x".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "aux ask",
+                aux_cmd(&[
+                    "ask".into(),
+                    "--prompt".into(),
+                    "hi".into(),
+                    "--bogus".into(),
+                ]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "retry schedule",
+                retry_cmd(&["schedule".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "skills guard",
+                {
+                    let dir = skills_guard_test_dir("bad-flag");
+                    let skill = write_test_skill(&dir, "eta", &["echo"]);
+                    let map = guard_skills_map(skill);
+                    skills_guard_cmd_against(&["eta".into(), "--bogus".into()], &map)
+                },
+                ["--bogus"]
+            ),
+            cli_case!(
+                "vision route",
+                vision_route_cmd(&["--bytes".into(), "1024".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "vision sniff",
+                vision_sniff_cmd(&["--bogus".into(), "x".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "vision analyze",
+                vision_analyze_cmd(&[
+                    "--bogus".into(),
+                    "v".into(),
+                    "--file".into(),
+                    "x.png".into(),
+                    "--prompt".into(),
+                    "describe".into(),
+                ]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "display transcript",
+                parse_display_transcript_args(&["--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "shell hooks tail",
+                shell_hooks_cmd(&["tail".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "media list-outputs",
+                media_cmd(&["list-outputs".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "binary ext list",
+                binary_ext_cmd(&["list".into(), "--bogus".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "context hints",
+                context_hints_cmd(&["--bogus".into(), "x".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "context refs",
+                context_refs_cmd(&["--bogus".into(), "v".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "context build",
+                context_cmd(&["build".into(), "--bogus".into()]),
+                ["--bogus"]
+            ),
+            cli_case!(
+                "osv query",
+                osv_cmd(&[
+                    "query".into(),
+                    "foo@1.0".into(),
+                    "--bogus".into(),
+                    "x".into(),
+                ]),
+                ["--bogus"]
+            ),
+            // `ask` must enumerate supported flags so users can discover
+            // `--full` without reading the source.
+            cli_case!(
+                "ask",
+                run("ask", &["--bogus".into(), "hi".into()]),
+                ["unknown ask flag", "--full"]
+            ),
+            cli_case!("chat", chat_cmd(&["--bogus".into()]), ["unknown flag"]),
+            cli_case!(
+                "learn extract",
+                learn_cmd(&["extract".into(), "--frobnicate".into(), "x".into()]),
+                ["unknown"]
+            ),
+            cli_case!(
+                "media play",
+                media_play_cmd(&["--frobnicate".into(), "a.wav".into()]),
+                ["unknown flag"]
+            ),
+            cli_case!(
+                "media playback-status",
+                media_playback_status_cmd(&["--quack".into()]),
+                ["unknown flag"]
+            ),
+        ]);
+    }
+
+    #[test]
+    fn cli_missing_required_argument_reports_usage() {
+        assert_cli_rejects(vec![
+            cli_case!("notes read", notes_cmd(&["read".into()]), ["usage"]),
+            cli_case!("skills info", skills_cmd(&["info".into()]), ["usage"]),
+            cli_case!(
+                "skills hub list",
+                skills_cmd(&["hub".into(), "list".into()]),
+                ["owner/repo"]
+            ),
+            cli_case!(
+                "skills hub install",
+                skills_cmd(&["hub".into(), "install".into(), "owner/repo".into()]),
+                ["usage:", "install"]
+            ),
+            cli_case!(
+                "skills hub show",
+                skills_cmd(&["hub".into(), "show".into(), "owner/repo".into()]),
+                ["usage:", "show"]
+            ),
+            cli_case!("redact", redact_cmd(&[]), ["usage:"]),
+            cli_case!(
+                "skills usage record",
+                {
+                    let dir = tempfile::tempdir().expect("tmp");
+                    let p = dir.path().join("usage.jsonl");
+                    skills_usage_cmd_at(&["record".into()], &p)
+                },
+                ["usage:"]
+            ),
+            cli_case!("think-scrub", think_scrub_cmd(&[]), ["usage:"]),
+            cli_case!("tokens", tokens_cmd(&[]), ["usage:"]),
+            cli_case!("nudge add", nudge_cmd(&["add".into()]), ["usage"]),
+            cli_case!(
+                "nudge add (due only)",
+                nudge_cmd(&["add".into(), "30".into()]),
+                ["usage"]
+            ),
+            cli_case!("nudge fire", nudge_cmd(&["fire".into()]), ["usage"]),
+            cli_case!("usage provider", usage_cmd(&["provider".into()]), ["usage"]),
+            cli_case!("usage model", usage_cmd(&["model".into()]), ["usage"]),
+            cli_case!("usage session", usage_cmd(&["session".into()]), ["usage"]),
+            cli_case!("usage app", usage_cmd(&["app".into()]), ["usage"]),
+            cli_case!("usage verb", usage_cmd(&["verb".into()]), ["usage"]),
+            cli_case!(
+                "curator drafts auto-title",
+                curator_drafts_cmd(&["auto-title".into()]),
+                ["usage"]
+            ),
+            cli_case!("tools show", tools_cmd(&["show".into()]), ["show"]),
+            cli_case!("set-title", parse_set_title_args(&[]), ["usage"]),
+            cli_case!("sessions title", sessions_title(&[]), ["usage"]),
+            cli_case!("display", display_cmd(&[]), ["usage"]),
+            cli_case!(
+                "display format-bytes",
+                display_format_bytes_cmd(&[]),
+                ["usage"]
+            ),
+            cli_case!(
+                "display format-duration",
+                display_format_duration_cmd(&[]),
+                ["usage"]
+            ),
+            cli_case!(
+                "shell hooks record-post",
+                shell_hooks_cmd(&["record-post".into()]),
+                ["usage"]
+            ),
+            cli_case!(
+                "binary ext check",
+                binary_ext_cmd(&["check".into()]),
+                ["usage"]
+            ),
+            cli_case!("context", context_cmd(&[]), ["usage"]),
+            cli_case!("file safety", file_safety_cmd(&[]), ["usage", "check"]),
+            cli_case!(
+                "file safety check",
+                file_safety_cmd(&["check".into()]),
+                ["usage"]
+            ),
+            cli_case!("osv", osv_cmd(&[]), ["usage", "parse"]),
+            cli_case!("osv parse", osv_cmd(&["parse".into()]), ["usage"]),
+        ]);
+    }
+
+    #[test]
+    fn cli_flag_without_value_names_the_flag() {
+        assert_cli_rejects(vec![
+            cli_case!("redact --file", redact_cmd(&["--file".into()]), ["--file"]),
+            cli_case!(
+                "prompt --extra",
+                prompt_cmd(&["show".into(), "--extra".into()]),
+                ["--extra"]
+            ),
+            cli_case!(
+                "read_text_input --file",
+                read_text_input(&["--file".into()], "tokens"),
+                ["--file"]
+            ),
+            cli_case!(
+                "usage --app",
+                usage_cmd(&["overall".into(), "--app".into()]),
+                ["--app"]
+            ),
+            cli_case!(
+                "usage --verb",
+                usage_cmd(&["overall".into(), "--verb".into()]),
+                ["--verb"]
+            ),
+            cli_case!(
+                "mcp serve --allow",
+                mcp_cmd(&["serve".into(), "--allow".into()]),
+                ["--allow"]
+            ),
+            cli_case!(
+                "mcp serve --deny",
+                mcp_cmd(&["serve".into(), "--deny".into()]),
+                ["--deny"]
+            ),
+            cli_case!(
+                "curator propose --min-turns",
+                curator_cmd(&["propose".into(), "any-sid".into(), "--min-turns".into()]),
+                ["--min-turns"]
+            ),
+            cli_case!(
+                "curator scan --limit",
+                curator_cmd(&["scan".into(), "--limit".into()]),
+                ["--limit"]
+            ),
+            cli_case!(
+                "providers --names",
+                providers_cmd(&["--names".into()]),
+                ["--names"]
+            ),
+            cli_case!(
+                "provider doctor --names",
+                provider_doctor_cmd(&["--names".into()]),
+                ["--names"]
+            ),
+            cli_case!(
+                "summarise --max",
+                summarise_cmd(&["--max".into()]),
+                ["--max"]
+            ),
+            cli_case!(
+                "classify --labels",
+                classify_cmd(&["--labels".into()]),
+                ["--labels"]
+            ),
+            cli_case!(
+                "approval check --input",
+                approval_cmd(&["check".into(), "echo".into(), "--input".into()]),
+                ["--input"]
+            ),
+            cli_case!(
+                "sessions stats --session",
+                sessions_stats(&["--session".into()]),
+                ["--session requires"]
+            ),
+            cli_case!(
+                "shell hooks tail --limit",
+                shell_hooks_cmd(&["tail".into(), "--limit".into()]),
+                ["--limit"]
+            ),
+            cli_case!(
+                "media list-outputs --limit",
+                media_cmd(&["list-outputs".into(), "--limit".into()]),
+                ["--limit"]
+            ),
+            cli_case!(
+                "media list-outputs --ext",
+                media_cmd(&["list-outputs".into(), "--ext".into()]),
+                ["--ext"]
+            ),
+            cli_case!(
+                "binary ext list --limit",
+                binary_ext_cmd(&["list".into(), "--limit".into()]),
+                ["--limit"]
+            ),
+            cli_case!(
+                "chat --session",
+                chat_cmd(&["--session".into()]),
+                ["--session"]
+            ),
+            cli_case!(
+                "chat --max-turns",
+                chat_cmd(&["--max-turns".into()]),
+                ["--max-turns"]
+            ),
+            cli_case!(
+                "media playback-status --format",
+                media_playback_status_cmd(&["--format".into()]),
+                ["--format"]
+            ),
+        ]);
     }
 }

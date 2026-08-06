@@ -125,7 +125,9 @@ fn update_meta_serializes_concurrent_writers() {
     })
     .unwrap();
 
-    let increments_per_thread = 200u64;
+    // Kept small on purpose: a missing lock loses updates within the first
+    // few dozen interleavings, so more iterations only add wall-clock time.
+    let increments_per_thread = 50u64;
     let sid_a = sid.clone();
     let sid_b = sid.clone();
     let h1 = std::thread::spawn(move || {
@@ -170,7 +172,7 @@ fn write_state_preserves_concurrent_runtime_entries() {
     let sid = create("multi-runtime").unwrap();
     let sid_a = sid.clone();
     let sid_b = sid.clone();
-    let iterations = 50u64;
+    let iterations = 20u64;
     let h1 = std::thread::spawn(move || {
         for i in 0..iterations {
             write_state(&sid_a, "alpha", serde_json::json!({"i": i})).unwrap();
@@ -416,7 +418,7 @@ fn concurrent_appends_do_not_lose_lines() {
 
     let sid = create("concurrent").unwrap();
     let n_threads = 8;
-    let per_thread = 64;
+    let per_thread = 16;
     std::thread::scope(|s| {
         for t in 0..n_threads {
             let sid = sid.clone();

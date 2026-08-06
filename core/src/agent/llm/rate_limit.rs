@@ -467,9 +467,11 @@ mod tests {
         };
         for _ in 0..50 {
             let d = p.delay_for(1);
-            // [500ms, 1500ms).
+            // `delay_for` rounds `clamped * factor`, and `jitter_factor` is
+            // exclusive of 1.5, so the largest representable delay rounds up
+            // to exactly `max_ms * 1.5` — the upper bound is inclusive.
             assert!(
-                d >= Duration::from_millis(500) && d < Duration::from_millis(1500),
+                d >= Duration::from_millis(500) && d <= Duration::from_millis(1500),
                 "out of range: {d:?}"
             );
         }

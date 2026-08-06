@@ -56,7 +56,7 @@ jobs:
         # Each module guards its own state with a per-module `Mutex<()>`,
         # but the env vars themselves are shared, so two modules racing on
         # separate locks still trample each other. Running serially is the
-        # cheapest fix; the test binary still finishes in ~15s.
+        # cheapest fix; the lib test binary finishes in ~70s.
         run: cd core && cargo test -- --test-threads=1
 
       - name: Run cos-browser tests
