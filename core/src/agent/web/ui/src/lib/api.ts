@@ -1,9 +1,9 @@
 /**
- * Single source of truth for cos agent web API access. Mirrors what
- * the old single-file SPA used — token is the same Bearer header /
- * ?t= query parameter the axum routes accept.
+ * Single source of truth for cos agent web API access. The persistent
+ * bootstrap secret is exchanged once; normal requests use only the returned
+ * short-lived Bearer token.
  *
- * The token is held in localStorage. If missing or rejected we surface
+ * The short-lived access token is held in localStorage. If missing or rejected we surface
  * a "needs token" event so the App shell can show the bootstrap modal.
  */
 
@@ -34,6 +34,35 @@ export function clearToken() {
   }
 }
 
+export async function exchangeBootstrapToken(bootstrap: string): Promise<void> {
+  const res = await fetch("/api/auth/token", {
+    method: "POST",
+    headers: {
+      Authorization: `Bootstrap ${bootstrap}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ ttl_seconds: 3600 }),
+  });
+  if (!res.ok) {
+    let body: any;
+    try {
+      body = await res.json();
+    } catch {
+      body = await res.text();
+    }
+    throw new ApiError(
+      res.status,
+      body,
+      (body && typeof body === "object" && body.error) || `HTTP ${res.status}`,
+    );
+  }
+  const body = await res.json();
+  if (!body?.access_token || body?.token_type !== "Bearer") {
+    throw new Error("Token exchange returned an invalid response");
+  }
+  setToken(body.access_token);
+}
+
 export type ApiOpts = RequestInit & { signal?: AbortSignal };
 
 export class ApiError extends Error {
@@ -58,6 +87,10 @@ async function request<T = any>(
   }
   const res = await fetch(path, { ...opts, headers });
   if (!res.ok) {
+    if (res.status === 401) {
+      clearToken();
+      window.dispatchEvent(new CustomEvent("cos:auth-required"));
+    }
     let body: any;
     try {
       body = await res.json();
@@ -103,6 +136,10 @@ export async function streamSse(
     signal,
   });
   if (!res.ok || !res.body) {
+    if (res.status === 401) {
+      clearToken();
+      window.dispatchEvent(new CustomEvent("cos:auth-required"));
+    }
     let errBody: any;
     try {
       errBody = await res.json();

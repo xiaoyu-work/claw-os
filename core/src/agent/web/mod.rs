@@ -27,12 +27,14 @@
 //!   actually answer the pending consent prompts that block agent
 //!   work in clawd-routed setups.
 //!
-//! Auth is intentionally minimal: a one-shot 32-byte hex token loaded
-//! from `$COS_DATA_DIR/agent/web/serve.token` (auto-generated on
-//! first run) is required as `?t=<token>` or `Authorization: Bearer
-//! <token>`. By default the server only binds `127.0.0.1`. Exposing
+//! Auth uses a persistent 32-byte bootstrap secret loaded from
+//! `$COS_DATA_DIR/agent/web/serve.token` (auto-generated on first run).
+//! The UI exchanges it once at `/api/auth/token`; normal requests use only
+//! signed Bearer access tokens. By default the server binds `127.0.0.1`.
+//! Exposing
 //! to other interfaces (`--bind 0.0.0.0`) requires a PEM certificate and
-//! owner-only private key; query-string tokens are then disabled. Each
+//! owner-only private key. The bootstrap is exchanged for a signed one-hour
+//! access token; API query-string tokens are never accepted. Each
 //! instance is bound to exactly one non-root Unix uid
 //! and refuses shared or wrong-owner state directories. Multiple desktop
 //! users run separate isolated instances.
@@ -87,6 +89,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     let mut log_override: Option<PathBuf> = None;
     let mut tls_cert: Option<PathBuf> = None;
     let mut tls_key: Option<PathBuf> = None;
+    let mut rotate_token = false;
 
     let mut i = 0usize;
     while i < args.len() {
@@ -150,6 +153,10 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 tls_key = Some(PathBuf::from(value));
                 i += 2;
             }
+            "--rotate-token" => {
+                rotate_token = true;
+                i += 1;
+            }
             "--stop" => {
                 stop_daemon_flag = true;
                 i += 1;
@@ -162,18 +169,19 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
                 return Ok(json!({
                     "command": "cos agent serve",
                     "summary": "Run the built-in web UI for chat / tasks / approvals / sysinfo.",
-                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--open] [--detach|--stop|--status] [--log <path>]",
+                    "usage": "cos agent serve [--bind 127.0.0.1] [--port 7878] [--tls-cert cert.pem --tls-key key.pem] [--token <hex>] [--rotate-token] [--open] [--detach|--stop|--status] [--log <path>]",
                     "flags": {
                         "--bind": "Network interface to bind. Default 127.0.0.1 (localhost only).",
                         "--port": "TCP port. Default 7878.",
-                        "--token": "Override the persisted access token. Default: load/generate from $COS_DATA_DIR/agent/web/serve.token.",
-                        "--open": "Print the URL with the token query parameter so the user can paste it into a browser.",
+                        "--token": "Override the persistent 64-hex bootstrap secret. Default: load/generate from $COS_DATA_DIR/agent/web/serve.token.",
+                        "--open": "Open the UI. Loopback URLs carry the bootstrap in ?t= only for the frontend exchange step.",
                         "--detach / -d": "Run in the background. Writes PID to $COS_DATA_DIR/agent/web/serve.pid and logs to serve.log (override with --log).",
                         "--stop": "Stop a previously-detached daemon (SIGTERM, then SIGKILL after 5s).",
                         "--status": "Report whether a detached daemon is running; print URL + PID if so.",
                         "--log": "Path for the detached daemon's log file. Default $COS_DATA_DIR/agent/web/serve.log.",
                         "--tls-cert": "PEM certificate chain. Required with --tls-key.",
                         "--tls-key": "Owner-only PEM private key. Required with --tls-cert.",
+                        "--rotate-token": "Rotate bootstrap and signing secrets, immediately invalidating every issued access token.",
                     },
                     "url": format!("{}://{}/", if tls_cert.is_some() { "https" } else { "http" }, display_address(&bind, port)),
                 }));
@@ -187,6 +195,18 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     }
     if status_daemon_flag {
         return report_status();
+    }
+    if rotate_token {
+        let owner_uid = state::current_owner_uid()?;
+        state::validate_owner_storage(owner_uid)?;
+        let bootstrap = auth::rotate_tokens()?;
+        return Ok(json!({
+            "rotated": true,
+            "bootstrap_token": bootstrap,
+            "bootstrap_path": auth::token_path().display().to_string(),
+            "signing_key_path": auth::signing_key_path().display().to_string(),
+            "note": "all previously issued access tokens are now invalid",
+        }));
     }
     let owner_uid = state::current_owner_uid()?;
     let addr: std::net::SocketAddr = format!("{bind}:{port}")
@@ -227,6 +247,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         Some(t) => auth::persist_token(&t).map_err(|e| format!("persist token: {e}"))?,
         None => auth::load_or_generate_token().map_err(|e| format!("token: {e}"))?,
     };
+    auth::ensure_signing_key()?;
     let tls_material = match (tls_cert.as_deref(), tls_key.as_deref()) {
         (Some(cert), Some(key)) => Some(read_tls_material(cert, key, owner_uid)?),
         (None, None) => None,
@@ -278,12 +299,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("tokio runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let state = state::AppState::new(
-            cfg,
-            token,
-            owner_uid,
-            addr.ip().is_loopback(),
-        );
+        let state = state::AppState::new(cfg, owner_uid);
         let app = server::build_app(state);
         if let Some((cert, key)) = tls_material {
             let _ = rustls::crypto::ring::default_provider().install_default();

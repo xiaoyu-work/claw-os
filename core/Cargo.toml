@@ -64,6 +64,7 @@ zbus = { version = "=5.5.0", default-features = false, features = ["blocking-api
 ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 hex = "0.4"
 sha2 = "0.10"
+hmac = "0.12"
 
 # Phase 5.5 (Edge TTS): WebSocket client. Aligned with workspace 0.26 + rustls
 # to match `reqwest`'s `rustls-tls` feature already in use here, so the binary

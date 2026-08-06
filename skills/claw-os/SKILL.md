@@ -150,8 +150,15 @@ Loopback `cos agent serve` may use HTTP. Any non-loopback bind is rejected
 unless both `--tls-cert /absolute/cert.pem` and
 `--tls-key /absolute/key.pem` are supplied. The built-in server uses rustls;
 the private key must be owned by the serving uid with no group/other
-permissions. Query-string tokens are accepted only on loopback, so remote
-clients authenticate with the `Authorization` header. A TLS reverse proxy can
-instead terminate HTTPS while `cos agent serve` remains bound to `127.0.0.1`.
+permissions. API query-string tokens are never accepted; the loopback `?t=`
+value is consumed only by the frontend bootstrap exchange. A TLS reverse proxy
+can instead terminate HTTPS while `cos agent serve` remains bound to
+`127.0.0.1`.
+
+`serve.token` is only a bootstrap secret. The browser exchanges it at
+`POST /api/auth/token` for a uid-bound HMAC-SHA256 access token valid for at
+most one hour; normal APIs reject the persistent bootstrap secret. Run
+`cos agent serve --rotate-token` to rotate both bootstrap and signing secrets,
+immediately invalidating every issued access token.
 
 For detailed usage of any feature, read the corresponding doc linked above.

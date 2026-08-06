@@ -1,9 +1,9 @@
 /**
  * Token bootstrap modal. Mirrors the old single-file SPA's first-launch
  * flow: read `cos.token` from localStorage; if missing or rejected by
- * `/api/meta`, prompt the user to paste the token printed by
- * `cos agent serve`. The token is the 32-byte hex value persisted to
- * `$COS_DATA_DIR/agent/web/serve.token`.
+ * `/api/meta`, prompt the user to paste the bootstrap secret printed by
+ * `cos agent serve`. The bootstrap secret is exchanged for a one-hour signed
+ * access token; only the short-lived token is stored in localStorage.
  *
  * Also reads `?t=<token>` from the initial URL so the user can just
  * click the link printed by the daemon.
@@ -13,7 +13,7 @@ import { useEffect, useState } from "react";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api, getToken, setToken } from "@/lib/api";
+import { api, exchangeBootstrapToken, getToken } from "@/lib/api";
 
 type Status = "checking" | "ok" | "needs-token";
 
@@ -24,15 +24,28 @@ export function TokenGate({ children, onMeta }: { children: React.ReactNode; onM
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    void bootstrap();
+    const requireAuth = () => setStatus("needs-token");
+    window.addEventListener("cos:auth-required", requireAuth);
+    return () => window.removeEventListener("cos:auth-required", requireAuth);
+  }, []);
+
+  async function bootstrap() {
     const url = new URL(window.location.href);
     const t = url.searchParams.get("t");
-    if (t && !getToken()) {
-      setToken(t);
+    if (t) {
       url.searchParams.delete("t");
       window.history.replaceState({}, "", url.pathname + url.hash);
+      try {
+        await exchangeBootstrapToken(t);
+      } catch (e: any) {
+        setErr(e?.message || "Invalid bootstrap token");
+        setStatus("needs-token");
+        return;
+      }
     }
-    verify();
-  }, []);
+    await verify();
+  }
 
   async function verify() {
     setStatus("checking");
@@ -57,8 +70,8 @@ export function TokenGate({ children, onMeta }: { children: React.ReactNode; onM
   async function submit() {
     setErr(null);
     setBusy(true);
-    setToken(pasted.trim());
     try {
+      await exchangeBootstrapToken(pasted.trim());
       const meta = await api.get("/api/meta");
       onMeta(meta);
       setStatus("ok");
@@ -85,14 +98,14 @@ export function TokenGate({ children, onMeta }: { children: React.ReactNode; onM
             <DialogTitle>Paste your access token</DialogTitle>
             <DialogDescription>
               Run <code className="font-mono text-xs">cos agent serve --status</code> on
-              the host to see the URL with the token, or paste it manually.
+              the host to see the bootstrap URL, or paste the bootstrap token manually.
             </DialogDescription>
           </DialogHeader>
           <div className="flex flex-col gap-3">
             <Input
               type="password"
               autoFocus
-              placeholder="32-byte hex token"
+              placeholder="64-character bootstrap token"
               value={pasted}
               onChange={(e) => setPasted(e.target.value)}
               onKeyDown={(e) => {

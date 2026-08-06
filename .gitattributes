@@ -30,3 +30,6 @@
 *.woff binary
 *.woff2 binary
 *.ttf binary
+
+# Vite bundles may contain intentional whitespace inside generated templates.
+core/src/agent/web/ui/dist/assets/*.js -whitespace

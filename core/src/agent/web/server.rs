@@ -26,6 +26,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/clawos-symbol-dark.png", get(assets::brand_symbol_dark))
         .route("/assets/{file}", get(assets::asset))
         // JSON API.
+        .route("/api/auth/token", post(routes::auth::token))
         .route("/api/meta", get(routes::meta::handler))
         .route("/api/chat", post(routes::chat::handler))
         .route("/api/sessions", get(routes::sessions::list))
