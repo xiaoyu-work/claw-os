@@ -2,7 +2,7 @@
 Name=ClawOS
 Comment=ClawOS Icons
 Example=folder
-Inherits=Tela-black,Tela,Pop,hicolor
+Inherits=Tela-black,Adwaita,hicolor
 
 # KDE Specific Stuff
 DisplayDepth=32
