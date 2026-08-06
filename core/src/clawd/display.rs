@@ -810,8 +810,8 @@ fn parse_outputs(kdl: &str) -> Result<Vec<Value>, String> {
                         "height": fields[1].parse::<i64>().ok(),
                         "refresh_millihz": fields[2].parse::<i64>().ok(),
                         "refresh_hz": fields[2].parse::<f64>().ok().map(|value| value / 1000.0),
-                        "current": fields.iter().any(|field| *field == "current=#true"),
-                        "preferred": fields.iter().any(|field| *field == "preferred=#true"),
+                        "current": fields.contains(&"current=#true"),
+                        "preferred": fields.contains(&"preferred=#true"),
                     }));
                 }
             }

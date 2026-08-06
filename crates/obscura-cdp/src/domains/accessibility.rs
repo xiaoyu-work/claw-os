@@ -36,7 +36,7 @@ pub async fn handle(
                 .get_session_page(session_id)
                 .ok_or("No page")?;
             let nodes = page
-                .with_dom(|dom| build_ax_nodes(dom))
+                .with_dom(build_ax_nodes)
                 .unwrap_or_default();
             Ok(json!({ "nodes": nodes }))
         }
@@ -408,7 +408,7 @@ fn compute_properties(_dom: &DomTree, node: &obscura_dom::Node) -> Vec<Value> {
 
         // level for headings
         if let Some(level) = tag.strip_prefix('h').and_then(|s| s.parse::<u32>().ok()) {
-            if level >= 1 && level <= 6 {
+            if (1..=6).contains(&level) {
                 props.push(json!({"name": "level", "value": ax_value_integer(level)}));
             }
         }

@@ -6,6 +6,8 @@
 //! The kernel runs the catalog implementation under the app's own
 //! capabilities, audits the call, and returns a structured result.
 
+#![allow(clippy::result_large_err)]
+
 use std::ffi::OsString;
 
 use serde::{Deserialize, Serialize};

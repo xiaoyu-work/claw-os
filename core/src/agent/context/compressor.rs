@@ -455,7 +455,6 @@ const _UNUSED_FINISH_REASON_REF: Option<FinishReason> = None;
 mod tests {
     use super::*;
     use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
-    use crate::agent::llm::ToolCall;
     use crate::config::AgentConfig;
 
     fn parent_cfg() -> AgentConfig {

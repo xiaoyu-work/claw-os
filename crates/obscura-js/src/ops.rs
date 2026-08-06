@@ -68,6 +68,12 @@ impl ObscuraState {
     }
 }
 
+impl Default for ObscuraState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub type SharedState = Rc<RefCell<ObscuraState>>;
 
 #[op2]
@@ -380,7 +386,7 @@ async fn op_fetch_url(
                         "error": reason,
                     }).to_string());
                 }
-                Ok(InterceptResolution::Continue { url: new_url, method: new_method, headers: new_headers, body: new_body }) => {
+                Ok(InterceptResolution::Continue { .. }) => {
                     tracing::debug!("Interception: continue request {}", url);
                 }
                 Err(_) => {
@@ -585,14 +591,17 @@ fn glob_match(pattern: &str, url: &str) -> bool {
     if pattern == "*" {
         return true;
     }
-    if pattern.starts_with('*') && pattern.ends_with('*') {
-        return url.contains(&pattern[1..pattern.len() - 1]);
+    if let Some(inner) = pattern
+        .strip_prefix('*')
+        .and_then(|value| value.strip_suffix('*'))
+    {
+        return url.contains(inner);
     }
-    if pattern.starts_with('*') {
-        return url.ends_with(&pattern[1..]);
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return url.ends_with(suffix);
     }
-    if pattern.ends_with('*') {
-        return url.starts_with(&pattern[..pattern.len() - 1]);
+    if let Some(prefix) = pattern.strip_suffix('*') {
+        return url.starts_with(prefix);
     }
     url == pattern
 }

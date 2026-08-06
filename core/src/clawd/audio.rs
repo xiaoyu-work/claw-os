@@ -117,7 +117,7 @@ fn authorize_session(session_id: &str, peer_pid: u32, requested: &[Cap]) -> Resu
 
 async fn audio_status(environment: &AudioEnvironment) -> Result<Value, String> {
     let objects = pipewire_objects(environment).await?;
-    let raw_status = run_wpctl(environment, &["status", "--name"], ChildPolicy::default()).await?;
+    let raw_status = run_wpctl(environment, &["status", "--name"], ChildPolicy).await?;
     let output_default = default_state(environment, Direction::Output)
         .await
         .unwrap_or_else(|error| json!({"available": false, "error": error}));
@@ -271,7 +271,7 @@ async fn mutate(
         guard.verify(environment).await?;
     }
     let refs = args.iter().map(String::as_str).collect::<Vec<_>>();
-    let output = run_wpctl(environment, &refs, ChildPolicy::default()).await?;
+    let output = run_wpctl(environment, &refs, ChildPolicy).await?;
     let after = match action {
         "output-volume" | "output-mute" => volume_state(environment, Direction::Output).await,
         "input-volume" | "input-mute" => volume_state(environment, Direction::Input).await,
@@ -344,7 +344,7 @@ async fn default_state(
     let inspect = run_wpctl(
         environment,
         &["inspect", direction.special()],
-        ChildPolicy::default(),
+        ChildPolicy,
     )
     .await?;
     let volume = volume_state(environment, direction).await?;
@@ -362,7 +362,7 @@ async fn volume_state(
     let output = run_wpctl(
         environment,
         &["get-volume", direction.special()],
-        ChildPolicy::default(),
+        ChildPolicy,
     )
     .await?;
     parse_volume(&output.stdout)
@@ -387,7 +387,7 @@ async fn inspect_state(environment: &AudioEnvironment, id: u32) -> Result<Value,
     let output = run_wpctl(
         environment,
         &["inspect", &id.to_string()],
-        ChildPolicy::default(),
+        ChildPolicy,
     )
     .await?;
     Ok(json!({
@@ -496,7 +496,7 @@ async fn pipewire_object(environment: &AudioEnvironment, id: u32) -> Result<Valu
 }
 
 async fn pipewire_objects(environment: &AudioEnvironment) -> Result<Vec<Value>, String> {
-    let output = run_user_tool(pw_dump_path()?, &[], environment, ChildPolicy::default()).await?;
+    let output = run_user_tool(pw_dump_path()?, &[], environment, ChildPolicy).await?;
     let values: Value = serde_json::from_str(&output.stdout)
         .map_err(|error| format!("parse pw-dump JSON: {error}"))?;
     let mut objects = Vec::new();

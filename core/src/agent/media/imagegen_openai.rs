@@ -222,7 +222,6 @@ fn body_preview(bytes: &[u8]) -> String {
 mod tests {
     use super::*;
     use base64::engine::general_purpose::STANDARD as B64;
-    use base64::Engine as _;
 
     fn fake_png() -> Vec<u8> {
         // Single PNG signature byte block — encode/decode round-trip is what we test.

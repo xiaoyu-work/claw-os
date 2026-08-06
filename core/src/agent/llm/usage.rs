@@ -288,7 +288,7 @@ fn parse_ts(s: &str) -> Option<DateTime<Utc>> {
 mod tests {
     use super::*;
     use crate::agent::llm::run_log::record_to_path;
-    use crate::agent::llm::{EngineInfo, FinishReason, Usage};
+    use crate::agent::llm::{FinishReason, Usage};
 
     fn write(path: &Path, recs: &[LlmRunRecord]) {
         for r in recs {

@@ -16,6 +16,8 @@
 //! [`require`] returns `Err(PolicyError::Denied(decision))` when the
 //! kernel refuses; the inner [`Decision`] is the wire v1 perms reply.
 
+#![allow(clippy::result_large_err)]
+
 use std::ffi::OsString;
 
 use serde::{Deserialize, Serialize};

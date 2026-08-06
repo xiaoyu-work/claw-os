@@ -299,7 +299,7 @@ impl Store {
             if idx < cursor {
                 continue;
             }
-            let line = record.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+            let line = record.trim_end_matches(['\r', '\n']);
             match serde_json::from_str::<Value>(line) {
                 Ok(value) => {
                     events.push(value);
@@ -720,8 +720,8 @@ impl Store {
                 job.turns_used = Some(turns_used);
                 job.provider = Some(provider);
                 job.model = Some(model);
-                job.evidence = evidence;
-                job.fallback = fallback;
+                job.evidence = *evidence;
+                job.fallback = *fallback;
             }
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
@@ -969,8 +969,8 @@ pub enum FinishOutcome {
         turns_used: u32,
         provider: String,
         model: String,
-        evidence: Option<crate::agent::runtime::evidence::EvidenceReport>,
-        fallback: Option<crate::agent::llm::ProviderFallbackState>,
+        evidence: Box<Option<crate::agent::runtime::evidence::EvidenceReport>>,
+        fallback: Box<Option<crate::agent::llm::ProviderFallbackState>>,
     },
     Error(String),
     Cancelled,
@@ -1700,8 +1700,8 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             turns_used: r.turns,
             provider: r.provider,
             model: r.model,
-            evidence: Some(r.evidence),
-            fallback: r.fallback,
+            evidence: Box::new(Some(r.evidence)),
+            fallback: Box::new(r.fallback),
         },
         Err(e) => FinishOutcome::Error(e.to_string()),
     }
@@ -2182,8 +2182,8 @@ mod tests {
                     turns_used: 2,
                     provider: "mock".into(),
                     model: "mock-model".into(),
-                    evidence: None,
-                    fallback: None,
+                    evidence: Box::new(None),
+                    fallback: Box::new(None),
                 },
             )
             .unwrap();
@@ -2357,8 +2357,8 @@ mod tests {
                     turns_used: 1,
                     provider: "m".into(),
                     model: "m".into(),
-                    evidence: None,
-                    fallback: None,
+                    evidence: Box::new(None),
+                    fallback: Box::new(None),
                 },
             )
             .unwrap();
@@ -2384,8 +2384,8 @@ mod tests {
                         turns_used: 1,
                         provider: "m".into(),
                         model: "m".into(),
-                        evidence: None,
-                        fallback: None,
+                        evidence: Box::new(None),
+                        fallback: Box::new(None),
                     },
                 )
                 .unwrap();
@@ -2532,8 +2532,8 @@ mod tests {
                     turns_used: 1,
                     provider: "mock".into(),
                     model: "mock-model".into(),
-                    evidence: None,
-                    fallback: None,
+                    evidence: Box::new(None),
+                    fallback: Box::new(None),
                 },
             )
             .unwrap();
@@ -2566,8 +2566,8 @@ mod tests {
                         turns_used: 1,
                         provider: "m".into(),
                         model: "m".into(),
-                        evidence: None,
-                        fallback: None,
+                        evidence: Box::new(None),
+                        fallback: Box::new(None),
                     },
                 )
                 .unwrap();
@@ -2630,8 +2630,8 @@ mod tests {
                     turns_used: 1,
                     provider: "m".into(),
                     model: "m".into(),
-                    evidence: None,
-                    fallback: None,
+                    evidence: Box::new(None),
+                    fallback: Box::new(None),
                 },
             )
             .unwrap();

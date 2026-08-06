@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use obscura_browser::{BrowserContext, Page};
-use obscura_js::ops::{InterceptResolution, InterceptedRequest};
+use obscura_js::ops::InterceptedRequest;
 use serde_json::json;
 
 use crate::domains;
@@ -29,6 +29,12 @@ pub struct CdpContext {
     pub isolated_worlds: Vec<String>,
     pub fetch_intercept: FetchInterceptState,
     pub intercept_tx: Option<tokio::sync::mpsc::UnboundedSender<InterceptedRequest>>,
+}
+
+impl Default for CdpContext {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CdpContext {

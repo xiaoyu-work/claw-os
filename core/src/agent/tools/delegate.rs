@@ -372,8 +372,6 @@ fn format_result(result: &AskResult) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
-    use crate::agent::llm::ToolCall;
 
     fn parent_cfg() -> AgentConfig {
         AgentConfig {

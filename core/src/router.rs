@@ -433,7 +433,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
                 if input.len() > 64 {
                     return Err("Bluetooth response exceeds 64 bytes".to_string());
                 }
-                let input = input.trim_end_matches(|character| matches!(character, '\r' | '\n'));
+                let input = input.trim_end_matches(['\r', '\n']);
                 if input.is_empty() {
                     return Err("Bluetooth response from stdin is empty".to_string());
                 }

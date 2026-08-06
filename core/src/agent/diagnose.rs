@@ -1055,6 +1055,9 @@ fn round2(value: f64) -> f64 {
 }
 
 #[cfg(test)]
+mod eval;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1164,19 +1167,17 @@ mod tests {
             }
         }
 
-        #[cfg(test)]
-        mod eval;
+    }
 
-        #[test]
-        fn detects_apparmor_denial_inside_raw_kernel_text() {
-            let findings = analyze(&[ok(
-                "kernel-log",
-                json!({"entries": [{"raw": "audit: apparmor=\"DENIED\" operation=\"open\""}]}),
-            )]);
-            assert!(findings
-                .iter()
-                .any(|finding| finding.code == "apparmor-denial"));
-        }
+    #[test]
+    fn detects_apparmor_denial_inside_raw_kernel_text() {
+        let findings = analyze(&[ok(
+            "kernel-log",
+            json!({"entries": [{"raw": "audit: apparmor=\"DENIED\" operation=\"open\""}]}),
+        )]);
+        assert!(findings
+            .iter()
+            .any(|finding| finding.code == "apparmor-denial"));
     }
 
     #[test]

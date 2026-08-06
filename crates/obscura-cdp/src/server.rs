@@ -76,7 +76,7 @@ pub async fn start_with_authenticated_options(
         .run_until(async {
             let (msg_tx, msg_rx) = mpsc::unbounded_channel::<ServerMessage>();
 
-            let processor_handle = tokio::task::spawn_local(cdp_processor(msg_rx, proxy, stealth, user_agent));
+            let _processor_handle = tokio::task::spawn_local(cdp_processor(msg_rx, proxy, stealth, user_agent));
 
             loop {
                 match listener.accept().await {
@@ -91,7 +91,7 @@ pub async fn start_with_authenticated_options(
                                 if !format!("{}", e).contains("close") {
                                     error!("Connection error from {}: {}", peer_addr, e);
                                 }
-                            }
+                            };
                         });
                     }
                     Err(e) => error!("Accept error: {}", e),
@@ -132,7 +132,7 @@ async fn cdp_processor(
                     ).await;
                 } else {
                     if cdp_msg.text.contains("Fetch.") {
-                        handle_fetch_resolution(&cdp_msg.text, &mut ctx, &cdp_msg.reply_tx, &mut intercepted_paused);
+                        handle_fetch_resolution(&cdp_msg.text, &cdp_msg.reply_tx, &mut intercepted_paused);
                     }
                     process_cdp_message(&cdp_msg.text, &mut ctx, &cdp_msg.reply_tx).await;
                 }
@@ -144,7 +144,6 @@ async fn cdp_processor(
 
 fn handle_fetch_resolution(
     text: &str,
-    ctx: &mut CdpContext,
     reply_tx: &mpsc::UnboundedSender<String>,
     intercepted_paused: &mut HashMap<String, tokio::sync::oneshot::Sender<obscura_js::ops::InterceptResolution>>,
 ) {
@@ -271,17 +270,12 @@ async fn process_with_interception(
         let _ = nav_done_tx.send((page, result)).await;
     });
 
-    let mut navigate_result: Result<(), String> = Ok(());
-    let mut page_back: Option<obscura_browser::Page> = None;
-
-    loop {
+    let (page_back, navigate_result) = loop {
         let has_irx = intercept_rx.is_some();
 
         tokio::select! {
             Some((returned_page, result)) = nav_done_rx.recv() => {
-                page_back = Some(returned_page);
-                navigate_result = result;
-                break;
+                break (returned_page, result);
             }
             Some(intercepted) = async {
                 if let Some(ref mut irx) = intercept_rx {
@@ -351,7 +345,7 @@ async fn process_with_interception(
                     }
                     ServerMessage::Cdp(msg) => {
                         if msg.text.contains("Fetch.") {
-                            handle_fetch_resolution(&msg.text, ctx, &msg.reply_tx, intercepted_paused);
+                            handle_fetch_resolution(&msg.text, &msg.reply_tx, intercepted_paused);
                         } else {
                             process_cdp_message(&msg.text, ctx, &msg.reply_tx).await;
                         }
@@ -359,9 +353,9 @@ async fn process_with_interception(
                 }
             }
         }
-    }
+    };
 
-    let mut page = page_back.expect("navigation task should return the page");
+    let mut page = page_back;
 
     let network_events: Vec<_> = page.network_events.drain(..).collect();
     let page_url = page.url_string();

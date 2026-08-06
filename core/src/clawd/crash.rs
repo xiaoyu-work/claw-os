@@ -964,15 +964,15 @@ fn run_command_sync(
 }
 
 fn apply_child_policy(policy: ChildPolicy) -> std::io::Result<()> {
-    set_limit(libc::RLIMIT_CORE as u32, 0)?;
+    set_limit(libc::RLIMIT_CORE, 0)?;
     if let Some(limit) = policy.file_size_limit {
-        set_limit(libc::RLIMIT_FSIZE as u32, limit)?;
+        set_limit(libc::RLIMIT_FSIZE, limit)?;
     }
     if let Some(limit) = policy.address_space_limit {
-        set_limit(libc::RLIMIT_AS as u32, limit)?;
+        set_limit(libc::RLIMIT_AS, limit)?;
     }
     if let Some(limit) = policy.cpu_seconds {
-        set_limit(libc::RLIMIT_CPU as u32, limit)?;
+        set_limit(libc::RLIMIT_CPU, limit)?;
     }
     if unsafe { libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
         return Err(std::io::Error::last_os_error());
@@ -991,7 +991,12 @@ fn apply_child_policy(policy: ChildPolicy) -> std::io::Result<()> {
     Ok(())
 }
 
-fn set_limit(resource: u32, value: u64) -> std::io::Result<()> {
+#[cfg(target_env = "gnu")]
+type RlimitResource = libc::__rlimit_resource_t;
+#[cfg(not(target_env = "gnu"))]
+type RlimitResource = libc::c_int;
+
+fn set_limit(resource: RlimitResource, value: u64) -> std::io::Result<()> {
     let limit = libc::rlimit {
         rlim_cur: value as libc::rlim_t,
         rlim_max: value as libc::rlim_t,

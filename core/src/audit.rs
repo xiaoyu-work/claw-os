@@ -209,7 +209,7 @@ pub fn verify_hash_chain(path: &Path) -> Result<serde_json::Value, String> {
             valid: true,
             ..Default::default()
         }
-        .to_json(path));
+        .into_json(path));
     }
     crate::filelock::with_exclusive_path_lock(path, || {
         let root = path
@@ -217,7 +217,7 @@ pub fn verify_hash_chain(path: &Path) -> Result<serde_json::Value, String> {
             .ok_or_else(|| "audit path has no parent".to_string())?;
         let mut visited = BTreeSet::new();
         let report = verify_path(path, root, 0, &mut visited)?;
-        Ok(report.to_json(path))
+        Ok(report.into_json(path))
     })
 }
 
@@ -784,7 +784,7 @@ struct ChainVerification {
 }
 
 impl ChainVerification {
-    fn to_json(self, path: &Path) -> serde_json::Value {
+    fn into_json(self, path: &Path) -> serde_json::Value {
         json!({
             "path": path.display().to_string(),
             "valid": self.valid,
@@ -916,7 +916,7 @@ fn verify_path(
                         .warnings
                         .push(format!("linked archive {}: {warning}", link.path.display()));
                 }
-                archive_json["chain"] = nested.to_json(&link.path);
+                archive_json["chain"] = nested.into_json(&link.path);
             } else if link.kind == "legacy" {
                 report.warnings.push(format!(
                     "legacy archive is hash-anchored but was not internally chained: {}",

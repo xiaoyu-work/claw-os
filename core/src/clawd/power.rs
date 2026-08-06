@@ -158,8 +158,7 @@ fn normalize_key(value: &str) -> String {
     value
         .trim()
         .to_ascii_lowercase()
-        .replace(' ', "_")
-        .replace('-', "_")
+        .replace([' ', '-'], "_")
 }
 
 fn parse_upower_value(value: &str) -> Value {

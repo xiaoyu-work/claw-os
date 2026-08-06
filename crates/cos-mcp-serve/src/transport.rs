@@ -283,8 +283,7 @@ mod tests {
         let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out));
 
         // Drive: write a request from client side; server reads it.
-        let (mut cli_in_w, _hold) = (cli_r_to_srv, ());
-        let _ = _hold;
+        let mut cli_in_w = cli_r_to_srv;
         use tokio::io::AsyncWriteExt;
         cli_in_w.write_all(b"{\"hello\":1}\n").await.unwrap();
         cli_in_w.flush().await.unwrap();

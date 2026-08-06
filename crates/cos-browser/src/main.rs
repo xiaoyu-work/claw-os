@@ -456,6 +456,7 @@ async fn run_multi_worker_serve(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_fetch(
     url_str: &str,
     dump: DumpFormat,
@@ -956,6 +957,7 @@ fn dump_links(page: &Page) {
 // `validate_navigable_url`, `reject_private_ip`, and `recheck_no_rebind`
 // now live in `url_safety.rs` so the worker binary can share them.
 
+#[allow(dead_code)]
 async fn run_screenshot(
     url_str: &str,
     output: &std::path::Path,
@@ -1098,6 +1100,7 @@ async fn run_screenshot(
     }
 }
 
+#[allow(dead_code)]
 async fn probe_scroll_height(
     url_str: &str,
     width: u32,
@@ -1110,7 +1113,7 @@ async fn probe_scroll_height(
     ));
     let mut page = Page::new("probe-page".to_string(), context);
     let _ = width; // Obscura has no layout, viewport width is informational only.
-    let _ = timeout(
+    timeout(
         Duration::from_secs(timeout_secs.min(15)),
         page.navigate_with_wait(url_str, obscura_browser::lifecycle::WaitUntil::Load),
     )
