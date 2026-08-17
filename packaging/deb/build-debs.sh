@@ -9,7 +9,7 @@
 #
 # Inputs:
 #   target/<RUST_TARGET>/release/cos          (built by cargo for $ARCH)
-#   target/<RUST_TARGET>/release/cos-browser  (built by cargo for $ARCH)
+#   target/<RUST_TARGET:gnu>/release/cos-browser  (glibc — V8 needs it)
 #   apps/, skills/                                        (source tree)
 #   rootfs/overlay/etc/cos/*, rootfs/overlay/usr/...      (source tree)
 #   rootfs/features/systemd/overlay/usr/lib/systemd/...   (source tree)
@@ -183,22 +183,33 @@ ensure_cargo() {
 # build-debs.sh assembles already-built binaries; CI compiles them as
 # separate cached steps before calling the rootfs build. A local
 # `./build.sh` has no such step, so compile on demand here the first time a
-# required binary is absent. The build always names `$RUST_TARGET`, so a
+# required binary is absent. The build always names an explicit target, so a
 # cross-enabled packaging run cannot silently produce a host-architecture
 # binary. No-op in CI (binaries already present, so find_bin succeeds and
 # cargo never runs).
 #
+# The target defaults to $RUST_TARGET (musl, static). Callers override it for
+# crates that cannot link against musl — see cos-browser below.
+#
 #   $1 = binary name to locate   $2 = cargo package to build if missing
+#   $3 = target triple (optional, default $RUST_TARGET)
 ###############################################################################
 ensure_bin() {
-    local bin="$1" pkg="$2" path
+    local bin="$1" pkg="$2" target="${3:-$RUST_TARGET}" path
     if path="$(find_bin "$bin")"; then
         echo "$path"
         return 0
     fi
     ensure_cargo
-    echo "  :: $bin not built — compiling (cargo build --release --target $RUST_TARGET -p $pkg)" >&2
-    ( cd "$PROJECT_DIR" && cargo build --release --target "$RUST_TARGET" -p "$pkg" ) >&2
+    # rustup installs the host gnu triple by default but musl (and a
+    # non-host triple generally) may be missing on a fresh box.
+    if command -v rustup >/dev/null 2>&1 \
+        && ! rustup target list --installed 2>/dev/null | grep -qx "$target"; then
+        echo "  :: rust target $target not installed — adding" >&2
+        rustup target add "$target" >&2 || true
+    fi
+    echo "  :: $bin not built — compiling (cargo build --release --target $target -p $pkg)" >&2
+    ( cd "$PROJECT_DIR" && cargo build --release --target "$target" -p "$pkg" ) >&2
     find_bin "$bin"
 }
 
@@ -374,7 +385,10 @@ mkdir -p "$BROWSER_STAGE/usr/local/bin"
 
 render_control "$SCRIPT_DIR/claw-os-browser/control" "$BROWSER_STAGE/DEBIAN/control"
 
-COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser)" || {
+# cos-browser embeds V8 (rusty_v8), which only publishes prebuilt static
+# libs for glibc targets — a musl build 404s on the download. Build it for
+# the gnu triple instead; this mirrors what CI does in its own build steps.
+COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser "${RUST_TARGET/-musl/-gnu}")" || {
     echo "error: cos-browser binary not built" >&2; exit 1; }
 echo "  :: cos-browser  <- $COS_BROWSER_BIN"
 install -m 755 "$COS_BROWSER_BIN" "$BROWSER_STAGE/usr/local/bin/cos-browser"
