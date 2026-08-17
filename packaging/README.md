@@ -77,3 +77,10 @@ embedded in Claw OS images and published beside the repository.
 Local rootfs builds should set `COS_APT_PUBLIC_KEY_FILE` to a trusted
 binary export of that public key. Download fallback is available only when
 `COS_APT_PUBLIC_KEY_FINGERPRINT` is supplied explicitly.
+
+When the `CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret is not configured (forks,
+pull requests, or before a key has been provisioned), CI does not fail and
+does not fall back to an unsigned repo: it drops the `apt-source` feature
+from the images and skips the apt repo build and publication entirely. The
+Docker and WSL pipelines are unaffected. Configuring the secret re-enables
+the signed repo automatically, with no workflow changes.

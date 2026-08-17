@@ -70,23 +70,53 @@ jobs:
           PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
         run: python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
 
+  # Exports the public half of the apt signing key for the rootfs builds.
+  #
+  # Signing is optional infrastructure: the private key lives in the
+  # `CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret, which is not configured on every
+  # fork (and is never exposed to pull requests from forks). When the secret is
+  # absent this job reports `signing-available=false` instead of failing, and
+  # the apt repo jobs downstream skip themselves. That keeps the repo from ever
+  # publishing an *unsigned* apt repository while still letting the Docker and
+  # WSL pipelines — which do not depend on apt signing — build and publish.
   prepare-apt-key:
     needs: test
     runs-on: ubuntu-latest
+    outputs:
+      signing-available: ${{ steps.detect.outputs.available }}
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Export apt archive public key
-        if: github.event_name != 'pull_request'
+      - name: Detect apt signing key
+        id: detect
         env:
           CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
         run: |
-          if [ -z "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" ]; then
-            echo "CLAW_OS_APT_SIGNING_PRIVATE_KEY is required" >&2
-            exit 1
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo ":: pull request build — apt repo signing and publication skipped"
+          elif [ -z "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::CLAW_OS_APT_SIGNING_PRIVATE_KEY is not configured; skipping the apt-source feature and apt repo publication"
+            {
+              echo "## Apt repository skipped"
+              echo
+              echo 'The `CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret is not configured, so the'
+              echo '`apt-source` feature was left out of the images and the apt repo was'
+              echo 'neither built nor published. Docker images and WSL tarballs were'
+              echo 'published as usual. Set the secret to enable the signed apt repository.'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Export apt archive public key
+        if: steps.detect.outputs.available == 'true'
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: |
           export GNUPGHOME="$RUNNER_TEMP/claw-os-apt-gnupg"
           trap 'rm -rf "$GNUPGHOME"' EXIT
           mkdir -m 700 -p "$GNUPGHOME"
@@ -98,7 +128,7 @@ jobs:
           test -s build/apt-key/claw-os-archive-keyring.gpg
 
       - name: Upload apt archive public key
-        if: github.event_name != 'pull_request'
+        if: steps.detect.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: claw-os-apt-public-key
@@ -130,6 +160,11 @@ jobs:
     permissions:
       contents: read
       packages: write  # Docker push to GHCR
+    env:
+      # `apt-source` bakes the upgrade channel into the image, which requires
+      # the archive public key. Without a signing key there is no repo to point
+      # at, so the feature is dropped rather than shipping a broken apt source.
+      ROOTFS_FEATURES: base,cos-core,browser,systemd,gpu-drivers${{ needs.prepare-apt-key.outputs.signing-available == 'true' && ',apt-source' || '' }},qwen3-embedding
 
     steps:
       - uses: actions/checkout@v5
@@ -137,7 +172,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download apt archive public key
-        if: github.event_name != 'pull_request'
+        if: needs.prepare-apt-key.outputs.signing-available == 'true'
         uses: actions/download-artifact@v4
         with:
           name: claw-os-apt-public-key
@@ -176,12 +211,7 @@ jobs:
       # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
       # tarball both consume this same tree.
       - name: Build headless rootfs (shared with Docker + WSL)
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,qwen3-embedding
-          else
-            sudo ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
-          fi
+        run: sudo ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
       # Docker-specific prep on a private staging copy:
       #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
@@ -269,13 +299,7 @@ jobs:
       # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
       # the existing rootfs and skips the rootfs rebuild.
       - name: Package WSL amd64 rootfs tarball
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            FEATURES=base,cos-core,browser,systemd,gpu-drivers,qwen3-embedding
-          else
-            FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
-          fi
-          sudo FEATURES="$FEATURES" ./targets/wsl/build.sh
+        run: sudo FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
@@ -319,6 +343,7 @@ jobs:
       packages: write  # Docker push to GHCR
     env:
       ARCH: arm64
+      ROOTFS_FEATURES: base,cos-core,browser,systemd,gpu-drivers${{ needs.prepare-apt-key.outputs.signing-available == 'true' && ',apt-source' || '' }},qwen3-embedding
 
     steps:
       - uses: actions/checkout@v5
@@ -326,6 +351,7 @@ jobs:
           fetch-depth: 0
 
       - name: Download apt archive public key
+        if: needs.prepare-apt-key.outputs.signing-available == 'true'
         uses: actions/download-artifact@v4
         with:
           name: claw-os-apt-public-key
@@ -361,7 +387,7 @@ jobs:
         run: cargo build --release -p claw-semantic --target aarch64-unknown-linux-gnu
 
       - name: Build arm64 headless rootfs
-        run: sudo ARCH=arm64 ./rootfs/build.sh --features base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding
+        run: sudo ARCH=arm64 ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
       - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
         run: |
@@ -434,7 +460,7 @@ jobs:
           docker buildx prune --all --force || true
 
       - name: Package WSL arm64 rootfs tarball
-        run: sudo ARCH=arm64 FEATURES=base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding ./targets/wsl/build.sh
+        run: sudo ARCH=arm64 FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
         run: sudo chown -R "$(id -u):$(id -g)" build
@@ -629,8 +655,11 @@ jobs:
             build/claw-os-wsl-arm64.tar.gz.sha256
 
   build-apt-repo:
-    needs: [build-amd64, build-arm64]
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [prepare-apt-key, build-amd64, build-arm64]
+    if: |
+      github.event_name != 'pull_request'
+      && github.ref == 'refs/heads/main'
+      && needs.prepare-apt-key.outputs.signing-available == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
