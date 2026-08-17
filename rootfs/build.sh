@@ -121,6 +121,34 @@ for f in "${FEATURE_LIST[@]}"; do
     fi
 done
 
+# ---------------------------------------------------------------------------
+# apt-source needs the archive public key to pin `signed-by=` against. The
+# signing key is optional infrastructure (see todo.md): without it there is
+# no trustworthy repo to point at, and features/apt-source/install.sh
+# deliberately refuses to emit an unsigned or unverifiable source.
+#
+# Aborting the whole build over it would be a poor trade -- apt-source is one
+# late feature among ~30, and every other target (Docker, WSL, VM images)
+# is perfectly usable without an upgrade channel. So drop it here, loudly,
+# exactly like the CI workflow does when the signing secret is absent. Once a
+# key exists the feature comes back automatically, with no flag to remember.
+# ---------------------------------------------------------------------------
+apt_key_file="${COS_APT_PUBLIC_KEY_FILE:-$PROJECT_DIR/packaging/apt-repo/claw-os-archive-keyring.gpg}"
+if [[ ",$FEATURES," == *",apt-source,"* ]] \
+    && [ ! -s "$apt_key_file" ] \
+    && [ -z "${COS_APT_PUBLIC_KEY_FINGERPRINT:-}" ]; then
+    cat >&2 <<EOF
+warning: no Claw OS apt signing key available — dropping the 'apt-source'
+         feature. The image will build and boot normally but ships without
+         the apt upgrade channel.
+         Provide one with COS_APT_PUBLIC_KEY_FILE=<keyring> (or
+         COS_APT_PUBLIC_KEY_FINGERPRINT=<fpr> to fetch it over HTTPS).
+EOF
+    FEATURES="$(printf '%s' "$FEATURES" | sed -e 's/,apt-source,/,/g' \
+        -e 's/^apt-source,//' -e 's/,apt-source$//' -e 's/^apt-source$//')"
+    IFS=',' read -ra FEATURE_LIST <<< "$FEATURES"
+fi
+
 if [ "$(id -u)" -ne 0 ]; then
     echo "error: must run as root" >&2
     exit 1
