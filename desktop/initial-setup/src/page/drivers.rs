@@ -280,6 +280,44 @@ fn detect_blocking() -> Option<Detection> {
     }
 }
 
+/// Whether the wizard should include this step at all.
+///
+/// The page's only actionable content is the "install proprietary driver"
+/// button, and that button exists solely for `install_kmod` — bare-metal
+/// NVIDIA with the driver not yet installed. Every other outcome (AMD/Intel,
+/// a virtualised GPU, driver already installed, arm64) renders one
+/// informational line the user cannot act on, so the step is dropped instead
+/// of making everyone page through a dead screen. A missing or failing helper
+/// likewise means nothing could be installed, so the page has no purpose.
+///
+/// Probed synchronously while the wizard is being constructed, using a plain
+/// `Command` rather than the `cos_runtime::exec` bridge: this runs before the
+/// first frame, and the bridge would spawn a Python helper for what is a
+/// read-only PCI scan. `detect` has no side effects and needs no privileges,
+/// so it warrants no audit trail. `timeout` bounds it so a wedged probe
+/// cannot stall startup.
+pub fn has_installable_gpu() -> bool {
+    let output = std::process::Command::new("timeout")
+        .args(["5", HELPER, "detect", "--json"])
+        .output();
+    let Ok(out) = output else {
+        return false;
+    };
+    if !out.status.success() {
+        return false;
+    }
+    let Ok(text) = std::str::from_utf8(&out.stdout) else {
+        return false;
+    };
+    match serde_json::from_str::<Detection>(text.trim()) {
+        Ok(d) => d.action == "install_kmod",
+        Err(why) => {
+            tracing::warn!(?why, "gpu-setup detect: bad JSON; omitting drivers page");
+            false
+        }
+    }
+}
+
 /// Privileged install via polkit. A generous timeout: pulling nvidia-driver +
 /// building the DKMS module against the kernel headers can take a few minutes.
 /// On success, any stdout the helper prints (e.g. Secure Boot key-enrolment

@@ -96,11 +96,13 @@ pub fn pages(mode: AppMode) -> IndexMap<TypeId, Box<dyn Page>> {
     );
     // }
 
-    // Drivers is the final step: ClawOS ships open drivers for everything, so
-    // this page only does real work on a bare-metal NVIDIA machine (offers the
-    // proprietary driver). NewInstall only — a Gnome transition keeps the
-    // existing driver setup.
-    if matches!(mode, AppMode::NewInstall { .. }) {
+    // Drivers is the final step, and only earns its place when there is
+    // actually something to install: bare-metal NVIDIA whose proprietary
+    // driver is not yet present. ClawOS ships the open stack for everything
+    // else, so on AMD/Intel, in a VM, or once the driver is installed the
+    // page would just be a line of text and an extra click for every user.
+    // NewInstall only — a Gnome transition keeps the existing driver setup.
+    if matches!(mode, AppMode::NewInstall { .. }) && drivers::has_installable_gpu() {
         pages.insert(
             TypeId::of::<drivers::Page>(),
             Box::new(drivers::Page::new()),
