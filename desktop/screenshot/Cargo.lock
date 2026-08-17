@@ -249,14 +249,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cos-runtime"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "claw-os-sdk",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "cosmic-screenshot"
 version = "0.1.0"
 dependencies = [
  "ashpd",
  "async-trait",
  "clap",
- "claw-os-sdk",
  "cos-mcp-serve",
+ "cos-runtime",
  "dirs",
  "i18n-embed",
  "i18n-embed-fl",
