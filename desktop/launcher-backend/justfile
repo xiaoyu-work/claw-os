@@ -5,7 +5,8 @@ rootdir := ''
 prefix := '/usr'
 debug := '0'
 
-target-dir := if debug == '1' { 'target/debug' } else { 'target/release' }
+cargo-target-dir := env('CARGO_TARGET_DIR', 'target')
+target-dir := cargo-target-dir / if debug == '1' { 'debug' } else { 'release' }
 
 # Install paths follow the same convention as every other crate in
 # `desktop/justfile` — `rootdir / prefix` so that `rootdir=""` yields a

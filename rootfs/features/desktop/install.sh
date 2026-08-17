@@ -270,6 +270,18 @@ chroot "$ROOTFS" env \
     set -e
     export CARGO_HOME=/root/.cargo
     export PATH="$CARGO_HOME/bin:$PATH"
+    # One shared target dir for all ~24 desktop crates. Each crate opts out
+    # of the repo-root workspace and so defaults to its own ./target, which
+    # recompiles and re-stores the whole shared dependency tree (libcosmic,
+    # iced, wgpu, …) once per crate — ~2 GB each, ~45 GB for the full set,
+    # which does not fit alongside the ~16 GB install root. Sharing one dir
+    # builds those deps once. Every crate honours this: the justfiles read
+    # env("CARGO_TARGET_DIR") and the Makefiles use CARGO_TARGET_DIR ?=,
+    # for both the build and the install path they copy the binary from.
+    #
+    # It lives under the bind-mounted source tree, so it stays on the host
+    # as an incremental cache between runs and never lands in the image.
+    export CARGO_TARGET_DIR=/build/desktop-src/target
     cd /build/desktop-src
     just build
     # NB: pass rootdir and prefix as POSITIONAL args. `just install rootdir=""`
@@ -303,8 +315,11 @@ chroot "$ROOTFS" env \
         echo "  :: building cos-agent-ui + cos-agent-bridge"
         cd /build/desktop-src/agent
         cargo build --release --workspace
-        install -Dm0755 target/release/cos-agent-ui     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
-        install -Dm0755 target/release/cos-agent-bridge "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
+        # Honour CARGO_TARGET_DIR (exported above) — cargo writes there, so
+        # the binaries are not under ./target when it is set.
+        agent_target="${CARGO_TARGET_DIR:-target}"
+        install -Dm0755 "$agent_target/release/cos-agent-ui"     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
+        install -Dm0755 "$agent_target/release/cos-agent-bridge" "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
     fi
 '
 
