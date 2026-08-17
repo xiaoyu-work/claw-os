@@ -763,13 +763,19 @@ fn glass_backdrop_style(theme: &cosmic::Theme) -> cosmic::widget::container::Sty
 
 /// The floating wizard card: a frosted-glass panel consistent with the rest of
 /// the Claw Glass desktop (cf. the agent UI composer / sidebar). Uses the
-/// system frosted component fill at ~62% so the backdrop bleeds through, a 1px
-/// brand-blue translucent hairline, and a soft layered drop shadow — depth from
-/// blur + shadow, not a heavy border.
+/// system frosted component fill, a 1px brand-blue translucent hairline, and a
+/// soft layered drop shadow — depth from blur + shadow, not a heavy border.
+///
+/// The fill sits noticeably more opaque than the greeter's login card (0.62):
+/// this surface carries a full page of body text, labelled toggles and list
+/// rows rather than a single password field, and it floats over an arbitrary
+/// user wallpaper. At the lighter value the backdrop showed through the text
+/// and the setup pages — accessibility in particular, with its dense rows of
+/// small labels — became hard to read.
 fn glass_card_style(theme: &cosmic::Theme) -> cosmic::widget::container::Style {
     let cosmic = theme.cosmic();
     let mut fill = cosmic.bg_component_color();
-    fill.alpha = 0.62;
+    fill.alpha = 0.85;
 
     container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
