@@ -223,7 +223,9 @@ async fn write_setup_marker() -> Result<(), String> {
     let marker = setup_marker_path()?;
     let marker = marker.to_string_lossy().into_owned();
     tokio::task::spawn_blocking(move || {
-        cos_runtime::fs::write(&marker, "").map_err(|why| why.to_string())
+        cos_runtime::fs::write(&marker, "")
+            .map(|_| ())
+            .map_err(|why| why.to_string())
     })
     .await
     .map_err(|why| format!("setup marker task failed: {why}"))?
@@ -261,7 +263,7 @@ async fn terminate_oem_session() -> Result<(), String> {
         .await
         .map_err(|why| format!("marker cleanup task failed: {why}"))?;
         return match cleanup {
-            Ok(()) => Err(error),
+            Ok(_) => Err(error),
             Err(cleanup) => Err(format!(
                 "{error}; removing setup marker also failed: {cleanup}"
             )),
