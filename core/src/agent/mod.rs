@@ -457,6 +457,10 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
                         "category": f.category.as_str(),
                         "text": f.text,
                         "confidence": f.confidence,
+                        "entity": f.entity,
+                        "attribute": f.attribute,
+                        "value": f.value,
+                        "key": f.key(),
                     })
                 })
                 .collect();
@@ -468,6 +472,10 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
                         "category": f.category.as_str(),
                         "text": f.text,
                         "confidence": f.confidence,
+                        "entity": f.entity,
+                        "attribute": f.attribute,
+                        "value": f.value,
+                        "key": f.key(),
                     })
                 })
                 .collect();

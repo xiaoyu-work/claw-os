@@ -167,9 +167,13 @@ impl NotesStore {
                     continue;
                 }
                 // USER.md is the always-on persona tier: keep it whole
-                // (capped). MEMORY.md goes through relevance selection.
+                // (capped). MEMORY.md is append-only, so project chain
+                // tails first — otherwise a superseded value and its
+                // replacement both reach the model — then rank what is
+                // left against the budget.
                 let selected = if name == &MEMORY_FILE {
-                    select_memory_for_prompt(trimmed, query, cap_chars)
+                    let tails = project_chain_tails(trimmed);
+                    select_memory_for_prompt(tails.trim(), query, cap_chars)
                 } else {
                     truncate_for_prompt(trimmed, cap_chars).into_owned()
                 };
@@ -196,6 +200,64 @@ impl NotesStore {
 /// Marker that pins a `MEMORY.md` entry to the always-on tier — it is
 /// injected every turn regardless of relevance. Case-insensitive.
 pub const ALWAYS_TAG: &str = "[always]";
+
+/// Drop curated entries that a later entry supersedes.
+///
+/// `MEMORY.md` is append-only: when a fact changes, the new value is
+/// appended rather than overwriting the old one, so the file keeps the
+/// whole history (`editor.name = vim` … later … `editor.name = helix`).
+/// That is right for storage and wrong for the prompt — injecting both
+/// puts two contradictory facts in front of the model at once.
+///
+/// So the file is the store and this is the view: for each structured
+/// key, only the last (tail) entry is projected. Superseded entries stay
+/// on disk and remain readable via `cos_memory read MEMORY.md`.
+///
+/// Unstructured lines have no key and are always kept — we cannot tell
+/// whether two prose sentences describe the same slot, which is exactly
+/// why facts are structured now.
+fn project_chain_tails(content: &str) -> String {
+    use std::collections::HashMap;
+
+    let lines: Vec<&str> = content.lines().collect();
+
+    // Last line index per key wins.
+    let mut tail_of: HashMap<String, usize> = HashMap::new();
+    for (i, line) in lines.iter().enumerate() {
+        if let Some(key) = curated_key(line) {
+            tail_of.insert(key, i);
+        }
+    }
+    if tail_of.is_empty() {
+        return content.to_string();
+    }
+
+    let mut out = String::new();
+    for (i, line) in lines.iter().enumerate() {
+        let superseded = curated_key(line)
+            .and_then(|k| tail_of.get(&k).copied())
+            .is_some_and(|tail| tail != i);
+        if superseded {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+/// The `entity.attribute` key of a curated bullet, if it has one.
+///
+/// Recognises the shape `render_fact_line` writes:
+/// `- [category] entity.attribute = value _(date, conf N)_`
+fn curated_key(line: &str) -> Option<String> {
+    let trimmed = line.trim();
+    let rest = trimmed.strip_prefix("- [")?;
+    let close = rest.find("] ")?;
+    let after = &rest[close + 2..];
+    let body = after.split(" _(").next().unwrap_or(after).trim();
+    super::curator::split_curated_body(body).map(|(k, _)| k)
+}
 
 /// Is this line a contextual bullet entry (rankable / droppable), as
 /// opposed to a pinned structural line (heading, prose, or an entry
@@ -632,5 +694,93 @@ mod tests {
         // Each # heading appears exactly once.
         assert_eq!(assembled.matches("# MEMORY.md").count(), 1);
         assert_eq!(assembled.matches("# USER.md").count(), 1);
+    }
+
+    #[test]
+    fn project_chain_tails_keeps_only_the_latest_value_per_key() {
+        let content = "\
+# memory
+
+## Curated facts (auto)
+- [preference] editor.name = vim _(2026-01-01, conf 0.90)_
+- [environment] shell.name = bash _(2026-01-02, conf 0.90)_
+- [preference] editor.name = helix _(2026-03-01, conf 0.95)_
+";
+        let out = project_chain_tails(content);
+        assert!(!out.contains("editor.name = vim"));
+        assert!(out.contains("editor.name = helix"));
+        assert!(out.contains("shell.name = bash"));
+        // Structural lines survive untouched.
+        assert!(out.contains("# memory"));
+        assert!(out.contains("## Curated facts (auto)"));
+    }
+
+    #[test]
+    fn project_chain_tails_leaves_unstructured_entries_alone() {
+        // Two prose facts might or might not describe the same slot;
+        // without a key we cannot tell, so both are kept.
+        let content = "\
+## Curated facts (auto)
+- [preference] User prefers Rust _(2026-01-01, conf 0.90)_
+- [preference] User prefers Go _(2026-02-01, conf 0.90)_
+";
+        let out = project_chain_tails(content);
+        assert!(out.contains("User prefers Rust"));
+        assert!(out.contains("User prefers Go"));
+    }
+
+    #[test]
+    fn project_chain_tails_is_identity_without_structured_facts() {
+        let content = "# memory\n\nsome prose\n- a plain bullet\n";
+        assert_eq!(project_chain_tails(content), content);
+    }
+
+    #[test]
+    fn project_chain_tails_preserves_document_order() {
+        let content = "\
+## Curated facts (auto)
+- [environment] os.name = linux _(2026-01-01, conf 0.90)_
+- [preference] editor.name = vim _(2026-01-01, conf 0.90)_
+- [preference] editor.name = helix _(2026-03-01, conf 0.95)_
+";
+        let out = project_chain_tails(content);
+        let os_at = out.find("os.name").unwrap();
+        let ed_at = out.find("editor.name").unwrap();
+        assert!(os_at < ed_at);
+    }
+
+    #[test]
+    fn assemble_for_prompt_hides_superseded_facts() {
+        // The end-to-end guarantee: a superseded value must never reach
+        // the model, even though it is still on disk.
+        let dir = std::env::temp_dir().join(format!(
+            "cos-notes-tails-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        let store = NotesStore::at(&dir);
+        store
+            .write(
+                MEMORY_FILE,
+                "\
+## Curated facts (auto)
+- [preference] editor.name = vim _(2026-01-01, conf 0.90)_
+- [preference] editor.name = helix _(2026-03-01, conf 0.95)_
+",
+            )
+            .unwrap();
+
+        let assembled = store.assemble_for_prompt().unwrap();
+        assert!(assembled.contains("helix"));
+        assert!(!assembled.contains("vim"));
+
+        // But the file itself still has the full history.
+        let raw = store.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(raw.contains("vim"));
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

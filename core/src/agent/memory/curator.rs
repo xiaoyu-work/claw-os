@@ -118,6 +118,10 @@ pub enum FactCategory {
     Identity,
     Environment,
     Skill,
+    /// A problem that was diagnosed and fixed. Durable and reusable:
+    /// "debugging X today" is noise, but "X crashed because of Y, fix
+    /// was Z" is worth more than a preference the next time Y bites.
+    Resolution,
     Other(String),
 }
 
@@ -128,6 +132,7 @@ impl FactCategory {
             "identity" | "id" => Self::Identity,
             "environment" | "env" => Self::Environment,
             "skill" | "skills" => Self::Skill,
+            "resolution" | "fix" => Self::Resolution,
             other => Self::Other(other.to_string()),
         }
     }
@@ -138,6 +143,7 @@ impl FactCategory {
             Self::Identity => "identity",
             Self::Environment => "environment",
             Self::Skill => "skill",
+            Self::Resolution => "resolution",
             Self::Other(s) => s.as_str(),
         }
     }
@@ -148,6 +154,41 @@ pub struct ExtractedFact {
     pub category: FactCategory,
     pub text: String,
     pub confidence: f32,
+    /// What the fact is *about* (`editor`, `deploy`, `postgres`).
+    pub entity: Option<String>,
+    /// Which property of the entity (`name`, `region`, `cause`).
+    pub attribute: Option<String>,
+    /// The property's value (`helix`, `us-west-2`).
+    pub value: Option<String>,
+}
+
+impl ExtractedFact {
+    /// Identity of the *slot* this fact occupies: `entity.attribute`.
+    ///
+    /// Two facts sharing a key are successive states of one thing, so a
+    /// later one supersedes an earlier one. Free-text facts cannot answer
+    /// "is `editor = helix` replacing `editor = vim`, or are both true for
+    /// different projects?" — a key can, which is why everything else in
+    /// this module depends on it.
+    pub fn key(&self) -> Option<String> {
+        match (&self.entity, &self.attribute) {
+            (Some(e), Some(a)) if !e.trim().is_empty() && !a.trim().is_empty() => Some(format!(
+                "{}.{}",
+                e.trim().to_ascii_lowercase(),
+                a.trim().to_ascii_lowercase()
+            )),
+            _ => None,
+        }
+    }
+
+    /// Body as written into `MEMORY.md`: `entity.attribute = value` when
+    /// structured, else the free text the LLM produced.
+    pub fn body(&self) -> String {
+        match (self.key(), &self.value) {
+            (Some(k), Some(v)) if !v.trim().is_empty() => format!("{k} = {}", v.trim()),
+            _ => self.text.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -279,17 +320,32 @@ from a conversation between a user and an AI agent.
 
 Output format: zero or more `<fact>` tags, one per line:
 
-    <fact category="<category>" confidence="<0.0-1.0>">free text</fact>
+    <fact category="<category>" entity="<entity>" attribute="<attribute>" value="<value>" confidence="<0.0-1.0>">free text</fact>
 
 Categories you may use:
   - preference   — preferences, likes / dislikes, working style
   - identity     — names, roles, affiliations, languages spoken
   - environment  — operating system, tooling, hardware, locations
   - skill        — technical or domain expertise the user has shown
+  - resolution   — a problem that was diagnosed and fixed
+
+Structure every fact as entity + attribute + value:
+
+    <fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.9">User switched to helix</fact>
+    <fact category="resolution" entity="postgres" attribute="cause" value="connection pool exhausted" confidence="0.8">Staging DB dropped connections because the pool was too small</fact>
+
+This matters: two facts sharing entity+attribute are treated as
+successive states of the same thing, so a later one supersedes an
+earlier one. `editor/name` lets "helix" replace "vim"; free text does
+not. Reuse the *same* entity and attribute names for the same slot.
 
 Rules:
   1. Only emit facts that will *still be true next month* (durable),
      not short-term task state ("user is currently debugging X").
+     Exception: `resolution` facts. A problem that was diagnosed and
+     fixed stays useful even though the debugging session does not —
+     record what broke, why, and what fixed it. "Spent today debugging
+     X" is still noise; "X failed because of Y, fixed by Z" is not.
   2. Confidence is your honest estimate (0.0-1.0). Below 0.5, omit
      the fact entirely — better silent than wrong.
   3. NEVER emit secrets, API keys, tokens, passwords, or anything
@@ -367,9 +423,15 @@ pub fn parse_facts(llm_output: &str) -> Vec<ExtractedFact> {
 
         let mut category = FactCategory::Other("unknown".to_string());
         let mut confidence = 0.5f32;
+        let mut entity: Option<String> = None;
+        let mut attribute: Option<String> = None;
+        let mut value: Option<String> = None;
         for (k, v) in parse_attrs(attrs) {
             match k.as_str() {
                 "category" => category = FactCategory::parse(&v),
+                "entity" => entity = non_empty(v),
+                "attribute" | "attr" => attribute = non_empty(v),
+                "value" | "val" => value = non_empty(v),
                 "confidence" => {
                     if let Ok(n) = v.parse::<f32>() {
                         if n.is_finite() {
@@ -385,9 +447,24 @@ pub fn parse_facts(llm_output: &str) -> Vec<ExtractedFact> {
             category,
             text: body,
             confidence,
+            entity,
+            attribute,
+            value,
         });
     }
     out
+}
+
+/// `Some(trimmed)` for a non-blank attribute, `None` otherwise — a model
+/// that emits `entity=""` is treated as having omitted it rather than
+/// creating an empty slot key.
+fn non_empty(s: String) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
 }
 
 fn parse_attrs(attrs: &str) -> Vec<(String, String)> {
@@ -510,13 +587,17 @@ pub fn looks_secret(text: &str) -> bool {
     false
 }
 
-/// Existing curated lines in MEMORY.md, used to dedupe at write time.
+/// Existing curated entries in MEMORY.md, used to dedupe at write time.
+///
+/// Returns the rendered body of each curated line, e.g.
+/// `"editor.name = helix"` for a structured fact or the raw sentence for
+/// a free-text one.
 fn existing_curated_lines(memory_md: &str) -> Vec<String> {
     let mut out = Vec::new();
     for line in memory_md.lines() {
         let trimmed = line.trim();
         if let Some(rest) = trimmed.strip_prefix("- [") {
-            // e.g. "- [preference] User prefers Rust _(...)_"
+            // e.g. "- [preference] editor.name = helix _(...)_"
             if let Some(close) = rest.find("] ") {
                 let after = &rest[close + 2..];
                 // Strip trailing italics like "_(2026-01-15, conf 0.90)_"
@@ -528,12 +609,46 @@ fn existing_curated_lines(memory_md: &str) -> Vec<String> {
     out
 }
 
+/// Split a rendered curated body into `(key, value)` when it is
+/// structured, i.e. `entity.attribute = value`.
+///
+/// Shared with prompt assembly, which must recognise the same shape to
+/// project only chain tails.
+pub fn split_curated_body(body: &str) -> Option<(String, String)> {
+    let (lhs, rhs) = body.split_once(" = ")?;
+    let key = lhs.trim();
+    // A key is `entity.attribute`: one dot, neither side blank, and no
+    // whitespace — whitespace means this is prose that happens to
+    // contain an equals sign, not a structured slot.
+    if key.is_empty() || key.contains(char::is_whitespace) {
+        return None;
+    }
+    let (e, a) = key.split_once('.')?;
+    if e.is_empty() || a.is_empty() || a.contains('.') {
+        return None;
+    }
+    Some((key.to_ascii_lowercase(), rhs.trim().to_string()))
+}
+
+/// The most recent value recorded for each structured key.
+fn latest_values(existing: &[String]) -> std::collections::HashMap<String, String> {
+    let mut out = std::collections::HashMap::new();
+    for body in existing {
+        if let Some((k, v)) = split_curated_body(body) {
+            // Later lines win: the section is append-only, so the last
+            // occurrence of a key is its current state.
+            out.insert(k, v);
+        }
+    }
+    out
+}
+
 /// Format a single fact as a MEMORY.md line.
 pub fn render_fact_line(fact: &ExtractedFact, today: &str) -> String {
     format!(
         "- [{}] {} _({today}, conf {:.2})_",
         fact.category.as_str(),
-        fact.text,
+        fact.body(),
         fact.confidence
     )
 }
@@ -714,17 +829,42 @@ impl MemoryCurator {
             .cloned()
             .collect();
 
-        // Dedupe against existing MEMORY.md curated lines (case-insensitive).
+        // Dedupe against existing MEMORY.md curated entries.
+        //
+        // Append-only: a *changed* value for a known key is not a
+        // duplicate, it is a correction, and it gets appended so the
+        // chain records the transition. Only an unchanged restatement is
+        // dropped. Unstructured facts fall back to exact text match.
         let existing = self
             .notes
             .read(MEMORY_FILE)
             .map_err(CurationError::Notes)?
             .unwrap_or_default();
-        let already: Vec<String> = existing_curated_lines(&existing)
-            .into_iter()
+        let existing_bodies = existing_curated_lines(&existing);
+        let current = latest_values(&existing_bodies);
+        let already: Vec<String> = existing_bodies
+            .iter()
             .map(|s| s.to_ascii_lowercase())
             .collect();
-        survivors.retain(|f| !already.contains(&f.text.to_ascii_lowercase()));
+        survivors.retain(|f| match (f.key(), &f.value) {
+            (Some(k), Some(v)) => current.get(&k).map(|cur| cur.as_str()) != Some(v.trim()),
+            _ => !already.contains(&f.body().to_ascii_lowercase()),
+        });
+
+        // Two facts in one batch can claim the same slot; keep the last,
+        // which is the later state within this transcript.
+        let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut deduped: Vec<ExtractedFact> = Vec::new();
+        for f in survivors.into_iter().rev() {
+            if let Some(k) = f.key() {
+                if !seen_keys.insert(k) {
+                    continue;
+                }
+            }
+            deduped.push(f);
+        }
+        deduped.reverse();
+        let survivors = deduped;
 
         let added = if survivors.is_empty() {
             Vec::new()
@@ -913,12 +1053,108 @@ other content
             category: FactCategory::Preference,
             text: "User prefers Rust".to_string(),
             confidence: 0.91,
+            entity: None,
+            attribute: None,
+            value: None,
         };
         let line = render_fact_line(&fact, "2026-01-15");
         assert_eq!(
             line,
             "- [preference] User prefers Rust _(2026-01-15, conf 0.91)_"
         );
+    }
+
+    // ---- structured facts ---------------------------------------------
+
+    #[test]
+    fn parse_facts_extracts_entity_attribute_value() {
+        let out = parse_facts(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.9">User switched to helix</fact>"#,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].entity.as_deref(), Some("editor"));
+        assert_eq!(out[0].attribute.as_deref(), Some("name"));
+        assert_eq!(out[0].value.as_deref(), Some("helix"));
+        assert_eq!(out[0].key().as_deref(), Some("editor.name"));
+        assert_eq!(out[0].body(), "editor.name = helix");
+    }
+
+    #[test]
+    fn unstructured_facts_still_parse_and_render_as_prose() {
+        // Backwards compatibility: a model that ignores the new attrs
+        // must keep working exactly as before.
+        let out =
+            parse_facts(r#"<fact category="preference" confidence="0.9">User prefers Rust</fact>"#);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].key().is_none());
+        assert_eq!(out[0].body(), "User prefers Rust");
+    }
+
+    #[test]
+    fn key_requires_both_entity_and_attribute() {
+        let only_entity =
+            parse_facts(r#"<fact category="preference" entity="editor" confidence="0.9">x</fact>"#);
+        assert!(only_entity[0].key().is_none());
+        let blank = parse_facts(
+            r#"<fact category="preference" entity="" attribute="name" confidence="0.9">x</fact>"#,
+        );
+        assert!(blank[0].key().is_none());
+    }
+
+    #[test]
+    fn key_is_case_insensitive() {
+        let a = parse_facts(
+            r#"<fact entity="Editor" attribute="Name" value="helix" confidence="0.9">x</fact>"#,
+        );
+        assert_eq!(a[0].key().as_deref(), Some("editor.name"));
+    }
+
+    #[test]
+    fn resolution_category_round_trips() {
+        assert_eq!(FactCategory::parse("resolution"), FactCategory::Resolution);
+        assert_eq!(FactCategory::parse("fix"), FactCategory::Resolution);
+        assert_eq!(FactCategory::Resolution.as_str(), "resolution");
+    }
+
+    #[test]
+    fn split_curated_body_recognises_structured_entries() {
+        assert_eq!(
+            split_curated_body("editor.name = helix"),
+            Some(("editor.name".to_string(), "helix".to_string()))
+        );
+        // Prose containing an equals sign is not a slot.
+        assert!(split_curated_body("User thinks a = b").is_none());
+        // Missing the dot means no entity.attribute pair.
+        assert!(split_curated_body("editor = helix").is_none());
+        assert!(split_curated_body("User prefers Rust").is_none());
+    }
+
+    #[test]
+    fn structured_fact_renders_as_key_value_line() {
+        let fact = ExtractedFact {
+            category: FactCategory::Preference,
+            text: "User switched to helix".to_string(),
+            confidence: 0.9,
+            entity: Some("editor".to_string()),
+            attribute: Some("name".to_string()),
+            value: Some("helix".to_string()),
+        };
+        assert_eq!(
+            render_fact_line(&fact, "2026-01-15"),
+            "- [preference] editor.name = helix _(2026-01-15, conf 0.90)_"
+        );
+    }
+
+    #[test]
+    fn latest_values_takes_the_last_occurrence() {
+        let bodies = vec![
+            "editor.name = vim".to_string(),
+            "shell.name = bash".to_string(),
+            "editor.name = helix".to_string(),
+        ];
+        let m = latest_values(&bodies);
+        assert_eq!(m.get("editor.name").unwrap(), "helix");
+        assert_eq!(m.get("shell.name").unwrap(), "bash");
     }
 
     #[test]
@@ -1109,6 +1345,108 @@ other content
         let again = curator.curate_session(&db, "sess-1", false).await.unwrap();
         assert!(again.skipped_no_new_messages);
         assert!(again.facts_added.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_appends_correction_for_changed_value() {
+        // The append-only claim: a new value for a known key is not a
+        // duplicate, it is a correction. Both lines must end up on disk
+        // so the transition stays readable.
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let cfg = AgentConfig::default();
+        let provider = MockProvider::new("mock-aux", &cfg);
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.95">User switched to helix</fact>"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        db.record_message("sess-1", "user", "stuff").unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-correct-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        notes
+            .write(
+                MEMORY_FILE,
+                "# memory\n\n## Curated facts (auto)\n- [preference] editor.name = vim _(2025-12-31, conf 0.85)_\n",
+            )
+            .unwrap();
+
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+        let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
+
+        assert_eq!(outcome.facts_added.len(), 1, "correction must be appended");
+
+        let memory = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(memory.contains("editor.name = vim"), "old value retained");
+        assert!(memory.contains("editor.name = helix"), "new value appended");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_skips_unchanged_structured_restatement() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let cfg = AgentConfig::default();
+        let provider = MockProvider::new("mock-aux", &cfg);
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.95">Still helix</fact>"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        db.record_message("sess-1", "user", "stuff").unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-same-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        notes
+            .write(
+                MEMORY_FILE,
+                "# memory\n\n## Curated facts (auto)\n- [preference] editor.name = helix _(2025-12-31, conf 0.85)_\n",
+            )
+            .unwrap();
+
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+        let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
+
+        assert!(
+            outcome.facts_added.is_empty(),
+            "unchanged value must not be re-appended"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
