@@ -164,6 +164,7 @@ cleanup() {
     set +e
     # Lazy fallback: /sys is rbind'd (cgroup2 etc.) and can be "busy".
     [ -d "$MNT" ] && { umount -R "$MNT" 2>/dev/null || umount -Rl "$MNT" 2>/dev/null; }
+    [ -n "${UUID_LINKS:-}" ] && rm -f $UUID_LINKS
     [ -n "${LOOP:-}" ] && losetup -d "$LOOP" 2>/dev/null
 }
 trap cleanup EXIT
@@ -284,7 +285,38 @@ export MTOOLS_SKIP_CHECK=1
 rm -f "$MNT/tmp/$EFI_REMOVABLE" "$MNT/tmp/grub-embed.cfg"
 
 echo ":: update-grub (writes /boot/grub/grub.cfg)"
+# grub-mkconfig only emits `root=UUID=…` when the by-uuid symlink actually
+# exists; util/grub.d/10_linux.in falls back to the raw device node when
+#     ! test -e "/dev/disk/by-uuid/${GRUB_DEVICE_UUID}"
+# Those symlinks are udev's job, and minimal build hosts (WSL2 in
+# particular) run no udev at all — /dev/disk does not even exist. GRUB then
+# silently bakes the *build host's* device into the image as
+# `root=/dev/loop0p3`, a path no guest ever has, and every boot dead-ends in
+# the initramfs rescue shell after "Gave up waiting for root device".
+# Nothing warns: the image builds and converts cleanly.
+#
+# So provide what udev would have. Only links we create ourselves are
+# recorded, so a host with a working udev keeps its own.
+UUID_LINKS=""
+mkdir -p /dev/disk/by-uuid
+for uuid_dev in "$ROOT_UUID:$ROOT_DEV" "$ESP_UUID:$ESP_DEV"; do
+    uuid="${uuid_dev%%:*}"
+    dev="${uuid_dev#*:}"
+    [ -n "$uuid" ] || continue
+    [ -e "/dev/disk/by-uuid/$uuid" ] && continue
+    ln -s "$dev" "/dev/disk/by-uuid/$uuid"
+    UUID_LINKS="$UUID_LINKS /dev/disk/by-uuid/$uuid"
+done
+
 chroot "$MNT" update-grub
+
+# Fail loudly rather than shipping an unbootable image: the whole point of
+# the symlinks above is that this substitution happens.
+if grep -qE '^[[:space:]]*linux[[:space:]].*root=/dev/' "$MNT/boot/grub/grub.cfg"; then
+    echo "error: grub.cfg references a build-host device instead of root=UUID=" >&2
+    grep -nE '^[[:space:]]*linux[[:space:]]' "$MNT/boot/grub/grub.cfg" | head -3 >&2
+    exit 1
+fi
 
 # 11. Unwind.
 sync
