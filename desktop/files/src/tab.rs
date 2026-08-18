@@ -6209,7 +6209,11 @@ impl Tab {
             widget::container(file_content)
                 .width(Length::Fill)
                 .height(Length::Fill)
-                .class(theme::Container::custom(crate::glass::content)),
+                .class(theme::Container::custom(if matches!(self.mode, Mode::Desktop) {
+                    crate::glass::desktop_content
+                } else {
+                    crate::glass::content
+                })),
         );
         match &self.location {
             Location::Trash | Location::Search(SearchLocation::Trash, ..) => {

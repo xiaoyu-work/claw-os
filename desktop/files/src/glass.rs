@@ -90,6 +90,24 @@ pub fn content(theme: &Theme) -> container::Style {
     }
 }
 
+/// Backdrop for the desktop icon grid.
+///
+/// In `Mode::Desktop` the tab is stretched across the entire output behind the
+/// icon grid, so giving it [`content`]'s surface paints a full-screen sheet
+/// over the wallpaper — at `CONTENT_ALPHA` that reads as a large rounded
+/// rectangle covering the desktop, hairline and all. Out here the wallpaper is
+/// the surface. Keep the foreground colours so icon labels stay legible and
+/// drop the fill, border and radius.
+pub fn desktop_content(theme: &Theme) -> container::Style {
+    let cosmic = theme.cosmic();
+    container::Style {
+        icon_color: Some(cosmic.on_bg_color().into()),
+        text_color: Some(cosmic.on_bg_color().into()),
+        background: None,
+        ..Default::default()
+    }
+}
+
 pub fn navigation(theme: &Theme) -> container::Style {
     let cosmic = theme.cosmic();
     container::Style {
