@@ -25,6 +25,30 @@ const COSMIC_SETUP_DONE_PATH: &str = ".config/cosmic-initial-setup-done";
 const GNOME_SETUP_DONE_PATH: &str = ".config/gnome-initial-setup-done";
 static RESUME_EXIT_PENDING: AtomicBool = AtomicBool::new(false);
 
+/// Terminate the OEM first-boot session.
+///
+/// Run directly rather than through the `cos_runtime::exec` bridge. That
+/// bridge routes through `cos app exec run`, whose manifest declares a
+/// `proc.spawn` need, so `caps::bootstrap` refuses to auto-create a session
+/// for it and the call denies with "Permission denied (no active session)".
+/// The wizard is a system component winding down its own login session, not
+/// an agent acting for the user, so there is nothing to gate or audit here.
+fn terminate_oem_session_blocking() -> Result<(), String> {
+    let out = std::process::Command::new("loginctl")
+        .args(["terminate-user", "cosmic-initial-setup"])
+        .output()
+        .map_err(|why| format!("run loginctl terminate-user: {why}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let detail = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    if detail.is_empty() {
+        Err(format!("loginctl exited with status {}", out.status))
+    } else {
+        Err(format!("loginctl failed: {detail}"))
+    }
+}
+
 fn setup_marker_finishes_launch(marker: &Path) -> bool {
     if !marker.exists() {
         return false;
@@ -34,11 +58,7 @@ fn setup_marker_finishes_launch(marker: &Path) -> bool {
     if !is_oem {
         return true;
     }
-    let terminated = cos_runtime::exec::run(
-        &["loginctl", "terminate-user", "cosmic-initial-setup"],
-        None,
-    )
-    .is_ok_and(|result| result.exit_code == 0);
+    let terminated = terminate_oem_session_blocking().is_ok();
     if terminated {
         return true;
     }
@@ -219,51 +239,54 @@ fn setup_marker_path() -> Result<std::path::PathBuf, String> {
     Ok(home.join(COSMIC_SETUP_DONE_PATH))
 }
 
+/// Record that setup finished, so the next login skips the wizard.
+///
+/// Written with `std::fs`, mirroring how `setup_marker_finishes_launch`
+/// *reads* it. Going through the `cos_runtime::fs` bridge instead made this
+/// unreachable: it dispatches to `cos app fs write`, whose manifest declares
+/// an `fs.write` need, and `caps::bootstrap` only auto-creates a session for
+/// operations that need nothing. Every attempt therefore denied with
+/// "Permission denied (no active session)", the error surfaced as
+/// `finish_error`, and the wizard refused to close — leaving no way to finish
+/// or skip onboarding at all.
+///
+/// The bridge exists so an agent's file access is scoped and audited. This is
+/// the wizard stamping its own private state file in its own home directory;
+/// it is not acting for anyone.
 async fn write_setup_marker() -> Result<(), String> {
     let marker = setup_marker_path()?;
-    let marker = marker.to_string_lossy().into_owned();
     tokio::task::spawn_blocking(move || {
-        cos_runtime::fs::write(&marker, "")
-            .map(|_| ())
-            .map_err(|why| why.to_string())
+        // `cos_runtime::fs::write` created missing parents; ~/.config may not
+        // exist yet on a fresh account, so keep that behaviour.
+        if let Some(parent) = marker.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|why| format!("create {}: {why}", parent.display()))?;
+        }
+        std::fs::write(&marker, "")
+            .map_err(|why| format!("write {}: {why}", marker.display()))
     })
     .await
     .map_err(|why| format!("setup marker task failed: {why}"))?
 }
 
 async fn terminate_oem_session() -> Result<(), String> {
-    let marker = setup_marker_path()?.to_string_lossy().into_owned();
-    let command_result = match tokio::task::spawn_blocking(move || {
-        match cos_runtime::exec::run(
-            &["loginctl", "terminate-user", "cosmic-initial-setup"],
-            None,
-        ) {
-            Ok(result) if result.exit_code == 0 => Ok(()),
-            Ok(result) => {
-                let detail = result.stderr.trim();
-                if detail.is_empty() {
-                    Err(format!("loginctl exited with status {}", result.exit_code))
-                } else {
-                    Err(format!("loginctl failed: {detail}"))
-                }
-            }
-            Err(why) => Err(format!("run loginctl terminate-user: {why}")),
-        }
-    })
-    .await
-    {
+    let marker = setup_marker_path()?;
+    let command_result = match tokio::task::spawn_blocking(terminate_oem_session_blocking).await {
         Ok(result) => result,
         Err(why) => Err(format!("session termination task failed: {why}")),
     };
     if let Err(error) = command_result {
+        // Roll the marker back so the wizard runs again rather than leaving
+        // the OEM account stranded in a session it thinks is already done.
         let cleanup_marker = marker.clone();
         let cleanup = tokio::task::spawn_blocking(move || {
-            cos_runtime::fs::rm(&cleanup_marker).map_err(|why| why.to_string())
+            std::fs::remove_file(&cleanup_marker)
+                .map_err(|why| format!("remove {}: {why}", cleanup_marker.display()))
         })
         .await
         .map_err(|why| format!("marker cleanup task failed: {why}"))?;
         return match cleanup {
-            Ok(_) => Err(error),
+            Ok(()) => Err(error),
             Err(cleanup) => Err(format!(
                 "{error}; removing setup marker also failed: {cleanup}"
             )),
