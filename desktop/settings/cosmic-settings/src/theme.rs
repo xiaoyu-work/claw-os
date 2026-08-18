@@ -28,17 +28,27 @@ fn elevated_fill(cosmic: &cosmic::cosmic_theme::Theme) -> Color {
 /// Used for the category rows on the Settings landing page: an airy
 /// `radius_l` surface, a 1px neutral hairline, and a soft drop shadow. Depth
 /// comes from elevation, not from a tinted border.
+///
+/// The foreground colours are set explicitly. `page_list_item` wraps this
+/// card in `button::custom` with `theme::Button::Transparent`, and that style
+/// resolves through `TRANSPARENT_COMPONENT`, whose every colour — including
+/// the `on` colour buttons hand down as `text_color` — is rgba(0,0,0,0).
+/// Leaving these `None` inherits that, so the row's title and description
+/// rendered fully transparent while the icon tile (which sets its own colours)
+/// stayed visible: the Settings pages looked like rows of icons and chevrons
+/// with no labels at all.
 #[must_use]
 pub fn frosted_card() -> cosmic::theme::Container<'static> {
     theme::Container::custom(|theme| {
         let cosmic = theme.cosmic();
+        let ink = cosmic.on_bg_color();
 
         cosmic::widget::container::Style {
-            icon_color: None,
-            text_color: None,
+            icon_color: Some(ink.into()),
+            text_color: Some(ink.into()),
             background: Some(Background::Color(elevated_fill(cosmic))),
             border: Border {
-                color: Color::from(cosmic.on_bg_color().with_alpha(0.10)),
+                color: Color::from(ink.with_alpha(0.10)),
                 radius: cosmic.corner_radii.radius_l.into(),
                 width: 1.0,
             },

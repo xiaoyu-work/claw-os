@@ -66,7 +66,16 @@ pub fn appearance(
 
             let (background, text, icon) = color(style_component);
             appearance.background = Some(Background::Color(background));
-            if !matches!(style, Button::Standard) {
+            if matches!(style, Button::Transparent) {
+                // `Transparent` means "no background", not "invisible
+                // contents". Its component is rgba(0,0,0,0) throughout —
+                // including the `on` colour the branch below would install as
+                // `text_color` — so assigning it makes every label and glyph
+                // inside the button fully transparent. Callers wrap arbitrary
+                // content in this style to get a pressable region with no
+                // chrome of its own; leave the foreground unset so that
+                // content keeps whatever colour its own container resolved.
+            } else if !matches!(style, Button::Standard) {
                 appearance.text_color = text;
                 appearance.icon_color = icon;
             } else if hc {
