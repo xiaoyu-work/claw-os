@@ -476,7 +476,20 @@ impl CosmicLauncher {
                 namespace: "launcher".into(),
                 size: None,
                 size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(880.0),
-                exclusive_zone: -1,
+                // Let the compositor place us clear of the panel's exclusive
+                // zone, and keep the gap above the palette in the surface's
+                // margin. Previously the surface anchored over the panel
+                // (`exclusive_zone: -1`) and a `vertical_space` inside it
+                // pushed the palette down instead. That spacer was still part
+                // of the surface, and `is_shell_glass_namespace` blurs the
+                // whole layer bbox, so the empty strip rendered as a band of
+                // blurred wallpaper above the palette. Margin lives outside
+                // the surface, so there is nothing there to blur.
+                exclusive_zone: 0,
+                margin: IcedMargin {
+                    top: 12,
+                    ..Default::default()
+                },
                 ..Default::default()
             }),
             overlap_notify(self.window_id, true),
@@ -963,10 +976,18 @@ impl CosmicLauncher {
                 );
 
                 if self.width >= PALETTE_NARROW_BREAKPOINT {
-                    row![suggestions, recents]
-                        .spacing(12)
-                        .width(Length::Fill)
-                        .into()
+                    // Stretch only the second column. The row sizes itself to
+                    // the taller card (Suggestions), and "Recent" then fills
+                    // that height instead of sitting as a stub beside it. Both
+                    // columns filling would leave the shrink-sized row with
+                    // nothing to measure.
+                    row![
+                        suggestions,
+                        container(recents).height(Length::Fill)
+                    ]
+                    .spacing(12)
+                    .width(Length::Fill)
+                    .into()
                 } else {
                     column![suggestions, recents]
                         .spacing(12)
@@ -992,7 +1013,15 @@ impl CosmicLauncher {
                         .id(SCROLLABLE.clone())
                         .height(Length::Shrink),
                 )
-                .max_height(430.0),
+                // Scale with the space actually available instead of a fixed
+                // 430 px, which cut off mid-row on a 1080p screen while
+                // leaving the palette's lower half empty. `margin` is the
+                // bottom edge of whatever panel overlaps us, so subtracting it
+                // measures the room the compositor's exclusive zone leaves.
+                // The clamp keeps it usable on a very short output and stops
+                // it running past the palette on a tall one; the rest of the
+                // palette (input, chips, padding) needs ~150 px.
+                .max_height((((self.height - self.margin).max(240.0)) * 0.55).clamp(320.0, 640.0)),
             );
         }
 
@@ -1021,7 +1050,6 @@ impl CosmicLauncher {
             .padding(16)
             .class(Container::custom(palette_appearance));
         let window = Column::new()
-            .push(vertical_space().height(Length::Fixed(self.margin + 20.0)))
             .push(palette)
             .width(Length::Fill)
             .max_width(PALETTE_WIDTH);
@@ -2091,7 +2119,6 @@ impl cosmic::Application for CosmicLauncher {
             }
 
             let window = Column::new()
-                .push(vertical_space().height(Length::Fixed(self.margin + 16.)))
                 .push(
                     // Use the built-in `Container::Transparent` variant
                     // (the default of `theme::Container`) so the launcher
