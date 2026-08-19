@@ -27,7 +27,7 @@ use calloop::timer::Timer;
 use cctk::wayland_client::protocol::wl_pointer::WlPointer;
 use cctk::wayland_client::protocol::wl_seat;
 use cosmic::iced::id;
-use cosmic_panel_config::{CosmicPanelConfig, CosmicPanelOuput, NAME, Side};
+use cosmic_panel_config::{CosmicPanelBackground, CosmicPanelConfig, CosmicPanelOuput, NAME, Side};
 use freedesktop_desktop_entry::{self, DesktopEntry, Iter};
 use itertools::izip;
 use launch_pad::process::Process;
@@ -432,7 +432,26 @@ impl WrapperSpace for PanelSpace {
                 self.output.as_ref().and_then(|o| o.2.name.clone()).unwrap_or_default();
 
             let config_anchor = ron::ser::to_string(&self.config.anchor).unwrap_or_default();
-            let config_bg = ron::ser::to_string(&self.config.background).unwrap_or_default();
+            // Send the variant we actually resolved, not the raw config value.
+            // `ThemeDefault` tells the applet "work it out yourself", and it
+            // does so via `theme::system_preference()`, which silently falls
+            // back to the *light* theme whenever it cannot read the theme-mode
+            // config. A panel drawing itself dark then hosts applets drawing
+            // themselves light: on the Dock that produced a near-black app
+            // library glyph on a near-black surface, while the separator right
+            // above it — drawn by this process, with the correct theme — stayed
+            // legible. We already know the answer here, so state it.
+            let resolved_bg = match self.config.background {
+                CosmicPanelBackground::ThemeDefault => {
+                    if self.colors.theme.theme_type.is_dark() {
+                        CosmicPanelBackground::Dark
+                    } else {
+                        CosmicPanelBackground::Light
+                    }
+                },
+                ref other => other.clone(),
+            };
+            let config_bg = ron::ser::to_string(&resolved_bg).unwrap_or_default();
             let config_spacing = ron::ser::to_string(&self.config.spacing).unwrap_or_default();
             let config_padding_overlap =
                 ron::ser::to_string(&self.config.padding_overlap()).unwrap_or_default();
