@@ -46,7 +46,6 @@ fi
 GRUB_DEFAULT="$ROOTFS/etc/default/grub"
 if [ -f "$GRUB_DEFAULT" ]; then
     sed -i \
-        -e 's|^GRUB_CMDLINE_LINUX_DEFAULT=.*|GRUB_CMDLINE_LINUX_DEFAULT="quiet console=tty0 console=ttyS0,115200n8 video=1920x1080"|' \
         -e 's|^#\?GRUB_TERMINAL=.*|GRUB_TERMINAL="serial console"|' \
         -e 's|^#\?GRUB_SERIAL_COMMAND=.*|GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"|' \
         "$GRUB_DEFAULT"
@@ -57,6 +56,28 @@ if [ -f "$GRUB_DEFAULT" ]; then
     grep -q '^GRUB_SERIAL_COMMAND=' "$GRUB_DEFAULT" || \
         echo 'GRUB_SERIAL_COMMAND="serial --speed=115200 --unit=0 --word=8 --parity=no --stop=1"' >> "$GRUB_DEFAULT"
 fi
+
+# 2b. Kernel command line, as a grub.d drop-in.
+#
+# It has to be a drop-in, and it has to sort after grub-disk's
+# 50-claw-os.cfg: grub-mkconfig reads /etc/default/grub first and the
+# drop-ins after, so anything this feature wrote to /etc/default/grub for
+# GRUB_CMDLINE_LINUX_DEFAULT was silently overwritten by 50-claw-os.cfg —
+# the serial console never actually reached the kernel.
+#
+# `vt.global_cursor_default=0` hides the text-mode cursor. Logging in tears
+# down the greeter's compositor and starts the user's, and for the moment
+# in between there is nothing on the VT but a blinking console cursor. The
+# gap is inherent to handing DRM master from one compositor to the other;
+# hiding the cursor is what keeps it from reading as a glitch.
+#
+# `splash` is kept from 50-claw-os.cfg: it is what starts plymouth, which
+# covers the boot-to-greeter transition.
+mkdir -p "$ROOTFS/etc/default/grub.d"
+cat > "$ROOTFS/etc/default/grub.d/60-claw-os-vm.cfg" <<'EOF'
+# Claw OS VM overrides. Sorts after 50-claw-os.cfg, so this wins.
+GRUB_CMDLINE_LINUX_DEFAULT="quiet splash vt.global_cursor_default=0 console=tty0 console=ttyS0,115200n8 video=1920x1080"
+EOF
 
 # 3. Enable serial-getty on ttyS0 for headless login.
 mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"
