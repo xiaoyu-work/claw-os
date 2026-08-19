@@ -63,4 +63,26 @@ mkdir -p "$ROOTFS/etc/systemd/system/getty.target.wants"
 ln -sf /usr/lib/systemd/system/serial-getty@.service \
     "$ROOTFS/etc/systemd/system/getty.target.wants/serial-getty@ttyS0.service"
 
+# 4. Don't auto-suspend a virtual machine.
+#
+# cosmic-idle suspends the whole machine after 30 minutes on AC (15 on
+# battery) — sensible on a laptop, wrong in a VM. There is no battery to
+# save, the host already manages power, and the guest cannot be woken from
+# inside: moving the mouse does nothing, because the machine it would wake
+# is suspended. The user is left staring at a black window that looks like
+# a hang, and has to power-cycle the VM from the hypervisor UI.
+#
+# Screen-off (and the lock that follows it) is left alone: that one *is*
+# wakeable from inside, since `process_input_event` turns the outputs back
+# on with the first event it sees.
+#
+# Written as a system default under /usr/share/cosmic, so it seeds the
+# value without pinning it — the user can still set a suspend time in
+# Settings and their choice, stored under ~/.config, takes precedence.
+IDLE_CONF_DIR="$ROOTFS/usr/share/cosmic/com.clawos.Idle/v1"
+mkdir -p "$IDLE_CONF_DIR"
+printf 'None' > "$IDLE_CONF_DIR/suspend_on_ac_time"
+printf 'None' > "$IDLE_CONF_DIR/suspend_on_battery_time"
+
 echo "  :: created 'cos' user, configured GRUB serial+console terminal, enabled serial-getty@ttyS0"
+echo "  :: disabled idle auto-suspend (a suspended guest cannot be woken from inside)"
