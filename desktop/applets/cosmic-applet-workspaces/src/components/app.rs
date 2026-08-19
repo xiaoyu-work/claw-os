@@ -13,6 +13,7 @@ use cctk::{
 use cosmic::{
     Element, Task, Theme, app,
     applet::cosmic_panel_config::PanelAnchor,
+    cosmic_theme::palette::WithAlpha,
     iced::core::{Background, Border},
     iced::{
         Alignment,
@@ -37,6 +38,12 @@ use std::{process::Command as ShellCommand, sync::LazyLock, time::Duration};
 static AUTOSIZE_MAIN_ID: LazyLock<Id> = LazyLock::new(|| Id::new("autosize-main"));
 
 const SCROLL_RATE_LIMIT: Duration = Duration::from_millis(200);
+
+/// Translucency steps for the active-workspace marker, mirroring the Claw
+/// Glass selection treatment used elsewhere for "this is the current one".
+const ACTIVE_FILL_ALPHA: f32 = 0.15;
+const ACTIVE_HOVER_FILL_ALPHA: f32 = 0.24;
+const ACTIVE_BORDER_ALPHA: f32 = 0.50;
 
 pub fn run() -> cosmic::iced::Result {
     cosmic::applet::run::<IcedWorkspacesApplet>(())
@@ -228,7 +235,42 @@ impl cosmic::Application for IcedWorkspacesApplet {
 
             btn.class(
                 if w.state.contains(ext_workspace_handle_v1::State::Active) {
-                    cosmic::theme::iced::Button::Primary
+                    // A translucent accent wash with an accent ring and accent
+                    // label, matching the Claw Glass selection treatment used
+                    // for wizard rows. `Button::Primary` paints a fully
+                    // saturated accent chip, which on a small panel badge
+                    // reads as a glaring dot rather than a marker.
+                    let appearance = |theme: &Theme| {
+                        let cosmic = theme.cosmic();
+                        let accent = cosmic.accent_color();
+                        button::Style {
+                            background: Some(Background::Color(
+                                accent.with_alpha(ACTIVE_FILL_ALPHA).into(),
+                            )),
+                            border: Border {
+                                radius: cosmic.radius_xl().into(),
+                                width: 1.0,
+                                color: accent.with_alpha(ACTIVE_BORDER_ALPHA).into(),
+                            },
+                            border_radius: cosmic.radius_xl().into(),
+                            text_color: cosmic.accent_text_color().into(),
+                            ..button::Style::default()
+                        }
+                    };
+                    cosmic::theme::iced::Button::Custom(Box::new(
+                        move |theme, status| match status {
+                            button::Status::Hovered => {
+                                let accent = theme.cosmic().accent_color();
+                                button::Style {
+                                    background: Some(Background::Color(
+                                        accent.with_alpha(ACTIVE_HOVER_FILL_ALPHA).into(),
+                                    )),
+                                    ..appearance(theme)
+                                }
+                            },
+                            _ => appearance(theme),
+                        },
+                    ))
                 } else if w.state.contains(ext_workspace_handle_v1::State::Urgent) {
                     let appearance = |theme: &Theme| {
                         let cosmic = theme.cosmic();
