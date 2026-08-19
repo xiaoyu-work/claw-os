@@ -38,6 +38,11 @@ Pick an entry point:
 - **WSL** — recommended
 - **Docker / OrbStack** — recommended
 - **Desktop / ISO / VM** — experimental
+- **Azure Compute Gallery** — generalized fixed VHD
+
+All artifacts share the same composed Debian rootfs; platform profiles only
+add their user, boot, and provisioning policy. See
+[Image architecture](docs/image-architecture.md).
 
 ### WSL
 
@@ -70,6 +75,18 @@ Desktop images are **experimental**.
 Build a bootable desktop VM disk image and load it in VMware — see
 [Building the Claw OS Desktop Image](docs/building-desktop.md) for the steps on
 Windows (WSL2), macOS, and Linux.
+
+### Azure Compute Gallery
+
+Build a generalized Hyper-V Generation 2 fixed VHD:
+
+```bash
+sudo ./build.sh azure
+```
+
+Azure supplies the administrator and SSH key for each VM through cloud-init.
+See [Building an Azure Compute Gallery image](docs/building-azure.md) for
+desktop builds and publishing commands.
 
 ### Drive the OS
 

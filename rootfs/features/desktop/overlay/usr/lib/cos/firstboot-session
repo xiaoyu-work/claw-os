@@ -24,9 +24,8 @@
 # We deliberately do NOT consult passwd -S / /etc/shadow: this script
 # runs as the non-root cosmic-initial-setup user and cannot read shadow.
 # Presence of *any* uid-1000+ user with a real shell is the signal —
-# safe because rootfs/features/vm/install.sh skips its default `cos`
-# user when this wizard is wired, so a fresh image truly has no human
-# users.
+# safe because the local-user feature skips its default `cos` user when
+# this wizard is wired, so a fresh image truly has no human users.
 set -eu
 
 while IFS=: read -r name _ uid _ _ _ shell; do
@@ -39,5 +38,4 @@ while IFS=: read -r name _ uid _ _ _ shell; do
 done < /etc/passwd
 
 exec cosmic-comp cosmic-initial-setup
-
 

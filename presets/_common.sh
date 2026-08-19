@@ -12,13 +12,14 @@
 # regardless of the caller's working directory.
 PRESETS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$PRESETS_DIR/.." && pwd)"
+source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
 
 # Desktop feature set: the full COSMIC desktop + VMware guest tools (screen
 # auto-resize, clipboard) + Copilot CLI + the Claw OS apt repo. This is the
 # one feature string that the core's default does NOT cover, which is why a
 # preset is useful here. The wsl/docker targets already default to the
 # right features, so those presets don't override FEATURES at all.
-FEATURES_DESKTOP="base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source"
+FEATURES_DESKTOP="$IMAGE_FEATURES_DESKTOP_VM"
 
 # run_preset <target> — export whatever FEATURES/FORMATS/SIZE the caller
 # set (any may be empty, in which case the target's own default applies)

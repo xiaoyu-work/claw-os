@@ -29,6 +29,7 @@ ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 ISO_BUILD="$PROJECT_DIR/build/iso-installer-build"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
+source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
 
 OUTPUT="$PROJECT_DIR/build/claw-os-installer-${ARCH_SUFFIX}.iso"
 
@@ -63,7 +64,7 @@ done
 #    Includes apt-source so the installed system can apt upgrade out of
 #    the box, AND grub-disk so Calamares finds grub-install/efibootmgr.
 "$PROJECT_DIR/rootfs/build.sh" \
-    --features base,cos-core,systemd,kernel,grub-disk,live,installer,gpu-drivers,apt-source
+    --features "$IMAGE_FEATURES_INSTALLER"
 
 # 2. Apply iso-installer overlay if any.
 if [ -d "$SCRIPT_DIR/overlay" ]; then

@@ -22,19 +22,28 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `desktop` | Builds the vendored desktop workspace into `claw-os-desktop.deb`, then installs it. Includes compositor, greeter, panel, launcher, settings, apps, desktop defaults, and graphical boot wiring. Set `DESKTOP_SKIP=1` to install runtime deps + overlay only. |
 | `claw-mail-ai` | Packs the `extensions/claw-mail-ai` MailExtension as an `.xpi`, force-installs it into Thunderbird, deploys the Python Native Messaging host (`apps/mail-ai`) under `/usr/lib/cos/mail-ai`, and drops the NM manifest + policies. Requires Thunderbird (already pulled in by `desktop`). |
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by cosmic-term's `@`-trigger AI integration (`desktop/term/src/ai/`). |
+| `vm` | Hypervisor-neutral serial console, GRUB command line, serial getty, and VM power defaults. Does not create a user or install a provider agent. |
+| `local-user` | Adds the local `cos` login account when no metadata service can provision one. Skips graphical images that use the desktop first-boot wizard. |
+| `cloud-init` | Provider-neutral cloud provisioning, SSH, root filesystem growth, and locked root account. |
+| `azure` | Azure datasource policy, WALinuxAgent, Hyper-V daemons/initramfs modules, and Azure serial-console settings. Requires `cloud-init`. |
 | `vmware` | Optional VMware Tools guest integration (`open-vm-tools`, `open-vm-tools-desktop`) for VMware Fusion / Workstation / ESXi images. Include only for VMware builds, after `systemd`. |
 
 Default feature set (when no `--features` is given): `base,cos-core,browser`.
 Docker and WSL use the headless Claw OS runtime feature set:
-`base,cos-core,browser,systemd,apt-source,qwen3-embedding`. This is the full
-non-desktop OS surface: Claw's own `cos`/`clawd` agent runtime, apps, skills,
-browser automation, service units, local embedding stack, and upgrade
-source. This feature set builds on both amd64 and arm64 (WSL/Docker arm64
-are Linux targets). In every system target, systemd starts
+`base,cos-core,browser,systemd,gpu-drivers,apt-source,qwen3-embedding`. This is
+the full non-desktop OS surface: Claw's own `cos`/`clawd` agent runtime, apps,
+skills, browser automation, service units, local embedding stack, and upgrade
+source. This feature set builds on both amd64 and arm64 (WSL/Docker arm64 are
+Linux targets). In every system target, systemd starts
 `clawd.service` as part of boot.
-Target-specific boot/install features (`kernel`, `grub-disk`, `vm`, `vmware`,
-`live`, `installer`), desktop UI, and third-party agent providers
+Target-specific boot/install features (`kernel`, `grub-disk`, `vm`,
+`local-user`, `cloud-init`, `azure`, `vmware`, `live`, `installer`), desktop
+UI, and third-party agent providers
 (`copilot-cli`) are opt-in.
+
+Supported feature combinations are centralized in
+`scripts/lib/image-profiles.sh`. Features define capabilities; targets define
+artifact formats and finalization.
 
 ## Usage
 
@@ -49,7 +58,10 @@ sudo ./rootfs/build.sh --features base,cos-core
 sudo ./rootfs/build.sh --features base
 
 # Desktop VMware image rootfs with VMware Tools guest integration
-sudo ./rootfs/build.sh --features base,cos-core,systemd,kernel,desktop,vmware,grub-disk,vm,apt-source
+sudo ./rootfs/build.sh --features base,cos-core,systemd,kernel,desktop,vmware,grub-disk,vm,apt-source,local-user
+
+# Generalized Azure rootfs (the azure target also performs final cleanup)
+sudo ./rootfs/build.sh --features base,cos-core,systemd,kernel,grub-disk,vm,cloud-init,azure
 ```
 
 ## Adding a new feature

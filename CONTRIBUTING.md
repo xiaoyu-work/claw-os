@@ -67,7 +67,7 @@ qemu-system-x86_64 -m 2G -bios /usr/share/ovmf/OVMF.fd \
 # Host requirements (Debian/Ubuntu):
 sudo apt install qemu-utils parted dosfstools mtools rsync
 
-# Produces build/claw-os-vm.qcow2 (hybrid BIOS+UEFI bootable)
+# Produces build/claw-os-vm-amd64.qcow2 (hybrid BIOS+UEFI bootable)
 sudo ./build.sh vm
 
 # Multiple formats in one build:
@@ -77,7 +77,7 @@ sudo FORMATS="qcow2 vmdk vhdx" ./build.sh vm
 # for guest resize / clipboard (preset wrapper sets the desktop features):
 sudo ./presets/desktop.sh
 # ...or spell out the equivalent FEATURES manually:
-sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source,local-user \
      FORMATS=vmdk ./build.sh vm
 
 # Larger disk:
@@ -85,7 +85,7 @@ sudo SIZE=16G ./build.sh vm
 
 # Boot in QEMU (BIOS):
 qemu-system-x86_64 -m 2G -nographic \
-    -drive file=build/claw-os-vm.qcow2,format=qcow2,if=virtio
+    -drive file=build/claw-os-vm-amd64.qcow2,format=qcow2,if=virtio
 
 # Boot in Hyper-V Gen 2 (UEFI): disable Secure Boot first
 #   Set-VMFirmware -VMName claw-os -EnableSecureBoot Off

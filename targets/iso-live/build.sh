@@ -23,6 +23,7 @@ ROOTFS="$PROJECT_DIR/build/claw-os-rootfs"
 ISO_BUILD="$PROJECT_DIR/build/iso-build"
 
 source "$PROJECT_DIR/scripts/lib/arch.sh"
+source "$PROJECT_DIR/scripts/lib/image-profiles.sh"
 
 OUTPUT="$PROJECT_DIR/build/claw-os-live-${ARCH_SUFFIX}.iso"
 
@@ -65,7 +66,7 @@ done
 #    Note: rootfs/features/live/install.sh detects whether `desktop` was
 #    already applied and, if so, layers a greetd [initial_session] block
 #    for autologin into a Wayland session.
-FEATURES="${FEATURES:-base,cos-core,systemd,kernel,live,gpu-drivers,apt-source}"
+FEATURES="${FEATURES:-$IMAGE_FEATURES_LIVE}"
 echo ":: features: $FEATURES"
 "$PROJECT_DIR/rootfs/build.sh" --features "$FEATURES"
 

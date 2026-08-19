@@ -1,0 +1,10 @@
+# Provider-neutral cloud provisioning. A provider feature such as `azure`
+# restricts the datasource and adds its guest agent.
+cloud-init
+cloud-utils-growpart
+gdisk
+openssh-server
+
+# Azure's datasource needs a DHCP client before the persistent network
+# configuration exists. dhclient also exposes Azure DHCP option 245.
+isc-dhcp-client

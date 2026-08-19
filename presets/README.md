@@ -8,11 +8,19 @@ Each preset just exports the right environment and calls the core build — it
 adds no new build logic. Edit `_common.sh` to change the shared desktop feature
 list.
 
+The canonical feature combinations live in
+`scripts/lib/image-profiles.sh`; presets are only user-facing convenience
+wrappers.
+
 | Preset | Command | Produces |
 | --- | --- | --- |
 | **Desktop VM** | `sudo ./presets/desktop.sh` | Bootable COSMIC desktop VM image (`vmdk`, 50G) for VMware. Full graphical Claw OS. |
 | **WSL** | `sudo ./presets/wsl.sh` | WSL2 root filesystem tarball — headless Claw OS inside Windows. |
 | **Docker** | `./presets/docker.sh` | Headless Claw OS Docker image (container runtime). |
+
+Azure is a platform target rather than a local preset:
+`sudo ./build.sh azure` creates a generalized fixed VHD, and
+`sudo IMAGE_FLAVOR=desktop ./build.sh azure` includes the COSMIC desktop.
 
 ## Notes
 

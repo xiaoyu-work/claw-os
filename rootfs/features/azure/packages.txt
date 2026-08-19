@@ -1,0 +1,3 @@
+# Azure platform integration. cloud-init must be applied before this feature.
+waagent
+hyperv-daemons

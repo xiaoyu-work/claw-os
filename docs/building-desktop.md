@@ -1,8 +1,8 @@
 # Building the Claw OS Desktop Image
 
 This guide covers building a bootable Claw OS **desktop VM disk image** and loading
-it in VMware. Only the steps are covered here — see `targets/vm/build.sh` for the
-full details.
+it in VMware. Only the steps are covered here — see
+`targets/common/disk-image.sh` for the full disk-layout details.
 
 ## What you get
 
@@ -76,11 +76,12 @@ Output: `build/claw-os-vm-<arch>.vmdk`.
 <summary>Manual equivalent (if you want to tweak features/format/size)</summary>
 
 ```bash
-sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source \
+sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,vm,apt-source,local-user \
      FORMATS=vmdk SIZE=50G ./build.sh vm
 ```
 
-- `FORMATS` — output format: `vmdk` (VMware), `vhdx` (Hyper-V), `qcow2` (QEMU), or `raw`.
+- `FORMATS` — output format: `vmdk` (VMware), `vhdx` (Hyper-V), `qcow2`
+  (QEMU), or `raw`. Azure's fixed `vhd` is produced by `./build.sh azure`.
 - `SIZE` — virtual disk size (sparse, so the file is much smaller).
 
 `FORMATS` and `SIZE` also work with the preset, e.g.

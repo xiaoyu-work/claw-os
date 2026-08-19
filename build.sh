@@ -25,7 +25,7 @@ EOF
         for d in "$SCRIPT_DIR"/targets/*/; do
             name="$(basename "$d")"
             [ "$name" = "common" ] && continue
-            [ -x "$d/build.sh" ] && echo "  $name"
+            [ -f "$d/build.sh" ] && echo "  $name"
         done
     fi
     cat <<EOF
@@ -33,6 +33,7 @@ EOF
 Examples:
   ./build.sh docker                          # docker image
   sudo ./build.sh vm                         # qcow2 / vmdk / vhdx
+  sudo ./build.sh azure                      # generalized fixed VHD
   sudo ./build.sh iso-live                   # live ISO
   sudo ./build.sh wsl                        # WSL tarball
 EOF
@@ -53,11 +54,11 @@ fi
 TARGET_DIR="$SCRIPT_DIR/targets/$TARGET"
 TARGET_BUILD="$TARGET_DIR/build.sh"
 
-if [ ! -d "$TARGET_DIR" ] || [ ! -x "$TARGET_BUILD" ]; then
+if [ ! -d "$TARGET_DIR" ] || [ ! -f "$TARGET_BUILD" ]; then
     echo "error: unknown target '$TARGET'" >&2
     echo >&2
     usage >&2
     exit 1
 fi
 
-exec "$TARGET_BUILD" "$@"
+exec bash "$TARGET_BUILD" "$@"
