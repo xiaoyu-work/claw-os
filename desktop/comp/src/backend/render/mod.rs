@@ -409,7 +409,10 @@ fn region_bounds(region: &RegionAttributes) -> Option<Rectangle<i32, Logical>> {
 }
 
 fn is_shell_glass_namespace(namespace: &str) -> bool {
-    matches!(namespace, "Panel" | "Dock" | "app-library" | "launcher")
+    matches!(
+        namespace,
+        "Panel" | "Dock" | "app-library" | "launcher" | "cosmic-workspace-overview"
+    )
 }
 
 /// How strongly a shell-glass surface blurs what is behind it.
@@ -422,7 +425,7 @@ fn is_shell_glass_namespace(namespace: &str) -> bool {
 fn shell_glass_blur_tier(namespace: &str) -> blur::BlurTier {
     match namespace {
         "Panel" | "Dock" => blur::BlurTier::Attached,
-        "app-library" => blur::BlurTier::Fullscreen,
+        "app-library" | "cosmic-workspace-overview" => blur::BlurTier::Fullscreen,
         // The launcher, and any applet popup anchored to the panel.
         _ => blur::BlurTier::Floating,
     }
@@ -437,6 +440,9 @@ fn shell_glass_blur_tier(namespace: &str) -> blur::BlurTier {
 fn shell_glass_corner_radius(namespace: &str, scale: f64) -> [u8; 4] {
     let logical = match namespace {
         "launcher" => 24.0,
+        // Edge-to-edge over the whole output: rounding here would carve the
+        // blur out of the screen corners and leave sharp wallpaper showing.
+        "cosmic-workspace-overview" => 0.0,
         // Panel/Dock/app-library popups all round at `radius_l`.
         _ => 16.0,
     };

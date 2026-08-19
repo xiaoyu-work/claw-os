@@ -106,6 +106,7 @@ enum Msg {
     OnScroll(wl_output::WlOutput, ScrollDelta),
     TogglePinned(ExtWorkspaceHandleV1),
     EnteredWorkspaceSidebarEntry(ExtWorkspaceHandleV1, bool),
+    HoveredSpacesBar(bool),
     DbusInterface(zbus::Result<dbus::Interface>),
     DBus(dbus::Event),
     PanelContainerEntries(Vec<String>),
@@ -192,6 +193,11 @@ struct App {
     dbus_interface: Option<dbus::Interface>,
     panel_configs: HashMap<String, Option<CosmicPanelConfig>>,
     action_on_typing_activated: bool,
+    /// Whether the pointer is over the Spaces bar. macOS Sonoma onwards opens
+    /// Mission Control with the bar collapsed to plain desktop names and only
+    /// grows it into thumbnails once you reach for it, so the previews never
+    /// eat the top of the screen until you actually want them.
+    spaces_bar_hovered: bool,
 }
 
 #[derive(Debug, Default)]
@@ -325,6 +331,10 @@ impl App {
         self.action_on_typing_activated = false;
 
         self.visible = false;
+        // Next time the overview opens it should start collapsed again, the
+        // way Mission Control does, rather than resuming whatever hover state
+        // it was dismissed in.
+        self.spaces_bar_hovered = false;
         self.update_capture_filter();
         self.drag_surface = None;
         Task::batch(
@@ -728,6 +738,9 @@ impl Application for App {
                 if let Some(workspace) = self.workspaces.for_handle_mut(&workspace_handle) {
                     workspace.has_cursor = entered;
                 }
+            }
+            Msg::HoveredSpacesBar(hovered) => {
+                self.spaces_bar_hovered = hovered;
             }
             Msg::DbusInterface(interface) => {
                 if let Ok(interface) = interface {

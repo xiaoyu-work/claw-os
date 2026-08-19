@@ -97,6 +97,10 @@ pub(crate) fn layer_surface<'a>(
         layout,
         app.drop_target.as_ref(),
         drag_workspace,
+        // Mission Control keeps the bar as a strip of names until you reach
+        // for it. Anything mid-drag needs the thumbnails to aim at, so a drag
+        // forces it open regardless of where the pointer currently is.
+        app.spaces_bar_hovered || drag_workspace.is_some() || drag_toplevel.is_some(),
     );
     let toplevels = toplevel_previews(
         app.toplevels.0.iter().filter(|i| {
@@ -129,17 +133,19 @@ pub(crate) fn layer_surface<'a>(
         cosmic::Element::from(toplevels)
     };
     let container = match layout {
-        WorkspaceLayout::Vertical => widget::layer_container(
+        WorkspaceLayout::Vertical => backdrop(
             row![sidebar, toplevels]
                 .spacing(12)
                 .height(Length::Fill)
-                .width(Length::Fill),
+                .width(Length::Fill)
+                .into(),
         ),
-        WorkspaceLayout::Horizontal => widget::layer_container(
+        WorkspaceLayout::Horizontal => backdrop(
             column![sidebar, toplevels]
                 .spacing(12)
                 .height(Length::Fill)
-                .width(Length::Fill),
+                .width(Length::Fill)
+                .into(),
         ),
     };
 
@@ -150,6 +156,29 @@ pub(crate) fn layer_surface<'a>(
     widget::mouse_area(container)
         .on_scroll(move |delta| Msg::OnScroll(output.clone(), delta))
         .into()
+}
+
+/// Dimming scrim for the overview, over the compositor's blur.
+///
+/// `layer_container` paints the opaque layer background, which covered the
+/// wallpaper with a flat grey field. Mission Control instead darkens and
+/// blurs the desktop so it stays recognisable behind the previews, so the
+/// compositor blurs this namespace and all that is left to draw here is the
+/// scrim that lifts the thumbnails off it.
+fn backdrop(content: cosmic::Element<'_, Msg>) -> widget::Container<'_, Msg, cosmic::Theme> {
+    widget::container(content).class(cosmic::theme::Container::custom(|theme| {
+        let cosmic = theme.cosmic();
+        let mut scrim = cosmic.bg_color();
+        scrim.alpha = 0.45;
+        cosmic::iced::widget::container::Style {
+            text_color: Some(cosmic.on_bg_color().into()),
+            icon_color: Some(cosmic.on_bg_color().into()),
+            background: Some(iced::Background::Color(scrim.into())),
+            border: Border::default(),
+            shadow: Default::default(),
+            snap: true,
+        }
+    }))
 }
 
 fn close_button(on_press: Msg) -> cosmic::Element<'static, Msg> {
@@ -288,6 +317,52 @@ fn workspace_item_appearance(
     appearance
 }
 
+/// Collapsed Spaces-bar entry: just the desktop's name in a slim chip.
+///
+/// This is the state Mission Control opens in — a thin strip of names across
+/// the top — with the thumbnails only appearing once the pointer reaches the
+/// bar. Building the label alone (rather than a hidden thumbnail) keeps the
+/// collapsed strip cheap and lets the bar shrink to text height.
+fn collapsed_workspace_item(
+    workspace: &Workspace,
+    is_active: bool,
+    is_drop_target: bool,
+) -> cosmic::Element<'static, Msg> {
+    let label = widget::text::body(fl!("workspace", number = workspace.info.name.as_str()))
+        .ellipsize(Ellipsize::Middle(EllipsizeHeightLimit::Lines(1)));
+    let label = if is_active {
+        label.class(cosmic::theme::Text::Accent)
+    } else {
+        label
+    };
+
+    let mut button = widget::button::custom(label)
+        .selected(is_active)
+        .class(cosmic::theme::Button::Custom {
+            active: Box::new(move |_focused, theme| {
+                workspace_item_appearance(theme, is_active, is_drop_target)
+            }),
+            disabled: Box::new(move |theme| {
+                workspace_item_appearance(theme, is_active, is_drop_target)
+            }),
+            hovered: Box::new(move |_focused, theme| {
+                workspace_item_appearance(theme, is_active, true)
+            }),
+            pressed: Box::new(move |_focused, theme| {
+                workspace_item_appearance(theme, is_active, true)
+            }),
+        })
+        .padding([4, 16]);
+    if workspace
+        .info
+        .capabilities
+        .contains(ext_workspace_handle_v1::WorkspaceCapabilities::Activate)
+    {
+        button = button.on_press(Msg::ActivateWorkspace(workspace.handle().clone()));
+    }
+    button.into()
+}
+
 fn workspace_item(
     workspace: &Workspace,
     _output: &wl_output::WlOutput,
@@ -295,7 +370,15 @@ fn workspace_item(
     is_drop_target: bool,
     has_workspace_drag: bool,
     has_toplevels: bool,
+    expanded: bool,
 ) -> cosmic::Element<'static, Msg> {
+    if !expanded {
+        return collapsed_workspace_item(
+            workspace,
+            workspace.is_active() && !has_workspace_drag,
+            is_drop_target,
+        );
+    }
     let (mut image, image_height, image_width) = if let Some(img) = workspace.img.as_ref() {
         let is_rotated = matches!(
             img.transform,
@@ -398,6 +481,7 @@ fn workspace_drag_placeholder(
     other_workspace: &Workspace,
     other_output: &wl_output::WlOutput,
     layout: WorkspaceLayout,
+    expanded: bool,
 ) -> cosmic::Element<'static, Msg> {
     let drop_target = DropTarget::WorkspaceSidebarDragPlaceholder(
         other_workspace.handle().clone(),
@@ -416,7 +500,7 @@ fn workspace_drag_placeholder(
     })
     .padding(8);
     let placeholder = crate::widgets::match_size(
-        workspace_item(other_workspace, other_output, layout, true, true, false),
+        workspace_item(other_workspace, other_output, layout, true, true, false, expanded),
         placeholder,
     );
     dnd_destination_for_target(drop_target, placeholder.into(), Msg::DndWorkspaceDrop)
@@ -429,6 +513,7 @@ fn workspace_sidebar_entry<'a>(
     is_drop_target: bool,
     has_toplevels: bool,
     has_workspace_drag: bool,
+    expanded: bool,
 ) -> cosmic::Element<'a, Msg> {
     /* XXX
     let mouse_interaction = if is_drop_target {
@@ -444,6 +529,7 @@ fn workspace_sidebar_entry<'a>(
         is_drop_target,
         has_workspace_drag,
         has_toplevels,
+        expanded,
     );
     let item = iced::widget::mouse_area(item)
         .on_enter(Msg::EnteredWorkspaceSidebarEntry(
@@ -475,7 +561,9 @@ fn workspace_sidebar_entry<'a>(
             DragSurface::Workspace(workspace.handle().clone()),
             Some(workspace.dnd_source_id.clone()),
             destination,
-            move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false),
+            // The thing under the cursor while dragging is always the full
+            // thumbnail: you can only pick a desktop up once the bar is open.
+            move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false, true),
         )
     } else {
         destination
@@ -490,6 +578,7 @@ fn workspaces_sidebar<'a>(
     layout: WorkspaceLayout,
     drop_target: Option<&DropTarget>,
     drag_workspace: Option<&'a backend::ExtWorkspaceHandleV1>,
+    expanded: bool,
 ) -> cosmic::Element<'a, Msg> {
     let mut sidebar_entries = Vec::new();
     let mut last_handle = None;
@@ -506,7 +595,7 @@ fn workspaces_sidebar<'a>(
                     .width(Length::Shrink)
                     .height(Length::Shrink)
                     .into(),
-                move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false),
+                move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false, true),
             );
             sidebar_entries.push(source);
             continue;
@@ -532,7 +621,7 @@ fn workspaces_sidebar<'a>(
             && drag_workspace != Some(workspace.handle())
             && (drop_target_is_workspace || drop_target_is_placeholder)
         {
-            sidebar_entries.push(workspace_drag_placeholder(workspace, output, layout));
+            sidebar_entries.push(workspace_drag_placeholder(workspace, output, layout, expanded));
         }
         sidebar_entries.push(workspace_sidebar_entry(
             workspace,
@@ -541,6 +630,7 @@ fn workspaces_sidebar<'a>(
             drop_target_is_workspace && drag_workspace.is_none(),
             workspaces_with_toplevels.contains(workspace.handle()),
             drag_workspace.is_some(),
+            expanded,
         ));
         last_handle = Some(workspace.handle().clone());
     }
@@ -606,6 +696,9 @@ fn workspaces_sidebar<'a>(
             })),
     )
     .padding(spacing.space_xs)
+    .apply(iced::widget::mouse_area)
+    .on_enter(Msg::HoveredSpacesBar(true))
+    .on_exit(Msg::HoveredSpacesBar(false))
     .into()
 }
 
