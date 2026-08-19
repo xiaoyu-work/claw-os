@@ -178,7 +178,12 @@ fn palette_appearance(theme: &cosmic::Theme) -> container::Style {
         text_color: Some(cosmic.on_bg_color().into()),
         background: Some(background.into()),
         border: Border {
-            radius: cosmic.corner_radii.radius_xl.into(),
+            // `radius_xl` is 160 px — a pill radius, meant for chips and
+            // buttons where it clamps to half the height. On a panel this size
+            // it eats the corners, leaving the fill looking like a lozenge with
+            // the blurred wallpaper showing through around it. `radius_l` (32)
+            // is the large-surface step.
+            radius: cosmic.corner_radii.radius_l.into(),
             width: 1.0,
             color: hairline(cosmic, if is_dark { 0.16 } else { 0.10 }),
         },

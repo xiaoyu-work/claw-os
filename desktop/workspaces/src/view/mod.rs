@@ -641,7 +641,10 @@ fn toplevel_preview(toplevel: &Toplevel, is_being_dragged: bool) -> cosmic::Elem
                     border: Border {
                         color: theme.cosmic().bg_divider().into(),
                         width: 1.0,
-                        radius: theme.cosmic().radius_xl().into(),
+                        // radius_l, not radius_xl: the latter is a 160 px pill
+                        // radius for chips, and on a window thumbnail it
+                        // rounds the corners away entirely.
+                        radius: theme.cosmic().radius_l().into(),
                     },
                     ..Default::default()
                 }
