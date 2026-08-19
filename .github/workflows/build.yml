@@ -1,19 +1,6 @@
 name: Build and Publish
 
 on:
-  push:
-    branches: [main]
-    tags: ['v*']
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
-  pull_request:
-    branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - 'docs/**'
-      - 'LICENSE'
   workflow_dispatch:
 
 env:
@@ -547,7 +534,7 @@ jobs:
 
   publish-wsl-release:
     needs: [build-amd64, build-arm64]
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -578,7 +565,7 @@ jobs:
             echo "- claw-os-wsl-${arch}.tar.gz ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
-      # Rolling pre-release on every push to main, so there is always a
+      # Rolling pre-release on every manual run from main, so there is always a
       # stable download URL pointing at the latest build of main:
       #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.tar.gz
       #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-arm64.tar.gz
@@ -628,8 +615,8 @@ jobs:
             build/claw-os-wsl-arm64.tar.gz
             build/claw-os-wsl-arm64.tar.gz.sha256
 
-      # Versioned release on tag push (v*).
-      - name: Publish versioned release (tag push)
+      # Versioned release on a manually selected v* tag.
+      - name: Publish versioned release (tag run)
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
