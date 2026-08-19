@@ -475,7 +475,14 @@ impl CosmicLauncher {
                 anchor: Anchor::TOP,
                 namespace: "launcher".into(),
                 size: None,
-                size_limits: Limits::NONE.min_width(1.0).min_height(1.0).max_width(880.0),
+                // Match the palette exactly. At 880 against a 840 px palette
+                // the surface stood 20 px proud on each side, and since the
+                // compositor blurs the whole layer bbox that margin showed up
+                // as a second, wallpaper-coloured backdrop around the palette.
+                size_limits: Limits::NONE
+                    .min_width(1.0)
+                    .min_height(1.0)
+                    .max_width(PALETTE_WIDTH),
                 // Let the compositor place us clear of the panel's exclusive
                 // zone, and keep the gap above the palette in the surface's
                 // margin. Previously the surface anchored over the panel
@@ -899,6 +906,7 @@ impl CosmicLauncher {
         indices: &[usize],
         visible_offset: usize,
         empty_message: String,
+        fill_height: bool,
     ) -> Element<'_, Message> {
         let body = if indices.is_empty() {
             self.empty_state(empty_message)
@@ -907,6 +915,13 @@ impl CosmicLauncher {
         };
         container(column![text::heading(title), body].spacing(8))
             .width(Length::Fill)
+            // The card itself has to fill, not a wrapper around it, or the
+            // card keeps its shrink height and only an invisible box stretches.
+            .height(if fill_height {
+                Length::Fill
+            } else {
+                Length::Shrink
+            })
             .padding(12)
             .class(Container::custom(section_appearance))
             .into()
@@ -954,6 +969,7 @@ impl CosmicLauncher {
                     .count();
                 let (suggestions, recents) = visible.split_at(suggestion_count);
                 let loading = self.is_loading && visible.is_empty();
+                let two_columns = self.width >= PALETTE_NARROW_BREAKPOINT;
                 let suggestions = self.result_section(
                     fl!("section-suggestions"),
                     suggestions,
@@ -963,6 +979,7 @@ impl CosmicLauncher {
                     } else {
                         fl!("state-no-suggestions")
                     },
+                    false,
                 );
                 let recents = self.result_section(
                     fl!("section-recent"),
@@ -973,21 +990,18 @@ impl CosmicLauncher {
                     } else {
                         fl!("state-no-recent")
                     },
+                    // Match the taller Suggestions card when they sit side by
+                    // side. Stacked, each card keeps its own height.
+                    two_columns,
                 );
 
-                if self.width >= PALETTE_NARROW_BREAKPOINT {
-                    // Stretch only the second column. The row sizes itself to
-                    // the taller card (Suggestions), and "Recent" then fills
-                    // that height instead of sitting as a stub beside it. Both
-                    // columns filling would leave the shrink-sized row with
-                    // nothing to measure.
-                    row![
-                        suggestions,
-                        container(recents).height(Length::Fill)
-                    ]
-                    .spacing(12)
-                    .width(Length::Fill)
-                    .into()
+                if two_columns {
+                    // Only the second column fills: the row measures itself
+                    // against Suggestions, which it could not do if both did.
+                    row![suggestions, recents]
+                        .spacing(12)
+                        .width(Length::Fill)
+                        .into()
                 } else {
                     column![suggestions, recents]
                         .spacing(12)
@@ -1004,6 +1018,7 @@ impl CosmicLauncher {
                     } else {
                         fl!("state-no-results")
                     },
+                    false,
                 )
             };
 
