@@ -46,14 +46,15 @@ add their user, boot, and provisioning policy. See
 
 ### WSL
 
-Import the latest WSL rootfs:
+Import the latest successfully published `main` WSL rootfs (`wsl-latest`,
+rolling pre-release):
 
 ```powershell
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
 $tarball = "claw-os-wsl-$arch.tar.gz"
 $url = "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$tarball"
 
-Invoke-WebRequest $url -OutFile $tarball
+curl.exe -L --fail --retry 5 --retry-delay 3 -C - --output $tarball $url
 wsl --import claw-os C:\WSL\claw-os .\$tarball --version 2
 wsl -d claw-os
 ```
