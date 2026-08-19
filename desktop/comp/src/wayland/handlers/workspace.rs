@@ -40,6 +40,30 @@ impl WorkspaceHandler for State {
                         // TODO: move cursor?
                     }
                 }
+                Request::Create { in_group, .. } => {
+                    let mut shell = self.common.shell.write();
+                    let mut guard = self.common.workspace_state.update();
+                    if let Some(set) = shell
+                        .workspaces
+                        .sets
+                        .values_mut()
+                        .find(|set| set.group == in_group)
+                    {
+                        set.add_persistent_workspace(&mut guard);
+                    }
+                }
+                Request::Remove(handle) => {
+                    let mut shell = self.common.shell.write();
+                    let mut guard = self.common.workspace_state.update();
+                    if let Some(set) = shell
+                        .workspaces
+                        .sets
+                        .values_mut()
+                        .find(|set| set.workspaces.iter().any(|w| w.handle == handle))
+                    {
+                        set.remove_persistent_workspace(&mut guard, &handle);
+                    }
+                }
                 Request::SetTilingState { workspace, state } => {
                     let mut shell = self.common.shell.write();
                     let seat = shell.seats.last_active().clone();

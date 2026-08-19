@@ -173,6 +173,27 @@ impl AppData {
                     workspace_manager.commit();
                 }
             }
+            Cmd::CreateWorkspace(workspace_handle) => {
+                // The protocol request lives on the *group*, so look up the
+                // group that owns the workspace the user was looking at.
+                if let Ok(workspace_manager) = self.workspace_state.workspace_manager().get()
+                    && let Some(group) = self
+                        .workspace_state
+                        .workspace_groups()
+                        .find(|group| group.workspaces.contains(&workspace_handle))
+                {
+                    group.handle.create_workspace(String::new());
+                    workspace_manager.commit();
+                }
+            }
+            Cmd::RemoveWorkspace(workspace_handle) => {
+                // `remove` is an ext-workspace-v1 request on the workspace
+                // itself, not one of the cosmic v2 extensions.
+                if let Ok(workspace_manager) = self.workspace_state.workspace_manager().get() {
+                    workspace_handle.remove();
+                    workspace_manager.commit();
+                }
+            }
         }
     }
 

@@ -601,6 +601,31 @@ impl WorkspaceSet {
         self.sticky_layer.refresh();
     }
 
+    /// Append a workspace the user asked for explicitly.
+    ///
+    /// Marked pinned, which is what makes it survive: `ensure_last_empty`
+    /// reclaims any empty workspace that `can_auto_remove`, and that returns
+    /// false for pinned ones. Without the pin a desktop added from the
+    /// overview would be swept away the moment the shell refreshed, before
+    /// the user could put anything on it.
+    pub fn add_persistent_workspace(
+        &mut self,
+        state: &mut WorkspaceUpdateGuard<State>,
+    ) -> WorkspaceHandle {
+        self.add_empty_workspace(state);
+        let workspace = self.workspaces.last_mut().expect("just pushed");
+        workspace.pinned = true;
+        if workspace.id.is_none() {
+            let id = crate::shell::random_workspace_id();
+            state
+                .set_id(&workspace.handle, &id)
+                .expect("workspace already has id");
+            workspace.id = Some(id);
+        }
+        state.add_workspace_state(&workspace.handle, WState::Pinned);
+        workspace.handle
+    }
+
     fn add_empty_workspace(&mut self, state: &mut WorkspaceUpdateGuard<State>) {
         let workspace = create_workspace(
             state,
@@ -703,6 +728,50 @@ impl WorkspaceSet {
 
     // Remove a workspace from the set, and return it, for adding to a different
     // workspace set
+    /// Remove a workspace the user explicitly closed.
+    ///
+    /// Only empty workspaces: moving windows off a closing workspace needs the
+    /// tiling/floating layers merged *and* every toplevel's workspace
+    /// association rewritten, and the helper that did that is commented out
+    /// upstream. Silently dropping a workspace with windows on it would take
+    /// the windows with it, so this refuses and the overview only offers the
+    /// close affordance on empty ones.
+    ///
+    /// Also refuses the last remaining workspace: `post_remove_workspace` adds
+    /// an empty one straight back, so the user would watch the desktop they
+    /// just closed reappear.
+    pub fn remove_persistent_workspace(
+        &mut self,
+        workspace_state: &mut WorkspaceUpdateGuard<'_, State>,
+        handle: &WorkspaceHandle,
+    ) -> bool {
+        if self.workspaces.len() <= 1 {
+            return false;
+        }
+        let Some(idx) = self.workspaces.iter().position(|w| w.handle == *handle) else {
+            return false;
+        };
+        if !self.workspaces[idx].is_empty() {
+            return false;
+        }
+        let previous_active_handle = self.workspaces[self.active].handle;
+        let removed = self.workspaces.remove(idx);
+        workspace_state.remove_workspace(removed.handle);
+        // The active workspace may have been the one removed; fall back to
+        // whatever now sits at its index.
+        let previous_active_handle = if self
+            .workspaces
+            .iter()
+            .any(|w| w.handle == previous_active_handle)
+        {
+            previous_active_handle
+        } else {
+            self.workspaces[idx.min(self.workspaces.len() - 1)].handle
+        };
+        self.post_remove_workspace(workspace_state, &previous_active_handle);
+        true
+    }
+
     fn remove_workspace(
         &mut self,
         workspace_state: &mut WorkspaceUpdateGuard<'_, State>,

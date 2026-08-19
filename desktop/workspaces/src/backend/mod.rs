@@ -97,4 +97,9 @@ pub enum Cmd {
     MoveWorkspaceAfter(ExtWorkspaceHandleV1, ExtWorkspaceHandleV1),
     ActivateWorkspace(ExtWorkspaceHandleV1),
     SetWorkspacePinned(ExtWorkspaceHandleV1, bool),
+    /// Ask the compositor for a new workspace in the group the given workspace
+    /// belongs to.
+    CreateWorkspace(ExtWorkspaceHandleV1),
+    /// Ask the compositor to remove a workspace.
+    RemoveWorkspace(ExtWorkspaceHandleV1),
 }

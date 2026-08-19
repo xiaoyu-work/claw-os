@@ -86,7 +86,6 @@ enum Msg {
     Wayland(backend::Event),
     Close,
     ActivateWorkspace(ExtWorkspaceHandleV1),
-    #[allow(dead_code)]
     CloseWorkspace(ExtWorkspaceHandleV1),
     ActivateToplevel(ExtForeignToplevelHandleV1),
     CloseToplevel(ExtForeignToplevelHandleV1),
@@ -99,8 +98,7 @@ enum Msg {
     #[allow(dead_code)]
     DndWorkspaceDrop(DragWorkspace),
     SourceFinished,
-    #[allow(dead_code)]
-    NewWorkspace,
+    NewWorkspace(ExtWorkspaceHandleV1),
     CompConfig(Box<CosmicCompConfig>),
     Config(CosmicWorkspacesConfig),
     BgConfig(cosmic_bg_config::state::State),
@@ -610,19 +608,8 @@ impl Application for App {
                 self.send_wayland_cmd(backend::Cmd::ActivateToplevel(toplevel_handle));
                 return self.hide();
             }
-            Msg::CloseWorkspace(_workspace_handle) => {
-                // XXX close specific workspace
-                /*
-                if let WorkspaceAmount::Static(n) = &mut self.conf.workspace_config.workspace_amount
-                {
-                    if *n != 1 {
-                        *n -= 1;
-                        self.conf
-                            .cosmic_comp_config
-                            .set("workspaces", &self.conf.workspace_config);
-                    }
-                }
-                */
+            Msg::CloseWorkspace(workspace_handle) => {
+                self.send_wayland_cmd(backend::Cmd::RemoveWorkspace(workspace_handle));
             }
             Msg::CloseToplevel(toplevel_handle) => {
                 // TODO confirmation?
@@ -662,16 +649,8 @@ impl Application for App {
                     }
                 }
             }
-            Msg::NewWorkspace => {
-                /*
-                if let WorkspaceAmount::Static(n) = &mut self.conf.workspace_config.workspace_amount
-                {
-                    *n += 1;
-                    self.conf
-                        .cosmic_comp_config
-                        .set("workspaces", &self.conf.workspace_config);
-                }
-                */
+            Msg::NewWorkspace(in_group_with) => {
+                self.send_wayland_cmd(backend::Cmd::CreateWorkspace(in_group_with));
             }
             Msg::Config(c) => {
                 self.conf.config = c;

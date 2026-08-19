@@ -208,6 +208,49 @@ fn pin_button(workspace: &Workspace) -> cosmic::Element<'static, Msg> {
     .into()
 }
 
+fn workspace_close_button(workspace: &Workspace, is_empty: bool) -> cosmic::Element<'static, Msg> {
+    crate::widgets::visibility_wrapper(
+        widget::button::custom(
+            widget::icon::from_name("window-close-symbolic")
+                .symbolic(true)
+                .size(16),
+        )
+        .padding([4, 8])
+        .class(cosmic::theme::Button::Custom {
+            active: Box::new(move |_, theme| pin_button_style(theme, false)),
+            disabled: Box::new(move |theme| pin_button_style(theme, false)),
+            hovered: Box::new(move |_, theme| pin_button_style(theme, false)),
+            pressed: Box::new(move |_, theme| pin_button_style(theme, false)),
+        })
+        .on_press(Msg::CloseWorkspace(workspace.handle().clone())),
+        // Reveal on hover, the way macOS shows the close badge on a Space —
+        // and only for empty ones, because the compositor refuses to remove a
+        // workspace that still has windows rather than take them down with it.
+        workspace.has_cursor && is_empty,
+    )
+    .into()
+}
+
+/// Neutral chip for the trailing "add desktop" button. Deliberately not the
+/// accent: the accent marks the *active* workspace, and spending it on a
+/// permanent control would leave nothing to distinguish the one you are on.
+fn add_button_style(theme: &cosmic::Theme) -> cosmic::widget::button::Style {
+    let cosmic = theme.cosmic();
+    cosmic::widget::button::Style {
+        icon_color: Some(cosmic.on_bg_color().into()),
+        background: Some(iced::Background::Color(
+            cosmic.on_bg_color().with_alpha(0.08).into(),
+        )),
+        border_radius: cosmic.corner_radii.radius_m.into(),
+        ..cosmic::widget::button::Style::new()
+    }
+}
+
+fn spacing_for_add() -> [u16; 2] {
+    let spacing = cosmic::theme::active().cosmic().spacing;
+    [spacing.space_s, spacing.space_s]
+}
+
 fn workspace_item_appearance(
     theme: &cosmic::Theme,
     is_active: bool,
@@ -251,6 +294,7 @@ fn workspace_item(
     layout: WorkspaceLayout,
     is_drop_target: bool,
     has_workspace_drag: bool,
+    has_toplevels: bool,
 ) -> cosmic::Element<'static, Msg> {
     let (mut image, image_height, image_width) = if let Some(img) = workspace.img.as_ref() {
         let is_rotated = matches!(
@@ -304,7 +348,9 @@ fn workspace_item(
         workspace_label
     };
     let workspace_footer = row![
-        widget::space::horizontal().width(Length::Fixed(32.0)),
+        // Close on the left, pin on the right: the label stays centred, and
+        // both affordances only appear on hover.
+        workspace_close_button(workspace, !has_toplevels),
         workspace_label.apply(widget::container).center_x(Length::Fill),
         pin_button(workspace),
     ];
@@ -370,7 +416,7 @@ fn workspace_drag_placeholder(
     })
     .padding(8);
     let placeholder = crate::widgets::match_size(
-        workspace_item(other_workspace, other_output, layout, true, true),
+        workspace_item(other_workspace, other_output, layout, true, true, false),
         placeholder,
     );
     dnd_destination_for_target(drop_target, placeholder.into(), Msg::DndWorkspaceDrop)
@@ -397,6 +443,7 @@ fn workspace_sidebar_entry<'a>(
         layout,
         is_drop_target,
         has_workspace_drag,
+        has_toplevels,
     );
     let item = iced::widget::mouse_area(item)
         .on_enter(Msg::EnteredWorkspaceSidebarEntry(
@@ -428,7 +475,7 @@ fn workspace_sidebar_entry<'a>(
             DragSurface::Workspace(workspace.handle().clone()),
             Some(workspace.dnd_source_id.clone()),
             destination,
-            move || workspace_item(&workspace_clone, &output_clone, layout, false, true),
+            move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false),
         )
     } else {
         destination
@@ -445,6 +492,7 @@ fn workspaces_sidebar<'a>(
     drag_workspace: Option<&'a backend::ExtWorkspaceHandleV1>,
 ) -> cosmic::Element<'a, Msg> {
     let mut sidebar_entries = Vec::new();
+    let mut last_handle = None;
     for workspace in workspaces {
         // XXX Need dnd source with same id for drag to work; but give it 0x0 size
         if drag_workspace == Some(workspace.handle()) {
@@ -458,7 +506,7 @@ fn workspaces_sidebar<'a>(
                     .width(Length::Shrink)
                     .height(Length::Shrink)
                     .into(),
-                move || workspace_item(&workspace_clone, &output_clone, layout, false, true),
+                move || workspace_item(&workspace_clone, &output_clone, layout, false, true, false),
             );
             sidebar_entries.push(source);
             continue;
@@ -494,6 +542,31 @@ fn workspaces_sidebar<'a>(
             workspaces_with_toplevels.contains(workspace.handle()),
             drag_workspace.is_some(),
         ));
+        last_handle = Some(workspace.handle().clone());
+    }
+    // Trailing "+", the way macOS puts Add Desktop at the end of the Spaces
+    // bar. The protocol request is made against a workspace group, and the
+    // group is reached through a workspace it owns, so this needs one existing
+    // workspace to hang off — there is always at least one.
+    if drag_workspace.is_none()
+        && let Some(handle) = last_handle
+    {
+        sidebar_entries.push(
+            widget::button::custom(
+                widget::icon::from_name("list-add-symbolic")
+                    .symbolic(true)
+                    .size(16),
+            )
+            .padding(spacing_for_add())
+            .class(cosmic::theme::Button::Custom {
+                active: Box::new(|_, theme| add_button_style(theme)),
+                disabled: Box::new(|theme| add_button_style(theme)),
+                hovered: Box::new(|_, theme| add_button_style(theme)),
+                pressed: Box::new(|_, theme| add_button_style(theme)),
+            })
+            .on_press(Msg::NewWorkspace(handle))
+            .into(),
+        );
     }
     let (axis, width, height) = match layout {
         WorkspaceLayout::Vertical => (Axis::Vertical, Length::Shrink, Length::Fill),
