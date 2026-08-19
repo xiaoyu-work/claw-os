@@ -1025,11 +1025,15 @@ where
                                         .reduce(|acc, rect| acc.merge(rect))
                                 })
                         })
-                        .filter(|region: &Rectangle<i32, Logical>| {
-                            !region.is_empty()
-                                && region.size.w <= logical_bbox.size.w
-                                && region.size.h <= logical_bbox.size.h
-                        });
+                        // Clamp to the surface rather than requiring the region
+                        // to fit inside it: the panel pads its input region by
+                        // its slide-in gap, so it can stick out slightly, and
+                        // rejecting it outright would fall back to the bbox and
+                        // frost the whole edge again.
+                        .and_then(|region: Rectangle<i32, Logical>| {
+                            region.intersection(Rectangle::from_size(logical_bbox.size))
+                        })
+                        .filter(|region| !region.is_empty());
                         let (blur_origin, blur_size) = match painted {
                             Some(region) => (
                                 surface_loc
