@@ -12,7 +12,7 @@
 //! from the [`ALL_VERBS`] table in this module; deserializers and CLI
 //! parsers route through [`Verb::parse`], which rejects unknown strings.
 
-use std::fmt;
+use std::{borrow::Cow, fmt};
 
 /// A capability verb. Cheap to clone; pattern-equal to its constant.
 #[derive(Copy, Clone, Eq, PartialEq, Hash, Debug)]
@@ -52,8 +52,8 @@ impl serde::Serialize for Verb {
 
 impl<'de> serde::Deserialize<'de> for Verb {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = <&str as serde::Deserialize>::deserialize(d)?;
-        Verb::parse(raw).ok_or_else(|| serde::de::Error::custom(format!("unknown verb: {raw}")))
+        let raw = <Cow<'de, str> as serde::Deserialize>::deserialize(d)?;
+        Verb::parse(&raw).ok_or_else(|| serde::de::Error::custom(format!("unknown verb: {raw}")))
     }
 }
 
@@ -364,6 +364,12 @@ mod tests {
         assert_eq!(json, "\"net.dial\"");
         let back: Verb = serde_json::from_str(&json).unwrap();
         assert_eq!(back, v);
+    }
+
+    #[test]
+    fn serde_accepts_owned_json_value() {
+        let back: Verb = serde_json::from_value(serde_json::json!("net.dial")).unwrap();
+        assert_eq!(back, Verb::NET_DIAL);
     }
 
     #[test]
