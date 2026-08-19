@@ -96,5 +96,6 @@ SIZE=$(du -h "$OUTPUT" | cut -f1)
 echo ":: done — $OUTPUT ($SIZE)"
 echo
 echo "To install on Windows:"
+echo "  New-Item -ItemType Directory -Force -Path C:\\WSL\\claw-os | Out-Null"
 echo "  wsl --import claw-os C:\\WSL\\claw-os $OUTPUT --version 2"
 echo "  wsl -d claw-os"

@@ -5,6 +5,7 @@
 # runtime (cos / clawd / browser stack, no COSMIC desktop — WSL has no
 # graphical session). Import it on Windows with:
 #
+#     New-Item -ItemType Directory -Force -Path C:\ClawOS | Out-Null
 #     wsl --import ClawOS C:\ClawOS build\claw-os-wsl-<arch>.tar
 #     wsl -d ClawOS
 #

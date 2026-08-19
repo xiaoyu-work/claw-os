@@ -604,7 +604,9 @@ jobs:
             #   x64 Windows:       claw-os-wsl-amd64.tar.gz
             #   Windows on ARM64:  claw-os-wsl-arm64.tar.gz
             $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
-            wsl --import claw-os C:\WSL\claw-os $tarball --version 2
+            $installPath = "C:\WSL\claw-os"
+            New-Item -ItemType Directory -Force -Path $installPath | Out-Null
+            wsl --import claw-os $installPath $tarball --version 2
             wsl -d claw-os
             ```
 
@@ -632,7 +634,9 @@ jobs:
             ## Install on Windows
             ```powershell
             $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
-            wsl --import claw-os C:\WSL\claw-os $tarball --version 2
+            $installPath = "C:\WSL\claw-os"
+            New-Item -ItemType Directory -Force -Path $installPath | Out-Null
+            wsl --import claw-os $installPath $tarball --version 2
             wsl -d claw-os
             ```
           files: |
