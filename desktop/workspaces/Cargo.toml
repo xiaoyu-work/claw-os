@@ -9,7 +9,12 @@ anyhow = "1.0.102"
 calloop = { version = "0.14.4", features = ["executor"] }
 clap = { version = "4", features = ["derive"] }
 cosmic-bg-config = { git = "https://github.com/pop-os/cosmic-bg" }
-cosmic-comp-config = { git = "https://github.com/pop-os/cosmic-comp" }
+# Must be the in-tree crate, not upstream's: cosmic-comp is built from
+# desktop/comp/ and reads this same config. Pulling the published copy here
+# gave the overview a *different* WorkspaceConfig to the one the compositor
+# uses, so defaults diverged — the compositor laid workspaces out
+# horizontally while the overview drew the strip vertically.
+cosmic-comp-config = { path = "../comp/cosmic-comp-config" }
 env_logger = "0.11.9"
 gbm = "0.18.0"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", default-features = false, features = [
