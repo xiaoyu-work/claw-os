@@ -29,6 +29,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
+source "$PROJECT_DIR/scripts/lib/git-readonly.sh"
 
 DEBS_DIR="$PROJECT_DIR/build/debs"
 REPO_DIR="$PROJECT_DIR/build/apt-repo"
@@ -178,7 +179,7 @@ if [ -d "$SITE_DIR" ]; then
     find "$SITE_DIR" -mindepth 1 -maxdepth 1 \
         ! -name '*.py' -exec cp -R {} "$REPO_DIR/" \;
 
-    GIT_SHA="$(git -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     # `sed -i` differs between BSD (macOS) and GNU. `-i.bak` is portable.
     for f in "$REPO_DIR/index.html" "$REPO_DIR/style.css" "$REPO_DIR/app.js"; do
         [ -f "$f" ] || continue

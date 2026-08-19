@@ -52,6 +52,14 @@ SUITE="trixie"
 STAMP_SCHEMA=1
 BUILDER_INPUTS_VERSION=1
 
+# Every source-repository Git operation in the rootfs pipeline is a query.
+# `git status` normally performs an optional index refresh; under sudo that
+# can atomically replace .git/index with a root-owned file. Disable optional
+# locks for this process and every feature subprocess, and use git_readonly
+# below to make the contract explicit.
+export GIT_OPTIONAL_LOCKS=0
+source "$PROJECT_DIR/scripts/lib/git-readonly.sh"
+
 # Architecture mapping ($ARCH, $DEB_ARCH, $KERNEL_PKG, …). Defaults to host
 # arch when $ARCH is unset.
 source "$PROJECT_DIR/scripts/lib/arch.sh"
@@ -160,8 +168,8 @@ COS_VERSION="$(package_version "$PROJECT_DIR")"
 COS_PACKAGE_VERSION="$COS_VERSION"
 
 source_hash() {
-    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-        git -C "$PROJECT_DIR" ls-files -co --exclude-standard -z \
+    if git_readonly -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        git_readonly -C "$PROJECT_DIR" ls-files -co --exclude-standard -z \
             | LC_ALL=C sort -z \
             | tar -C "$PROJECT_DIR" --null -T - --sort=name \
                 --mtime='@0' --owner=0 --group=0 --numeric-owner -cf - \
@@ -181,10 +189,10 @@ source_hash() {
 }
 
 SOURCE_HASH="$(source_hash)"
-SOURCE_COMMIT="$(git -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo none)"
-if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+SOURCE_COMMIT="$(git_readonly -C "$PROJECT_DIR" rev-parse HEAD 2>/dev/null || echo none)"
+if git_readonly -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     SOURCE_STATUS_HASH="$(
-        git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+        git_readonly -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
             | sha256sum | awk '{print $1}'
     )"
 else
@@ -562,9 +570,9 @@ if [ -n "$(rootfs_mounts)" ]; then
 fi
 FINAL_SOURCE_HASH="$(source_hash)"
 if [ "$FINAL_SOURCE_HASH" != "$SOURCE_HASH" ]; then
-    if git -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    if git_readonly -C "$PROJECT_DIR" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
         final_status_hash="$(
-            git -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
+            git_readonly -C "$PROJECT_DIR" status --porcelain=v1 -z --untracked-files=normal \
                 | sha256sum | awk '{print $1}'
         )"
     else
