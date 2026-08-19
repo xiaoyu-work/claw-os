@@ -1,3 +1,7 @@
+use cctk::wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -60,10 +64,12 @@ impl WrapperSpace for SpaceContainer {
         conn: &Connection,
         qh: &QueueHandle<GlobalState>,
         overlap_notify: Option<OverlapNotifyV1>,
+        background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     ) {
         self.overlap_notify = overlap_notify.clone();
         self.connection = Some(conn.clone());
         *self.shared.security_context_manager.borrow_mut() = security_context_manager.clone();
+        *self.shared.background_effect_manager.borrow_mut() = background_effect_manager.clone();
 
         // create a space for each config profile which is configured for Active output
         // and call setup on each
@@ -95,6 +101,7 @@ impl WrapperSpace for SpaceContainer {
                             conn,
                             qh,
                             overlap_notify.clone(),
+                            background_effect_manager.clone(),
                         );
                         if let Some(s_display) = self.s_display.as_ref() {
                             s.set_display_handle(s_display.clone());
@@ -192,6 +199,7 @@ impl WrapperSpace for SpaceContainer {
                                 conn,
                                 qh,
                                 self.overlap_notify.clone(),
+                                self.shared.background_effect_manager.borrow().clone(),
                             );
                             if let Some(s_display) = self.s_display.as_ref() {
                                 s.set_display_handle(s_display.clone());
@@ -207,6 +215,7 @@ impl WrapperSpace for SpaceContainer {
                             conn,
                             qh,
                             self.overlap_notify.clone(),
+                            self.shared.background_effect_manager.borrow().clone(),
                         );
 
                         if s.new_output(
@@ -254,6 +263,7 @@ impl WrapperSpace for SpaceContainer {
                                 conn,
                                 qh,
                                 self.overlap_notify.clone(),
+                                self.shared.background_effect_manager.borrow().clone(),
                             );
 
                             if let Some(s_display) = self.s_display.as_ref() {

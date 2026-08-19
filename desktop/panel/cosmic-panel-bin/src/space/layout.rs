@@ -970,6 +970,34 @@ impl PanelSpace {
 
         layer.wl_surface().set_input_region(Some(input_region.wl_region()));
 
+        // Tell the compositor exactly which part of this surface to blur.
+        //
+        // The layer surface is deliberately bigger than the visible bar: it
+        // carries the configured margin, the anchor gap, and room for the
+        // autohide slide. All of that is transparent, but the compositor
+        // cannot tell that from geometry alone, so it blurred the lot and left
+        // a frosted strip of wallpaper alongside the dock.
+        //
+        // The region is read back from the background element in the space —
+        // the very thing that gets rendered — rather than recomputed here. So
+        // it stays correct on its own when the panel moves to another edge, is
+        // resized, has its margin changed, or slides in and out: whatever is
+        // drawn is what gets blurred.
+        let painted = self.background_element.as_ref().and_then(|bg| {
+            let loc = self
+                .space
+                .element_location(&CosmicMappedInternal::Background(bg.clone()))?;
+            let size = bg.geometry().size;
+            (size.w > 0 && size.h > 0).then(|| Rectangle::new(loc, size))
+        });
+        if let (Some(effect), Some(region), Some(rect)) =
+            (self.background_effect.as_ref(), self.blur_region.as_ref(), painted)
+        {
+            region.subtract(0, 0, i32::MAX, i32::MAX);
+            region.add(rect.loc.x, rect.loc.y, rect.size.w, rect.size.h);
+            effect.set_blur_region(Some(region.wl_region()));
+        }
+
         self.reorder_overflow_space(OverflowSection::Left);
         self.reorder_overflow_space(OverflowSection::Center);
         self.reorder_overflow_space(OverflowSection::Right);

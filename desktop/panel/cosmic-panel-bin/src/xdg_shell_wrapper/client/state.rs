@@ -53,6 +53,7 @@ use wayland_protocols::wp::fractional_scale::v1::client::wp_fractional_scale_v1:
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 
 use super::handlers::overlap::OverlapNotifyV1;
+use cctk::wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
 use super::handlers::wp_fractional_scaling::FractionalScalingManager;
 use super::handlers::wp_security_context::SecurityContextManager;
 use super::handlers::wp_viewporter::ViewporterState;
@@ -138,6 +139,15 @@ pub struct ClientState {
     pub security_context_manager: Option<SecurityContextManager>,
     /// overlap notifications subscription
     pub overlap_notify: Option<OverlapNotifyV1>,
+    /// `ext_background_effect_v1` manager, used to tell the compositor exactly
+    /// which part of a panel surface to blur.
+    ///
+    /// Without it the compositor has to guess from the surface geometry, and
+    /// the surface is deliberately larger than the visible bar — it carries
+    /// the gap to the screen edge and the slide-in margin, both of which are
+    /// transparent. Blurring those frosted a strip of wallpaper alongside the
+    /// dock that matched nothing around it.
+    pub background_effect: Option<ExtBackgroundEffectManagerV1>,
 
     pub(crate) connection: Connection,
     /// queue handle
@@ -265,6 +275,14 @@ impl ClientState {
         if let Err(err) = &overlap_notify {
             tracing::warn!("Failed to bind to overlap notify {err:?}");
         }
+        // Optional: compositors without it simply fall back to guessing the
+        // blur area from the surface geometry.
+        let background_effect = globals
+            .bind::<ExtBackgroundEffectManagerV1, _, _>(&qh, 1..=1, ())
+            .map_err(|err| {
+                tracing::info!("ext_background_effect unavailable: {err:?}");
+            })
+            .ok();
         let compositor_state =
             CompositorState::bind(&globals, &qh).expect("wl_compositor not available");
 
@@ -291,6 +309,7 @@ impl ClientState {
             data_device_manager: DataDeviceManagerState::bind(&globals, &qh)
                 .expect("data device manager is not available"),
             overlap_notify: overlap_notify.ok(),
+            background_effect,
 
             outputs: Default::default(),
             touch_surfaces: HashMap::new(),

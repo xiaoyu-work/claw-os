@@ -1,3 +1,7 @@
+use cctk::wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -281,6 +285,9 @@ pub struct PanelSharedState {
     pub c_hovered_surface: Rc<RefCell<ClientFocus>>,
     pub applet_tx: mpsc::Sender<AppletMsg>,
     pub security_context_manager: RefCell<Option<SecurityContextManager>>,
+    /// `ext_background_effect_v1` manager, when the compositor advertises it.
+    /// Panels use it to declare exactly which part of their surface to blur.
+    pub background_effect_manager: RefCell<Option<ExtBackgroundEffectManagerV1>>,
     pub cosmic_workspaces: Option<CosmicWorkspaces>,
     pub panel_tx: calloop::channel::Sender<PanelCalloopMsg>,
     pub loop_handle: calloop::LoopHandle<'static, GlobalState>,
@@ -331,6 +338,12 @@ pub struct PanelSpace {
     pub start_instant: Instant,
     pub colors: PanelColors,
     pub input_region: Option<Region>,
+    /// `ext_background_effect_v1` object for this panel's layer surface, and
+    /// the region handed to it. Both are `None` when the compositor does not
+    /// advertise the protocol, in which case it falls back to deciding the
+    /// blur area from the surface geometry.
+    pub background_effect: Option<ExtBackgroundEffectSurfaceV1>,
+    pub blur_region: Option<Region>,
     pub has_frame: bool,
     pub scale: f64,
     pub animate_state: Option<AnimateState>,
@@ -408,6 +421,8 @@ impl PanelSpace {
             colors: PanelColors::new(theme),
             actual_size: (0, 0).into(),
             input_region: None,
+            background_effect: None,
+            blur_region: None,
             damage_tracked_renderer: None,
             is_dirty: false,
             has_frame: true,

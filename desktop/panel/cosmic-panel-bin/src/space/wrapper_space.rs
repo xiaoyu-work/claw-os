@@ -1,3 +1,7 @@
+use cctk::wayland_protocols::ext::background_effect::v1::client::{
+    ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1,
+    ext_background_effect_surface_v1::ExtBackgroundEffectSurfaceV1,
+};
 use std::cell::{Cell, RefCell};
 use std::ffi::OsString;
 use std::os::fd::OwnedFd;
@@ -877,6 +881,9 @@ impl WrapperSpace for PanelSpace {
         _conn: &Connection,
         _qh: &QueueHandle<GlobalState>,
         overlap_notify: Option<OverlapNotifyV1>,
+        // The manager reaches PanelSpace through `shared`, which every space
+        // already holds; nothing to store here.
+        _background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     ) {
         self.overlap_notify = overlap_notify;
     }
@@ -1542,6 +1549,16 @@ impl WrapperSpace for PanelSpace {
         let input_region = Region::new(compositor_state)?;
         client_surface.wl_surface().set_input_region(Some(input_region.wl_region()));
         self.input_region.replace(input_region);
+
+        // Blur region, when the compositor supports declaring one. Created
+        // alongside the input region because both describe this surface and
+        // both need the compositor state; `layout_` then just refreshes the
+        // rectangle as the panel moves or resizes.
+        if let Some(manager) = self.shared.background_effect_manager.borrow().as_ref() {
+            self.background_effect =
+                Some(manager.get_background_effect(client_surface.wl_surface(), qh, ()));
+            self.blur_region = Region::new(compositor_state).ok();
+        }
 
         let fractional_scale =
             fractional_scale_manager.map(|f| f.fractional_scaling(client_surface.wl_surface(), qh));

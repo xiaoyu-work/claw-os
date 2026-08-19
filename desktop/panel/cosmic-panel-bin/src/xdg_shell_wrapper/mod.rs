@@ -54,6 +54,7 @@ pub fn run(
         &global_state.client_state.connection,
         &global_state.client_state.queue_handle,
         global_state.client_state.overlap_notify.clone(),
+        global_state.client_state.background_effect.clone(),
     );
 
     let multipool = MultiPool::new(&global_state.client_state.shm_state);

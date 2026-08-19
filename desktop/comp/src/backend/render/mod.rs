@@ -79,7 +79,7 @@ use smithay::{
 
 use smithay::wayland::{
     background_effect::BackgroundEffectSurfaceCachedState,
-    compositor::{RectangleKind, SurfaceAttributes, with_states},
+    compositor::{RectangleKind, RegionAttributes, SurfaceAttributes, with_states},
 };
 
 #[cfg(feature = "debug")]
@@ -395,6 +395,19 @@ pub struct PostprocessShader(pub GlesTexProgram);
 /// through `ext_background_effect_v1`, so the compositor has to recognise
 /// them by name. Every other layer surface — the wallpaper, notifications,
 /// OSD — stays un-blurred unless it explicitly asks.
+/// Bounding box of the additive rects in a region.
+///
+/// Subtracted rects only carve holes, so they cannot extend how far the region
+/// reaches and are ignored here.
+fn region_bounds(region: &RegionAttributes) -> Option<Rectangle<i32, Logical>> {
+    region
+        .rects
+        .iter()
+        .filter(|(kind, _)| matches!(kind, RectangleKind::Add))
+        .map(|(_, rect)| *rect)
+        .reduce(|acc, rect| acc.merge(rect))
+}
+
 fn is_shell_glass_namespace(namespace: &str) -> bool {
     matches!(namespace, "Panel" | "Dock" | "app-library" | "launcher")
 }
@@ -999,31 +1012,32 @@ where
                         // entire edge, leaving a band beside the dock that
                         // looked nothing like the wallpaper around it.
                         //
-                        // The input region is the surface's own description of
-                        // where it is: a panel accepts clicks on its bar and
-                        // nowhere else. Fall back to the bbox when a surface
-                        // sets no input region, which means "all of me".
+                        // Prefer what the client declared through
+                        // `ext_background_effect_v1`: that is exact, and it
+                        // tracks the bar as it moves, resizes or slides.
+                        // Otherwise fall back to the input region, the
+                        // surface's own account of where it is — a panel takes
+                        // clicks on its bar and nowhere else — and finally to
+                        // the bbox for surfaces that say nothing at all.
                         let logical_bbox = layer.bbox();
                         let painted = with_states(layer.wl_surface(), |states| {
+                            let mut cached =
+                                states.cached_state.get::<BackgroundEffectSurfaceCachedState>();
+                            let declared = cached
+                                .current()
+                                .blur_region
+                                .as_ref()
+                                .and_then(region_bounds);
+                            if declared.is_some() {
+                                return declared;
+                            }
                             states
                                 .cached_state
                                 .get::<SurfaceAttributes>()
                                 .current()
                                 .input_region
                                 .as_ref()
-                                .and_then(|region| {
-                                    // Union of the additive rects; subtracted
-                                    // ones only carve holes and cannot extend
-                                    // how far the surface reaches.
-                                    region
-                                        .rects
-                                        .iter()
-                                        .filter(|(kind, _)| {
-                                            matches!(kind, RectangleKind::Add)
-                                        })
-                                        .map(|(_, rect)| *rect)
-                                        .reduce(|acc, rect| acc.merge(rect))
-                                })
+                                .and_then(region_bounds)
                         })
                         // Clamp to the surface rather than requiring the region
                         // to fit inside it: the panel pads its input region by

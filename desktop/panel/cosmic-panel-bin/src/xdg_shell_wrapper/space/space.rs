@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use cctk::wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -103,6 +104,7 @@ pub trait WrapperSpace {
         conn: &Connection,
         qh: &QueueHandle<GlobalState>,
         overlap_notify: Option<OverlapNotifyV1>,
+        background_effect_manager: Option<ExtBackgroundEffectManagerV1>,
     );
 
     /// add the configured output to the space

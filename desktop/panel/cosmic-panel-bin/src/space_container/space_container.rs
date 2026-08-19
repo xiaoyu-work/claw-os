@@ -125,6 +125,7 @@ impl SpaceContainer {
                 applet_tx: tx,
                 panel_tx,
                 security_context_manager: RefCell::new(None),
+                background_effect_manager: RefCell::new(None),
                 loop_handle,
                 cosmic_workspaces,
                 workspaces_shown: Cell::new(false),
