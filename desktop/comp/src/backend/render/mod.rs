@@ -78,7 +78,8 @@ use smithay::{
 };
 
 use smithay::wayland::{
-    background_effect::BackgroundEffectSurfaceCachedState, compositor::with_states,
+    background_effect::BackgroundEffectSurfaceCachedState,
+    compositor::{RectangleKind, SurfaceAttributes, with_states},
 };
 
 #[cfg(feature = "debug")]
@@ -989,11 +990,59 @@ where
                                 .is_some()
                         });
                     if has_blur {
+                        // Blur only where the surface actually paints itself.
+                        //
+                        // `bbox()` is the whole layer surface, and a panel or
+                        // dock anchors to the full length of its edge while
+                        // drawing a much smaller rounded bar inside that span.
+                        // Blurring the bbox frosted the wallpaper along the
+                        // entire edge, leaving a band beside the dock that
+                        // looked nothing like the wallpaper around it.
+                        //
+                        // The input region is the surface's own description of
+                        // where it is: a panel accepts clicks on its bar and
+                        // nowhere else. Fall back to the bbox when a surface
+                        // sets no input region, which means "all of me".
                         let logical_bbox = layer.bbox();
-                        let mut blur_rect: Rectangle<i32, Physical> = Rectangle::new(
-                            surface_loc,
-                            logical_bbox.size.to_physical_precise_round(scale),
-                        );
+                        let painted = with_states(layer.wl_surface(), |states| {
+                            states
+                                .cached_state
+                                .get::<SurfaceAttributes>()
+                                .current()
+                                .input_region
+                                .as_ref()
+                                .and_then(|region| {
+                                    // Union of the additive rects; subtracted
+                                    // ones only carve holes and cannot extend
+                                    // how far the surface reaches.
+                                    region
+                                        .rects
+                                        .iter()
+                                        .filter(|(kind, _)| {
+                                            matches!(kind, RectangleKind::Add)
+                                        })
+                                        .map(|(_, rect)| *rect)
+                                        .reduce(|acc, rect| acc.merge(rect))
+                                })
+                        })
+                        .filter(|region: &Rectangle<i32, Logical>| {
+                            !region.is_empty()
+                                && region.size.w <= logical_bbox.size.w
+                                && region.size.h <= logical_bbox.size.h
+                        });
+                        let (blur_origin, blur_size) = match painted {
+                            Some(region) => (
+                                surface_loc
+                                    + region.loc.to_physical_precise_round(scale),
+                                region.size.to_physical_precise_round(scale),
+                            ),
+                            None => (
+                                surface_loc,
+                                logical_bbox.size.to_physical_precise_round(scale),
+                            ),
+                        };
+                        let mut blur_rect: Rectangle<i32, Physical> =
+                            Rectangle::new(blur_origin, blur_size);
                         let output_rect = Rectangle::from_size(output_size);
                         if let Some(clipped) = blur_rect.intersection(output_rect) {
                             blur_rect = clipped;
