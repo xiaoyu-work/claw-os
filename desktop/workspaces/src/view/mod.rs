@@ -510,12 +510,16 @@ fn workspaces_sidebar<'a>(
             .height(height)
             .class(cosmic::theme::Container::custom(|theme| {
                 let cosmic = theme.cosmic();
+                // Claw Glass: frosted translucent bar floating over the
+                // blurred desktop — never an opaque gray field. The fill has
+                // to actually carry alpha to be frosted; at full opacity this
+                // read as a flat black slab pinned beside the dock.
+                let mut fill = cosmic.bg_component_color();
+                fill.alpha = 0.74;
                 cosmic::iced::widget::container::Style {
                     text_color: Some(cosmic.on_bg_color().into()),
                     icon_color: Some(cosmic.on_bg_color().into()),
-                    // Claw Glass: frosted translucent bar floating over the
-                    // blurred desktop — never an opaque gray field.
-                    background: Some(iced::Background::Color(cosmic.bg_component_color().into())),
+                    background: Some(iced::Background::Color(fill.into())),
                     border: Border {
                         // Large frosted radius for the floating overview bar.
                         radius: cosmic.radius_l().into(),

@@ -39,8 +39,13 @@ pub enum WorkspaceMode {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WorkspaceLayout {
-    #[default]
     Vertical,
+    /// Workspaces run left-to-right, and the overview shows them as a strip
+    /// across the top of the screen — the arrangement macOS uses for Spaces,
+    /// and the one the overview reads best in: thumbnails are landscape, so a
+    /// horizontal strip costs one row of height instead of a column down the
+    /// side of the screen.
+    #[default]
     Horizontal,
 }
 
