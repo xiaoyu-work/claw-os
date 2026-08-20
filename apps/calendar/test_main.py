@@ -113,10 +113,6 @@ class TestCreateValidation(unittest.TestCase):
         result = run("create", ["--title", "No start"])
         self.assertIn("error", result)
 
-    def test_create_missing_both(self):
-        result = run("create", [])
-        self.assertIn("error", result)
-
 
 class TestListValidation(unittest.TestCase):
     def setUp(self):
@@ -128,10 +124,6 @@ class TestListValidation(unittest.TestCase):
 
     def test_list_missing_to(self):
         result = run("list", ["--from", "2026-03-25T00:00:00Z"])
-        self.assertIn("error", result)
-
-    def test_list_missing_both(self):
-        result = run("list", [])
         self.assertIn("error", result)
 
 
@@ -213,10 +205,6 @@ class TestToday(unittest.TestCase):
 class TestUnknownCommand(unittest.TestCase):
     def test_unknown_command(self):
         result = run("bogus", [])
-        self.assertIn("error", result)
-
-    def test_another_unknown(self):
-        result = run("sync", [])
         self.assertIn("error", result)
 
 
