@@ -665,7 +665,8 @@ fn workspaces_sidebar<'a>(
     let spacing = cosmic::theme::active().cosmic().spacing;
     let sidebar_entries_container =
         widget::container(crate::widgets::workspace_bar(sidebar_entries, axis))
-            .padding(spacing.space_xs);
+            .padding(spacing.space_xs)
+            .center_x(width);
 
     widget::container(
         widget::container(sidebar_entries_container)
@@ -695,7 +696,18 @@ fn workspaces_sidebar<'a>(
                 }
             })),
     )
-    .padding(spacing.space_xs)
+    // Flush with the top of the screen. Mission Control hangs the Spaces bar
+    // directly off the menu bar; padding the top pushed it down and left a
+    // strip of wallpaper between the panel and the bar.
+    .padding(match layout {
+        WorkspaceLayout::Horizontal => iced::Padding {
+            top: 0.0,
+            right: spacing.space_xs as f32,
+            bottom: spacing.space_xs as f32,
+            left: spacing.space_xs as f32,
+        },
+        WorkspaceLayout::Vertical => iced::Padding::from(spacing.space_xs),
+    })
     .apply(iced::widget::mouse_area)
     .on_enter(Msg::HoveredSpacesBar(true))
     .on_exit(Msg::HoveredSpacesBar(false))

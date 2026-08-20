@@ -425,7 +425,14 @@ fn is_shell_glass_namespace(namespace: &str) -> bool {
 fn shell_glass_blur_tier(namespace: &str) -> blur::BlurTier {
     match namespace {
         "Panel" | "Dock" => blur::BlurTier::Attached,
-        "app-library" | "cosmic-workspace-overview" => blur::BlurTier::Fullscreen,
+        // The overview dims the desktop but is meant to keep it recognisable
+        // behind the previews, so it softens the wallpaper rather than
+        // erasing it. The app library sits at the heaviest tier because it
+        // has to obscure what is behind it; borrowing that here flattened the
+        // wallpaper into a featureless wash — measured local variance fell
+        // from ~6400 on the sharp wallpaper to 0.
+        "cosmic-workspace-overview" => blur::BlurTier::Attached,
+        "app-library" => blur::BlurTier::Fullscreen,
         // The launcher, and any applet popup anchored to the panel.
         _ => blur::BlurTier::Floating,
     }
