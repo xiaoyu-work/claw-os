@@ -84,7 +84,7 @@
         </div>
         <div class="install-hint mono">
           <span class="install-hint-label">wsl</span>
-          <code id="wslOneLiner">wsl --import claw-os C:\WSL\claw-os claw-os-wsl-amd64.tar.gz --version 2 &amp;&amp; wsl -d claw-os</code>
+          <code id="wslOneLiner">wsl --install --from-file .\claw-os-wsl-amd64.wsl --name claw-os --location C:\WSL\claw-os --version 2</code>
           <button class="copy-btn" data-copy="#wslOneLiner" aria-label="Copy install command">copy</button>
         </div>
       </div>
@@ -407,7 +407,7 @@
       <div class="kicker mono"><span class="kicker-dot"></span>install</div>
       <h2 class="h2">Two runtimes. <span class="muted">Same Claw OS underneath.</span></h2>
       <p class="section-lede">
-        Run Claw OS where you already work: import it as a WSL distro on
+        Run Claw OS where you already work: install it as a WSL distro on
         Windows, or as a Docker container on macOS or Linux. The
         <code>cos</code> / <code>clawd</code> agent stack is the same inside
         either.
@@ -419,13 +419,12 @@
             <div class="install-rank mono">recommended · Windows</div>
             <h3>WSL</h3>
           </header>
-          <p>Import the latest rootfs and launch into the agent shell.</p>
+          <p>Install the latest package and create your UNIX account on first launch.</p>
 <pre class="code-block mono" id="codeWsl"><span class="code-comment"># PowerShell</span>
 <span class="t-prompt">PS&gt;</span> $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-<span class="t-prompt">PS&gt;</span> $tarball = "claw-os-wsl-$arch.tar.gz"
-<span class="t-prompt">PS&gt;</span> Invoke-WebRequest "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$tarball" -OutFile $tarball
-<span class="t-prompt">PS&gt;</span> wsl --import claw-os C:\WSL\claw-os $tarball --version 2
-<span class="t-prompt">PS&gt;</span> wsl -d claw-os</pre>
+<span class="t-prompt">PS&gt;</span> $package = "claw-os-wsl-$arch.wsl"
+<span class="t-prompt">PS&gt;</span> curl.exe -L --fail -C - -o $package "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$package"
+<span class="t-prompt">PS&gt;</span> wsl --install --from-file ".\$package" --name claw-os --location C:\WSL\claw-os --version 2</pre>
           <button class="copy-btn copy-btn-card" data-copy="#codeWsl">copy</button>
         </article>
 
@@ -437,9 +436,9 @@
           <p>Run the full OS image in a privileged container.</p>
 <pre class="code-block mono" id="codeDocker"><span class="t-prompt">$</span> docker pull ghcr.io/xiaoyu-work/claw-os:latest
 <span class="t-prompt">$</span> docker run -d --name claw --privileged \
-    -v ./workspace:/home/cos/workspace \
+    -e CLAW_USER=yourname -v ./workspace:/workspace \
     ghcr.io/xiaoyu-work/claw-os
-<span class="t-prompt">$</span> docker exec -it --user cos claw bash --login</pre>
+<span class="t-prompt">$</span> docker exec -it claw /usr/local/sbin/claw-container-entrypoint shell</pre>
           <button class="copy-btn copy-btn-card" data-copy="#codeDocker">copy</button>
         </article>
       </div>

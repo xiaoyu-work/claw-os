@@ -1,16 +1,18 @@
 FROM scratch
 
-ARG ROOTFS_DIR=build/claw-os-docker-rootfs-amd64
+ARG ROOTFS_DIR=build/claw-os-rootfs
 COPY ${ROOTFS_DIR}/ /
+COPY --chmod=0755 targets/docker/container-entrypoint.sh /usr/local/sbin/claw-container-entrypoint
 
 ENV container=docker
 ENV NODE_MAJOR=24
-ENV HOME=/home/cos
-ENV COS_HOME=/home/cos
+ENV CLAW_UID=1000
+ENV CLAW_GID=1000
 ENV COS_BROWSER_BIN=cos-browser
 ENV COS_BROWSER_PORT=9222
 
 STOPSIGNAL SIGRTMIN+3
-WORKDIR /
+WORKDIR /workspace
 VOLUME ["/sys/fs/cgroup"]
+ENTRYPOINT ["/usr/local/sbin/claw-container-entrypoint"]
 CMD ["/sbin/init"]

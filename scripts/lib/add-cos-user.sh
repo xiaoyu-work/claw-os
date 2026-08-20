@@ -1,9 +1,5 @@
-# scripts/lib/add-cos-user.sh — Shared 'cos' user creation for non-system targets.
+# scripts/lib/add-cos-user.sh — Headless local-VM development account helper.
 # shellcheck shell=bash
-#
-# Source this from any target/feature script that needs a default unprivileged
-# user (WSL, VM, Docker, …). The user matches the convention documented in
-# targets/wsl/build.sh: uid 1000, /bin/bash login shell, passwordless sudo.
 #
 # Usage:
 #   source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
@@ -11,11 +7,6 @@
 #
 # Idempotent: skips creation if a user named 'cos' already exists in the rootfs.
 #
-# Why passwordless sudo:
-#   - WSL has no install-time password prompt.
-#   - VM/Docker images ship without per-host secrets either.
-#   Users can tighten via `sudo passwd cos` and editing /etc/sudoers.d/cos.
-
 # Guard against being executed instead of sourced.
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     echo "error: scripts/lib/add-cos-user.sh must be sourced, not executed" >&2

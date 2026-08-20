@@ -30,19 +30,18 @@ sudo ./rootfs/build.sh
 ./cli/cos-ctl build
 ```
 
-### Build a WSL2 Tarball
+### Build a WSL2 Distribution
 
 ```bash
-# Produces build/claw-os-wsl-amd64.tar.gz
+# Produces build/claw-os-wsl-amd64.wsl
 sudo ./build.sh wsl
 ```
 
 On Windows, import and launch from PowerShell:
 
 ```powershell
-New-Item -ItemType Directory -Force -Path C:\WSL\claw-os | Out-Null
-wsl --import claw-os C:\WSL\claw-os .\build\claw-os-wsl-amd64.tar.gz --version 2
-wsl -d claw-os
+wsl --install --from-file .\build\claw-os-wsl-amd64.wsl `
+    --name claw-os --location C:\WSL\claw-os --version 2
 
 # Or run the helper:
 .\targets\wsl\install.ps1

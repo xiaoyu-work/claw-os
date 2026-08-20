@@ -15,7 +15,7 @@ wrappers.
 | Preset | Command | Produces |
 | --- | --- | --- |
 | **Desktop VM** | `sudo ./presets/desktop.sh` | Bootable COSMIC desktop VM image (`vmdk`, 50G) for VMware. Full graphical Claw OS. |
-| **WSL** | `sudo ./presets/wsl.sh` | WSL2 root filesystem tarball — headless Claw OS inside Windows. |
+| **WSL** | `sudo ./presets/wsl.sh` | Modern `.wsl` package with first-launch account creation. |
 | **Docker** | `./presets/docker.sh` | Headless Claw OS Docker image (container runtime). |
 
 Azure is a platform target rather than a local preset:

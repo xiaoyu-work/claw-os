@@ -22,6 +22,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `desktop` | Builds the vendored desktop workspace into `claw-os-desktop.deb`, then installs it. Includes compositor, greeter, panel, launcher, settings, apps, desktop defaults, and graphical boot wiring. Set `DESKTOP_SKIP=1` to install runtime deps + overlay only. |
 | `claw-mail-ai` | Packs the `extensions/claw-mail-ai` MailExtension as an `.xpi`, force-installs it into Thunderbird, deploys the Python Native Messaging host (`apps/mail-ai`) under `/usr/lib/cos/mail-ai`, and drops the NM manifest + policies. Requires Thunderbird (already pulled in by `desktop`). |
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by cosmic-term's `@`-trigger AI integration (`desktop/term/src/ai/`). |
+| `systemd` | Claw OS system services plus `systemd-coredump`, so the system agent can diagnose process crashes on desktop and headless images. |
 | `vm` | Hypervisor-neutral serial console, GRUB command line, serial getty, and VM power defaults. Does not create a user or install a provider agent. |
 | `local-user` | Adds the local `cos` login account when no metadata service can provision one. Skips graphical images that use the desktop first-boot wizard. |
 | `cloud-init` | Provider-neutral cloud provisioning, SSH, root filesystem growth, and locked root account. |
@@ -35,7 +36,9 @@ the full non-desktop OS surface: Claw's own `cos`/`clawd` agent runtime, apps,
 skills, browser automation, service units, local embedding stack, and upgrade
 source. This feature set builds on both amd64 and arm64 (WSL/Docker arm64 are
 Linux targets). In every system target, systemd starts
-`clawd.service` as part of boot.
+`clawd.service` as part of boot. The shared rootfs contains no target-specific
+human account: WSL creates one through its first-launch OOBE, while Docker
+creates the account requested through its runtime environment.
 Target-specific boot/install features (`kernel`, `grub-disk`, `vm`,
 `local-user`, `cloud-init`, `azure`, `vmware`, `live`, `installer`), desktop
 UI, and third-party agent providers

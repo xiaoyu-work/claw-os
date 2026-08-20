@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# presets/wsl.sh — Claw OS as an importable WSL2 distribution.
+# presets/wsl.sh — Claw OS as an installable WSL2 distribution.
 #
-# Builds a WSL root filesystem tarball containing the headless Claw OS
+# Builds a modern WSL distribution containing the headless Claw OS
 # runtime (cos / clawd / browser stack, no COSMIC desktop — WSL has no
-# graphical session). Import it on Windows with:
+# graphical session). Install it on Windows with:
 #
-#     New-Item -ItemType Directory -Force -Path C:\ClawOS | Out-Null
-#     wsl --import ClawOS C:\ClawOS build\claw-os-wsl-<arch>.tar
-#     wsl -d ClawOS
+#     wsl --install --from-file build\claw-os-wsl-<arch>.wsl \
+#         --name ClawOS --location C:\ClawOS --version 2
 #
 # Note: this produces the Claw OS *distro* you run inside WSL. It is a
 # build artifact, distinct from the Ubuntu WSL you build it in.
@@ -18,7 +17,7 @@
 # Usage:
 #   sudo ./presets/wsl.sh
 #
-# Output: build/claw-os-wsl-<arch>.tar
+# Output: build/claw-os-wsl-<arch>.wsl
 
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/_common.sh"

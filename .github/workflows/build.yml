@@ -17,11 +17,25 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
           components: clippy, rustfmt
 
-      - name: Install musl tools
-        run: sudo apt-get update -qq && sudo apt-get install -y musl-tools
+      - name: Validate image provisioning scripts
+        run: |
+          set -euo pipefail
+          scripts=(
+            scripts/lib/image-identity.sh
+            targets/docker/build.sh
+            targets/docker/container-entrypoint.sh
+            targets/wsl/build.sh
+            targets/wsl/overlay/usr/lib/cos/init/wsl-oobe
+          )
+          for script in "${scripts[@]}"; do
+            bash -n "$script"
+          done
+          if grep -Il $'\r' "${scripts[@]}"; then
+            echo "Bash provisioning scripts must use LF line endings" >&2
+            exit 1
+          fi
 
       - name: Cache cargo registry & target
         uses: actions/cache@v4
@@ -34,8 +48,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
+      # Lint on the host target so clippy shares its dependency build with
+      # `cargo test` below. Building this step for musl instead compiled all
+      # ~530 dependency crates a second time into
+      # `target/x86_64-unknown-linux-musl/` for no extra signal: the only
+      # target-conditional code in the crate is the `RlimitResource` type
+      # alias in `clawd/crash.rs`, and the `build` job still compiles the
+      # real musl release binary, so a musl-only break is still caught.
       - name: Clippy lint (cos)
-        run: cd core && cargo clippy --target x86_64-unknown-linux-musl -- -D warnings
+        run: cd core && cargo clippy -- -D warnings
 
       - name: Run cos tests
         # `--test-threads=1` because many tests in `cos` mutate process-wide
@@ -92,7 +113,7 @@ jobs:
               echo
               echo 'The `CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret is not configured, so the'
               echo '`apt-source` feature was left out of the images and the apt repo was'
-              echo 'neither built nor published. Docker images and WSL tarballs were'
+              echo 'neither built nor published. Docker images and WSL packages were'
               echo 'published as usual. Set the secret to enable the signed apt repository.'
             } >> "$GITHUB_STEP_SUMMARY"
           else
@@ -136,7 +157,7 @@ jobs:
   #
   # Downstream steps in this job then package that one rootfs into:
   #   - 1 Docker amd64 source image     → GHCR
-  #   - 1 WSL amd64 tarball             → workflow artifact
+  #   - 1 WSL amd64 .wsl package        → workflow artifact
   #   - amd64 .deb packages             → workflow artifact
   #
   # Multi-arch Docker manifest publication, WSL release publication, and apt
@@ -196,37 +217,15 @@ jobs:
         run: cargo build --release -p claw-semantic --target x86_64-unknown-linux-gnu
 
       # Build the headless Claw OS rootfs ONCE. The Docker image and WSL
-      # tarball both consume this same tree.
+      # package both consume this same tree.
       - name: Build headless rootfs (shared with Docker + WSL)
         run: sudo ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
-      # Docker-specific prep on a private staging copy:
-      #   - Add the default `cos` user (uid 1000, NOPASSWD sudo).
-      #   - Pre-create /var/lib/cos/overlay/{base,upper,work} chowned to cos
-      #     so cos-home-setup.service can prepare the non-root agent home
-      #     when systemd boots the container.
-      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Verify shared rootfs has no human account
         run: |
           sudo bash -c '
-            set -euo pipefail
-            export ROOTFS="$PWD/build/claw-os-rootfs"
-            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-amd64"
-            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-amd64"
-            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-amd64"
-            export PROJECT_DIR="$PWD"
-            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
-            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
-            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
-            mount -t overlay overlay \
-              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
-              "$DOCKER_ROOTFS"
-            source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$DOCKER_ROOTFS"
-            chroot "$DOCKER_ROOTFS" /bin/bash -c "
-              set -e
-              mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
-              chown -R cos:cos /var/lib/cos/overlay
-            "
+            source scripts/lib/image-identity.sh
+            assert_no_human_login_users build/claw-os-rootfs "shared amd64 rootfs"
           '
 
       # Docker build (FROM scratch — no base image)
@@ -266,26 +265,20 @@ jobs:
             output_flag=--push
           fi
           sudo tar --numeric-owner -cf - \
-            targets/docker/Dockerfile build/claw-os-docker-rootfs-amd64 \
+            targets/docker/Dockerfile targets/docker/container-entrypoint.sh \
+            build/claw-os-rootfs \
             | docker buildx build \
                 --platform linux/amd64 \
                 --file targets/docker/Dockerfile \
-                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-amd64 \
+                --build-arg ROOTFS_DIR=build/claw-os-rootfs \
                 --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-amd64" \
                 "${label_args[@]}" "$output_flag" -
 
-      - name: Remove Docker amd64 staging
+      - name: Remove Docker amd64 build cache
         if: always()
-        run: |
-          sudo umount build/claw-os-docker-rootfs-amd64 2>/dev/null || true
-          sudo rm -rf build/claw-os-docker-rootfs-amd64 \
-            build/.claw-os-docker-upper-amd64 build/.claw-os-docker-work-amd64
-          docker buildx prune --all --force || true
+        run: docker buildx prune --all --force || true
 
-      # WSL packaging — same amd64 rootfs we just shipped to Docker, plus the
-      # WSL-specific overlay (/etc/wsl.conf). targets/wsl/build.sh detects
-      # the existing rootfs and skips the rootfs rebuild.
-      - name: Package WSL amd64 rootfs tarball
+      - name: Package WSL amd64 distribution
         run: sudo FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
@@ -302,22 +295,22 @@ jobs:
         id: artifact
         run: |
           cd build
-          sha256sum claw-os-wsl-amd64.tar.gz > claw-os-wsl-amd64.tar.gz.sha256
-          SHA=$(cut -d' ' -f1 claw-os-wsl-amd64.tar.gz.sha256)
-          SIZE=$(du -h claw-os-wsl-amd64.tar.gz | cut -f1)
+          sha256sum claw-os-wsl-amd64.wsl > claw-os-wsl-amd64.wsl.sha256
+          SHA=$(cut -d' ' -f1 claw-os-wsl-amd64.wsl.sha256)
+          SIZE=$(du -h claw-os-wsl-amd64.wsl | cut -f1)
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
           echo "## Claw OS WSL build" >> "$GITHUB_STEP_SUMMARY"
-          echo "- File: \`claw-os-wsl-amd64.tar.gz\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`claw-os-wsl-amd64.wsl\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
           echo "- SHA-256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload WSL tarball as workflow artifact
+      - name: Upload WSL package as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: claw-os-wsl-amd64
           path: |
-            build/claw-os-wsl-amd64.tar.gz
-            build/claw-os-wsl-amd64.tar.gz.sha256
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
           if-no-files-found: error
           retention-days: 90
 
@@ -376,28 +369,11 @@ jobs:
       - name: Build arm64 headless rootfs
         run: sudo ARCH=arm64 ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
-      - name: Stage rootfs for Docker (cos user + overlay scratch dirs)
+      - name: Verify shared rootfs has no human account
         run: |
           sudo bash -c '
-            set -euo pipefail
-            export ROOTFS="$PWD/build/claw-os-rootfs"
-            export DOCKER_ROOTFS="$PWD/build/claw-os-docker-rootfs-arm64"
-            export DOCKER_UPPER="$PWD/build/.claw-os-docker-upper-arm64"
-            export DOCKER_WORK="$PWD/build/.claw-os-docker-work-arm64"
-            export PROJECT_DIR="$PWD"
-            mountpoint -q "$DOCKER_ROOTFS" 2>/dev/null && umount "$DOCKER_ROOTFS" || true
-            rm -rf "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
-            mkdir -p "$DOCKER_ROOTFS" "$DOCKER_UPPER" "$DOCKER_WORK"
-            mount -t overlay overlay \
-              -o "lowerdir=$ROOTFS,upperdir=$DOCKER_UPPER,workdir=$DOCKER_WORK" \
-              "$DOCKER_ROOTFS"
-            source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
-            add_cos_user "$DOCKER_ROOTFS"
-            chroot "$DOCKER_ROOTFS" /bin/bash -c "
-              set -e
-              mkdir -p /var/lib/cos/overlay/base /var/lib/cos/overlay/upper /var/lib/cos/overlay/work
-              chown -R cos:cos /var/lib/cos/overlay
-            "
+            source scripts/lib/image-identity.sh
+            assert_no_human_login_users build/claw-os-rootfs "shared arm64 rootfs"
           '
 
       - name: Set up Docker Buildx
@@ -430,23 +406,20 @@ jobs:
             [ -n "$label" ] && label_args+=(--label "$label")
           done <<< "$DOCKER_LABELS"
           sudo tar --numeric-owner -cf - \
-            targets/docker/Dockerfile build/claw-os-docker-rootfs-arm64 \
+            targets/docker/Dockerfile targets/docker/container-entrypoint.sh \
+            build/claw-os-rootfs \
             | docker buildx build \
                 --platform linux/arm64 \
                 --file targets/docker/Dockerfile \
-                --build-arg ROOTFS_DIR=build/claw-os-docker-rootfs-arm64 \
+                --build-arg ROOTFS_DIR=build/claw-os-rootfs \
                 --tag "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}-arm64" \
                 "${label_args[@]}" --push -
 
-      - name: Remove Docker arm64 staging
+      - name: Remove Docker arm64 build cache
         if: always()
-        run: |
-          sudo umount build/claw-os-docker-rootfs-arm64 2>/dev/null || true
-          sudo rm -rf build/claw-os-docker-rootfs-arm64 \
-            build/.claw-os-docker-upper-arm64 build/.claw-os-docker-work-arm64
-          docker buildx prune --all --force || true
+        run: docker buildx prune --all --force || true
 
-      - name: Package WSL arm64 rootfs tarball
+      - name: Package WSL arm64 distribution
         run: sudo ARCH=arm64 FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
 
       - name: Fix build/ ownership for non-sudo steps
@@ -463,22 +436,22 @@ jobs:
         id: artifact
         run: |
           cd build
-          sha256sum claw-os-wsl-arm64.tar.gz > claw-os-wsl-arm64.tar.gz.sha256
-          SHA=$(cut -d' ' -f1 claw-os-wsl-arm64.tar.gz.sha256)
-          SIZE=$(du -h claw-os-wsl-arm64.tar.gz | cut -f1)
+          sha256sum claw-os-wsl-arm64.wsl > claw-os-wsl-arm64.wsl.sha256
+          SHA=$(cut -d' ' -f1 claw-os-wsl-arm64.wsl.sha256)
+          SIZE=$(du -h claw-os-wsl-arm64.wsl | cut -f1)
           echo "sha256=$SHA" >> "$GITHUB_OUTPUT"
           echo "size=$SIZE" >> "$GITHUB_OUTPUT"
           echo "## Claw OS WSL arm64 build" >> "$GITHUB_STEP_SUMMARY"
-          echo "- File: \`claw-os-wsl-arm64.tar.gz\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`claw-os-wsl-arm64.wsl\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
           echo "- SHA-256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload WSL arm64 tarball as workflow artifact
+      - name: Upload WSL arm64 package as workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: claw-os-wsl-arm64
           path: |
-            build/claw-os-wsl-arm64.tar.gz
-            build/claw-os-wsl-arm64.tar.gz.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256
           if-no-files-found: error
           retention-days: 90
 
@@ -557,29 +530,19 @@ jobs:
         run: |
           cd build
           for arch in amd64 arm64; do
-            sha256sum "claw-os-wsl-${arch}.tar.gz" > "claw-os-wsl-${arch}.tar.gz.sha256"
-            sha=$(cut -d' ' -f1 "claw-os-wsl-${arch}.tar.gz.sha256")
-            size=$(du -h "claw-os-wsl-${arch}.tar.gz" | cut -f1)
+            sha256sum "claw-os-wsl-${arch}.wsl" > "claw-os-wsl-${arch}.wsl.sha256"
+            sha=$(cut -d' ' -f1 "claw-os-wsl-${arch}.wsl.sha256")
+            size=$(du -h "claw-os-wsl-${arch}.wsl" | cut -f1)
             echo "${arch}_sha=$sha" >> "$GITHUB_OUTPUT"
             echo "${arch}_size=$size" >> "$GITHUB_OUTPUT"
-            echo "- claw-os-wsl-${arch}.tar.gz ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "- claw-os-wsl-${arch}.wsl ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
           done
 
       # Rolling pre-release on every manual run from main, so there is always a
       # stable download URL pointing at the latest build of main:
-      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.tar.gz
-      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-arm64.tar.gz
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.wsl
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-arm64.wsl
       #
-      # action-gh-release does not move an existing tag, so we delete the
-      # previous rolling release + tag first to force the new commit SHA.
-      - name: Remove previous rolling release (main only)
-        if: github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release delete wsl-latest --cleanup-tag --yes \
-            --repo "${GITHUB_REPOSITORY}" || true
-
       - name: Publish rolling pre-release (main only)
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
@@ -589,33 +552,40 @@ jobs:
           prerelease: true
           target_commitish: ${{ github.sha }}
           body: |
-            Rolling build of `main` for WSL2 import on Windows.
+            Rolling build of `main` for WSL2 installation on Windows.
 
             **Commit:** ${{ github.sha }}
 
             | Architecture | File | SHA-256 | Size |
             |---|---|---|---|
-            | amd64 | `claw-os-wsl-amd64.tar.gz` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
-            | arm64 | `claw-os-wsl-arm64.tar.gz` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
+            | amd64 | `claw-os-wsl-amd64.wsl` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.wsl` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
 
             ## Install on Windows
             ```powershell
-            # Download the tarball matching your Windows CPU architecture:
-            #   x64 Windows:       claw-os-wsl-amd64.tar.gz
-            #   Windows on ARM64:  claw-os-wsl-arm64.tar.gz
-            $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
+            # Download the package matching your Windows CPU architecture:
+            #   x64 Windows:       claw-os-wsl-amd64.wsl
+            #   Windows on ARM64:  claw-os-wsl-arm64.wsl
+            $package = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.wsl" } else { ".\claw-os-wsl-amd64.wsl" }
             $installPath = "C:\WSL\claw-os"
-            New-Item -ItemType Directory -Force -Path $installPath | Out-Null
-            wsl --import claw-os $installPath $tarball --version 2
-            wsl -d claw-os
+            wsl --install --from-file $package --name claw-os --location $installPath --version 2
             ```
 
-            Or use the helper script: `targets/wsl/install.ps1`
+            First launch asks you to create the UNIX username and password.
           files: |
-            build/claw-os-wsl-amd64.tar.gz
-            build/claw-os-wsl-amd64.tar.gz.sha256
-            build/claw-os-wsl-arm64.tar.gz
-            build/claw-os-wsl-arm64.tar.gz.sha256
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256
+
+      - name: Move rolling tag to the published commit (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/wsl-latest" \
+            -f sha="${GITHUB_SHA}" -F force=true
 
       # Versioned release on a manually selected v* tag.
       - name: Publish versioned release (tag run)
@@ -624,26 +594,25 @@ jobs:
         with:
           name: Claw OS ${{ github.ref_name }}
           body: |
-            Claw OS ${{ github.ref_name }} — WSL2 importable rootfs tarballs.
+            Claw OS ${{ github.ref_name }} — installable WSL2 distributions.
 
             | Architecture | File | SHA-256 | Size |
             |---|---|---|---|
-            | amd64 | `claw-os-wsl-amd64.tar.gz` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
-            | arm64 | `claw-os-wsl-arm64.tar.gz` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
+            | amd64 | `claw-os-wsl-amd64.wsl` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.wsl` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
 
             ## Install on Windows
             ```powershell
-            $tarball = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.tar.gz" } else { ".\claw-os-wsl-amd64.tar.gz" }
+            $package = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.wsl" } else { ".\claw-os-wsl-amd64.wsl" }
             $installPath = "C:\WSL\claw-os"
-            New-Item -ItemType Directory -Force -Path $installPath | Out-Null
-            wsl --import claw-os $installPath $tarball --version 2
-            wsl -d claw-os
+            wsl --install --from-file $package --name claw-os --location $installPath --version 2
             ```
+            First launch asks you to create the UNIX username and password.
           files: |
-            build/claw-os-wsl-amd64.tar.gz
-            build/claw-os-wsl-amd64.tar.gz.sha256
-            build/claw-os-wsl-arm64.tar.gz
-            build/claw-os-wsl-arm64.tar.gz.sha256
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256
 
   build-apt-repo:
     needs: [prepare-apt-key, build-amd64, build-arm64]

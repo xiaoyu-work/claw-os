@@ -53,8 +53,8 @@ feature combinations. Targets use these defaults but continue to accept a
 | --- | --- | --- |
 | Local VM | Baked `cos` user or desktop first-boot wizard | Generic VM; optional VMware Tools |
 | Azure | User, hostname, and SSH key supplied per instance | cloud-init, WALinuxAgent, Hyper-V |
-| WSL | Baked `cos` user selected by `wsl.conf` | WSL rootfs conventions |
-| Docker | Baked `cos` container user | Container/systemd conventions |
+| WSL | User created interactively by the WSL first-launch OOBE | Modern `.wsl` package conventions |
+| Docker | User name and numeric identity supplied at container creation | Container/systemd conventions |
 | Live/installer ISO | Temporary live user or installer-created user | Live boot and Calamares |
 
 ### Targets
@@ -65,7 +65,7 @@ Targets package a profile and may finalize a staged copy of its rootfs:
 - `vm` selects the local-VM profile and requests raw, QCOW2, VMDK, or VHDX.
 - `azure` selects a generalized cloud profile, finalizes identity, and asks
   the disk builder for an Azure-compatible fixed VHD.
-- `wsl` emits an importable rootfs tarball.
+- `wsl` emits a modern `.wsl` package with a first-launch OOBE.
 - `docker` builds an OCI container image.
 - `iso-live` and `iso-installer` emit bootable ISO media.
 
@@ -78,8 +78,9 @@ artifacts.
 Artifacts fall into two identity models.
 
 **Locally managed artifacts** need a usable account because the runtime has no
-metadata service. The VM, WSL, and Docker profiles therefore create `cos`, or
-the desktop first-boot wizard creates a user interactively.
+metadata service. The desktop and WSL profiles create one interactively;
+Docker creates the requested account from `CLAW_USER`, `CLAW_UID`, and
+`CLAW_GID` when the container starts.
 
 **Cloud generalized artifacts** must contain no reusable human account or
 machine identity. Before conversion, the Azure target:

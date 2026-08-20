@@ -46,19 +46,17 @@ add their user, boot, and provisioning policy. See
 
 ### WSL
 
-Import the latest successfully published `main` WSL rootfs (`wsl-latest`,
+Install the latest successfully published `main` WSL distribution (`wsl-latest`,
 rolling pre-release):
 
 ```powershell
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "amd64" }
-$tarball = "claw-os-wsl-$arch.tar.gz"
-$url = "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$tarball"
+$package = "claw-os-wsl-$arch.wsl"
+$url = "https://github.com/xiaoyu-work/claw-os/releases/download/wsl-latest/$package"
 $installPath = "C:\WSL\claw-os"
 
-curl.exe -L --fail --retry 5 --retry-delay 3 -C - --output $tarball $url
-New-Item -ItemType Directory -Force -Path $installPath | Out-Null
-wsl --import claw-os $installPath ".\$tarball" --version 2
-wsl -d claw-os
+curl.exe -L --fail --retry 5 --retry-delay 3 -C - --output $package $url
+wsl --install --from-file ".\$package" --name claw-os --location $installPath --version 2
 ```
 
 ### Docker
@@ -67,9 +65,17 @@ Run the container:
 
 ```bash
 docker pull ghcr.io/xiaoyu-work/claw-os:latest
-docker run -d --name claw --privileged -v ./workspace:/home/cos/workspace ghcr.io/xiaoyu-work/claw-os
-docker exec -it --user cos claw bash --login
+mkdir -p ./workspace
+docker run -d --name claw --privileged \
+  -e CLAW_USER=yourname \
+  -v ./workspace:/workspace \
+  ghcr.io/xiaoyu-work/claw-os:latest
+docker exec -it claw /usr/local/sbin/claw-container-entrypoint shell
 ```
+
+Replace `yourname` with the UNIX username to create. The default UID/GID is
+1000; set `CLAW_UID` and `CLAW_GID` when a Linux host needs numeric ownership
+to match a bind mount.
 
 ### Desktop / ISO / VM
 

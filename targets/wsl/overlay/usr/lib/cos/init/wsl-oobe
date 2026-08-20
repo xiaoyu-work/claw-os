@@ -1,0 +1,104 @@
+#!/bin/bash
+# Create the first human account when a modern .wsl package is launched.
+
+set -Eeuo pipefail
+
+DEFAULT_UID=1000
+DEFAULT_GID=1000
+created_user=""
+created_group=""
+
+rollback() {
+    if [ -n "$created_user" ] && id "$created_user" >/dev/null 2>&1; then
+        userdel --remove "$created_user" >/dev/null 2>&1 || true
+    fi
+    if [ -n "$created_group" ] && getent group "$created_group" >/dev/null; then
+        groupdel "$created_group" >/dev/null 2>&1 || true
+    fi
+}
+trap rollback ERR
+trap 'rollback; exit 130' INT
+trap 'rollback; exit 143' TERM
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "error: Claw OS first-launch setup must run as root" >&2
+    exit 1
+fi
+
+existing="$(getent passwd "$DEFAULT_UID" || true)"
+if [ -n "$existing" ]; then
+    IFS=: read -r username _ _ _ _ home shell <<< "$existing"
+    case "$shell" in
+        */nologin|*/false)
+            echo "error: UID $DEFAULT_UID belongs to non-login account '$username'" >&2
+            exit 1
+            ;;
+    esac
+    /usr/lib/cos/init/setup-home.sh "$home"
+    echo "Claw OS account '$username' is already configured."
+    exit 0
+fi
+
+if [ ! -t 0 ]; then
+    echo "error: first-launch setup requires an interactive terminal" >&2
+    echo "Run this distribution without a command to create the account." >&2
+    exit 1
+fi
+
+echo "Create your Claw OS UNIX account."
+echo "The username does not need to match your Windows username."
+echo
+
+while true; do
+    read -r -p "Enter new UNIX username: " username
+    if [[ ! "$username" =~ ^[a-z][a-z0-9_-]{0,30}$ ]]; then
+        echo "Use 1-31 lowercase letters, digits, '-' or '_'; start with a letter."
+        continue
+    fi
+    if getent passwd "$username" >/dev/null; then
+        echo "User '$username' already exists."
+        continue
+    fi
+    if getent group "$username" >/dev/null; then
+        echo "Group '$username' already exists."
+        continue
+    fi
+    break
+done
+
+read -r -p "Full name (optional): " full_name
+if [[ "$full_name" == *:* || "$full_name" =~ [[:cntrl:]] ]]; then
+    echo "error: full name must not contain ':' or control characters" >&2
+    exit 1
+fi
+
+if getent group "$DEFAULT_GID" >/dev/null; then
+    echo "error: GID $DEFAULT_GID is already assigned" >&2
+    exit 1
+fi
+
+groupadd --gid "$DEFAULT_GID" "$username"
+created_group="$username"
+useradd \
+    --uid "$DEFAULT_UID" \
+    --gid "$DEFAULT_GID" \
+    --create-home \
+    --shell /bin/bash \
+    --comment "$full_name" \
+    "$username"
+created_user="$username"
+usermod --append --groups sudo "$username"
+
+echo
+echo "Set the password for '$username'."
+passwd "$username"
+
+printf 'COS_HOME=/home/%s\n' "$username" > /etc/default/cos-home
+/usr/lib/cos/init/setup-home.sh "/home/$username"
+
+created_user=""
+created_group=""
+trap - ERR INT TERM
+
+echo
+echo "Claw OS account '$username' is ready."
