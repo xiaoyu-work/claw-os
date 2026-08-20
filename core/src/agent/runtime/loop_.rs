@@ -613,6 +613,11 @@ async fn ask_inner(
             for new_msg in &messages[len_before..] {
                 let role = sqlite_fts::role_str(new_msg.role);
                 let content = sqlite_fts::render_message_content(new_msg);
+                let content = if role == "assistant" {
+                    super::evidence::strip_markers(&content)
+                } else {
+                    content
+                };
                 if content.is_empty() {
                     continue;
                 }
@@ -635,6 +640,7 @@ async fn ask_inner(
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
+            let answer = super::evidence::strip_markers(&answer);
             let fallback = provider.fallback_state();
             // Generate + persist a session title on the first
             // successful turn that produces a final answer. We guard
@@ -888,6 +894,11 @@ async fn ask_inner_streaming(
             for new_msg in &messages[len_before..] {
                 let role = sqlite_fts::role_str(new_msg.role);
                 let content = sqlite_fts::render_message_content(new_msg);
+                let content = if role == "assistant" {
+                    super::evidence::strip_markers(&content)
+                } else {
+                    content
+                };
                 if content.is_empty() {
                     continue;
                 }
@@ -910,6 +921,7 @@ async fn ask_inner_streaming(
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
+            let answer = super::evidence::strip_markers(&answer);
             let fallback = provider.fallback_state();
             if let Some((db, sid)) = recorder {
                 if matches!(db.title_for(sid), Ok(None)) {
@@ -1116,49 +1128,16 @@ pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails
     g
 }
 
-/// Build an [`ApprovalGate`] from the [`AgentConfig`] dangerous_tools /
-/// auto_approve_tools / auto_deny_tools fields. Default is empty
-/// (every call short-circuits to Approved). Headless: no approver
-/// configured, so dangerous tools without explicit auto_approve emit
-/// `Deferred` outcomes that the dispatcher surfaces to the model as
-/// an error tool_result.
-/// Curated set of tools that require explicit approval **out of the box**
-/// when the operator hasn't configured their own `dangerous_tools` list.
-/// These are the highest-blast-radius, lowest-frequency, irreversible /
-/// security-sensitive operations — the ones a capable agent should pause
-/// on even though the caps system already gates them. Kept deliberately
-/// small so routine work (reads, file edits, exec) still flows through
-/// the normal caps layer without a second prompt.
-///
-/// Safe-by-construction: a fresh install gates these without the operator
-/// configuring anything. Override by setting any explicit `dangerous_tools`
-/// in config, or disable entirely with `COS_APPROVAL_DEFAULTS=off`.
-pub const DEFAULT_DANGEROUS_TOOLS: &[&str] = &["cos_credential", "cos_netfilter"];
-
-/// Whether the built-in safe-default dangerous set should be applied.
-/// Disabled by `COS_APPROVAL_DEFAULTS=off|0|false|no`.
-fn approval_defaults_enabled() -> bool {
-    match std::env::var("COS_APPROVAL_DEFAULTS") {
-        Ok(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "off" | "0" | "false" | "no"),
-        Err(_) => true,
-    }
-}
-
+/// Build an optional tool-level [`ApprovalGate`] from explicit operator
+/// configuration. Capability risk is enforced separately: high- and
+/// critical-risk capability denials create durable approval requests in the
+/// kernel, so the default tool-name gate stays empty and cannot intercept a
+/// call before its precise verb and scope are known.
 pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::ApprovalGate {
     use crate::agent::runtime::approval::{ApprovalConfig, ApprovalGate};
     let mut acfg = ApprovalConfig::new();
-    // Operator's explicit list wins verbatim. Only when they've configured
-    // nothing do we seed the curated safe defaults (unless disabled), so a
-    // fresh install is safe-by-construction without surprising operators
-    // who deliberately set their own policy.
-    if cfg.dangerous_tools.is_empty() && approval_defaults_enabled() {
-        for name in DEFAULT_DANGEROUS_TOOLS {
-            acfg = acfg.dangerous(*name);
-        }
-    } else {
-        for name in &cfg.dangerous_tools {
-            acfg = acfg.dangerous(name.as_str());
-        }
+    for name in &cfg.dangerous_tools {
+        acfg = acfg.dangerous(name.as_str());
     }
     for name in &cfg.auto_approve_tools {
         acfg = acfg.auto_approve(name.as_str());
@@ -2215,23 +2194,13 @@ mod tests {
         assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
     }
 
-    /// `approval_from_cfg` seeds the curated safe-default dangerous set
-    /// when the operator configured none. The default gate is therefore
-    /// not empty — `cos_credential` / `cos_netfilter` require approval out
-    /// of the box — but unclassified tools still short-circuit to
-    /// `Approved`.
+    /// Capability risk owns the default approval policy, so the optional
+    /// tool-name gate is empty until an operator explicitly configures it.
     #[tokio::test]
-    async fn approval_from_cfg_default_seeds_safe_dangerous_set() {
-        // Ensure defaults aren't disabled by an ambient env var.
-        std::env::remove_var("COS_APPROVAL_DEFAULTS");
+    async fn approval_from_cfg_default_is_empty() {
         let cfg = cfg();
         let gate = approval_from_cfg(&cfg);
-        for name in super::DEFAULT_DANGEROUS_TOOLS {
-            assert!(
-                gate.config().dangerous.contains(*name),
-                "expected default dangerous set to contain {name}"
-            );
-        }
+        assert!(gate.config().dangerous.is_empty());
         assert!(gate.config().auto_approve.is_empty());
         assert!(gate.config().auto_deny.is_empty());
         // A tool outside any set still passes through.

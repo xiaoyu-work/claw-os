@@ -287,6 +287,7 @@ pub fn extract_tool_calls_from_content(content: &str) -> Vec<String> {
 /// `user_acceptance` is left to the caller to set — sentiment
 /// detection isn't this module's job.
 pub fn message_to_turn(role: &str, content: &str) -> Option<ConversationTurn> {
+    let content = crate::agent::memory::history::sanitize_stored_content(role, content);
     let role = match role {
         "user" => TurnRole::User,
         "assistant" => TurnRole::Assistant,
@@ -295,13 +296,13 @@ pub fn message_to_turn(role: &str, content: &str) -> Option<ConversationTurn> {
         _ => return None,
     };
     let tool_calls = if matches!(role, TurnRole::Assistant) {
-        extract_tool_calls_from_content(content)
+        extract_tool_calls_from_content(&content)
     } else {
         Vec::new()
     };
     Some(ConversationTurn {
         role,
-        content: content.to_string(),
+        content,
         tool_calls,
         user_acceptance: false,
     })
@@ -595,6 +596,16 @@ mod tests {
         assert_eq!(t.role, TurnRole::Assistant);
         assert_eq!(t.tool_calls, vec!["cos_fs", "cos_proc"]);
         assert!(!t.user_acceptance);
+    }
+
+    #[test]
+    fn message_to_turn_hides_legacy_evidence_markers() {
+        let turn = message_to_turn(
+            "assistant",
+            "Network is idle. [evidence:call_1 confidence=0.95]",
+        )
+        .unwrap();
+        assert_eq!(turn.content, "Network is idle.");
     }
 
     #[test]

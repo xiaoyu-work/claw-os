@@ -372,6 +372,9 @@ pub(crate) fn strip_markers(value: &str) -> String {
     while let Some(relative_start) = value[cursor..].find("[evidence:") {
         let start = cursor + relative_start;
         output.push_str(&value[cursor..start]);
+        while output.ends_with([' ', '\t']) {
+            output.pop();
+        }
         let Some(relative_end) = value[start..].find(']') else {
             output.push_str(&value[start..]);
             cursor = value.len();
@@ -537,6 +540,17 @@ mod tests {
         assert_eq!(report.status, EvidenceStatus::Verified);
         assert_eq!(report.binding_confidence, Some(1.0));
         assert_eq!(report.claim_confidence, Some(0.4));
+    }
+
+    #[test]
+    fn presentation_strips_internal_evidence_markers() {
+        assert_eq!(
+            strip_markers(
+                "Link is idle. [evidence:call_1 confidence=0.95]\n\
+                 DNS is unresolved. [evidence:call_2 confidence=0.40]"
+            ),
+            "Link is idle.\nDNS is unresolved."
+        );
     }
 
     #[test]

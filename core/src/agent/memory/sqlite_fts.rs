@@ -343,12 +343,8 @@ impl MemoryDb {
     pub fn has_session(&self, session_id: &str) -> Result<bool, MemoryError> {
         let conn = self.lock_conn()?;
         let present = conn.query_row(
-            "SELECT EXISTS(
-                 SELECT 1 FROM messages WHERE session_id = ?
-                 UNION ALL
-                 SELECT 1 FROM session_titles WHERE session_id = ?
-             )",
-            params![session_id, session_id],
+            "SELECT EXISTS(SELECT 1 FROM messages WHERE session_id = ?)",
+            params![session_id],
             |row| row.get::<_, i64>(0),
         )?;
         Ok(present != 0)
@@ -940,6 +936,15 @@ mod tests {
         let alpha_only = db.search_session("alpha", "shared", 10).unwrap();
         assert_eq!(alpha_only.len(), 1);
         assert_eq!(alpha_only[0].row.session_id, "alpha");
+    }
+
+    #[test]
+    fn has_session_requires_conversation_messages() {
+        let db = db();
+        db.set_title("claimed", "Title only").unwrap();
+        assert!(!db.has_session("claimed").unwrap());
+        db.record_message("claimed", "user", "real history").unwrap();
+        assert!(db.has_session("claimed").unwrap());
     }
 
     #[test]

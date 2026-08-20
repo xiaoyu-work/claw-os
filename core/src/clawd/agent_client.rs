@@ -10,18 +10,18 @@ pub fn daemon_status() -> Result<Value, String> {
     send("daemon.status", Value::Null)
 }
 
-pub fn ask(prompt: &str, stream: bool) -> Result<Value, String> {
+pub fn ask(prompt: &str) -> Result<Value, String> {
     let submitted = send("task.submit", json!({ "prompt": prompt }))?;
     let task_id = required_field(&submitted, "id")?;
     let result = send(
-        if stream { "task.stream" } else { "task.result" },
+        "task.result",
         json!({
             "id": task_id,
             "timeout_ms": ASK_WAIT_TIMEOUT_MS,
         }),
     )?;
 
-    task_result_to_ask_response(result, stream)
+    task_result_to_ask_response(result)
 }
 
 pub fn service_cmd(args: &[String]) -> Result<Value, String> {
@@ -251,21 +251,21 @@ fn service_events(args: &[String]) -> Result<Value, String> {
     send("context.event.query", params)
 }
 
-fn task_result_to_ask_response(job: Value, stream_requested: bool) -> Result<Value, String> {
+fn task_result_to_ask_response(job: Value) -> Result<Value, String> {
     let status = job
         .get("status")
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     match status {
         "ok" => Ok(json!({
-            "answer": job.get("response").cloned().unwrap_or(Value::Null),
+            "answer": presented_answer(&job),
+            "evidence": job.get("evidence").cloned().unwrap_or(Value::Null),
             "turns": job.get("turns_used").cloned().unwrap_or(Value::Null),
             "provider": job.get("provider").cloned().unwrap_or(Value::Null),
             "model": job.get("model").cloned().unwrap_or(Value::Null),
             "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
             "task_id": job.get("id").cloned().unwrap_or(Value::Null),
             "backend": "clawd",
-            "stream_requested": stream_requested,
         })),
         "error" => Err(job
             .get("error")
@@ -274,6 +274,13 @@ fn task_result_to_ask_response(job: Value, stream_requested: bool) -> Result<Val
             .to_string()),
         "cancelled" => Err("agent task cancelled".to_string()),
         other => Err(format!("agent task did not finish (status={other})")),
+    }
+}
+
+fn presented_answer(job: &Value) -> Value {
+    match job.get("response").and_then(Value::as_str) {
+        Some(answer) => Value::String(crate::agent::runtime::evidence::strip_markers(answer)),
+        None => Value::Null,
     }
 }
 
@@ -309,4 +316,23 @@ fn required_field(value: &Value, key: &str) -> Result<String, String> {
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
         .ok_or_else(|| format!("clawd response missing string field: {key}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ask_response_hides_internal_evidence_markers() {
+        let response = task_result_to_ask_response(json!({
+            "id": "task-1",
+            "status": "ok",
+            "response": "Network is idle. [evidence:call_1 confidence=0.95]",
+            "evidence": {"status": "verified"},
+        }))
+        .unwrap();
+        assert_eq!(response["answer"], "Network is idle.");
+        assert_eq!(response["evidence"]["status"], "verified");
+        assert!(response.get("stream_requested").is_none());
+    }
 }

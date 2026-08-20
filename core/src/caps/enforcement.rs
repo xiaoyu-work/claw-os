@@ -41,7 +41,8 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::cap::{Cap, CapSet};
-use super::denial::Denial;
+use super::denial::{Denial, DenialReason};
+use super::risk::Risk;
 use super::scope::Scope;
 use super::verb::Verb;
 
@@ -295,7 +296,10 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
-    let result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
+    let mut result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
+    if let Err(denial) = &mut result {
+        attach_approval_request(denial, mode, session_id.as_deref());
+    }
     crate::audit::log_cap_decision(build_cap_audit_record(
         verb,
         &scope,
@@ -304,6 +308,84 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
         &result,
     ));
     result
+}
+
+fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&str>) {
+    if mode != Mode::Strict
+        || matches!(
+            denial.reason,
+            DenialReason::NoSession | DenialReason::PidAncestryMismatch { .. }
+        )
+    {
+        return;
+    }
+    let Some(session_id) = session_id.filter(|value| !value.is_empty()) else {
+        return;
+    };
+    let Some(meta) = super::catalog::lookup(denial.verb) else {
+        return;
+    };
+    if meta.risk < Risk::High {
+        return;
+    }
+
+    let is_app = crate::proc::current_trusted_session_for_caps()
+        .filter(|session| session.session_id == session_id)
+        .and_then(|session| session.app_id)
+        .is_some()
+        || load_registry()
+            .sessions
+            .iter()
+            .find(|session| session.session_id == session_id)
+            .and_then(|session| session.app_id.as_ref())
+            .is_some();
+    if is_app {
+        return;
+    }
+
+    let owner_uid = crate::paths::current_owner_uid_override().or_else(current_euid);
+    let existing = crate::approvals::list_pending_for_owner(owner_uid)
+        .into_iter()
+        .find(|request| {
+            request.session == session_id
+                && request.verb == denial.verb.as_str()
+                && request.scope.covers(&denial.requested_scope)
+        });
+    let request_id = match existing {
+        Some(request) => Ok(request.id),
+        None => crate::approvals::submit_owned(
+            denial.verb,
+            denial.requested_scope.clone(),
+            session_id,
+            format!(
+                "{}: {}",
+                meta.label.current(),
+                denial.requested_scope
+            ),
+            Some("system-agent".to_string()),
+            owner_uid,
+        ),
+    };
+    match request_id {
+        Ok(id) => {
+            denial.hint = Some(format!(
+                "approval request {id} is pending; approve it in Claw OS, then retry"
+            ));
+        }
+        Err(error) => {
+            denial.hint = Some(format!("could not create approval request: {error}"));
+        }
+    }
+}
+
+#[cfg(unix)]
+fn current_euid() -> Option<u32> {
+    Some(unsafe { libc::geteuid() })
+}
+
+#[cfg(not(unix))]
+fn current_euid() -> Option<u32> {
+    None
 }
 
 fn require_impl(
@@ -811,6 +893,46 @@ mod tests {
             err.reason,
             super::super::denial::DenialReason::VerbNotGranted
         ));
+        assert!(err.hint.as_deref().is_some_and(|hint| {
+            hint.contains("approval request") && hint.contains("pending")
+        }));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].verb, Verb::FS_DELETE.as_str());
+        assert_eq!(pending[0].scope, Scope::path("/home/jay/x"));
+    }
+
+    #[test]
+    fn low_risk_denial_does_not_create_approval_request() {
+        let _lock = env_lock();
+        let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+        let reg = registry_with_caps("s1", caps);
+        let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+        let err = require(Verb::NET_RESOLVE, Scope::host("example.com")).unwrap_err();
+        assert!(err.hint.is_none());
+        assert!(crate::approvals::list_pending().is_empty());
+    }
+
+    #[test]
+    fn approved_high_risk_request_allows_retry() {
+        let _lock = env_lock();
+        let caps = r#"[{"verb":"sys.observe","scope":{"kind":"name","value":"**"}}]"#;
+        let reg = registry_with_caps("s1", caps);
+        let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+
+        let first = require(Verb::SYS_CRASH, Scope::name("system")).unwrap_err();
+        assert!(first.hint.as_deref().is_some_and(|hint| hint.contains("pending")));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        crate::approvals::approve(
+            &pending[0].id,
+            crate::approvals::GrantDuration::Once,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(require(Verb::SYS_CRASH, Scope::name("system")).is_ok());
     }
 
     #[test]

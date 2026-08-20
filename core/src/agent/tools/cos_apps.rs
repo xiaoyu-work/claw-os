@@ -243,7 +243,7 @@ impl Tool for CosAppTool {
                 crate::caps::Verb::AGENT_INVOKE,
                 crate::caps::Scope::name(self.app),
             ) {
-                return ToolResult::err(denial.summary());
+                return ToolResult::err(denial.to_string());
             }
         }
 
@@ -642,7 +642,7 @@ impl Tool for CosAppRun {
             crate::caps::Verb::AGENT_INVOKE,
             crate::caps::Scope::name(&app_name),
         ) {
-            return ToolResult::err(denial.summary());
+            return ToolResult::err(denial.to_string());
         }
 
         let data = data_dir();

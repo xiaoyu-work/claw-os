@@ -5,7 +5,8 @@ Priority: optional
 Architecture: all
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Depends: claw-os-base (= __VERSION__), systemd, init-system-helpers (>= 1.52)
+Depends: claw-os-base (= __VERSION__), systemd, systemd-coredump,
+ init-system-helpers (>= 1.52)
 Description: Claw OS — systemd integration for Claw OS targets
  Installs systemd units for booting and running Claw OS on Docker, WSL,
  ISO, and VM targets. Specifically:
@@ -15,6 +16,7 @@ Description: Claw OS — systemd integration for Claw OS targets
    * cos-browser.service — runs the cos-browser CDP server on port
      9222 (installed but not enabled; opt-in).
    * clawd.service — starts the boot-time system agent daemon.
+   * systemd-coredump — captures process crashes for Crash Doctor.
    * claw-recoll-index.service and claw-semantic.service — maintain
      per-user keyword and semantic indexes under graphical or headless
      user sessions (enabled globally; skipped when optional binaries

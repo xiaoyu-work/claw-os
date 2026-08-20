@@ -223,9 +223,10 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_deny: Vec<String>,
 
-    /// Approval gate: tools that require explicit approval before each
-    /// invocation. Empty by default (gate short-circuits to Approved
-    /// for everything). When non-empty, headless mode (no approver
+    /// Optional tool-name approval override. Capability risk remains the
+    /// default policy: high/critical capability requests enter the durable
+    /// approval queue automatically. When this list is non-empty, headless
+    /// mode (no approver
     /// configured) emits a synthetic `tool_result` with
     /// `is_error: true` and the deferral prompt — the agent sees it
     /// and can ask the user. Names matched literally against

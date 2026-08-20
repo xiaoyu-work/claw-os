@@ -40,6 +40,14 @@ pub struct HistoryMessage {
     pub ts_ms: i64,
 }
 
+pub(crate) fn sanitize_stored_content(role: &str, content: &str) -> String {
+    if role == "assistant" {
+        crate::agent::runtime::evidence::strip_markers(content)
+    } else {
+        content.to_string()
+    }
+}
+
 /// Load the most recent `limit` rows for `session_id` from `db` and
 /// decode each via [`parse_stored_content`].
 pub fn load_history(
@@ -51,10 +59,11 @@ pub fn load_history(
     Ok(rows
         .into_iter()
         .map(|r| {
-            let parsed = parse_stored_content(&r.role, &r.content);
+            let content = sanitize_stored_content(&r.role, &r.content);
+            let parsed = parse_stored_content(&r.role, &content);
             HistoryMessage {
                 role: r.role,
-                content: r.content,
+                content,
                 text: parsed.text,
                 tool_calls: parsed.tool_calls,
                 tool_results: parsed.tool_results,
@@ -75,7 +84,8 @@ pub fn load_history(
 /// Note the marker recognition runs regardless of role: Anthropic puts
 /// ToolResult blocks inside `role="user"` messages, so we'd otherwise
 /// see the raw `[tool_result] ...` text on the user side of the chat.
-pub fn parse_stored_content(_role: &str, content: &str) -> ParsedRow {
+pub fn parse_stored_content(role: &str, content: &str) -> ParsedRow {
+    let content = sanitize_stored_content(role, content);
     let mut out = ParsedRow::default();
     let mut text_buf: Vec<&str> = Vec::new();
     let mut active_result: Option<(bool, String)> = None;
@@ -149,6 +159,13 @@ mod tests {
         assert_eq!(p.tool_calls.len(), 1);
         assert_eq!(p.tool_calls[0]["name"], "cos_sysinfo");
         assert_eq!(p.tool_calls[0]["input"]["command"], "largest_files");
+    }
+
+    #[test]
+    fn assistant_history_hides_legacy_evidence_markers() {
+        let body = "Network is idle. [evidence:call_1 confidence=0.95]";
+        let parsed = parse_stored_content("assistant", body);
+        assert_eq!(parsed.text, "Network is idle.");
     }
 
     #[test]

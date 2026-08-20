@@ -69,13 +69,10 @@ fn mlock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "ask" => {
-            let mut stream = false;
             let mut full = false;
             let mut positional: Vec<String> = Vec::with_capacity(args.len());
             for a in args {
                 match a.as_str() {
-                    "--stream" => stream = true,
-                    "--no-stream" => stream = false,
                     // Opt-in to the full JSON envelope (provider, model,
                     // session_id, task_id, turns, …). Without this the
                     // command prints just the model's plain-text answer
@@ -91,7 +88,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     "--no-full" => full = false,
                     other if other.starts_with("--") => {
                         return Err(format!(
-                            "unknown ask flag: {other}. supported: --stream | --no-stream | --full | --no-full"
+                            "unknown ask flag: {other}. supported: --full | --no-full"
                         ));
                     }
                     _ => positional.push(a.clone()),
@@ -99,9 +96,9 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             }
             let prompt = positional.first().cloned().unwrap_or_default();
             if prompt.is_empty() {
-                return Err("usage: cos agent ask \"<prompt>\" [--stream] [--full]".into());
+                return Err("usage: cos agent ask \"<prompt>\" [--full]".into());
             }
-            let envelope = agent_client::ask(&prompt, stream)?;
+            let envelope = agent_client::ask(&prompt)?;
             if full {
                 Ok(envelope)
             } else {
@@ -1070,11 +1067,13 @@ fn recall_cmd(args: &[String]) -> Result<Value, String> {
     let rendered: Vec<Value> = hits
         .iter()
         .map(|h| {
+            let content =
+                memory::history::sanitize_stored_content(&h.row.role, &h.row.content);
             json!({
                 "id": h.row.id,
                 "session_id": h.row.session_id,
                 "role": h.row.role,
-                "content": h.row.content,
+                "content": content,
                 "ts_ms": h.row.ts_ms,
                 "rank": h.rank,
             })
@@ -2787,10 +2786,9 @@ async fn stream_cmd_async(
     }))
 }
 
-/// Internal: full agent loop (tools + memory + MCP) with a streaming
-/// sink that mirrors tokens to stderr as they arrive. Used by
-/// `cos agent ask --stream`. Replaces the old top-level `cos agent
-/// live` (deleted; `ask --stream` is the user-facing surface).
+/// Test-only harness for the full agent loop's provider-stream path.
+/// Production streaming remains owned by the chat and web UI surfaces.
+#[cfg(test)]
 async fn live_cmd_async(
     provider: std::sync::Arc<dyn llm::Provider>,
     cfg: &crate::config::AgentConfig,
@@ -2822,7 +2820,7 @@ async fn live_cmd_async(
         // Heartbeat tasks keyed by tool_use id. Started on
         // `on_tool_start`; cancelled on `on_tool_result`. Reuses
         // the runtime-level [`progress::Heartbeat`] helper so the
-        // chat REPL and `ask --stream` share one implementation.
+        // Reuse the same heartbeat implementation as the chat REPL.
         heartbeat: crate::agent::runtime::progress::Heartbeat,
     }
     impl StreamSink for LiveSink {
@@ -3570,7 +3568,13 @@ async fn chat_cmd_async(
                                     let _ = writeln!(e, "(no messages yet)");
                                 } else {
                                     for r in &rows {
-                                        let snippet: String = r.content.chars().take(140).collect();
+                                        let content =
+                                            memory::history::sanitize_stored_content(
+                                                &r.role,
+                                                &r.content,
+                                            );
+                                        let snippet: String =
+                                            content.chars().take(140).collect();
                                         let _ = writeln!(e, "[{}] {}", r.role, snippet);
                                     }
                                 }
@@ -5869,7 +5873,9 @@ fn display_transcript_with(
     let lines: Vec<String> = rows
         .iter()
         .map(|row| {
-            crate::agent::display::render_message(role_from_str(&row.role), &row.content, &cfg)
+            let content =
+                memory::history::sanitize_stored_content(&row.role, &row.content);
+            crate::agent::display::render_message(role_from_str(&row.role), &content, &cfg)
         })
         .collect();
     let transcript = lines.join("\n");
@@ -12812,10 +12818,9 @@ mod tests {
     fn ask_rejects_empty_prompt() {
         let err = run("ask", &[]).unwrap_err();
         assert!(err.to_lowercase().contains("usage"), "got {err}");
-        // Usage hint must document the flags the handler accepts so
-        // users discover --full / --stream from the error itself.
+        // Usage hint must document the remaining flag the handler accepts.
         assert!(err.contains("--full"), "usage hint should mention --full: {err}");
-        assert!(err.contains("--stream"), "usage hint should mention --stream: {err}");
+        assert!(!err.contains("--stream"), "removed flag leaked into usage: {err}");
         let err2 = run("ask", &["".into()]).unwrap_err();
         assert!(err2.to_lowercase().contains("usage"), "got {err2}");
     }
@@ -13868,6 +13873,11 @@ mod tests {
                 "ask",
                 run("ask", &["--bogus".into(), "hi".into()]),
                 ["unknown ask flag", "--full"]
+            ),
+            cli_case!(
+                "ask stream removed",
+                run("ask", &["--stream".into(), "hi".into()]),
+                ["unknown ask flag", "--stream", "--full"]
             ),
             cli_case!("chat", chat_cmd(&["--bogus".into()]), ["unknown flag"]),
             cli_case!(

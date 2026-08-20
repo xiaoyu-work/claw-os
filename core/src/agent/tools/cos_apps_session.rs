@@ -864,7 +864,7 @@ impl Tool for AppSessionTool {
 
         for cap in &caps {
             if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
-                let msg = denial.summary();
+                let msg = denial.to_string();
                 emit_audit(
                     &self.app_id,
                     &self.manifest_tool_name,
@@ -1091,7 +1091,7 @@ impl Tool for CosAppSessionOpen {
             crate::caps::Verb::AGENT_INVOKE,
             crate::caps::Scope::name(&app_id),
         ) {
-            return ToolResult::err(denial.summary());
+            return ToolResult::err(denial.to_string());
         }
         match open_session(&app_id).await {
             Ok((_client, count)) => {

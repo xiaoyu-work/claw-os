@@ -39,21 +39,14 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let session_id = match session_id {
         Some(session_id) => {
-            if owner_uid != 0 {
-                let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
-                    crate::paths::clawd_user_memory_db_path(owner_uid),
-                )
-                .map_err(|err| format!("open memory: {err}"))?;
-                if !db
-                    .has_session(&session_id)
-                    .map_err(|err| format!("read memory session: {err}"))?
-                {
-                    return Err(format!("task session not found: {session_id}"));
-                }
-            }
+            prepare_task_session(&session_id, owner_uid, &owner_home)?;
             Some(session_id)
         }
-        None => Some(create_task_session(&prompt)?),
+        None => Some(create_task_session(
+            &prompt,
+            owner_uid,
+            &owner_home,
+        )?),
     };
     let job = store
         .submit_with_context(
@@ -69,17 +62,53 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     Ok(job_value(job))
 }
 
-fn create_task_session(prompt: &str) -> Result<String, String> {
+fn create_task_session(
+    prompt: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+) -> Result<String, String> {
     let purpose = format!("agent task: {}", preview(prompt, 80));
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
     session::update_meta(&sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
         meta.role = Some(Role::Observer);
+        meta.owner_uid = Some(owner_uid);
     })
     .map_err(|err| err.to_string())?;
-    let caps = super::system_caps::readonly_task_caps();
+    let caps = super::system_caps::system_agent_caps(Some(owner_home));
     session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
     Ok(sid.into_string())
+}
+
+fn prepare_task_session(
+    session_id: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+) -> Result<(), String> {
+    let sid = session_id
+        .parse::<session::SessionId>()
+        .map_err(|err| format!("invalid task session id: {err}"))?;
+    let meta = session::get_meta(&sid).map_err(|_| format!("task session not found: {session_id}"))?;
+    if owner_uid != 0 && meta.owner_uid != Some(owner_uid) {
+        return Err(format!("task session is not owned by uid {owner_uid}: {session_id}"));
+    }
+    if meta.creator_runtime.as_deref() != Some("clawd") {
+        return Err(format!("session is not a system-agent task: {session_id}"));
+    }
+
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
+        crate::paths::clawd_user_memory_db_path(owner_uid),
+    )
+    .map_err(|err| format!("open memory: {err}"))?;
+    if !db
+        .has_session(session_id)
+        .map_err(|err| format!("read memory session: {err}"))?
+    {
+        return Err(format!("task session has no conversation history: {session_id}"));
+    }
+
+    let caps = super::system_caps::system_agent_caps(Some(owner_home));
+    session::set_caps(&sid, &caps).map_err(|err| format!("refresh task capabilities: {err}"))
 }
 
 fn preview(value: &str, max: usize) -> String {
@@ -309,6 +338,40 @@ fn collect_jobs(
 fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
     let uid = client.require_uid()?;
     Ok((uid != 0).then_some(uid))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_env::{lock_env, TestEnvVarGuard};
+
+    #[test]
+    fn task_session_reuse_requires_owner_and_refreshes_caps() {
+        let _lock = lock_env();
+        let temp = tempfile::tempdir().unwrap();
+        let _data = TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+        let home = temp.path().join("home-owner");
+        std::fs::create_dir_all(&home).unwrap();
+
+        let session_id = create_task_session("test", 1001, &home).unwrap();
+        let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
+            crate::paths::clawd_user_memory_db_path(1001),
+        )
+        .unwrap();
+        db.record_message(&session_id, "user", "hello").unwrap();
+
+        let sid = session_id.parse::<session::SessionId>().unwrap();
+        session::set_caps(&sid, &crate::caps::CapSet::new()).unwrap();
+        prepare_task_session(&session_id, 1001, &home).unwrap();
+        let refreshed = session::get_caps(&sid).unwrap();
+        assert!(refreshed.covers(&crate::caps::Cap::new(
+            crate::caps::Verb::NET_DIAL,
+            crate::caps::Scope::host("example.com")
+        )));
+
+        let error = prepare_task_session(&session_id, 1002, &home).unwrap_err();
+        assert!(error.contains("not owned"));
+    }
 }
 
 fn job_value(job: Job) -> Value {

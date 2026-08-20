@@ -18,7 +18,7 @@ use crate::caps::{require_or_json, Scope, Verb};
 /// Risk::Critical), which mis-classified read-only ops like `loadavg` /
 /// `resources` / `uptime` as kernel-module loading and made
 /// clawd-routed agent jobs fail with `verb-not-granted: sys.kernel` even
-/// though [`crate::clawd::system_caps::readonly_task_caps`] already
+/// though [`crate::clawd::system_caps::system_agent_caps`] already
 /// grants `SYS_OBSERVE`. The cron/netfilter/checkpoint sites that
 /// *do* mutate kernel state still use `SYS_KERNEL`.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
@@ -1711,7 +1711,7 @@ mod tests {
     /// the clawd-routed agent doesn't have by default. The correct
     /// verb per `caps::catalog` is [`Verb::SYS_OBSERVE`] ("Inspect
     /// system state … without changing them", Risk::Low) — already
-    /// granted by [`crate::clawd::system_caps::readonly_task_caps`].
+    /// granted by [`crate::clawd::system_caps::system_agent_caps`].
     /// This test fails closed if anyone re-classifies the gate as a
     /// privileged verb again.
     #[test]
@@ -1733,7 +1733,7 @@ mod tests {
         env::remove_var("COS_PERMS_MODE");
 
         // Build a session that holds SYS_OBSERVE only — mirrors what
-        // `clawd::system_caps::readonly_task_caps` hands out. PID is
+        // `clawd::system_caps::system_agent_caps` hands out. PID is
         // our own so the ancestry check in caps::enforcement passes
         // without a real fork.
         let session_id = format!("sysinfo-cap-test-{}", std::process::id());

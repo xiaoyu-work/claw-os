@@ -14,6 +14,7 @@ pub fn begin(
     client: &ClientIdentity,
 ) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
+    let owner_home = client.require_home_dir()?;
     let purpose = required_string(&params, "purpose")?;
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
     if let Err(error) = session::update_meta(&session_id, |meta| {
@@ -28,7 +29,7 @@ pub fn begin(
             error.to_string(),
         ));
     }
-    let caps = super::system_caps::readonly_task_caps();
+    let caps = super::system_caps::system_agent_caps(Some(&owner_home));
     if let Err(error) = session::set_caps(&session_id, &caps) {
         return Err(fail_new_session(
             &session_id,

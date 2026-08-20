@@ -447,13 +447,6 @@ at-spi2-core
 # active local users, but without colord installed those actions
 # go nowhere. dbus-activated; no enable needed.
 colord
-# systemd-coredump: replaces the default `kernel.core_pattern`
-# with a handler that writes coredumps under /var/lib/systemd/
-# coredump/ and indexes them in the journal. Without it, when
-# an app crashes the user has no way to diagnose: `coredumpctl
-# list` returns nothing. As a developer-friendly OS we want
-# this on by default. Drops in a sysctl + dbus service; tiny.
-systemd-coredump
 # NetworkManager VPN plugins. cosmic-applet-network already has
 # the "Add VPN connection" UI but it walks /usr/lib/NetworkManager/
 # VPN/ to enumerate available protocol plugins. Without these

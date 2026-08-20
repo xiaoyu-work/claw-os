@@ -568,7 +568,7 @@ fn constrained_operation_caps(
                 if inherited.is_empty() && !parent_is_app {
                     let requested = Cap::new(need.verb, Scope::Wild);
                     crate::caps::require(requested.verb, requested.scope.clone())
-                        .map_err(|denial| denial.summary())?;
+                        .map_err(|denial| denial.to_string())?;
                     caps.insert(requested);
                 } else {
                     caps.extend(inherited);
@@ -623,7 +623,7 @@ fn constrained_operation_caps(
                 caps.insert(requested);
             } else if !parent_is_app {
                 crate::caps::require(requested.verb, requested.scope.clone())
-                    .map_err(|denial| denial.summary())?;
+                    .map_err(|denial| denial.to_string())?;
                 caps.insert(requested);
             }
         }

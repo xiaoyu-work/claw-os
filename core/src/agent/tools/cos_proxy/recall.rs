@@ -190,21 +190,27 @@ impl Tool for CosRecallTool {
 }
 
 fn row_to_json(row: &MessageRow) -> Value {
+    let content =
+        crate::agent::memory::history::sanitize_stored_content(&row.role, &row.content);
     json!({
         "id": row.id,
         "session_id": row.session_id,
         "role": row.role,
-        "content": row.content,
+        "content": content,
         "ts_ms": row.ts_ms,
     })
 }
 
 fn hit_to_json(hit: &SearchHit) -> Value {
+    let content = crate::agent::memory::history::sanitize_stored_content(
+        &hit.row.role,
+        &hit.row.content,
+    );
     json!({
         "id": hit.row.id,
         "session_id": hit.row.session_id,
         "role": hit.row.role,
-        "content": hit.row.content,
+        "content": content,
         "ts_ms": hit.row.ts_ms,
         "rank": hit.rank,
     })
@@ -264,6 +270,23 @@ mod tests {
             .await;
         assert!(!r.is_error, "{}", r.content);
         assert!(r.content.contains("rosebud"));
+    }
+
+    #[tokio::test]
+    async fn search_hides_legacy_assistant_evidence_markers() {
+        let t = tool();
+        t.db.record_message(
+            "s",
+            "assistant",
+            "Network is idle. [evidence:call_1 confidence=0.95]",
+        )
+        .unwrap();
+        let result = t
+            .exec(json!({ "command": "search", "query": "Network" }))
+            .await;
+        assert!(!result.is_error, "{}", result.content);
+        assert!(result.content.contains("Network is idle."));
+        assert!(!result.content.contains("[evidence:"));
     }
 
     #[tokio::test]
