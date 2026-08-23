@@ -175,3 +175,77 @@ claw-os/
 ├── clients/           Bridge (LLM ↔ Claw OS)
 └── tests/             Integration tests
 ```
+
+## Architecture Rules
+
+These rules apply to every subsystem in `core/src/`. They exist so
+agent state stays auditable and so cross-machine work (sandbox,
+remote provider) does not require forked implementations.
+
+### Capability seam requires all three roles
+
+A *capability seam* is what lets one implementation of a primitive
+be swapped for another (e.g. a local-only filesystem provider
+replaced by one that transparently proxies to a sandbox or a remote
+node). It is not a seam unless all three roles are present:
+
+1. **Service Definition** — the interface. A trait or explicit type
+   in a well-known module. Callers depend on this, not on the
+   provider. Example: `agent::memory::app_memory`.
+2. **Service Provider** — the implementation behind the interface.
+   There MAY be more than one (SQLite FTS, vector, remote); the
+   interface is what makes them interchangeable. Example:
+   `agent::memory::sqlite_fts::MemoryDb` and
+   `agent::memory::semantic`.
+3. **Consumer** — typically a model-facing `cos_*` tool, or another
+   subsystem that goes through the definition. Example: the
+   `cos_memory` / `cos_recall` tools.
+
+One role alone does not constitute a seam. A concrete type with no
+interface is not a seam (it is an implementation). An interface
+with no consumer is speculative. An interface with a single
+hard-wired provider that callers reach past is not a seam either.
+
+**Why this matters here.** Claw OS wants to run agent work in a
+sandbox or on another machine without forking every subsystem.
+That property only holds if filesystem, subprocess, memory, and
+network all share the same three-role shape: pointing the provider
+layer at a remote target then relocates the whole capability
+without touching consumers. Subsystems that skip the definition
+(consumer imports the concrete provider) block that entire
+property for their capability.
+
+**When adding a new subsystem** (diagnostics, storage, network,
+sandbox surface, credential store, …):
+
+- Introduce the Service Definition first, in its own module. Give
+  it a name that describes the capability, not the implementation
+  (`storage`, not `sqlite_storage`).
+- Land at least one Consumer against the Definition in the same
+  change. If nothing consumes it yet, the seam is speculative and
+  the definition should wait.
+- If you only need one provider today, the seam is still worth
+  it — the second provider is what pays off the design, and
+  retrofitting a seam onto a hard-wired consumer is the expensive
+  case this rule is meant to prevent.
+
+### Model-visible content must be logged
+
+Anything that reaches a model request has to be reconstructable
+from the session log. Concretely: system-prompt injections
+(`MEMORY.md`, `USER.md`, due nudges, per-session extras) are
+recorded as `injected` rows in the memory DB by
+`agent::prompt::build_system_prompt_traced`. Adding a new kind of
+model-visible input requires adding a corresponding record path
+*in the same change* — a transcript reader must never have to
+guess what the model saw.
+
+### Long-running mutations are three-phase bracketed
+
+Any operation that mutates durable state and can be interrupted by
+a crash appends a `start` event *before* the mutation, then the
+`end` (`Completed` / `Failed`) event *after* the mutation returns
+success. A crash in between leaves an orphan `start` with no
+matching `end`, which is detectable and explicitly treated as such
+(`agent::memory::curator::CurationLog::orphaned_runs`). Do not
+record "the operation finished" before the durable write returns.
