@@ -1,4 +1,4 @@
-name: Build APT repo
+name: Build APT repo (.deb packages)
 
 on:
   workflow_dispatch:
@@ -143,7 +143,7 @@ jobs:
   # Publish the apt repo to GitHub Pages.
   # Repo settings → Pages → Source must be set to "GitHub Actions" for the
   # deployment to succeed. The artifact is uploaded by the `build-repo` job.
-  publish:
+  publish-to-github-pages:
     needs: build-repo
     if: github.ref == 'refs/heads/main' && needs.build-repo.outputs.signed == 'true'
     runs-on: ubuntu-latest

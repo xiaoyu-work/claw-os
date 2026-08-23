@@ -1,4 +1,4 @@
-name: Build images
+name: Build Docker image + WSL package
 
 on:
   workflow_dispatch:
@@ -55,7 +55,7 @@ jobs:
           path: build/apt-key/claw-os-archive-keyring.gpg
           if-no-files-found: error
 
-  build:
+  build-rootfs-docker-wsl:
     needs: prepare-apt-key
     strategy:
       fail-fast: false
@@ -209,7 +209,7 @@ jobs:
           retention-days: 90
 
   publish-docker-manifest:
-    needs: build
+    needs: build-rootfs-docker-wsl
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -258,7 +258,7 @@ jobs:
           docker buildx imagetools inspect "$first_tag"
 
   publish-wsl-release:
-    needs: build
+    needs: build-rootfs-docker-wsl
     if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:

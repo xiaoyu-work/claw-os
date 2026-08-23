@@ -1,8 +1,13 @@
-name: Release
+name: Release everything (test + Docker + WSL + APT)
 
-# Umbrella pipeline: runs the test suite, then fans out to the two
-# independent distribution channels. Each of the called workflows can also
-# be run on its own from the Actions tab when you only need one artifact.
+# Umbrella pipeline: runs the test suite, then publishes every distribution
+# channel from one dispatch. Each called workflow can also be run on its own
+# from the Actions tab when you only need one artifact.
+#
+# Publishes:
+#   - Docker multi-arch image  -> ghcr.io/<repo>
+#   - WSL .wsl packages        -> GitHub Release (wsl-latest / v* tag)
+#   - Signed APT repo          -> GitHub Pages
 on:
   workflow_dispatch:
 
@@ -10,17 +15,17 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
-  images:
+  docker-image-and-wsl-package:
     needs: test
-    uses: ./.github/workflows/build-images.yml
+    uses: ./.github/workflows/build-docker-and-wsl.yml
     permissions:
       contents: write   # WSL rolling release
       packages: write   # Docker push to GHCR
     secrets: inherit
 
-  apt:
+  apt-repo:
     needs: test
-    uses: ./.github/workflows/build-apt.yml
+    uses: ./.github/workflows/build-apt-repo.yml
     permissions:
       contents: read
       pages: write

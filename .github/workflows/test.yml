@@ -1,4 +1,4 @@
-name: Test
+name: Test (clippy + cargo test + pytest)
 
 on:
   workflow_dispatch:
