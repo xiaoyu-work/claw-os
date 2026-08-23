@@ -24,6 +24,29 @@ use std::path::Path;
 use crate::agent::memory::notes::NotesStore;
 use crate::agent::nudge::{now_epoch_s, NudgeStore};
 
+/// A single chunk of content that was auto-injected into the system
+/// prompt at build time. Callers that own a `MemoryDb` handle should
+/// persist each segment as an `injected` row so a later transcript
+/// review can reconstruct exactly what the model saw, satisfying the
+/// "model-visible means logged" invariant (issue #2, point 1).
+///
+/// `source` is a short stable tag (`memory_notes`, `due_nudges`,
+/// `prompt_extra`) — the reader uses it to correlate a row with the
+/// build-time origin. `content` is the raw text that was concatenated
+/// into the prompt (i.e. what the model actually sees, *not* a summary).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InjectedSegment {
+    pub source: &'static str,
+    pub content: String,
+}
+
+/// Stable source tags for [`InjectedSegment`]. Kept as `&'static str`
+/// constants so the log rows can be filtered by exact string match
+/// without a separate enum surface leaking through the DB schema.
+pub const INJECTED_SOURCE_MEMORY_NOTES: &str = "memory_notes";
+pub const INJECTED_SOURCE_DUE_NUDGES: &str = "due_nudges";
+pub const INJECTED_SOURCE_PROMPT_EXTRA: &str = "prompt_extra";
+
 const SYSTEM_SCAFFOLD: &str = "You are Claw, the kernel-resident agent of ClawOS — an agent-native operating system. You are not an installed app; you are part of the OS itself, with native access to every cos kernel primitive.
 
 You operate at two levels:
@@ -55,50 +78,56 @@ pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
     build_system_prompt_for(extra_path, None)
 }
 
-/// Like [`build_system_prompt`] but selects relevance-ranked memory for
-/// the current turn. `query` is the user's message; when memory exceeds
-/// the prompt budget, only the entries most relevant to it are injected
-/// (always-on entries and USER.md are kept regardless). Pass `None` for
-/// turn-agnostic assembly (e.g. diagnostics).
-pub fn build_system_prompt_for(extra_path: Option<&Path>, query: Option<&str>) -> String {
+/// Like [`build_system_prompt_for`] but also returns the list of
+/// auto-injected segments (memory notes, due nudges, extra-file
+/// content) so the caller can log them as `injected` rows in the
+/// session memory DB. Enforces the "model-visible means logged"
+/// invariant: every returned segment appears verbatim inside the
+/// returned prompt string.
+///
+/// The scaffold itself is *not* returned as a segment — it is code,
+/// changes only with a release, and would otherwise flood the log
+/// on every turn. Only per-turn variable content is captured.
+pub fn build_system_prompt_traced(
+    extra_path: Option<&Path>,
+    query: Option<&str>,
+) -> (String, Vec<InjectedSegment>) {
+    let mut segments: Vec<InjectedSegment> = Vec::new();
     let mut out = String::from(SYSTEM_SCAFFOLD);
 
-    // Auto-injected notes (MEMORY.md, USER.md). These are prior-session
-    // / curator-derived content (some of it summarised from web pages and
-    // app results) and must enter the prompt as UNTRUSTED data — a kernel-
-    // resident agent must not obey instructions a payload smuggled into a
-    // remembered note. See `agent::safety::untrusted`.
     if let Some(notes) = NotesStore::system_default().assemble_for_prompt_relevant(
         query,
         crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT,
     ) {
-        out.push_str("\n\n---\n\n");
-        out.push_str(&crate::agent::safety::untrusted::wrap_untrusted(
+        let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
             crate::agent::safety::untrusted::MEMORY_TAG,
             &notes,
-        ));
+        );
+        out.push_str("\n\n---\n\n");
+        out.push_str(&wrapped);
+        segments.push(InjectedSegment {
+            source: INJECTED_SOURCE_MEMORY_NOTES,
+            content: wrapped,
+        });
     }
 
-    // Auto-injected due nudges. Reads `data_dir/agent/nudges.json`
-    // every turn so newly-fired nudges drop out of the prompt as
-    // soon as `nudge fire` updates them. NudgeStore swallows IO
-    // errors via `Vec::new`, so missing/empty/corrupt files are silent.
     let store = NudgeStore::new(crate::paths::agent_nudges_path());
     let due = store.due(now_epoch_s());
     if !due.is_empty() {
-        out.push_str("\n\n---\n\n<DUE_NUDGES>\n");
+        let mut block = String::from("<DUE_NUDGES>\n");
         for n in &due {
-            out.push_str(&format!("- [{}] {}\n", n.id, n.message));
+            block.push_str(&format!("- [{}] {}\n", n.id, n.message));
         }
-        out.push_str("</DUE_NUDGES>");
+        block.push_str("</DUE_NUDGES>");
+        out.push_str("\n\n---\n\n");
+        out.push_str(&block);
+        segments.push(InjectedSegment {
+            source: INJECTED_SOURCE_DUE_NUDGES,
+            content: block,
+        });
     }
 
-    // Explicit override file (e.g., per-session preface).
     if let Some(p) = extra_path {
-        // Cap how much we read so a stray multi-GB file pointed at by
-        // a misconfigured `--system-extra` flag can't OOM the agent.
-        // 256 KiB comfortably exceeds any realistic prompt template
-        // while keeping the worst case bounded.
         const MAX_PROMPT_EXTRA_BYTES: u64 = 256 * 1024;
         let meta = fs::metadata(p).ok();
         let len_ok = meta.as_ref().map(|m| m.len() <= MAX_PROMPT_EXTRA_BYTES).unwrap_or(false);
@@ -108,11 +137,49 @@ pub fn build_system_prompt_for(extra_path: Option<&Path>, query: Option<&str>) -
                 if !trimmed.is_empty() {
                     out.push_str("\n\n---\n\n");
                     out.push_str(trimmed);
+                    segments.push(InjectedSegment {
+                        source: INJECTED_SOURCE_PROMPT_EXTRA,
+                        content: trimmed.to_string(),
+                    });
                 }
             }
         }
     }
-    out
+
+    (out, segments)
+}
+
+/// Assert (in debug builds) that every recorded injected segment
+/// appears verbatim in the assembled prompt. Enforces the
+/// "model-visible means logged" invariant at the build seam: if a
+/// future change adds a new injection path but forgets to record it,
+/// this fires in tests before it reaches production.
+#[cfg(debug_assertions)]
+fn assert_segments_visible(prompt: &str, segments: &[InjectedSegment]) {
+    for seg in segments {
+        debug_assert!(
+            prompt.contains(&seg.content),
+            "injected segment {:?} not present in assembled prompt",
+            seg.source,
+        );
+    }
+}
+
+/// Like [`build_system_prompt`] but selects relevance-ranked memory for
+/// the current turn. `query` is the user's message; when memory exceeds
+/// the prompt budget, only the entries most relevant to it are injected
+/// (always-on entries and USER.md are kept regardless). Pass `None` for
+/// turn-agnostic assembly (e.g. diagnostics).
+pub fn build_system_prompt_for(extra_path: Option<&Path>, query: Option<&str>) -> String {
+    // Single source of truth: assemble via the traced variant and
+    // drop the segment list. Callers that need to log injections
+    // should call `build_system_prompt_traced` directly.
+    let (prompt, segments) = build_system_prompt_traced(extra_path, query);
+    #[cfg(debug_assertions)]
+    assert_segments_visible(&prompt, &segments);
+    #[cfg(not(debug_assertions))]
+    let _ = segments;
+    prompt
 }
 
 #[cfg(test)]

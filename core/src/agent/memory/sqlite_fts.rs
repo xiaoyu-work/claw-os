@@ -241,6 +241,31 @@ impl MemoryDb {
         Ok(conn.last_insert_rowid())
     }
 
+    /// Record an auto-injected system-prompt segment as its own row
+    /// under `role = "injected"`. Enforces the "model-visible means
+    /// logged" invariant (issue #2, point 1): every piece of variable
+    /// content that reaches a model request — memory notes, due nudges,
+    /// extra-file overrides — gets a durable row keyed by the
+    /// per-turn session id, so a later transcript review can tell
+    /// exactly which version of `MEMORY.md` / `USER.md` / nudges the
+    /// model actually saw.
+    ///
+    /// `source` is a short stable tag (e.g. `memory_notes`,
+    /// `due_nudges`, `prompt_extra`) and is prepended to `content`
+    /// so the row is self-describing without schema changes.
+    ///
+    /// Best-effort, like [`record_message`]: a failure here must not
+    /// bring down the agent loop — the caller logs and continues.
+    pub fn record_injected(
+        &self,
+        session_id: &str,
+        source: &str,
+        content: &str,
+    ) -> Result<i64, MemoryError> {
+        let body = format!("[{source}]\n{content}");
+        self.record_message_at(session_id, "injected", &body, current_ts_ms())
+    }
+
     /// Most recent `limit` messages for `session_id`, oldest first.
     pub fn recent(&self, session_id: &str, limit: usize) -> Result<Vec<MessageRow>, MemoryError> {
         let conn = self.lock_conn()?;
