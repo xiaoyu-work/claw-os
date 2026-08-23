@@ -433,7 +433,15 @@ async fn ask_inner(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let system = prompt::build_system_prompt_for(extra, Some(user_prompt));
+    let (system, injected_segments) =
+        prompt::build_system_prompt_traced(extra, Some(user_prompt));
+    if let Some((db, sid)) = recorder {
+        for seg in &injected_segments {
+            if let Err(e) = db.record_injected(sid, seg.source, &seg.content) {
+                tracing::warn!("memory: failed to record injected segment {}: {e}", seg.source);
+            }
+        }
+    }
 
     let mut messages: Vec<Message> = vec![Message::user_text(user_prompt)];
     let llm_tools = tools.as_llm_tools();
@@ -735,7 +743,20 @@ async fn ask_inner_streaming(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let mut system = prompt::build_system_prompt_for(extra, Some(user_prompt));
+    let (mut system, injected_segments) =
+        prompt::build_system_prompt_traced(extra, Some(user_prompt));
+    // "model-visible means logged" (issue #2, point 1): every
+    // auto-injected segment (memory notes, due nudges, extra file)
+    // that reached the model this turn gets a durable `injected`
+    // row in the session log. Best-effort — a failed write must
+    // not break the agent loop.
+    if let Some((db, sid)) = recorder {
+        for seg in &injected_segments {
+            if let Err(e) = db.record_injected(sid, seg.source, &seg.content) {
+                tracing::warn!("memory: failed to record injected segment {}: {e}", seg.source);
+            }
+        }
+    }
     if let Some(context) = transient_context.filter(|context| !context.trim().is_empty()) {
         system.push_str("\n\nTransient application context for this request only:\n");
         system.push_str(&crate::agent::safety::untrusted::wrap_untrusted(
