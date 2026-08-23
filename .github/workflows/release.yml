@@ -1,0 +1,35 @@
+name: Release
+
+# Umbrella pipeline: runs the test suite, then fans out to the three
+# independent distribution channels. Each of the called workflows can also
+# be run on its own from the Actions tab when you only need one artifact.
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  wsl:
+    needs: test
+    uses: ./.github/workflows/build-wsl.yml
+    permissions:
+      contents: write
+    secrets: inherit
+
+  docker:
+    needs: test
+    uses: ./.github/workflows/build-docker.yml
+    permissions:
+      contents: read
+      packages: write
+    secrets: inherit
+
+  apt:
+    needs: test
+    uses: ./.github/workflows/build-apt.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

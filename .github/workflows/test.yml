@@ -1,0 +1,76 @@
+name: Test
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Validate image provisioning scripts
+        run: |
+          set -euo pipefail
+          scripts=(
+            scripts/lib/image-identity.sh
+            targets/docker/build.sh
+            targets/docker/container-entrypoint.sh
+            targets/wsl/build.sh
+            targets/wsl/overlay/usr/lib/cos/init/wsl-oobe
+          )
+          for script in "${scripts[@]}"; do
+            bash -n "$script"
+          done
+          if grep -Il $'\r' "${scripts[@]}"; then
+            echo "Bash provisioning scripts must use LF line endings" >&2
+            exit 1
+          fi
+
+      - name: Cache cargo registry & target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-test-
+
+      # Lint on the host target so clippy shares its dependency build with
+      # `cargo test` below. Building this step for musl instead compiled all
+      # ~530 dependency crates a second time into
+      # `target/x86_64-unknown-linux-musl/` for no extra signal: the only
+      # target-conditional code in the crate is the `RlimitResource` type
+      # alias in `clawd/crash.rs`, and the image workflows still compile the
+      # real musl release binary, so a musl-only break is still caught.
+      - name: Clippy lint (cos)
+        run: cd core && cargo clippy -- -D warnings
+
+      - name: Run cos tests
+        # `--test-threads=1` because many tests in `cos` mutate process-wide
+        # env vars (`COS_DATA_DIR`, `COS_SESSION`, `COS_PERMS_MODE`, …).
+        # Each module guards its own state with a per-module `Mutex<()>`,
+        # but the env vars themselves are shared, so two modules racing on
+        # separate locks still trample each other. Running serially is the
+        # cheapest fix; the lib test binary finishes in ~70s.
+        run: cd core && cargo test -- --test-threads=1
+
+      - name: Run cos-browser tests
+        run: cargo test -p cos-browser
+
+      - name: Install Python test dependencies
+        run: python3 -m pip install --disable-pip-version-check pytest
+
+      - name: Run Python tests
+        env:
+          PYTHONPATH: claw-os-sdk/python/src:cos-runtime/python/src
+        run: python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
