@@ -235,6 +235,48 @@ impl std::error::Error for CurationError {}
 // Curation log on disk
 // =====================================================================
 
+/// State of a single curator run in the append-only run history.
+///
+/// Bracketing (issue #2, point 2): a run appends `InProgress` *before*
+/// touching MEMORY.md or the auxiliary LLM, then flips to `Completed`
+/// only after the final atomic MEMORY.md write returns success. A crash
+/// or panic between the two therefore leaves an orphaned `InProgress`
+/// entry — [`CurationLog::orphaned_runs`] surfaces those so partial
+/// writes never masquerade as clean finishes. `Failed` is written when
+/// the run reached a definitive error before completion; it is not the
+/// same as "crashed" and does not count as orphaned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunPhase {
+    InProgress,
+    Completed,
+    Failed,
+}
+
+/// A single row in the curator's run history. The schema is
+/// append-only — a `Completed` entry closes the preceding
+/// `InProgress` entry for the same `run_id`; `run_id` is unique per
+/// [`MemoryCurator::curate_session`] invocation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CurationRunEntry {
+    /// Unique per invocation. Format: `"{session_id}:{start_unix_s}:{nonce}"`.
+    pub run_id: String,
+    pub session_id: String,
+    pub phase: RunPhase,
+    pub at_unix_s: u64,
+    /// Only populated on `Completed` / `Failed`; carries the
+    /// last-seen message id so recovery can compare against a fresh
+    /// `recent()` fetch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_message_id: Option<i64>,
+    /// Only populated on `Completed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub facts_added: Option<usize>,
+    /// Only populated on `Failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SessionCurationEntry {
     pub last_curated_message_id: i64,
@@ -248,13 +290,20 @@ pub struct CurationLog {
     pub version: u32,
     #[serde(default)]
     pub sessions: BTreeMap<String, SessionCurationEntry>,
+    /// Append-only run history for crash detection. Bounded via
+    /// [`Self::truncate_runs`] to keep the file small in long-lived
+    /// deployments. Older entries roll off; the summary in `sessions`
+    /// still reflects the durable outcome.
+    #[serde(default)]
+    pub runs: Vec<CurationRunEntry>,
 }
 
 impl Default for CurationLog {
     fn default() -> Self {
         Self {
-            version: 1,
+            version: 2,
             sessions: BTreeMap::new(),
+            runs: Vec::new(),
         }
     }
 }
@@ -302,6 +351,88 @@ impl CurationLog {
             .unwrap_or(0);
         entry.facts_added_total = entry.facts_added_total.saturating_add(facts_added as u64);
     }
+
+    /// Append an `InProgress` row for a new curator run. Must be
+    /// persisted (`save`) *before* the run touches MEMORY.md or the
+    /// auxiliary LLM — that is what makes crash detection work.
+    pub fn begin_run(&mut self, run_id: &str, session_id: &str) {
+        self.runs.push(CurationRunEntry {
+            run_id: run_id.to_string(),
+            session_id: session_id.to_string(),
+            phase: RunPhase::InProgress,
+            at_unix_s: now_unix_s(),
+            last_message_id: None,
+            facts_added: None,
+            error: None,
+        });
+    }
+
+    /// Append a `Completed` row for `run_id`. Must be persisted
+    /// *after* the MEMORY.md write succeeds.
+    pub fn complete_run(
+        &mut self,
+        run_id: &str,
+        session_id: &str,
+        last_message_id: Option<i64>,
+        facts_added: usize,
+    ) {
+        self.runs.push(CurationRunEntry {
+            run_id: run_id.to_string(),
+            session_id: session_id.to_string(),
+            phase: RunPhase::Completed,
+            at_unix_s: now_unix_s(),
+            last_message_id,
+            facts_added: Some(facts_added),
+            error: None,
+        });
+    }
+
+    /// Append a `Failed` row for `run_id`. Distinct from a crash:
+    /// the process ran long enough to observe the error and record
+    /// it, so no recovery action is needed — the caller can retry.
+    pub fn fail_run(&mut self, run_id: &str, session_id: &str, error: &str) {
+        self.runs.push(CurationRunEntry {
+            run_id: run_id.to_string(),
+            session_id: session_id.to_string(),
+            phase: RunPhase::Failed,
+            at_unix_s: now_unix_s(),
+            last_message_id: None,
+            facts_added: None,
+            error: Some(error.to_string()),
+        });
+    }
+
+    /// Return every `InProgress` entry that has no matching
+    /// `Completed` or `Failed` for the same `run_id`. A non-empty
+    /// result means at least one prior invocation crashed between
+    /// LLM extraction and MEMORY.md finalisation — the curation log
+    /// says nothing happened, but partial facts may already be on
+    /// disk. Callers should compare `MEMORY.md` against
+    /// `last_message_id` on recovery.
+    pub fn orphaned_runs(&self) -> Vec<&CurationRunEntry> {
+        use std::collections::HashSet;
+        let closed: HashSet<&str> = self
+            .runs
+            .iter()
+            .filter(|r| matches!(r.phase, RunPhase::Completed | RunPhase::Failed))
+            .map(|r| r.run_id.as_str())
+            .collect();
+        self.runs
+            .iter()
+            .filter(|r| r.phase == RunPhase::InProgress && !closed.contains(r.run_id.as_str()))
+            .collect()
+    }
+
+    /// Cap the on-disk run history at `keep` entries, dropping the
+    /// oldest. Idempotent when already shorter than the cap. Callers
+    /// invoke this after a successful `complete_run` / `fail_run`
+    /// append so the file does not grow without bound.
+    pub fn truncate_runs(&mut self, keep: usize) {
+        if self.runs.len() > keep {
+            let drop = self.runs.len() - keep;
+            self.runs.drain(0..drop);
+        }
+    }
 }
 
 /// Default location for the curation log.
@@ -310,6 +441,28 @@ pub fn default_log_path() -> PathBuf {
         .join("memory")
         .join("curation_log.json")
 }
+
+fn now_unix_s() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
+/// Monotonically-incrementing counter used to disambiguate multiple
+/// runs that begin in the same wall-clock second (test loops, or a
+/// fast machine curating several sessions back to back).
+fn next_run_nonce() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    NONCE.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Cap on retained run entries in the on-disk log. Bounded so a
+/// long-lived agent doesn't accumulate an unbounded history; large
+/// enough to survive any realistic burst of curator runs between
+/// operator inspections.
+const MAX_RETAINED_RUNS: usize = 256;
 
 // =====================================================================
 // LLM prompting
@@ -804,6 +957,38 @@ impl MemoryCurator {
             });
         }
 
+        // ---- Three-phase bracketing (issue #2, point 2) ----------------
+        //
+        // Append `InProgress` and fsync it BEFORE any LLM call or
+        // MEMORY.md mutation. If we crash between here and the
+        // matching `complete_run` below, `orphaned_runs()` will
+        // surface this entry on the next load. Recovery can then
+        // compare MEMORY.md against `last_curated_message_id` to
+        // decide whether partial facts leaked through.
+        let run_id = format!(
+            "{session_id}:{start}:{nonce}",
+            start = now_unix_s(),
+            nonce = next_run_nonce(),
+        );
+        {
+            let mut log = CurationLog::load(&self.log_path);
+            log.begin_run(&run_id, session_id);
+            log.save(&self.log_path)?;
+        }
+
+        // From here on, any early return must go through
+        // `record_failure` so we don't leave a phantom InProgress
+        // entry behind for a *definitive* failure. Crashes stay
+        // orphaned by design — that's the whole point.
+        let record_failure = |err: &CurationError| {
+            let mut log = CurationLog::load(&self.log_path);
+            log.fail_run(&run_id, session_id, &err.to_string());
+            log.truncate_runs(MAX_RETAINED_RUNS);
+            // Best-effort; if the log write itself fails we surface
+            // the original error, not the log write error.
+            let _ = log.save(&self.log_path);
+        };
+
         let transcript = format_transcript(&messages, 800);
 
         let system_prompt = self
@@ -812,11 +997,14 @@ impl MemoryCurator {
             .as_deref()
             .unwrap_or(DEFAULT_SYSTEM_PROMPT);
 
-        let raw = self
-            .aux
-            .ask(Some(system_prompt), &transcript)
-            .await
-            .map_err(|e| CurationError::Llm(e.to_string()))?;
+        let raw = match self.aux.ask(Some(system_prompt), &transcript).await {
+            Ok(r) => r,
+            Err(e) => {
+                let err = CurationError::Llm(e.to_string());
+                record_failure(&err);
+                return Err(err);
+            }
+        };
 
         let mut proposed = parse_facts(&raw);
         proposed.truncate(self.config.max_facts_per_run);
@@ -835,11 +1023,14 @@ impl MemoryCurator {
         // duplicate, it is a correction, and it gets appended so the
         // chain records the transition. Only an unchanged restatement is
         // dropped. Unstructured facts fall back to exact text match.
-        let existing = self
-            .notes
-            .read(MEMORY_FILE)
-            .map_err(CurationError::Notes)?
-            .unwrap_or_default();
+        let existing = match self.notes.read(MEMORY_FILE) {
+            Ok(v) => v.unwrap_or_default(),
+            Err(e) => {
+                let err = CurationError::Notes(e);
+                record_failure(&err);
+                return Err(err);
+            }
+        };
         let existing_bodies = existing_curated_lines(&existing);
         let current = latest_values(&existing_bodies);
         let already: Vec<String> = existing_bodies
@@ -875,15 +1066,30 @@ impl MemoryCurator {
                 .map(|f| render_fact_line(f, &today))
                 .collect();
             let next = append_lines_to_section(&existing, &lines);
-            self.notes
-                .write(MEMORY_FILE, &next)
-                .map_err(CurationError::Notes)?;
+            if let Err(e) = self.notes.write(MEMORY_FILE, &next) {
+                let err = CurationError::Notes(e);
+                record_failure(&err);
+                return Err(err);
+            }
             survivors.clone()
         };
 
+        // ---- Close the bracket (issue #2, point 2) ---------------------
+        //
+        // MEMORY.md write has returned success. Only NOW do we append
+        // `Completed` — anything earlier would let a crash between
+        // the atomic MEMORY.md rename and this write masquerade as a
+        // clean finish.
         if let Some(id) = last_id {
             let mut log = CurationLog::load(&self.log_path);
             log.record_run(session_id, id, added.len());
+            log.complete_run(&run_id, session_id, Some(id), added.len());
+            log.truncate_runs(MAX_RETAINED_RUNS);
+            log.save(&self.log_path)?;
+        } else {
+            let mut log = CurationLog::load(&self.log_path);
+            log.complete_run(&run_id, session_id, None, added.len());
+            log.truncate_runs(MAX_RETAINED_RUNS);
             log.save(&self.log_path)?;
         }
 
@@ -1193,7 +1399,7 @@ other content
         ));
         let path = dir.join("missing.json");
         let log = CurationLog::load(&path);
-        assert_eq!(log.version, 1);
+        assert_eq!(log.version, 2);
         assert!(log.sessions.is_empty());
     }
 
@@ -1237,7 +1443,7 @@ other content
         let path = dir.join("log.json");
         std::fs::write(&path, "{ this is not json").unwrap();
         let log = CurationLog::load(&path);
-        assert_eq!(log.version, 1);
+        assert_eq!(log.version, 2);
         assert!(log.sessions.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1542,6 +1748,78 @@ other content
         assert!(outcome.facts_proposed.is_empty());
         assert!(outcome.facts_added.is_empty());
 
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ---- Three-phase bracketing (issue #2, point 2) ------------------
+
+    #[test]
+    fn orphaned_runs_returns_empty_when_all_completed() {
+        let mut log = CurationLog::default();
+        log.begin_run("r1", "s1");
+        log.complete_run("r1", "s1", Some(42), 3);
+        assert!(log.orphaned_runs().is_empty());
+    }
+
+    #[test]
+    fn orphaned_runs_flags_in_progress_without_matching_close() {
+        let mut log = CurationLog::default();
+        log.begin_run("r-crash", "s1");
+        // No complete_run / fail_run — simulates a crash between
+        // aux LLM extraction and MEMORY.md finalisation.
+        let orphans = log.orphaned_runs();
+        assert_eq!(orphans.len(), 1);
+        assert_eq!(orphans[0].run_id, "r-crash");
+        assert_eq!(orphans[0].session_id, "s1");
+        assert_eq!(orphans[0].phase, RunPhase::InProgress);
+    }
+
+    #[test]
+    fn fail_run_closes_the_bracket_and_is_not_orphaned() {
+        let mut log = CurationLog::default();
+        log.begin_run("r-err", "s1");
+        log.fail_run("r-err", "s1", "aux LLM error: timeout");
+        assert!(log.orphaned_runs().is_empty());
+    }
+
+    #[test]
+    fn truncate_runs_bounds_history() {
+        let mut log = CurationLog::default();
+        for i in 0..10 {
+            let id = format!("r{i}");
+            log.begin_run(&id, "s1");
+            log.complete_run(&id, "s1", Some(i as i64), 0);
+        }
+        log.truncate_runs(6);
+        assert_eq!(log.runs.len(), 6);
+        // Oldest are dropped: first surviving entry references a
+        // run id from the second half.
+        assert!(log.runs[0].run_id.starts_with("r"));
+    }
+
+    #[test]
+    fn v1_log_deserializes_with_empty_runs() {
+        // v1 schema had no `runs` field. Loading it must succeed
+        // and leave `runs` empty so a schema bump doesn't wedge
+        // agents that upgrade in place.
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-v1compat-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("log.json");
+        std::fs::write(
+            &path,
+            r#"{"version":1,"sessions":{"s1":{"last_curated_message_id":7,"last_run_unix_s":100,"facts_added_total":2}}}"#,
+        )
+        .unwrap();
+        let log = CurationLog::load(&path);
+        assert_eq!(log.sessions.len(), 1);
+        assert!(log.runs.is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
