@@ -1,4 +1,4 @@
-name: Build Docker
+name: Build images
 
 on:
   workflow_dispatch:
@@ -8,6 +8,10 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
 
+# Docker and WSL are two packagings of the same OS tree, so they share one
+# rootfs build per architecture. Splitting them into separate workflows would
+# mean running debootstrap, the chroot package installs and the Qwen3 model
+# download twice for identical output.
 jobs:
   prepare-apt-key:
     runs-on: ubuntu-latest
@@ -47,7 +51,7 @@ jobs:
         if: steps.detect.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: claw-os-apt-public-key-docker
+          name: claw-os-apt-public-key-images
           path: build/apt-key/claw-os-archive-keyring.gpg
           if-no-files-found: error
 
@@ -86,7 +90,7 @@ jobs:
         if: needs.prepare-apt-key.outputs.signing-available == 'true'
         uses: actions/download-artifact@v4
         with:
-          name: claw-os-apt-public-key-docker
+          name: claw-os-apt-public-key-images
           path: packaging/apt-repo
 
       # cos (musl, static) and cos-browser (gnu, V8 needs glibc).
@@ -119,14 +123,16 @@ jobs:
       - name: Build claw-semantic binaries (gnu)
         run: cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
 
-      - name: Build headless rootfs
+      # Build the headless rootfs ONCE. The Docker image and the WSL package
+      # below both consume this same tree.
+      - name: Build headless rootfs (shared with Docker + WSL)
         run: sudo ARCH="$ARCH" ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
-      - name: Verify rootfs has no human account
+      - name: Verify shared rootfs has no human account
         run: |
           sudo bash -c '
             source scripts/lib/image-identity.sh
-            assert_no_human_login_users build/claw-os-rootfs "${{ matrix.arch }} rootfs"
+            assert_no_human_login_users build/claw-os-rootfs "shared ${{ matrix.arch }} rootfs"
           '
 
       # Docker build (FROM scratch — no base image)
@@ -173,7 +179,36 @@ jobs:
         if: always()
         run: docker buildx prune --all --force || true
 
-  publish-manifest:
+      # targets/wsl/build.sh re-invokes rootfs/build.sh with
+      # --reuse-if-matching, which is a no-op here: the stamp written by the
+      # step above matches, so the tree is reused rather than rebuilt.
+      - name: Package WSL ${{ matrix.arch }} distribution
+        run: sudo ARCH="$ARCH" FEATURES="$ROOTFS_FEATURES" ./targets/wsl/build.sh
+
+      - name: Fix build/ ownership for non-sudo steps
+        run: sudo chown -R "$(id -u):$(id -g)" build
+
+      - name: Compute SHA-256 for WSL ${{ matrix.arch }} artifact
+        run: |
+          cd build
+          sha256sum "claw-os-wsl-${ARCH}.wsl" > "claw-os-wsl-${ARCH}.wsl.sha256"
+          SHA=$(cut -d' ' -f1 "claw-os-wsl-${ARCH}.wsl.sha256")
+          SIZE=$(du -h "claw-os-wsl-${ARCH}.wsl" | cut -f1)
+          echo "## Claw OS WSL ${ARCH} build" >> "$GITHUB_STEP_SUMMARY"
+          echo "- File: \`claw-os-wsl-${ARCH}.wsl\` ($SIZE)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SHA-256: \`$SHA\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload WSL ${{ matrix.arch }} package as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-wsl-${{ matrix.arch }}
+          path: |
+            build/claw-os-wsl-${{ matrix.arch }}.wsl
+            build/claw-os-wsl-${{ matrix.arch }}.wsl.sha256
+          if-no-files-found: error
+          retention-days: 90
+
+  publish-docker-manifest:
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -221,3 +256,111 @@ jobs:
 
           first_tag="$(printf '%s\n' "$TAGS" | sed -n '1p')"
           docker buildx imagetools inspect "$first_tag"
+
+  publish-wsl-release:
+    needs: build
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download WSL amd64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-wsl-amd64
+          path: build
+
+      - name: Download WSL arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: claw-os-wsl-arm64
+          path: build
+
+      - name: Compute WSL release metadata
+        id: artifact
+        run: |
+          cd build
+          for arch in amd64 arm64; do
+            sha256sum "claw-os-wsl-${arch}.wsl" > "claw-os-wsl-${arch}.wsl.sha256"
+            sha=$(cut -d' ' -f1 "claw-os-wsl-${arch}.wsl.sha256")
+            size=$(du -h "claw-os-wsl-${arch}.wsl" | cut -f1)
+            echo "${arch}_sha=$sha" >> "$GITHUB_OUTPUT"
+            echo "${arch}_size=$size" >> "$GITHUB_OUTPUT"
+            echo "- claw-os-wsl-${arch}.wsl ($size): \`$sha\`" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # Rolling pre-release on every run from main, so there is always a
+      # stable download URL pointing at the latest build of main:
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-amd64.wsl
+      #   https://github.com/<org>/<repo>/releases/download/wsl-latest/claw-os-wsl-arm64.wsl
+      - name: Publish rolling pre-release (main only)
+        if: github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: wsl-latest
+          name: WSL rolling build (main)
+          prerelease: true
+          target_commitish: ${{ github.sha }}
+          body: |
+            Rolling build of `main` for WSL2 installation on Windows.
+
+            **Commit:** ${{ github.sha }}
+
+            | Architecture | File | SHA-256 | Size |
+            |---|---|---|---|
+            | amd64 | `claw-os-wsl-amd64.wsl` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.wsl` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
+
+            ## Install on Windows
+            ```powershell
+            # Download the package matching your Windows CPU architecture:
+            #   x64 Windows:       claw-os-wsl-amd64.wsl
+            #   Windows on ARM64:  claw-os-wsl-arm64.wsl
+            $package = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.wsl" } else { ".\claw-os-wsl-amd64.wsl" }
+            $installPath = "C:\WSL\claw-os"
+            wsl --install --from-file $package --name claw-os --location $installPath --version 2
+            ```
+
+            First launch asks you to create the UNIX username and password.
+          files: |
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256
+
+      - name: Move rolling tag to the published commit (main only)
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh api --method PATCH \
+            "repos/${GITHUB_REPOSITORY}/git/refs/tags/wsl-latest" \
+            -f sha="${GITHUB_SHA}" -F force=true
+
+      # Versioned release on a manually selected v* tag.
+      - name: Publish versioned release (tag run)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Claw OS ${{ github.ref_name }}
+          body: |
+            Claw OS ${{ github.ref_name }} — installable WSL2 distributions.
+
+            | Architecture | File | SHA-256 | Size |
+            |---|---|---|---|
+            | amd64 | `claw-os-wsl-amd64.wsl` | `${{ steps.artifact.outputs.amd64_sha }}` | ${{ steps.artifact.outputs.amd64_size }} |
+            | arm64 | `claw-os-wsl-arm64.wsl` | `${{ steps.artifact.outputs.arm64_sha }}` | ${{ steps.artifact.outputs.arm64_size }} |
+
+            ## Install on Windows
+            ```powershell
+            $package = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { ".\claw-os-wsl-arm64.wsl" } else { ".\claw-os-wsl-amd64.wsl" }
+            $installPath = "C:\WSL\claw-os"
+            wsl --install --from-file $package --name claw-os --location $installPath --version 2
+            ```
+            First launch asks you to create the UNIX username and password.
+          files: |
+            build/claw-os-wsl-amd64.wsl
+            build/claw-os-wsl-amd64.wsl.sha256
+            build/claw-os-wsl-arm64.wsl
+            build/claw-os-wsl-arm64.wsl.sha256

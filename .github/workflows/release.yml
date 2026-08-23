@@ -1,6 +1,6 @@
 name: Release
 
-# Umbrella pipeline: runs the test suite, then fans out to the three
+# Umbrella pipeline: runs the test suite, then fans out to the two
 # independent distribution channels. Each of the called workflows can also
 # be run on its own from the Actions tab when you only need one artifact.
 on:
@@ -10,19 +10,12 @@ jobs:
   test:
     uses: ./.github/workflows/test.yml
 
-  wsl:
+  images:
     needs: test
-    uses: ./.github/workflows/build-wsl.yml
+    uses: ./.github/workflows/build-images.yml
     permissions:
-      contents: write
-    secrets: inherit
-
-  docker:
-    needs: test
-    uses: ./.github/workflows/build-docker.yml
-    permissions:
-      contents: read
-      packages: write
+      contents: write   # WSL rolling release
+      packages: write   # Docker push to GHCR
     secrets: inherit
 
   apt:
