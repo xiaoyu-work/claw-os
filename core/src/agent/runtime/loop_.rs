@@ -75,7 +75,7 @@ pub async fn ask_with(
     user_prompt: &str,
     tools: &ToolRegistry,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, None, None).await
+    ask_inner(provider, cfg, user_prompt, tools, None, None, Vec::new()).await
 }
 
 /// Same as [`ask_with`] but records every message into `db` under
@@ -96,6 +96,32 @@ pub async fn ask_with_memory(
         tools,
         Some((db, session_id)),
         None,
+        Vec::new(),
+    )
+    .await
+}
+
+/// Same as [`ask_with_memory`], but replays recent rows from `session_id`
+/// before the new prompt. Use this for non-streaming conversational surfaces
+/// where short follow-ups depend on the immediately preceding exchange.
+pub async fn ask_with_memory_continuation(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+) -> Result<AskResult, AgentError> {
+    let prior = load_continuation_messages(db, session_id, history_limit);
+    ask_inner(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        Some((db, session_id)),
+        None,
+        prior,
     )
     .await
 }
@@ -112,7 +138,16 @@ pub async fn ask_with_compressor(
     db: Option<(&MemoryDb, &str)>,
     compressor: Arc<dyn Compressor>,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, db, Some(compressor)).await
+    ask_inner(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        db,
+        Some(compressor),
+        Vec::new(),
+    )
+    .await
 }
 
 /// Streaming variant of [`ask_with`] / [`ask_with_memory`]. Drives
@@ -209,17 +244,7 @@ pub async fn ask_with_stream_continuation(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
-    let limit = if history_limit == 0 { 200 } else { history_limit };
-    let prior = match db.recent(session_id, limit) {
-        Ok(rows) => rows_to_messages(&rows),
-        Err(e) => {
-            tracing::warn!(
-                "memory: failed to load prior history for session {session_id}: {e}; \
-                 continuing without context"
-            );
-            Vec::new()
-        }
-    };
+    let prior = load_continuation_messages(db, session_id, history_limit);
     ask_inner_streaming(
         provider,
         cfg,
@@ -249,17 +274,7 @@ pub async fn ask_with_stream_continuation_scoped(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
-    let limit = if history_limit == 0 { 200 } else { history_limit };
-    let prior = match db.recent(session_id, limit) {
-        Ok(rows) => rows_to_messages(&rows),
-        Err(e) => {
-            tracing::warn!(
-                "memory: failed to load prior history for session {session_id}: {e}; \
-                 continuing without context"
-            );
-            Vec::new()
-        }
-    };
+    let prior = load_continuation_messages(db, session_id, history_limit);
     ask_inner_streaming(
         provider,
         cfg,
@@ -274,6 +289,28 @@ pub async fn ask_with_stream_continuation_scoped(
         Some(interrupt_scope),
     )
     .await
+}
+
+fn load_continuation_messages(
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+) -> Vec<Message> {
+    let limit = if history_limit == 0 {
+        200
+    } else {
+        history_limit
+    };
+    match db.recent(session_id, limit) {
+        Ok(rows) => rows_to_messages(&rows),
+        Err(e) => {
+            tracing::warn!(
+                "memory: failed to load prior history for session {session_id}: {e}; \
+                 continuing without context"
+            );
+            Vec::new()
+        }
+    }
 }
 
 /// Convert stored memory rows into plain-text [`Message`]s suitable
@@ -396,6 +433,7 @@ async fn ask_inner(
     tools: &ToolRegistry,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
+    initial_messages: Vec<Message>,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -443,7 +481,8 @@ async fn ask_inner(
         }
     }
 
-    let mut messages: Vec<Message> = vec![Message::user_text(user_prompt)];
+    let mut messages = initial_messages;
+    messages.push(Message::user_text(user_prompt));
     let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
@@ -1009,6 +1048,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 &tools,
                 Some((&db, session_id.as_str())),
                 compressor,
+                Vec::new(),
             )
             .await
         }
@@ -1016,7 +1056,16 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"
             );
-            ask_inner(provider, cfg, user_prompt, &tools, None, compressor).await
+            ask_inner(
+                provider,
+                cfg,
+                user_prompt,
+                &tools,
+                None,
+                compressor,
+                Vec::new(),
+            )
+            .await
         }
     }
 }
@@ -1383,14 +1432,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn continuation_replays_prior_turns_into_context() {
+    async fn streaming_continuation_replays_short_follow_up_context() {
         use crate::agent::memory::sqlite_fts::MemoryDb;
 
         let db = MemoryDb::open_in_memory().unwrap();
         let sid = "ctx-test";
-        db.record_message(sid, "user", "我网速现在多少").unwrap();
-        db.record_message(sid, "assistant", "当前网速：0 KB/s")
-            .unwrap();
+        db.record_message(sid, "user", "我网速多快").unwrap();
+        db.record_message(
+            sid,
+            "assistant",
+            "你是想测：1. 宽带实际下载/上传速度 2. 当前实时网速占用",
+        )
+        .unwrap();
 
         let cfg = cfg();
         let mock = MockProvider::new(&cfg.model, &cfg);
@@ -1402,18 +1455,20 @@ mod tests {
         let sink = crate::agent::llm::accumulate::null_sink();
         let progress = progress::null_progress();
 
-        ask_with_stream_continuation(
-            provider, &cfg, "开始", &tools, &db, sid, 50, sink, progress,
-        )
-        .await
-        .unwrap();
+        ask_with_stream_continuation(provider, &cfg, "1", &tools, &db, sid, 50, sink, progress)
+            .await
+            .unwrap();
 
         let req = mock
             .last_request()
             .expect("provider should have been called");
         // Provider should see: prior user, prior assistant, then the
         // new user prompt — not just the new prompt alone.
-        assert!(req.messages.len() >= 3, "got {} messages", req.messages.len());
+        assert!(
+            req.messages.len() >= 3,
+            "got {} messages",
+            req.messages.len()
+        );
         let texts: Vec<String> = req
             .messages
             .iter()
@@ -1424,15 +1479,66 @@ mod tests {
             })
             .collect();
         assert!(
-            texts.iter().any(|t| t.contains("我网速现在多少")),
+            texts.iter().any(|t| t.contains("我网速多快")),
             "prior user prompt missing from replay: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t.contains("当前网速")),
+            texts.iter().any(|t| t.contains("宽带实际下载/上传速度")),
             "prior assistant reply missing from replay: {texts:?}"
         );
         assert!(
-            texts.iter().any(|t| t == "开始"),
+            texts.iter().any(|t| t == "1"),
+            "new user prompt missing from replay: {texts:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn non_streaming_continuation_replays_short_follow_up_context() {
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = "ctx-test-non-streaming";
+        db.record_message(sid, "user", "我网速多快").unwrap();
+        db.record_message(
+            sid,
+            "assistant",
+            "你是想测：1. 宽带实际下载/上传速度 2. 当前实时网速占用",
+        )
+        .unwrap();
+
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text("ok".into()));
+        let mock = Arc::new(mock);
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+
+        ask_with_memory_continuation(provider, &cfg, "1", &tools, &db, sid, 50)
+            .await
+            .unwrap();
+
+        let req = mock
+            .last_request()
+            .expect("provider should have been called");
+        let texts: Vec<String> = req
+            .messages
+            .iter()
+            .flat_map(|m| m.content.iter())
+            .filter_map(|b| match b {
+                crate::agent::llm::ContentBlock::Text { text } => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            texts.iter().any(|t| t.contains("我网速多快")),
+            "prior user prompt missing from replay: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("宽带实际下载/上传速度")),
+            "prior assistant reply missing from replay: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t == "1"),
             "new user prompt missing from replay: {texts:?}"
         );
     }

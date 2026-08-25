@@ -3046,24 +3046,16 @@ async fn live_cmd_async(
 /// [--show-tools] [--max-turns N]` — interactive multi-turn REPL.
 ///
 /// Reads prompts from stdin one line at a time and routes each
-/// through the same agent runtime as `cos agent live`. The
-/// session-id is preserved across turns so:
+/// through the same agent runtime as `cos agent live`. With memory
+/// enabled, the session-id is preserved across turns so:
 ///   1. Every prompt and assistant turn is recorded under the
 ///      same FTS-searchable conversation;
 ///   2. The session title is generated once on the first turn
 ///      (matches `ask`/`live` semantics);
-///   3. `cos_recall` invocations from inside the model can search
+///   3. Recent turns are replayed directly into each model request,
+///      so short follow-ups such as "1" retain conversational context;
+///   4. `cos_recall` invocations from inside the model can search
 ///      the running conversation as it grows.
-///
-/// **Architecture note:** The model sees ONLY the current prompt
-/// per turn, not in-process replay of prior REPL turns. Cross-turn
-/// memory is provided by:
-///   - System prompt injection from `MEMORY.md` / `USER.md`
-///     (already done by `prompt::build_system_prompt`).
-///   - The `cos_recall` tool, which gives the model on-demand
-///     access to FTS-searchable history.
-/// This matches `live` and `ask`, costs fewer tokens, and avoids
-/// hidden context that the model can't introspect.
 ///
 /// **Slash commands** (recognised at the start of a non-empty
 /// prompt; whitespace-trimmed):
@@ -3078,8 +3070,8 @@ async fn live_cmd_async(
 ///
 /// Streaming behaviour mirrors `live`: tokens flow live to stderr;
 /// the assistant's final text plus a one-line summary go to
-/// stdout after each turn. Pass `--no-stream` to fall back to the
-/// non-streaming `ask_with` path (useful for non-TTY use).
+/// stdout after each turn. Pass `--no-stream` to use the equivalent
+/// non-streaming continuation path (useful for non-TTY use).
 ///
 /// Stdin EOF (Ctrl+D / closed pipe) exits cleanly.
 ///
@@ -3664,25 +3656,40 @@ async fn chat_cmd_async(
             let sink: Arc<dyn StreamSink> = sink_obj.clone();
             let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
                 sink_obj.clone();
-            let recorder = memory_db.as_ref().map(|db| (db, session_id.as_str()));
-            runtime::loop_::ask_with_stream(
-                provider.clone(),
-                cfg,
-                &user_prompt,
-                &tools,
-                recorder,
-                sink,
-                progress,
-            )
-            .await
+            if let Some(db) = &memory_db {
+                runtime::loop_::ask_with_stream_continuation(
+                    provider.clone(),
+                    cfg,
+                    &user_prompt,
+                    &tools,
+                    db,
+                    &session_id,
+                    100,
+                    sink,
+                    progress,
+                )
+                .await
+            } else {
+                runtime::loop_::ask_with_stream(
+                    provider.clone(),
+                    cfg,
+                    &user_prompt,
+                    &tools,
+                    None,
+                    sink,
+                    progress,
+                )
+                .await
+            }
         } else if let Some(db) = &memory_db {
-            runtime::loop_::ask_with_memory(
+            runtime::loop_::ask_with_memory_continuation(
                 provider.clone(),
                 cfg,
                 &user_prompt,
                 &tools,
                 db,
                 &session_id,
+                100,
             )
             .await
         } else {
