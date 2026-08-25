@@ -5,10 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
 
-use super::{
-    apps_dir, launch_app_gui, run_app_command, show_app_command_schema, show_app_help,
-    show_app_schema, show_apps,
-};
+use super::help::{show_app_command_schema, show_app_help, show_app_schema, show_apps};
+use super::{apps_dir, launch_app_gui, run_app_command};
 use crate::apps;
 
 /// Directory where freedesktop `.desktop` launchers are written at
