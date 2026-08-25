@@ -12,5 +12,6 @@ pub mod copilot_auth;
 pub mod gemini;
 pub mod llama_local;
 pub mod mock;
+pub(crate) mod openai_chat;
 pub mod openai_compat;
 pub(crate) mod openai_responses;

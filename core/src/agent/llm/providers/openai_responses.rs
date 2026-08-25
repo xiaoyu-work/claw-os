@@ -10,7 +10,7 @@ use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::sync::Arc;
 
-use super::openai_compat::wire;
+use super::openai_chat::use_max_completion_tokens;
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Result, Role, StreamEvent,
     ToolCall, ToolChoice, Usage,
@@ -73,7 +73,7 @@ pub(crate) fn build_request_body(
             object.insert("max_output_tokens".into(), serde_json::json!(max_tokens));
         }
         // Copilot's GPT-5 / reasoning models reject sampling knobs.
-        if !wire::use_max_completion_tokens(model) {
+        if !use_max_completion_tokens(model) {
             if let Some(temperature) = request.temperature {
                 object.insert("temperature".into(), serde_json::json!(temperature));
             }

@@ -21,6 +21,7 @@ provider-neutral agent types and provider-specific HTTP/event protocols.
 | `gemini.rs` | Gemini generateContent |
 | `bedrock.rs` | AWS Bedrock |
 | `openai_compat.rs` | OpenAI-compatible Chat Completions provider |
+| `openai_chat.rs` | Chat Completions request/response/SSE adapter |
 | `openai_responses.rs` | OpenAI Responses request/response/SSE adapter |
 | `copilot_auth.rs` | GitHub OAuth, Copilot token exchange/model routing |
 | `llama_local.rs` | Local llama runtime |
