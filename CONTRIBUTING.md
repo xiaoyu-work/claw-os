@@ -1,5 +1,9 @@
 # Contributing to Claw OS
 
+Coding agents and contributors should read [`AGENTS.md`](AGENTS.md) for task
+routing and authoritative validation commands, then
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for component boundaries and data flows.
+
 ## Building from Source
 
 ### Prerequisites
@@ -116,14 +120,19 @@ qemu-system-x86_64 -m 4G \
 ```
 
 The installed system has the Claw OS apt repository pre-configured, so
-`sudo apt update && sudo apt upgrade` will pull newer `cos` releases.
+`sudo apt update && sudo apt full-upgrade` will pull newer Claw OS packages.
+See [`docs/updating.md`](docs/updating.md) for the unified update path across
+installed targets.
 
 ### `apt` repository
 
 The `claw-os-base`, `claw-os-browser`, and `claw-os-systemd` `.deb`
-packages are built as part of every rootfs build and uploaded as CI
-artifacts. On pushes to `main`, the matching apt repository is published
-to GitHub Pages and consumable as:
+packages are assembled from compiled binaries and source-tree files; building
+the APT channel does not require a rootfs. The manually dispatched
+**Build APT repo (.deb packages)** workflow builds both architectures, signs the
+repository, and publishes it to GitHub Pages. The umbrella **Release
+everything (test + Docker + WSL + APT)** workflow includes the same channel.
+The repository is consumable as:
 
 ```bash
 curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
@@ -147,8 +156,18 @@ COS_APPS_DIR=./apps COS_DATA_DIR=/tmp/cos-data ./core/target/debug/cos fs ls .
 ### Run Tests
 
 ```bash
-cd core && cargo test
-python -m pytest tests/
+# Core tests share process-global environment variables.
+(cd core && cargo test -- --test-threads=1)
+
+# Exact CI lint.
+(cd core && cargo clippy -- -D warnings)
+
+# From the repository root.
+PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
+  python3 -m pytest -q apps adapters claw-os-sdk/python/src cos-runtime/python/src
+
+# Browser crate.
+cargo test -p cos-browser
 ```
 
 ### Project Structure
@@ -173,7 +192,7 @@ claw-os/
 ├── build.sh           Top-level dispatcher (./build.sh <target>)
 ├── cli/               cos-ctl management tool
 ├── clients/           Bridge (LLM ↔ Claw OS)
-└── tests/             Integration tests
+└── .github/workflows/ Test and publication workflows
 ```
 
 ## Architecture Rules
