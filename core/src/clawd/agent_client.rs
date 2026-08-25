@@ -11,16 +11,47 @@ pub fn daemon_status() -> Result<Value, String> {
 }
 
 pub fn ask(prompt: &str) -> Result<Value, String> {
-    let submitted = send("task.submit", json!({ "prompt": prompt }))?;
+    ask_in_session(prompt, None)
+}
+
+pub fn ask_in_session(prompt: &str, session_id: Option<&str>) -> Result<Value, String> {
+    ask_in_session_with_timeout(prompt, session_id, ASK_WAIT_TIMEOUT_MS)
+}
+
+pub fn ask_in_session_with_timeout(
+    prompt: &str,
+    session_id: Option<&str>,
+    timeout_ms: u64,
+) -> Result<Value, String> {
+    let mut params = json!({ "prompt": prompt });
+    if let Some(session_id) = session_id {
+        params["session_id"] = json!(session_id);
+    }
+    let submitted = send("task.submit", params)?;
     let task_id = required_field(&submitted, "id")?;
     let result = send(
         "task.result",
         json!({
-            "id": task_id,
-            "timeout_ms": ASK_WAIT_TIMEOUT_MS,
+            "id": task_id.clone(),
+            "timeout_ms": timeout_ms,
         }),
     )?;
 
+    let status = result
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    if matches!(status, "pending" | "running") {
+        let cancellation = send("task.cancel", json!({ "id": task_id }));
+        return match cancellation {
+            Ok(_) => Err(format!(
+                "agent task timed out after {timeout_ms}ms; cancellation requested"
+            )),
+            Err(error) => Err(format!(
+                "agent task timed out after {timeout_ms}ms; cancellation failed: {error}"
+            )),
+        };
+    }
     task_result_to_ask_response(result)
 }
 

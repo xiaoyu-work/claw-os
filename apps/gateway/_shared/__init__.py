@@ -19,6 +19,8 @@ audited blast radius:
 * :mod:`atomic`        — ``tmp + fsync + replace + fsync(parent)``
                           atomic file writes for gateway state files
                           (JSONL offsets, PID files, etc).
+* :mod:`websocket`     — stdlib-only RFC 6455 client layered on the
+                          same policy-gated, DNS-pinned egress path.
 
 The modules are stdlib-only on purpose so they can be vendored into
 single-file gateway apps without dragging in third-party deps.
@@ -32,4 +34,5 @@ __all__ = [
     "inbound",
     "atomic",
     "gateway_memory",
+    "websocket",
 ]

@@ -113,6 +113,22 @@ cos agent ask "why did my last app crash?"
 cos agent chat                                 # interactive REPL with cross-app memory
 ```
 
+### Connect Discord or Telegram
+
+The same system agent can receive and answer allowlisted Discord DMs, server
+mentions, threads, and Telegram chats:
+
+```bash
+cos credential store discord_bot_token "<bot-token>"
+cos app gateway-discord configure \
+  "users=<discord-user-id> guilds=<discord-server-id> require_mention=true"
+cos app gateway-discord start
+```
+
+See [External communications](docs/external-communications.md) for Discord bot
+permissions, persistent service setup, Telegram, security policy, and the
+current platform support matrix.
+
 ## License
 
 MIT for the kernel and apps. See the [`NOTICE`](NOTICE) for vendored sources and their upstream licenses.

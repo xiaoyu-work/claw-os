@@ -365,6 +365,68 @@ def _enforce_target(url: str) -> Tuple[str, str]:
 # Public API ----------------------------------------------------------------
 
 
+def safe_tls_connect(
+    host: str,
+    port: int = 443,
+    *,
+    timeout: float = 30.0,
+    verb_id: str,
+) -> ssl.SSLSocket:
+    """Open a policy-authorised, DNS-pinned TLS connection.
+
+    This is the streaming counterpart to :func:`safe_urlopen`, intended
+    for protocols such as WebSocket that begin with an HTTP upgrade and
+    then keep the socket open. DNS is resolved exactly once, every answer
+    is checked against the private-address policy, and TLS still verifies
+    the original hostname through SNI.
+    """
+    if not isinstance(host, str):
+        raise EgressBlocked("host must be a string")
+    host = host.strip().rstrip(".").lower()
+    if not host or any(char in host for char in "/\\@?#\r\n\0"):
+        raise EgressBlocked("host is invalid")
+    if isinstance(port, bool):
+        raise EgressBlocked("port must be an integer")
+    try:
+        port = int(port)
+    except (TypeError, ValueError):
+        raise EgressBlocked("port must be an integer") from None
+    if not 1 <= port <= 65535:
+        raise EgressBlocked("port is outside 1..65535")
+    try:
+        timeout = float(timeout)
+    except (TypeError, ValueError):
+        raise EgressBlocked("timeout must be a positive number") from None
+    if timeout <= 0 or not math.isfinite(timeout):
+        raise EgressBlocked("timeout must be a positive number")
+    if not _allow_private() and _is_private_address(host):
+        raise EgressBlocked(
+            f"host {host!r} is a non-public address; "
+            f"set {_PRIVATE_OK_ENV}=1 to override"
+        )
+    if policy is None:
+        raise EgressBlocked(
+            "cos_runtime.policy unavailable; refusing outbound connection"
+        )
+    _ = verb_id
+    policy.require("net.dial", host=host)
+
+    targets = _resolve_targets(host, port)
+    last_error: Optional[BaseException] = None
+    for target in targets:
+        raw_sock: Optional[socket.socket] = None
+        try:
+            raw_sock = _open_pinned_socket(target, timeout)
+            tls_sock = _TLS_CONTEXT.wrap_socket(raw_sock, server_hostname=host)
+            tls_sock.settimeout(timeout)
+            return tls_sock
+        except (OSError, ValueError) as exc:
+            last_error = exc
+            if raw_sock is not None:
+                raw_sock.close()
+    raise urllib.error.URLError(last_error or "all validated addresses failed")
+
+
 def safe_urlopen(
     method: str,
     url: str,
@@ -474,4 +536,10 @@ def parsed_host(url: str) -> Optional[str]:
     return host or None
 
 
-__all__ = ["safe_urlopen", "parsed_host", "EgressBlocked", "EgressError"]
+__all__ = [
+    "safe_tls_connect",
+    "safe_urlopen",
+    "parsed_host",
+    "EgressBlocked",
+    "EgressError",
+]

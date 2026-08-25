@@ -1,17 +1,30 @@
 {
   "id": "gateway-discord",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "name": {
     "en": "Discord Gateway"
   },
   "summary": {
-    "en": "Discord gateway. send posts messages through the Bot REST API; gateway WebSocket start and stop are not implemented."
+    "en": "Bidirectional Discord bot gateway. Routes allowlisted DMs, guild mentions, and thread messages to the system agent."
   },
   "runtime": "python",
   "operations": {
+    "configure": {
+      "label": {
+        "en": "Configure Discord inbound access"
+      },
+      "args": [
+        {
+          "name": "settings",
+          "kind": "text",
+          "required": true
+        }
+      ],
+      "needs": []
+    },
     "send": {
       "label": {
-        "en": "Send a message through this gateway"
+        "en": "Send a message through Discord"
       },
       "args": [
         {
@@ -36,7 +49,7 @@
             }
           },
           "why": {
-            "en": "Connect to the remote gateway service to perform the send operation."
+            "en": "Call the Discord REST API to post the message."
           }
         },
         {
@@ -49,7 +62,7 @@
             }
           },
           "why": {
-            "en": "Read the configured discord_bot_token secret required by this gateway."
+            "en": "Load the configured Discord bot token."
           }
         },
         {
@@ -62,17 +75,144 @@
             }
           },
           "why": {
-            "en": "Remember the successful send so the agent can recall it later."
+            "en": "Remember successful outbound Discord messages."
           }
         }
       ]
     },
     "status": {
       "label": {
-        "en": "Show gateway configuration and status"
+        "en": "Show Discord gateway status"
       },
       "args": [],
-      "needs": []
+      "needs": [
+        {
+          "verb": "proc.observe",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Check whether the Discord gateway process is running."
+          }
+        }
+      ]
+    },
+    "start": {
+      "label": {
+        "en": "Start the Discord agent gateway"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "gateway.discord.gg"
+            }
+          },
+          "why": {
+            "en": "Maintain the Discord Gateway WebSocket connection."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "*.discord.gg"
+            }
+          },
+          "why": {
+            "en": "Reconnect to the Discord-provided regional resume gateway."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "discord.com"
+            }
+          },
+          "why": {
+            "en": "Validate the bot identity and post replies through the Discord REST API."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/discord_bot_token"
+            }
+          },
+          "why": {
+            "en": "Load the configured Discord bot token."
+          }
+        },
+        {
+          "verb": "data.inbox.write",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Authorize allowlisted inbound Discord messages."
+          }
+        },
+        {
+          "verb": "agent.spawn",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Ask the system agent to answer inbound Discord messages."
+          }
+        },
+        {
+          "verb": "proc.observe",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Check for an existing Discord gateway process."
+          }
+        },
+        {
+          "verb": "memory.write",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "gateway-discord"
+            }
+          },
+          "why": {
+            "en": "Remember replies sent by the Discord gateway."
+          }
+        }
+      ]
+    },
+    "stop": {
+      "label": {
+        "en": "Stop the Discord agent gateway"
+      },
+      "args": [],
+      "needs": [
+        {
+          "verb": "proc.observe",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Check whether the Discord gateway process is still running."
+          }
+        }
+      ]
     }
   }
 }

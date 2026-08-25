@@ -70,9 +70,12 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
         "ask" => {
             let mut full = false;
+            let mut session_id: Option<String> = None;
+            let mut timeout_ms: Option<u64> = None;
             let mut positional: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                match a.as_str() {
+            let mut i = 0usize;
+            while i < args.len() {
+                match args[i].as_str() {
                     // Opt-in to the full JSON envelope (provider, model,
                     // session_id, task_id, turns, …). Without this the
                     // command prints just the model's plain-text answer
@@ -84,21 +87,64 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     // global output-format selector, so any per-command
                     // flag with those names would never reach this
                     // handler.
-                    "--full" => full = true,
-                    "--no-full" => full = false,
+                    "--full" => {
+                        full = true;
+                        i += 1;
+                    }
+                    "--no-full" => {
+                        full = false;
+                        i += 1;
+                    }
+                    "--session" => {
+                        let value = args
+                            .get(i + 1)
+                            .filter(|value| !value.trim().is_empty())
+                            .ok_or_else(|| "--session needs a non-empty id".to_string())?;
+                        session_id = Some(value.clone());
+                        i += 2;
+                    }
+                    "--timeout-secs" => {
+                        let value = args
+                            .get(i + 1)
+                            .ok_or_else(|| "--timeout-secs needs a positive integer".to_string())?;
+                        let seconds = value
+                            .parse::<u64>()
+                            .map_err(|_| "--timeout-secs needs a positive integer".to_string())?;
+                        if seconds == 0 {
+                            return Err("--timeout-secs needs a positive integer".to_string());
+                        }
+                        timeout_ms = Some(
+                            seconds
+                                .checked_mul(1_000)
+                                .ok_or_else(|| "--timeout-secs is too large".to_string())?,
+                        );
+                        i += 2;
+                    }
                     other if other.starts_with("--") => {
                         return Err(format!(
-                            "unknown ask flag: {other}. supported: --full | --no-full"
+                            "unknown ask flag: {other}. supported: --full | --no-full | --session <id> | --timeout-secs <n>"
                         ));
                     }
-                    _ => positional.push(a.clone()),
+                    _ => {
+                        positional.push(args[i].clone());
+                        i += 1;
+                    }
                 }
             }
             let prompt = positional.first().cloned().unwrap_or_default();
             if prompt.is_empty() {
-                return Err("usage: cos agent ask \"<prompt>\" [--full]".into());
+                return Err(
+                    "usage: cos agent ask \"<prompt>\" [--full] [--session <id>] [--timeout-secs <n>]".into(),
+                );
             }
-            let envelope = agent_client::ask(&prompt)?;
+            let envelope = match timeout_ms {
+                Some(timeout_ms) => agent_client::ask_in_session_with_timeout(
+                    &prompt,
+                    session_id.as_deref(),
+                    timeout_ms,
+                )?,
+                None => agent_client::ask_in_session(&prompt, session_id.as_deref())?,
+            };
             if full {
                 Ok(envelope)
             } else {
@@ -12833,6 +12879,26 @@ mod tests {
         // opaquely or actually consume LLM tokens.
         let err = run("ask", &["--full".into()]).unwrap_err();
         assert!(err.contains("usage:"), "got {err}");
+    }
+
+    #[test]
+    fn ask_session_requires_non_empty_id() {
+        let err = run("ask", &["--session".into()]).unwrap_err();
+        assert!(err.contains("--session"), "got {err}");
+        let err = run("ask", &["--session".into(), "".into(), "hi".into()]).unwrap_err();
+        assert!(err.contains("non-empty"), "got {err}");
+    }
+
+    #[test]
+    fn ask_timeout_requires_positive_integer() {
+        for value in ["", "0", "nope"] {
+            let err = run(
+                "ask",
+                &["--timeout-secs".into(), value.into(), "hi".into()],
+            )
+            .unwrap_err();
+            assert!(err.contains("positive integer"), "got {err}");
+        }
     }
 
     #[test]
