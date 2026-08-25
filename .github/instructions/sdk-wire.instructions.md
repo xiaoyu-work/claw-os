@@ -13,4 +13,3 @@ applyTo: "claw-os-sdk/wire/**/*,claw-os-sdk/node/**/*,claw-os-sdk/go/**/*"
 - Update conformance tests and all affected language SDKs in the same change.
 - Public SDK code must not expose internal `cos-runtime` policy helpers or
   broker implementation details.
-

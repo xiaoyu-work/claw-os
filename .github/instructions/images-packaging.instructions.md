@@ -20,4 +20,3 @@ applyTo: ".github/workflows/**/*.yml,rootfs/**/*,targets/**/*,packaging/**/*,scr
   changes.
 - Workflows are manually dispatched or reusable through `workflow_call`; do not
   describe push/PR automation unless the triggers actually exist.
-

@@ -19,4 +19,3 @@ Always:
 
 Path-specific instructions under `.github/instructions/` add local rules. They
 supplement rather than replace AGENTS.md and ARCHITECTURE.md.
-

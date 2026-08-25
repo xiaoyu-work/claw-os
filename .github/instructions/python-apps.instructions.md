@@ -23,4 +23,3 @@ Validation:
 PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
   python3 -m pytest -q <affected-test-paths>
 ```
-

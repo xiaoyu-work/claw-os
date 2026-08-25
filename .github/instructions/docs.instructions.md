@@ -17,4 +17,3 @@ applyTo: "**/*.md"
 - Do not claim that a workflow runs on push/PR unless its `on:` block does.
 - Examples must not contain real credentials, tokens, private endpoints, or
   user-specific absolute paths.
-

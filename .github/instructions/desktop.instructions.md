@@ -17,4 +17,3 @@ applyTo: "desktop/**/*"
   commit Windows case-collision phantom modifications.
 - Use the component's Cargo/just manifest and tests rather than assuming the
   root Rust workspace owns desktop crates.
-

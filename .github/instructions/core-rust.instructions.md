@@ -24,4 +24,3 @@ Validation:
 cargo test -p cos <test-filter> -- --test-threads=1
 (cd core && cargo clippy -- -D warnings)
 ```
-
