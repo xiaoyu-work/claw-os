@@ -29,7 +29,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex as AsyncMutex;
 
 /// GitHub OAuth client ID for Copilot's first-party application.
@@ -50,10 +50,114 @@ const SCOPES: &str = "read:user";
 /// + entitlement gating).
 pub const EDITOR_VERSION: &str = "vscode/1.96.2";
 pub const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub const GITHUB_API_VERSION: &str = "2025-10-01";
+pub const COPILOT_INITIATOR_USER: &str = "user";
+pub const COPILOT_INITIATOR_AGENT: &str = "agent";
+pub const COPILOT_INTERACTION_TYPE: &str = "conversation-agent";
 
 /// Refresh the Copilot token this far ahead of its real expiry. Keeps a
 /// long chat from failing mid-stream when the cached token ages out.
 const REFRESH_SAFETY_MARGIN: Duration = Duration::from_secs(5 * 60);
+const MODEL_CATALOG_TTL: Duration = Duration::from_secs(5 * 60);
+
+/// Copilot wire protocols that `cos` can speak.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopilotWireApi {
+    ChatCompletions,
+    Responses,
+}
+
+impl CopilotWireApi {
+    pub fn endpoint_path(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "/chat/completions",
+            Self::Responses => "/responses",
+        }
+    }
+
+    pub fn config_name(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "chat_completions",
+            Self::Responses => "responses",
+        }
+    }
+}
+
+/// One entry from Copilot's live `/models` catalogue.
+///
+/// Older entries omit `supported_endpoints`; those are ordinary
+/// chat-completions models. A non-empty endpoint list is authoritative.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CopilotModel {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    model_picker_enabled: Option<bool>,
+    #[serde(default)]
+    supported_endpoints: Option<Vec<String>>,
+    #[serde(default)]
+    capabilities: Option<CopilotModelCapabilities>,
+    #[serde(default)]
+    policy: Option<CopilotModelPolicy>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CopilotModelCapabilities {
+    #[serde(rename = "type")]
+    #[serde(default)]
+    model_type: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CopilotModelPolicy {
+    #[serde(default)]
+    state: Option<String>,
+}
+
+impl CopilotModel {
+    /// Select the newest protocol the model explicitly advertises.
+    ///
+    /// Older catalogue entries omit endpoint metadata; those retain the
+    /// legacy chat-completions fallback. When both are available, Responses
+    /// wins so models get the richer reasoning and tool-call transport.
+    pub fn wire_api(&self) -> Option<CopilotWireApi> {
+        let endpoints = self.supported_endpoints.as_deref().unwrap_or_default();
+        if endpoints.is_empty() {
+            return Some(CopilotWireApi::ChatCompletions);
+        }
+        if endpoints.iter().any(|v| v == "/responses") {
+            return Some(CopilotWireApi::Responses);
+        }
+        if endpoints.iter().any(|v| v == "/chat/completions") {
+            return Some(CopilotWireApi::ChatCompletions);
+        }
+        None
+    }
+
+    pub fn is_selectable_chat_model(&self) -> bool {
+        if self.model_picker_enabled != Some(true) {
+            return false;
+        }
+        if self
+            .policy
+            .as_ref()
+            .and_then(|p| p.state.as_deref())
+            .is_some_and(|state| !state.eq_ignore_ascii_case("enabled"))
+        {
+            return false;
+        }
+        if !self
+            .capabilities
+            .as_ref()
+            .and_then(|c| c.model_type.as_deref())
+            .is_some_and(|kind| kind.eq_ignore_ascii_case("chat"))
+        {
+            return false;
+        }
+        self.wire_api().is_some()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Error type
@@ -65,6 +169,7 @@ pub enum CopilotAuthError {
     Http { status: u16, body: String },
     UnexpectedBody(String),
     NotAuthorized(String),
+    UnsupportedModel(String),
 }
 
 impl std::fmt::Display for CopilotAuthError {
@@ -76,6 +181,7 @@ impl std::fmt::Display for CopilotAuthError {
             }
             CopilotAuthError::UnexpectedBody(s) => write!(f, "unexpected response body: {s}"),
             CopilotAuthError::NotAuthorized(s) => write!(f, "{s}"),
+            CopilotAuthError::UnsupportedModel(s) => write!(f, "{s}"),
         }
     }
 }
@@ -315,6 +421,173 @@ pub fn forget_cached(github_token: &str) {
     }
 }
 
+/// Return the live model catalogue, cached for a short period per
+/// short-lived Copilot bearer. Entitlements and endpoint availability
+/// can change while the process is running, so this cache is deliberately
+/// much shorter than the bearer lifetime.
+pub async fn ensure_copilot_models(
+    token: &CopilotToken,
+) -> Result<Arc<Vec<CopilotModel>>, CopilotAuthError> {
+    let fingerprint = token_fingerprint(&token.bearer);
+    if let Some(models) = lookup_model_catalog(fingerprint) {
+        return Ok(models);
+    }
+
+    let lock = model_catalog_lock_for(fingerprint);
+    let _guard = lock.lock().await;
+    if let Some(models) = lookup_model_catalog(fingerprint) {
+        return Ok(models);
+    }
+
+    let models = Arc::new(fetch_copilot_models(token).await?);
+    store_model_catalog(fingerprint, models.clone());
+    Ok(models)
+}
+
+/// Resolve the protocol for one configured model.
+///
+/// A manually-entered model that is absent from the live catalogue keeps
+/// the historical chat-completions behaviour. An advertised model with an
+/// unsupported endpoint is rejected before a doomed provider request.
+pub async fn wire_api_for_model(
+    token: &CopilotToken,
+    model_id: &str,
+) -> Result<CopilotWireApi, CopilotAuthError> {
+    let models = ensure_copilot_models(token).await?;
+    let Some(model) = models.iter().find(|m| m.id == model_id) else {
+        tracing::warn!(
+            target: "cos::agent::llm::copilot",
+            "Copilot model '{model_id}' was not present in the live catalogue; \
+             falling back to chat completions"
+        );
+        return Ok(CopilotWireApi::ChatCompletions);
+    };
+    model.wire_api().ok_or_else(|| {
+        CopilotAuthError::UnsupportedModel(format!(
+            "Copilot model `{model_id}` is not usable by this client; advertised endpoints: {}",
+            if model
+                .supported_endpoints
+                .as_ref()
+                .is_none_or(|endpoints| endpoints.is_empty())
+            {
+                "<none>".to_string()
+            } else {
+                model
+                    .supported_endpoints
+                    .as_deref()
+                    .unwrap_or_default()
+                    .join(", ")
+            }
+        ))
+    })
+}
+
+async fn fetch_copilot_models(
+    token: &CopilotToken,
+) -> Result<Vec<CopilotModel>, CopilotAuthError> {
+    let url = format!("{}/models", token.base_url.trim_end_matches('/'));
+    let resp = http_client()
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Editor-Version", EDITOR_VERSION)
+        .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
+        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+        .bearer_auth(&token.bearer)
+        .send()
+        .await?;
+    let status = resp.status();
+    let bytes = crate::agent::llm::read_body_capped(
+        resp,
+        crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+    )
+    .await
+    .map_err(|e| CopilotAuthError::UnexpectedBody(e.to_string()))?;
+    if !status.is_success() {
+        return Err(CopilotAuthError::Http {
+            status: status.as_u16(),
+            body: String::from_utf8_lossy(&bytes).into_owned(),
+        });
+    }
+
+    let parsed: serde_json::Value = serde_json::from_slice(&bytes).map_err(|e| {
+        CopilotAuthError::UnexpectedBody(format!(
+            "parse /models response: {e}: {}",
+            truncate(&String::from_utf8_lossy(&bytes), 240)
+        ))
+    })?;
+    let entries = parsed
+        .get("data")
+        .or_else(|| parsed.get("models"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| {
+            CopilotAuthError::UnexpectedBody(format!(
+                "/models had no data/models array: {}",
+                truncate(&String::from_utf8_lossy(&bytes), 240)
+            ))
+        })?;
+
+    let mut models = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match serde_json::from_value::<CopilotModel>(entry.clone()) {
+            Ok(model) if !model.id.trim().is_empty() => models.push(model),
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    target: "cos::agent::llm::copilot",
+                    "ignoring malformed Copilot model entry: {error}"
+                );
+            }
+        }
+    }
+    if !entries.is_empty() && models.is_empty() {
+        return Err(CopilotAuthError::UnexpectedBody(
+            "none of the Copilot model entries could be parsed".into(),
+        ));
+    }
+    Ok(models)
+}
+
+struct CachedModelCatalog {
+    fetched_at: Instant,
+    models: Arc<Vec<CopilotModel>>,
+}
+
+fn lookup_model_catalog(fingerprint: u64) -> Option<Arc<Vec<CopilotModel>>> {
+    model_catalog_cache().lock().ok().and_then(|cache| {
+        cache.get(&fingerprint).and_then(|entry| {
+            (entry.fetched_at.elapsed() < MODEL_CATALOG_TTL).then(|| entry.models.clone())
+        })
+    })
+}
+
+fn store_model_catalog(fingerprint: u64, models: Arc<Vec<CopilotModel>>) {
+    if let Ok(mut cache) = model_catalog_cache().lock() {
+        cache.retain(|_, entry| entry.fetched_at.elapsed() < Duration::from_secs(60 * 60));
+        cache.insert(
+            fingerprint,
+            CachedModelCatalog {
+                fetched_at: Instant::now(),
+                models,
+            },
+        );
+    }
+}
+
+fn model_catalog_cache() -> &'static Mutex<HashMap<u64, CachedModelCatalog>> {
+    static CACHE: OnceLock<Mutex<HashMap<u64, CachedModelCatalog>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn model_catalog_lock_for(fingerprint: u64) -> Arc<AsyncMutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<u64, Arc<AsyncMutex<()>>>>> = OnceLock::new();
+    let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = locks.lock().unwrap_or_else(|e| e.into_inner());
+    guard
+        .entry(fingerprint)
+        .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+        .clone()
+}
+
 fn needs_refresh(t: &CopilotToken) -> bool {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -477,6 +750,92 @@ mod tests {
         );
         assert!(lookup_cached(fp_a).is_some());
         assert!(lookup_cached(fp_b).is_none());
+    }
+
+    fn model(value: serde_json::Value) -> CopilotModel {
+        serde_json::from_value(value).expect("valid Copilot model fixture")
+    }
+
+    #[test]
+    fn model_wire_api_uses_advertised_endpoints() {
+        let legacy = model(serde_json::json!({"id": "gpt-4o"}));
+        assert_eq!(
+            legacy.wire_api(),
+            Some(CopilotWireApi::ChatCompletions),
+            "missing endpoint metadata means legacy chat completions"
+        );
+        let null_endpoints = model(serde_json::json!({
+            "id": "gpt-4.1",
+            "supported_endpoints": null
+        }));
+        assert_eq!(
+            null_endpoints.wire_api(),
+            Some(CopilotWireApi::ChatCompletions)
+        );
+
+        let dual = model(serde_json::json!({
+            "id": "gpt-4.1",
+            "supported_endpoints": ["/chat/completions", "/responses"]
+        }));
+        assert_eq!(
+            dual.wire_api(),
+            Some(CopilotWireApi::Responses),
+            "dual-protocol models prefer the newer Responses API"
+        );
+
+        let responses = model(serde_json::json!({
+            "id": "gpt-5.6-sol",
+            "supported_endpoints": ["/responses"]
+        }));
+        assert_eq!(responses.wire_api(), Some(CopilotWireApi::Responses));
+
+        let messages = model(serde_json::json!({
+            "id": "messages-only",
+            "supported_endpoints": ["/v1/messages"]
+        }));
+        assert_eq!(messages.wire_api(), None);
+    }
+
+    #[test]
+    fn model_picker_excludes_non_chat_and_disabled_models() {
+        let embedding = model(serde_json::json!({
+            "id": "text-embedding-3-small",
+            "capabilities": {"type": "embeddings"},
+            "supported_endpoints": ["/embeddings"]
+        }));
+        assert!(!embedding.is_selectable_chat_model());
+
+        let hidden = model(serde_json::json!({
+            "id": "trajectory-compaction",
+            "model_picker_enabled": false
+        }));
+        assert!(!hidden.is_selectable_chat_model());
+
+        let disabled = model(serde_json::json!({
+            "id": "disabled-chat",
+            "model_picker_enabled": true,
+            "policy": {"state": "disabled"},
+            "capabilities": {"type": "chat"},
+            "supported_endpoints": ["/chat/completions"]
+        }));
+        assert!(!disabled.is_selectable_chat_model());
+
+        let pending = model(serde_json::json!({
+            "id": "consent-required",
+            "model_picker_enabled": true,
+            "policy": {"state": "requires_consent"},
+            "capabilities": {"type": "chat"},
+            "supported_endpoints": ["/responses"]
+        }));
+        assert!(!pending.is_selectable_chat_model());
+
+        let responses = model(serde_json::json!({
+            "id": "gpt-5.6-sol",
+            "model_picker_enabled": true,
+            "capabilities": {"type": "chat"},
+            "supported_endpoints": ["/responses"]
+        }));
+        assert!(responses.is_selectable_chat_model());
     }
 
     #[test]

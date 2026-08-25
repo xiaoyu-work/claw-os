@@ -130,7 +130,7 @@ impl AuxiliaryClient {
             temperature: self.config.temperature,
             top_p: None,
             stop_sequences: Vec::new(),
-            extra: serde_json::Value::Null,
+            extra: serde_json::json!({"_cos_initiator": "agent"}),
         };
 
         let response = self.inner.chat(request).await?;

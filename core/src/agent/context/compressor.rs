@@ -106,6 +106,26 @@ pub fn estimate_message_tokens(msg: &Message) -> u32 {
             ContentBlock::ToolResult { content, .. } => {
                 estimate_text_tokens(content).saturating_add(4)
             }
+            ContentBlock::ToolState {
+                thought_signature, ..
+            } => estimate_text_tokens(thought_signature).saturating_add(4),
+            ContentBlock::Reasoning {
+                summary,
+                encrypted_content,
+                ..
+            } => {
+                let summary_tokens = summary
+                    .iter()
+                    .fold(0u32, |total, text| total.saturating_add(estimate_text_tokens(text)));
+                summary_tokens
+                    .saturating_add(
+                        encrypted_content
+                            .as_deref()
+                            .map(estimate_text_tokens)
+                            .unwrap_or_default(),
+                    )
+                    .saturating_add(8)
+            }
             ContentBlock::Image { data, .. } => {
                 // Base64 image: charge a flat large cost; exact cost is
                 // provider-specific (Anthropic charges by tile, OpenAI
@@ -312,6 +332,14 @@ impl LlmCompressor {
                             "<tool_result error={is_error}>\n{content}\n</tool_result>\n"
                         ));
                     }
+                    ContentBlock::Reasoning { summary, .. } => {
+                        if !summary.is_empty() {
+                            out.push_str("<reasoning_summary>\n");
+                            out.push_str(&summary.join("\n"));
+                            out.push_str("\n</reasoning_summary>\n");
+                        }
+                    }
+                    ContentBlock::ToolState { .. } => {}
                     ContentBlock::Image { media_type, .. } => {
                         out.push_str(&format!("<image media_type={media_type}>\n"));
                     }
@@ -388,7 +416,7 @@ impl Compressor for LlmCompressor {
             temperature: Some(0.0),
             top_p: None,
             stop_sequences: Vec::new(),
-            extra: serde_json::Value::Null,
+            extra: serde_json::json!({"_cos_initiator": "agent"}),
         };
 
         match self.provider.chat(request).await {

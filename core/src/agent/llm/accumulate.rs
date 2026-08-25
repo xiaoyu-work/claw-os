@@ -89,6 +89,10 @@ pub(crate) struct Accumulator {
     tool_input_partials: BTreeMap<String, String>, // id → accumulated partial JSON
     /// Final ToolUse events override the partial JSON (provider-validated).
     finalised_tools: BTreeMap<String, serde_json::Value>,
+    /// Provider-owned reasoning items that must survive into conversation
+    /// history for a subsequent tool-result request.
+    reasoning: Vec<ContentBlock>,
+    tool_state: Vec<ContentBlock>,
     /// If a `Message` event arrives, we adopt the response verbatim
     /// and skip the assembled blocks/tools.
     explicit_message: Option<ChatResponse>,
@@ -105,6 +109,8 @@ impl Accumulator {
             tool_use_starts: Vec::new(),
             tool_input_partials: BTreeMap::new(),
             finalised_tools: BTreeMap::new(),
+            reasoning: Vec::new(),
+            tool_state: Vec::new(),
             explicit_message: None,
             finish: FinishReason::Stop,
             usage: Usage::default(),
@@ -142,6 +148,28 @@ impl Accumulator {
                 }
                 false
             }
+            StreamEvent::ToolState {
+                tool_use_id,
+                thought_signature,
+            } => {
+                self.tool_state.push(ContentBlock::ToolState {
+                    tool_use_id,
+                    thought_signature,
+                });
+                false
+            }
+            StreamEvent::Reasoning {
+                id,
+                summary,
+                encrypted_content,
+            } => {
+                self.reasoning.push(ContentBlock::Reasoning {
+                    id,
+                    summary,
+                    encrypted_content,
+                });
+                false
+            }
             StreamEvent::Message(resp) => {
                 self.explicit_message = Some(resp);
                 false
@@ -175,7 +203,8 @@ impl Accumulator {
 
         // Re-emit accumulated text first, then tool_use blocks in
         // the order their starts arrived.
-        let mut content: Vec<ContentBlock> = Vec::new();
+        let mut content = self.reasoning;
+        content.extend(self.tool_state);
         if !self.text.is_empty() {
             content.push(ContentBlock::Text { text: self.text });
         }
@@ -335,6 +364,54 @@ mod tests {
         assert_eq!(resp.tool_calls[0].name, "echo");
         assert_eq!(resp.tool_calls[0].input, serde_json::json!({"text": "hi"}));
         assert!(matches!(resp.finish_reason, FinishReason::ToolUse));
+    }
+
+    #[test]
+    fn preserves_responses_reasoning_before_tool_use() {
+        let sink = Arc::new(NullSink);
+        let stream = s(vec![
+            Ok(StreamEvent::Reasoning {
+                id: "rs_1".into(),
+                summary: vec!["Need to inspect the file.".into()],
+                encrypted_content: Some("opaque-ciphertext".into()),
+            }),
+            Ok(StreamEvent::ToolState {
+                tool_use_id: "call_1".into(),
+                thought_signature: "opaque-thought-signature".into(),
+            }),
+            Ok(StreamEvent::ToolUse(ToolCall {
+                id: "call_1".into(),
+                name: "read_file".into(),
+                input: serde_json::json!({"path": "/tmp/a"}),
+            })),
+            Ok(StreamEvent::Done {
+                finish: FinishReason::ToolUse,
+                usage: Usage::default(),
+            }),
+        ]);
+        let response = rt()
+            .block_on(accumulate_stream(stream, sink, "gpt-5.6-sol"))
+            .unwrap();
+
+        assert!(matches!(
+            &response.content[0],
+            ContentBlock::Reasoning {
+                id,
+                encrypted_content: Some(content),
+                ..
+            } if id == "rs_1" && content == "opaque-ciphertext"
+        ));
+        assert!(matches!(
+            &response.content[1],
+            ContentBlock::ToolState {
+                tool_use_id,
+                thought_signature,
+            } if tool_use_id == "call_1" && thought_signature == "opaque-thought-signature"
+        ));
+        assert!(matches!(
+            &response.content[2],
+            ContentBlock::ToolUse { id, .. } if id == "call_1"
+        ));
     }
 
     #[test]

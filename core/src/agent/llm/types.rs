@@ -33,6 +33,23 @@ pub enum ContentBlock {
         is_error: bool,
         content: String,
     },
+    /// Provider-owned metadata associated with a tool call.
+    ToolState {
+        tool_use_id: String,
+        thought_signature: String,
+    },
+    /// Opaque reasoning state returned by OpenAI's Responses API.
+    ///
+    /// This is persisted in conversation history and round-tripped before
+    /// tool results. `encrypted_content` is provider-owned and must never be
+    /// interpreted by the client.
+    Reasoning {
+        id: String,
+        #[serde(default)]
+        summary: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        encrypted_content: Option<String>,
+    },
     /// Base64-encoded image (forward compatibility for vision-capable providers).
     Image {
         media_type: String,
@@ -188,6 +205,17 @@ pub enum StreamEvent {
     ToolInputDelta { id: String, partial_json: String },
     /// A tool call has been fully formed.
     ToolUse(ToolCall),
+    /// Opaque metadata that must accompany a historical tool call.
+    ToolState {
+        tool_use_id: String,
+        thought_signature: String,
+    },
+    /// Opaque reasoning state that must be retained for a later tool-result turn.
+    Reasoning {
+        id: String,
+        summary: Vec<String>,
+        encrypted_content: Option<String>,
+    },
     /// A complete (non-incremental) message — used by providers without true streaming.
     Message(ChatResponse),
     /// Final usage and finish reason for the response.

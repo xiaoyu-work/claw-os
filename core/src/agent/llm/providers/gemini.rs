@@ -428,22 +428,23 @@ pub(crate) mod wire {
 
     fn message_to_json(m: &crate::agent::llm::Message) -> serde_json::Value {
         let role = role_to_str(m.role);
-        let parts: Vec<serde_json::Value> = m.content.iter().map(content_block_to_part).collect();
+        let parts: Vec<serde_json::Value> =
+            m.content.iter().filter_map(content_block_to_part).collect();
         serde_json::json!({
             "role": role,
             "parts": parts,
         })
     }
 
-    fn content_block_to_part(b: &ContentBlock) -> serde_json::Value {
+    fn content_block_to_part(b: &ContentBlock) -> Option<serde_json::Value> {
         match b {
-            ContentBlock::Text { text } => serde_json::json!({"text": text}),
-            ContentBlock::ToolUse { name, input, .. } => serde_json::json!({
+            ContentBlock::Text { text } => Some(serde_json::json!({"text": text})),
+            ContentBlock::ToolUse { name, input, .. } => Some(serde_json::json!({
                 "functionCall": {
                     "name": name,
                     "args": input,
                 }
-            }),
+            })),
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
@@ -458,19 +459,23 @@ pub(crate) mod wire {
                 // otherwise wrap it as `{"content": "..."}`.
                 let response_value = serde_json::from_str::<serde_json::Value>(content)
                     .unwrap_or_else(|_| serde_json::json!({"content": content}));
-                serde_json::json!({
+                Some(serde_json::json!({
                     "functionResponse": {
                         "name": name,
                         "response": response_value,
                     }
-                })
+                }))
             }
-            ContentBlock::Image { media_type, data } => serde_json::json!({
+            ContentBlock::Reasoning { summary, .. } => {
+                (!summary.is_empty()).then(|| serde_json::json!({"text": summary.join("\n")}))
+            }
+            ContentBlock::ToolState { .. } => None,
+            ContentBlock::Image { media_type, data } => Some(serde_json::json!({
                 "inlineData": {
                     "mimeType": media_type,
                     "data": data,
                 }
-            }),
+            })),
         }
     }
 

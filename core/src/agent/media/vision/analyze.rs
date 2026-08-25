@@ -250,7 +250,7 @@ pub async fn analyze(
         temperature: None,
         top_p: None,
         stop_sequences: vec![],
-        extra: serde_json::Value::Null,
+        extra: serde_json::json!({"_cos_initiator": "agent"}),
     };
 
     let resp = provider

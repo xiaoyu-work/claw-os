@@ -523,7 +523,7 @@ pub(crate) mod wire {
         }
 
         let mut blocks: Vec<serde_json::Value> =
-            m.content.iter().map(content_block_to_json).collect();
+            m.content.iter().filter_map(content_block_to_json).collect();
 
         // Attach cache_control to the LAST content block of this
         // message when this message is a breakpoint. No-op if the
@@ -558,18 +558,18 @@ pub(crate) mod wire {
         out
     }
 
-    fn content_block_to_json(b: &ContentBlock) -> serde_json::Value {
+    fn content_block_to_json(b: &ContentBlock) -> Option<serde_json::Value> {
         match b {
-            ContentBlock::Text { text } => serde_json::json!({
+            ContentBlock::Text { text } => Some(serde_json::json!({
                 "type": "text",
                 "text": text,
-            }),
-            ContentBlock::ToolUse { id, name, input } => serde_json::json!({
+            })),
+            ContentBlock::ToolUse { id, name, input } => Some(serde_json::json!({
                 "type": "tool_use",
                 "id": id,
                 "name": name,
                 "input": input,
-            }),
+            })),
             ContentBlock::ToolResult {
                 tool_use_id,
                 is_error,
@@ -585,16 +585,23 @@ pub(crate) mod wire {
                         o.insert("is_error".into(), serde_json::json!(true));
                     }
                 }
-                obj
+                Some(obj)
             }
-            ContentBlock::Image { media_type, data } => serde_json::json!({
+            ContentBlock::Reasoning { summary, .. } => (!summary.is_empty()).then(|| {
+                serde_json::json!({
+                    "type": "text",
+                    "text": summary.join("\n"),
+                })
+            }),
+            ContentBlock::ToolState { .. } => None,
+            ContentBlock::Image { media_type, data } => Some(serde_json::json!({
                 "type": "image",
                 "source": {
                     "type": "base64",
                     "media_type": media_type,
                     "data": data,
                 },
-            }),
+            })),
         }
     }
 

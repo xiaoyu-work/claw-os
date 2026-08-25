@@ -322,6 +322,15 @@ impl StreamSink for SseSink {
                     }),
                 ));
             }
+            StreamEvent::Reasoning { summary, .. } => {
+                if !summary.is_empty() {
+                    self.send(sse::encode_event(
+                        "reasoning",
+                        &json!({ "summary": summary }),
+                    ));
+                }
+            }
+            StreamEvent::ToolState { .. } => {}
             StreamEvent::Message(resp) => {
                 let mut text = String::new();
                 for block in &resp.content {

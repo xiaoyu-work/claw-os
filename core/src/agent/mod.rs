@@ -2770,6 +2770,8 @@ async fn stream_cmd_async(
                     "input": call.input,
                 }));
             }
+            Ok(StreamEvent::Reasoning { .. }) => {}
+            Ok(StreamEvent::ToolState { .. }) => {}
             Ok(StreamEvent::Message(resp)) => {
                 // Non-streaming providers (mock / openai_compat /
                 // gemini / bedrock / llama_local today) emit the
@@ -2897,6 +2899,8 @@ async fn live_cmd_async(
                         "input": call.input,
                     }));
                 }
+                StreamEvent::Reasoning { .. } => {}
+                StreamEvent::ToolState { .. } => {}
                 StreamEvent::Message(resp) => {
                     for block in &resp.content {
                         if let crate::agent::llm::types::ContentBlock::Text { text } = block {
@@ -3469,6 +3473,8 @@ async fn chat_cmd_async(
                         "input": call.input,
                     }));
                 }
+                StreamEvent::Reasoning { .. } => {}
+                StreamEvent::ToolState { .. } => {}
                 StreamEvent::Message(resp) => {
                     for block in &resp.content {
                         if let crate::agent::llm::types::ContentBlock::Text { text } = block {

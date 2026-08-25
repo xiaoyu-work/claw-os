@@ -826,6 +826,11 @@ pub fn render_message_content(msg: &crate::agent::llm::Message) -> String {
                 });
                 out.push_str(content);
             }
+            crate::agent::llm::ContentBlock::Reasoning { .. } => {
+                // Opaque provider state is retained in conversation history,
+                // but must not pollute semantic memory or FTS results.
+            }
+            crate::agent::llm::ContentBlock::ToolState { .. } => {}
             crate::agent::llm::ContentBlock::Image { media_type, .. } => {
                 if !out.is_empty() {
                     out.push('\n');

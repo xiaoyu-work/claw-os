@@ -337,7 +337,7 @@ fn help_doc() -> Value {
             "providers":   "Emit JSON catalogue of providers + sample models for the picked modality (or `all`). Used by the cosmic-settings agent page.",
             "oauth-start": "Begin a device-authorization flow for a provider whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Emits the user code + verification URL the UI should display, plus the device_code the UI passes to `oauth-poll`.",
             "oauth-poll":  "One-shot poll for an in-flight OAuth flow. Requires --provider X --device-code Z. Emits a `status` of pending | slow_down | ok | expired | denied | error. On `ok` the long-lived credential is stored automatically; the UI then refreshes its model list via `models`.",
-            "models":      "Fetch the live model catalogue for providers whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Returns `{ models: [{name}, …] }`. Errors if the user is not signed in.",
+            "models":      "Fetch usable chat models for providers whose `auth_kind` is `oauth_device` (currently only `copilot`). Requires --provider X. Returns `{ models: [{name, wire_api}, …] }`; non-chat and unsupported endpoint models are excluded.",
         },
         "flags": {
             "--no-verify":      "Skip the live provider probe at the end of the wizard.",
@@ -2259,10 +2259,9 @@ fn copilot_terminal_login(e: &mut impl Write) -> Result<OAuthTerminalLogin, Stri
 }
 
 fn fetch_copilot_model_names(github_token: &str) -> Result<Vec<String>, String> {
-    match block_on(fetch_copilot_models(github_token))? {
-        Ok(Ok(values)) => Ok(model_names_from_values(values)),
-        Ok(Err(err)) | Err(err) => Err(err),
-    }
+    Ok(model_names_from_values(block_on(fetch_copilot_models(
+        github_token,
+    ))??))
 }
 
 fn model_names_from_values(values: Vec<Value>) -> Vec<String> {
@@ -2451,8 +2450,9 @@ fn oauth_poll_cmd(provider: Option<&str>, device_code: Option<&str>) -> Result<V
 
 /// `cos agent setup models --provider copilot` → fetch the live model
 /// catalogue from Copilot's `/models` endpoint using the stored token.
-/// Returns the same shape as the static `providers_llm` model list so
-/// UIs can drop the response straight into their model dropdown.
+/// Returns selectable chat models with their negotiated wire protocol.
+/// Embedding, internal, disabled, and unsupported-endpoint entries are
+/// excluded before UIs render the dropdown.
 fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
     let provider = require_provider(provider, "models")?;
     if provider != "copilot" {
@@ -2468,7 +2468,7 @@ fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
                 .to_string()
         })?;
 
-    let models = block_on(fetch_copilot_models(&github_token))???;
+    let models = block_on(fetch_copilot_models(&github_token))??;
     Ok(json!({
         "provider": provider,
         "models": models,
@@ -2477,85 +2477,32 @@ fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
 
 async fn fetch_copilot_models(
     github_token: &str,
-) -> Result<Result<Vec<Value>, String>, String> {
-    let copilot = match llm::providers::copilot_auth::ensure_copilot_token(github_token).await {
-        Ok(t) => t,
-        Err(e) => return Ok(Err(format!("copilot auth: {e}"))),
-    };
-    let url = format!("{}/models", copilot.base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-        .timeout(std::time::Duration::from_secs(15))
-        .build()
-        .map_err(|e| format!("http client: {e}"))?;
-    let resp = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .header(
-            "Editor-Version",
-            llm::providers::copilot_auth::EDITOR_VERSION,
-        )
-        .header(
-            "Copilot-Integration-Id",
-            llm::providers::copilot_auth::COPILOT_INTEGRATION_ID,
-        )
-        .bearer_auth(&copilot.bearer)
-        .send()
+) -> Result<Vec<Value>, String> {
+    let copilot = llm::providers::copilot_auth::ensure_copilot_token(github_token)
         .await
-        .map_err(|e| format!("GET {url}: {e}"))?;
-    let status = resp.status();
-    let text = resp
-        .text()
+        .map_err(|e| format!("copilot auth: {e}"))?;
+    let models = llm::providers::copilot_auth::ensure_copilot_models(&copilot)
         .await
-        .map_err(|e| format!("read body from {url}: {e}"))?;
-    if !status.is_success() {
-        return Ok(Err(format!(
-            "Copilot /models returned HTTP {}: {}",
-            status.as_u16(),
-            truncate_for_log(&text, 240)
-        )));
-    }
-    // Copilot's models endpoint shape: { "data": [ { "id": "gpt-4o", ... }, ... ] }.
-    // We tolerate either {"data": [...]} or {"models": [...]} and reduce
-    // each entry to {name: <id>} for the UI.
-    let parsed: serde_json::Value = match serde_json::from_str(&text) {
-        Ok(v) => v,
-        Err(e) => {
-            return Ok(Err(format!(
-                "parse /models response: {e}: {}",
-                truncate_for_log(&text, 240)
-            )));
-        }
-    };
-    let array = parsed
-        .get("data")
-        .or_else(|| parsed.get("models"))
-        .and_then(|v| v.as_array());
-    let Some(entries) = array else {
-        return Ok(Err(format!(
-            "unexpected /models response shape: {}",
-            truncate_for_log(&text, 240)
-        )));
-    };
-    let mut out = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let id = entry
-            .get("id")
-            .and_then(|v| v.as_str())
-            .or_else(|| entry.get("name").and_then(|v| v.as_str()));
-        if let Some(id) = id {
-            if !id.is_empty() {
-                out.push(json!({ "name": id }));
-            }
-        }
-    }
+        .map_err(|e| format!("Copilot /models: {e}"))?;
+
+    let mut out: Vec<Value> = models
+        .iter()
+        .filter(|model| model.is_selectable_chat_model())
+        .filter_map(|model| {
+            let wire_api = model.wire_api()?;
+            Some(json!({
+                "name": model.id,
+                "wire_api": wire_api.config_name(),
+            }))
+        })
+        .collect();
     out.sort_by(|a, b| {
         a.get("name")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
     });
-    Ok(Ok(out))
+    Ok(out)
 }
 
 fn truncate_for_log(s: &str, max: usize) -> String {
