@@ -3383,7 +3383,7 @@ async fn chat_cmd_async(
     }
 
     let stdin = std::io::stdin();
-    let mut input = String::new();
+    let mut input = Vec::new();
     let mut prompt_seq: u32 = 0;
 
     /// Stream sink shared across turns — re-used so allocation
@@ -3531,10 +3531,10 @@ async fn chat_cmd_async(
             let _ = e.flush();
         }
         input.clear();
-        let n = match stdin.lock().read_line(&mut input) {
+        let n = match stdin.lock().read_until(b'\n', &mut input) {
             Ok(n) => n,
             Err(e) => {
-                return Err(format!("stdin error: {e}"));
+                return Err(format!("stdin read error: {e}"));
             }
         };
         if n == 0 {
@@ -3543,13 +3543,24 @@ async fn chat_cmd_async(
             break true;
         }
 
-        let line = input.trim();
-        if line.is_empty() {
+        let decoded = String::from_utf8_lossy(&input);
+        let had_invalid_utf8 = matches!(&decoded, std::borrow::Cow::Owned(_));
+        if had_invalid_utf8 {
+            let _ = writeln!(
+                stderr.lock(),
+                "[warning: input contained invalid UTF-8; invalid bytes were replaced]"
+            );
+        }
+        let line = decoded.trim();
+        let repaired_command =
+            had_invalid_utf8.then(|| line.replace('\u{FFFD}', ""));
+        let command_line = repaired_command.as_deref().unwrap_or(line);
+        if command_line.is_empty() {
             continue;
         }
 
         // Slash commands.
-        if let Some(rest) = line.strip_prefix('/') {
+        if let Some(rest) = command_line.strip_prefix('/') {
             let mut parts = rest.split_whitespace();
             let cmd = parts.next().unwrap_or("");
             match cmd {
