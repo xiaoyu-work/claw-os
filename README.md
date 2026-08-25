@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://xiaoyu-work.github.io/claw-os"><img alt="Website" src="https://img.shields.io/badge/website-xiaoyu--work.github.io%2Fclaw--os-2563eb?style=flat-square"></a>
-  <a href="https://github.com/xiaoyu-work/claw-os/actions/workflows/build.yml"><img alt="Build" src="https://img.shields.io/github/actions/workflow/status/xiaoyu-work/claw-os/build.yml?branch=main&style=flat-square"></a>
+  <a href="https://github.com/xiaoyu-work/claw-os/actions/workflows/release.yml"><img alt="Release pipeline" src="https://img.shields.io/github/actions/workflow/status/xiaoyu-work/claw-os/release.yml?branch=main&style=flat-square"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-1f7a3a?style=flat-square"></a>
   <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
 </p>
@@ -43,6 +43,22 @@ Pick an entry point:
 All artifacts share the same composed Debian rootfs; platform profiles only
 add their user, boot, and provisioning policy. See
 [Image architecture](docs/image-architecture.md).
+
+### Updating an existing installation
+
+Package-level fixes to `cos`, `clawd`, bundled apps, browser automation, and
+systemd units do **not** require reinstalling the operating system or replacing
+its image. Claw OS uses the same signed APT update path across WSL, installed
+desktop/VM systems, Azure instances, and long-running containers:
+
+```bash
+sudo apt update
+sudo apt full-upgrade
+```
+
+See [Updating Claw OS](docs/updating.md) for repository checks, setup for older
+images, service restart behavior, container guidance, and the exceptional cases
+that require a new image.
 
 ### WSL
 
