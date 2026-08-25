@@ -28,9 +28,10 @@
 use serde_json::{json, Value};
 use std::io::{IsTerminal, Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 
 use crate::agent::llm;
+
+mod copilot;
 
 pub fn run(args: &[String]) -> Result<Value, String> {
     // Parse: optional --no-verify / --verify-only / --status / --reset /
@@ -156,7 +157,10 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         || apply_api_key_env.is_some()
         || apply_base_url.is_some()
         || apply_api_version.is_some();
-    let oauth_subcommand = matches!(sub, Some("oauth-start") | Some("oauth-poll") | Some("models"));
+    let oauth_subcommand = matches!(
+        sub,
+        Some("oauth-start") | Some("oauth-poll") | Some("models")
+    );
     if apply_flags_set && sub != Some("apply") && !oauth_subcommand {
         return Err(
             "--provider / --model / --api-key{,-stdin,-env} / --base-url / --api-version are only valid with the `apply` / `oauth-*` subcommands"
@@ -187,11 +191,14 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     .into(),
             ),
             Some("test") => verify_cmd(Modality::All),
-            Some("oauth-start") => oauth_start_cmd(apply_provider.as_deref()),
+            Some("oauth-start") => copilot::oauth_start_cmd(apply_provider.as_deref()),
             Some("oauth-poll") => {
-                oauth_poll_cmd(apply_provider.as_deref(), oauth_device_code.as_deref())
+                copilot::oauth_poll_cmd(
+                    apply_provider.as_deref(),
+                    oauth_device_code.as_deref(),
+                )
             }
-            Some("models") => models_cmd(apply_provider.as_deref()),
+            Some("models") => copilot::models_cmd(apply_provider.as_deref()),
             _ => {
                 if std::io::stdin().is_terminal() {
                     let picked = pick_modality_interactively()?;
@@ -231,11 +238,11 @@ pub fn run(args: &[String]) -> Result<Value, String> {
         Some("apply") => apply_cmd(modality, apply_args),
         Some("test") => verify_cmd(modality),
         Some("help") => Ok(help_doc()),
-        Some("oauth-start") => oauth_start_cmd(apply_provider.as_deref()),
+        Some("oauth-start") => copilot::oauth_start_cmd(apply_provider.as_deref()),
         Some("oauth-poll") => {
-            oauth_poll_cmd(apply_provider.as_deref(), oauth_device_code.as_deref())
+            copilot::oauth_poll_cmd(apply_provider.as_deref(), oauth_device_code.as_deref())
         }
-        Some("models") => models_cmd(apply_provider.as_deref()),
+        Some("models") => copilot::models_cmd(apply_provider.as_deref()),
         _ => dispatch_wizard(modality, verify_after),
     }
 }
@@ -257,12 +264,24 @@ fn pick_modality_interactively() -> Result<Modality, String> {
     let _ = writeln!(e, "cos agent setup — pick a modality to configure");
     let _ = writeln!(e);
     let options = [
-        (Modality::Llm,      "llm",      "Conversational LLM (required for ask/chat)"),
-        (Modality::Tts,      "tts",      "Text-to-speech"),
-        (Modality::Stt,      "stt",      "Speech-to-text"),
+        (
+            Modality::Llm,
+            "llm",
+            "Conversational LLM (required for ask/chat)",
+        ),
+        (Modality::Tts, "tts", "Text-to-speech"),
+        (Modality::Stt, "stt", "Speech-to-text"),
         (Modality::ImageGen, "imagegen", "Image generation"),
-        (Modality::Embed,    "embed",    "Text embeddings (semantic memory)"),
-        (Modality::All,      "all",      "Walk every modality, asking before each"),
+        (
+            Modality::Embed,
+            "embed",
+            "Text embeddings (semantic memory)",
+        ),
+        (
+            Modality::All,
+            "all",
+            "Walk every modality, asking before each",
+        ),
     ];
     for (i, (_, name, label)) in options.iter().enumerate() {
         let _ = writeln!(e, "  {}. {:8} — {}", i + 1, name, label);
@@ -272,7 +291,10 @@ fn pick_modality_interactively() -> Result<Modality, String> {
     let raw = read_line()?.trim().to_string();
     let idx: usize = raw.parse().map_err(|_| "expected a number".to_string())?;
     if idx < 1 || idx > options.len() {
-        return Err(format!("out of range: {idx} (expected 1-{})", options.len()));
+        return Err(format!(
+            "out of range: {idx} (expected 1-{})",
+            options.len()
+        ));
     }
     Ok(options[idx - 1].0)
 }
@@ -385,8 +407,16 @@ fn verify_cmd(modality: Modality) -> Result<Value, String> {
         Modality::Llm => verify_llm(),
         Modality::All => {
             let mut report = serde_json::Map::new();
-            report.insert("llm".into(), verify_llm().unwrap_or_else(|e| json!({"error": e})));
-            for m in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+            report.insert(
+                "llm".into(),
+                verify_llm().unwrap_or_else(|e| json!({"error": e})),
+            );
+            for m in [
+                Modality::Tts,
+                Modality::Stt,
+                Modality::ImageGen,
+                Modality::Embed,
+            ] {
                 report.insert(m.name().into(), verify_media(m));
             }
             Ok(json!({"verified": report}))
@@ -398,8 +428,7 @@ fn verify_cmd(modality: Modality) -> Result<Value, String> {
 fn verify_llm() -> Result<Value, String> {
     let cfg = &crate::config::get().agent;
     if let Err(reason) = is_ready(cfg) {
-        let reason_val: Value =
-            serde_json::from_str(&reason).unwrap_or_else(|_| json!(reason));
+        let reason_val: Value = serde_json::from_str(&reason).unwrap_or_else(|_| json!(reason));
         return Ok(json!({
             "modality": "llm",
             "ok": false,
@@ -419,7 +448,11 @@ fn verify_llm() -> Result<Value, String> {
         }));
     }
     let mut e = std::io::stderr();
-    let _ = writeln!(e, "probing llm: {} ({}) — up to 30s...", cfg.provider, cfg.model);
+    let _ = writeln!(
+        e,
+        "probing llm: {} ({}) — up to 30s...",
+        cfg.provider, cfg.model
+    );
     let verdict = super::run_active_provider_probe(&cfg.provider, cfg, 30);
     let ok = verdict.get("ok").and_then(|v| v.as_bool()).unwrap_or(false);
     if ok {
@@ -484,12 +517,8 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
             && fallback_cfg.provider != "mock"
             && (!provider_needs_credential(&fallback_cfg.provider)
                 || credential_present(&fallback_cfg)
-                || llm::registry::build(
-                    &fallback_cfg.provider,
-                    &fallback_cfg.model,
-                    &fallback_cfg,
-                )
-                .is_ok_and(|provider| provider.is_configured()))
+                || llm::registry::build(&fallback_cfg.provider, &fallback_cfg.model, &fallback_cfg)
+                    .is_ok_and(|provider| provider.is_configured()))
     }) {
         return Ok(());
     }
@@ -556,10 +585,16 @@ pub struct KeySource {
 }
 impl KeySource {
     fn credential(name: &str) -> Self {
-        Self { kind: "credential", name: name.to_string() }
+        Self {
+            kind: "credential",
+            name: name.to_string(),
+        }
     }
     fn env(name: &str) -> Self {
-        Self { kind: "env", name: name.to_string() }
+        Self {
+            kind: "env",
+            name: name.to_string(),
+        }
     }
     pub fn to_json(&self) -> Value {
         json!({ "kind": self.kind, "name": self.name })
@@ -576,10 +611,18 @@ fn status_cmd(modality: Modality) -> Result<Value, String> {
         Modality::All => {
             let mut map = serde_json::Map::new();
             map.insert("llm".into(), status_llm());
-            for m in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+            for m in [
+                Modality::Tts,
+                Modality::Stt,
+                Modality::ImageGen,
+                Modality::Embed,
+            ] {
                 map.insert(m.name().into(), status_media(m));
             }
-            map.insert("config_path".into(), json!(config_path().display().to_string()));
+            map.insert(
+                "config_path".into(),
+                json!(config_path().display().to_string()),
+            );
             Ok(json!({"modalities": map}))
         }
         other => Ok(status_media(other)),
@@ -614,11 +657,7 @@ fn fallback_status(cfg: &crate::config::AgentConfig) -> Vec<Value> {
     cfg.provider_fallbacks
         .iter()
         .map(|fallback| {
-            let mut header_names = fallback
-                .extra_headers
-                .keys()
-                .cloned()
-                .collect::<Vec<_>>();
+            let mut header_names = fallback.extra_headers.keys().cloned().collect::<Vec<_>>();
             header_names.sort();
             json!({
                 "provider": fallback.provider,
@@ -683,7 +722,12 @@ fn reset_cmd(modality: Modality) -> Result<Value, String> {
         Modality::Llm => reset_llm(),
         Modality::All => {
             reset_llm()?;
-            for m in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+            for m in [
+                Modality::Tts,
+                Modality::Stt,
+                Modality::ImageGen,
+                Modality::Embed,
+            ] {
                 let _ = reset_media(m);
             }
             Ok(json!({
@@ -703,9 +747,7 @@ fn reset_llm() -> Result<Value, String> {
         cfg = json!({});
     }
     let root = cfg.as_object_mut().expect("ensured object above");
-    let agent = root
-        .entry("agent".to_string())
-        .or_insert_with(|| json!({}));
+    let agent = root.entry("agent".to_string()).or_insert_with(|| json!({}));
     if !agent.is_object() {
         *agent = json!({});
     }
@@ -801,10 +843,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
             e,
             "API version (e.g. 2024-12-01-preview). Press Enter to skip"
         );
-        let _ = writeln!(
-            e,
-            "if your endpoint URL already includes ?api-version=…"
-        );
+        let _ = writeln!(e, "if your endpoint URL already includes ?api-version=…");
         let _ = write!(e, "Version: ");
         let _ = e.flush();
         let v = read_line()?.trim().to_string();
@@ -823,8 +862,8 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     // Terminal / headless environments (WSL, Docker, SSH) cannot rely on a
     // browser handoff. Drive the device flow entirely in the TTY: print the
     // GitHub URL + user code, then poll until GitHub reports success/failure.
-    if auth_kind_for(&provider) == Some("oauth_device") {
-        let login = oauth_device_terminal_login(&provider, &mut e)?;
+    if copilot::auth_kind_for(&provider) == Some("oauth_device") {
+        let login = copilot::oauth_device_terminal_login(&provider, &mut e)?;
         credential_name = Some(login.credential_name);
         oauth_live_models = Some(login.models);
     }
@@ -839,7 +878,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     let known = llm::metadata::list_for_provider(&provider);
     let _ = writeln!(e);
     let model = if let Some(models) = oauth_live_models.as_deref() {
-        pick_oauth_model(&provider, models, &mut e)?
+        copilot::pick_oauth_model(&provider, models, &mut e)?
     } else if !known.is_empty() {
         let _ = writeln!(e, "Known models for `{provider}`:");
         for (i, m) in known.iter().enumerate() {
@@ -863,10 +902,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         }
         if let Ok(idx) = raw.parse::<usize>() {
             if idx < 1 || idx > known.len() {
-                return Err(format!(
-                    "out of range: {idx} (expected 1-{})",
-                    known.len()
-                ));
+                return Err(format!("out of range: {idx} (expected 1-{})", known.len()));
             }
             known[idx - 1].name.to_string()
         } else {
@@ -934,11 +970,13 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
     };
 
     // ---- Step 3: credential ---------------------------------------------
-    if auth_kind_for(&provider) == Some("oauth_device") {
+    if copilot::auth_kind_for(&provider) == Some("oauth_device") {
         let _ = writeln!(
             e,
             "(GitHub sign-in stored as `{}`; skipping API-key paste)",
-            credential_name.as_deref().unwrap_or(COPILOT_GITHUB_TOKEN_CREDENTIAL)
+            credential_name
+                .as_deref()
+                .unwrap_or(copilot::COPILOT_GITHUB_TOKEN_CREDENTIAL)
         );
     } else if provider_needs_credential(&provider) {
         let _ = writeln!(e);
@@ -955,10 +993,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let name = format!("{provider}_api_key");
         match store_credential(&name, &key) {
             Ok(()) => {
-                let _ = writeln!(
-                    e,
-                    "✓ credential stored as `{name}` in namespace `agent`"
-                );
+                let _ = writeln!(e, "✓ credential stored as `{name}` in namespace `agent`");
                 credential_name = Some(name);
             }
             Err(store_err) => {
@@ -1006,9 +1041,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         cfg = json!({});
     }
     let root = cfg.as_object_mut().expect("ensured object above");
-    let agent = root
-        .entry("agent".to_string())
-        .or_insert_with(|| json!({}));
+    let agent = root.entry("agent".to_string()).or_insert_with(|| json!({}));
     if !agent.is_object() {
         *agent = json!({});
     }
@@ -1071,7 +1104,10 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         );
     } else {
         let _ = writeln!(e);
-        let _ = writeln!(e, "verifying connectivity to {provider} ({model}) — up to 30s...");
+        let _ = writeln!(
+            e,
+            "verifying connectivity to {provider} ({model}) — up to 30s..."
+        );
         // The global config is cached at first access (OnceLock) so it
         // does not reflect what we just persisted. Construct a probe
         // config in-memory by cloning the cached one and overriding the
@@ -1131,9 +1167,9 @@ mod media {
 
     /// Per-modality declarative wizard config.
     pub(super) struct ModalitySpec {
-        pub name: &'static str,            // "tts" | "stt" | ...
-        pub config_block: &'static str,    // "tts" | "stt" | ...
-        pub headline: &'static str,        // shown at top of wizard
+        pub name: &'static str,         // "tts" | "stt" | ...
+        pub config_block: &'static str, // "tts" | "stt" | ...
+        pub headline: &'static str,     // shown at top of wizard
         pub next_command_hint: &'static str,
         pub default_provider: &'static str,
         pub providers: &'static [ProviderChoice],
@@ -1141,11 +1177,11 @@ mod media {
 
     pub(super) struct ProviderChoice {
         pub name: &'static str,
-        pub label: &'static str,           // one-line human description
-        pub needs_credential: bool,        // false → no API key step
-        pub default_env: &'static str,     // env-var fallback (empty if none)
+        pub label: &'static str,       // one-line human description
+        pub needs_credential: bool,    // false → no API key step
+        pub default_env: &'static str, // env-var fallback (empty if none)
         pub sample_models: &'static [&'static str],
-        pub default_model: &'static str,   // suggested at the prompt
+        pub default_model: &'static str, // suggested at the prompt
     }
 
     impl ModalitySpec {
@@ -1168,7 +1204,11 @@ mod media {
                     label: "Microsoft Edge voices (free, no API key required)",
                     needs_credential: false,
                     default_env: "",
-                    sample_models: &["en-US-AriaNeural", "en-US-GuyNeural", "zh-CN-XiaoxiaoNeural"],
+                    sample_models: &[
+                        "en-US-AriaNeural",
+                        "en-US-GuyNeural",
+                        "zh-CN-XiaoxiaoNeural",
+                    ],
                     default_model: "en-US-AriaNeural",
                 },
                 ProviderChoice {
@@ -1184,7 +1224,11 @@ mod media {
                     label: "ElevenLabs (eleven_multilingual_v2, eleven_turbo_v2_5)",
                     needs_credential: true,
                     default_env: "ELEVENLABS_API_KEY",
-                    sample_models: &["eleven_multilingual_v2", "eleven_turbo_v2_5", "eleven_flash_v2_5"],
+                    sample_models: &[
+                        "eleven_multilingual_v2",
+                        "eleven_turbo_v2_5",
+                        "eleven_flash_v2_5",
+                    ],
                     default_model: "eleven_multilingual_v2",
                 },
                 ProviderChoice {
@@ -1237,7 +1281,11 @@ mod media {
                     label: "Groq (whisper-large-v3, whisper-large-v3-turbo) — fast",
                     needs_credential: true,
                     default_env: "GROQ_API_KEY",
-                    sample_models: &["whisper-large-v3", "whisper-large-v3-turbo", "distil-whisper-large-v3-en"],
+                    sample_models: &[
+                        "whisper-large-v3",
+                        "whisper-large-v3-turbo",
+                        "distil-whisper-large-v3-en",
+                    ],
                     default_model: "whisper-large-v3-turbo",
                 },
                 ProviderChoice {
@@ -1282,7 +1330,11 @@ mod media {
                     label: "fal.ai (flux-pro, fast-sdxl, etc.)",
                     needs_credential: true,
                     default_env: "FAL_KEY",
-                    sample_models: &["fal-ai/flux-pro/v1.1", "fal-ai/flux/dev", "fal-ai/fast-sdxl"],
+                    sample_models: &[
+                        "fal-ai/flux-pro/v1.1",
+                        "fal-ai/flux/dev",
+                        "fal-ai/fast-sdxl",
+                    ],
                     default_model: "fal-ai/flux-pro/v1.1",
                 },
             ],
@@ -1311,7 +1363,11 @@ mod media {
                     label: "OpenAI embeddings (text-embedding-3-small / -large)",
                     needs_credential: true,
                     default_env: "OPENAI_API_KEY",
-                    sample_models: &["text-embedding-3-small", "text-embedding-3-large", "text-embedding-ada-002"],
+                    sample_models: &[
+                        "text-embedding-3-small",
+                        "text-embedding-3-large",
+                        "text-embedding-ada-002",
+                    ],
                     default_model: "text-embedding-3-small",
                 },
             ],
@@ -1408,7 +1464,11 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
     let default_provider = default_provider_for(spec);
     let _ = writeln!(e, "Available providers:");
     for (i, p) in spec.providers.iter().enumerate() {
-        let marker = if p.name == default_provider { " (default)" } else { "" };
+        let marker = if p.name == default_provider {
+            " (default)"
+        } else {
+            ""
+        };
         let _ = writeln!(e, "  {}. {:12} — {}{}", i + 1, p.name, p.label, marker);
     }
     let _ = writeln!(e, "  0. none — skip (clear this modality)");
@@ -1466,7 +1526,11 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
     let _ = writeln!(e);
     let _ = writeln!(e, "Common models for `{}`:", provider.name);
     for (i, m) in provider.sample_models.iter().enumerate() {
-        let marker = if *m == provider.default_model { " (default)" } else { "" };
+        let marker = if *m == provider.default_model {
+            " (default)"
+        } else {
+            ""
+        };
         let _ = writeln!(e, "  {}. {}{}", i + 1, m, marker);
     }
     let _ = write!(
@@ -1505,7 +1569,11 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
             "(Press enter without typing to use ${} from your environment instead)",
             provider.default_env
         );
-        let _ = write!(e, "Paste API key for `{}` (or enter to skip): ", provider.name);
+        let _ = write!(
+            e,
+            "Paste API key for `{}` (or enter to skip): ",
+            provider.name
+        );
         let _ = e.flush();
         let key = read_line()?.trim().to_string();
         if key.is_empty() {
@@ -1598,9 +1666,13 @@ fn wizard_media(spec: &'static media::ModalitySpec, verify_after: bool) -> Resul
             None
         };
         if resolved.map(|s| !s.trim().is_empty()).unwrap_or(false) {
-            let _ = writeln!(e, "✓ credential resolves (live API probe not implemented for media yet)");
+            let _ = writeln!(
+                e,
+                "✓ credential resolves (live API probe not implemented for media yet)"
+            );
             verified = Some(true);
-            probe_note = Some("credential-resolvable check only; no upstream call performed".into());
+            probe_note =
+                Some("credential-resolvable check only; no upstream call performed".into());
         } else {
             let _ = writeln!(e, "✗ credential is not resolvable yet — set the env var or rerun under a privileged shell");
             verified = Some(false);
@@ -1641,11 +1713,11 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     let _ = writeln!(e);
 
     let modalities = [
-        ("llm",      "Conversational LLM (required for `ask`/`chat`)"),
-        ("tts",      "Text-to-speech"),
-        ("stt",      "Speech-to-text"),
+        ("llm", "Conversational LLM (required for `ask`/`chat`)"),
+        ("tts", "Text-to-speech"),
+        ("stt", "Speech-to-text"),
         ("imagegen", "Image generation"),
-        ("embed",    "Text embeddings (semantic memory)"),
+        ("embed", "Text embeddings (semantic memory)"),
     ];
 
     let mut results = serde_json::Map::new();
@@ -1653,14 +1725,37 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
         let modality = Modality::parse(name).expect("static modality name");
         let current = match modality {
             Modality::Llm => status_llm(),
-            Modality::Tts | Modality::Stt | Modality::ImageGen | Modality::Embed => status_media(modality),
+            Modality::Tts | Modality::Stt | Modality::ImageGen | Modality::Embed => {
+                status_media(modality)
+            }
             _ => continue,
         };
-        let provider = current.get("provider").and_then(|s| s.as_str()).unwrap_or("");
-        let ready = current.get("ready").and_then(|b| b.as_bool()).unwrap_or(false);
-        let badge = if ready { "✓ ready" } else if provider.is_empty() || provider == "none" || provider == "mock" { "— not configured" } else { "⚠  configured but not ready" };
+        let provider = current
+            .get("provider")
+            .and_then(|s| s.as_str())
+            .unwrap_or("");
+        let ready = current
+            .get("ready")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
+        let badge = if ready {
+            "✓ ready"
+        } else if provider.is_empty() || provider == "none" || provider == "mock" {
+            "— not configured"
+        } else {
+            "⚠  configured but not ready"
+        };
         let _ = writeln!(e, "[{name}] {label}");
-        let _ = writeln!(e, "       current: provider={} {}", if provider.is_empty() { "(none)" } else { provider }, badge);
+        let _ = writeln!(
+            e,
+            "       current: provider={} {}",
+            if provider.is_empty() {
+                "(none)"
+            } else {
+                provider
+            },
+            badge
+        );
         let _ = write!(e, "  Configure {name}? (y/N): ");
         let _ = e.flush();
         let yn = read_line()?.trim().to_ascii_lowercase();
@@ -1697,7 +1792,12 @@ pub fn status_for(modality: Modality) -> Value {
         Modality::All => {
             let mut map = serde_json::Map::new();
             map.insert("llm".into(), status_llm());
-            for m in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+            for m in [
+                Modality::Tts,
+                Modality::Stt,
+                Modality::ImageGen,
+                Modality::Embed,
+            ] {
                 map.insert(m.name().into(), status_media(m));
             }
             json!({"modalities": map})
@@ -1722,10 +1822,7 @@ fn status_media(modality: Modality) -> Value {
         .filter(|s| !s.is_empty())
         .map(str::to_string);
     let embed_auto = matches!(modality, Modality::Embed)
-        && raw_provider
-            .as_deref()
-            .map(|p| p == "auto")
-            .unwrap_or(true);
+        && raw_provider.as_deref().map(|p| p == "auto").unwrap_or(true);
     let auto_local_precheck = if embed_auto {
         Some(local_embed_precheck(&snap, None))
     } else {
@@ -1745,7 +1842,11 @@ fn status_media(modality: Modality) -> Value {
     } else {
         "none".to_string()
     };
-    let mut model = snap.get("model").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    let mut model = snap
+        .get("model")
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .to_string();
     if model.is_empty() {
         if matches!(modality, Modality::Embed) && is_local_embed_provider(&provider) {
             model = LOCAL_EMBED_MODEL.to_string();
@@ -1753,9 +1854,18 @@ fn status_media(modality: Modality) -> Value {
             model = choice.default_model.to_string();
         }
     }
-    let credential = snap.get("api_key_credential").and_then(|s| s.as_str()).map(|s| s.to_string());
-    let env = snap.get("api_key_env").and_then(|s| s.as_str()).map(|s| s.to_string());
-    let base_url_raw = snap.get("base_url").and_then(|s| s.as_str()).map(|s| s.to_string());
+    let credential = snap
+        .get("api_key_credential")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let env = snap
+        .get("api_key_env")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
+    let base_url_raw = snap
+        .get("base_url")
+        .and_then(|s| s.as_str())
+        .map(|s| s.to_string());
     let (endpoint, api_version) = split_base_url_and_api_version(base_url_raw.as_deref());
 
     // Ready iff (provider != none) AND (provider doesn't need a key OR a key is resolvable).
@@ -1770,7 +1880,9 @@ fn status_media(modality: Modality) -> Value {
             .map(|s| !s.trim().is_empty())
             .unwrap_or(false)
     } else if let Some(ref e) = env {
-        std::env::var(e).map(|s| !s.trim().is_empty()).unwrap_or(false)
+        std::env::var(e)
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
     } else {
         false
     };
@@ -1860,7 +1972,9 @@ fn reset_media(modality: Modality) -> Result<Value, String> {
         cfg = json!({});
     }
     let root = cfg.as_object_mut().expect("ensured object above");
-    let block = root.entry(block_name.to_string()).or_insert_with(|| json!({}));
+    let block = root
+        .entry(block_name.to_string())
+        .or_insert_with(|| json!({}));
     if !block.is_object() {
         *block = json!({});
     }
@@ -1954,7 +2068,12 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
         Modality::All => {
             let mut m = serde_json::Map::new();
             m.insert("llm".into(), providers_llm());
-            for md in [Modality::Tts, Modality::Stt, Modality::ImageGen, Modality::Embed] {
+            for md in [
+                Modality::Tts,
+                Modality::Stt,
+                Modality::ImageGen,
+                Modality::Embed,
+            ] {
                 m.insert(md.name().into(), providers_media(md));
             }
             Ok(json!({"modalities": m}))
@@ -1996,8 +2115,11 @@ fn providers_llm() -> Value {
                     })
                 })
                 .collect();
-            let default_model = default_model_name(name).unwrap_or_else(|| {
-                models.first().map(|m| m.name.to_string()).unwrap_or_default()
+            let default_model = copilot::default_model_name(name).unwrap_or_else(|| {
+                models
+                    .first()
+                    .map(|m| m.name.to_string())
+                    .unwrap_or_default()
             });
             let mut entry = json!({
                 "name": name,
@@ -2008,7 +2130,7 @@ fn providers_llm() -> Value {
                 "default_model": default_model,
                 "extra_fields": extra_fields_for(name),
             });
-            if let Some(kind) = auth_kind_for(name) {
+            if let Some(kind) = copilot::auth_kind_for(name) {
                 entry
                     .as_object_mut()
                     .expect("entry is object")
@@ -2088,423 +2210,6 @@ fn extra_fields_for(provider: &str) -> Vec<Value> {
     }
 }
 
-/// Authentication kind exposed to UIs that can render something other
-/// than a paste-an-API-key form. Currently the only non-default value
-/// is `"oauth_device"` for GitHub Copilot, which expects the UI to
-/// drive the device-authorization dance via the `oauth-start` and
-/// `oauth-poll` subcommands. Returning `None` means the standard
-/// API-key form is correct.
-fn auth_kind_for(provider: &str) -> Option<&'static str> {
-    match provider {
-        "copilot" => Some("oauth_device"),
-        _ => None,
-    }
-}
-
-/// Default model the picker should pre-select for providers whose
-/// `llm::metadata` catalogue is intentionally empty (because the
-/// real model list is fetched live post-sign-in). Returns `None`
-/// for providers backed by the static catalogue — those keep using
-/// the first metadata entry as their default.
-fn default_model_name(provider: &str) -> Option<String> {
-    match provider {
-        "copilot" => Some("gpt-4o".into()),
-        _ => None,
-    }
-}
-
-/// Credential name the OAuth-device path stores the long-lived GitHub
-/// token under in the `agent` namespace. Centralised so the kernel
-/// readers (apply, providers catalog, openai_compat) and the writer
-/// (oauth-poll) agree on a single string.
-const COPILOT_GITHUB_TOKEN_CREDENTIAL: &str = "copilot_github_token";
-const MIN_OAUTH_POLL_SECS: u64 = 5;
-
-struct OAuthTerminalLogin {
-    credential_name: String,
-    models: Vec<String>,
-}
-
-// ---------------------------------------------------------------------------
-// OAuth + model-discovery subcommands (Copilot)
-// ---------------------------------------------------------------------------
-
-fn oauth_device_terminal_login(
-    provider: &str,
-    e: &mut impl Write,
-) -> Result<OAuthTerminalLogin, String> {
-    ensure_oauth_provider(provider)?;
-    match provider {
-        "copilot" => copilot_terminal_login(e),
-        other => Err(format!("oauth terminal login: unsupported provider `{other}`")),
-    }
-}
-
-fn copilot_terminal_login(e: &mut impl Write) -> Result<OAuthTerminalLogin, String> {
-    let _ = writeln!(e);
-    let _ = writeln!(e, "GitHub Copilot sign-in");
-    let _ = writeln!(
-        e,
-        "This terminal flow works in WSL, Docker, SSH, and other headless Linux environments."
-    );
-
-    if let Some(github_token) = crate::credential::try_load(COPILOT_GITHUB_TOKEN_CREDENTIAL, "agent")
-        .map_err(|err| format!("read credential `{COPILOT_GITHUB_TOKEN_CREDENTIAL}`: {err}"))?
-        .filter(|token| !token.trim().is_empty())
-    {
-        match fetch_copilot_model_names(&github_token) {
-            Ok(models) => {
-                let _ = writeln!(
-                    e,
-                    "Existing GitHub sign-in found in `{}`; reusing it.",
-                    COPILOT_GITHUB_TOKEN_CREDENTIAL
-                );
-                return Ok(OAuthTerminalLogin {
-                    credential_name: COPILOT_GITHUB_TOKEN_CREDENTIAL.to_string(),
-                    models,
-                });
-            }
-            Err(err) => {
-                let _ = writeln!(
-                    e,
-                    "Stored GitHub sign-in could not be used ({err}); starting a new device login."
-                );
-            }
-        }
-    }
-
-    let dc = block_on(llm::providers::copilot_auth::start_device_flow())?
-        .map_err(|err| format!("oauth-start: {err}"))?;
-    let mut interval = dc.interval.max(MIN_OAUTH_POLL_SECS);
-    let deadline = Instant::now()
-        .checked_add(Duration::from_secs(dc.expires_in))
-        .unwrap_or_else(|| Instant::now() + Duration::from_secs(dc.expires_in.min(900)));
-
-    let _ = writeln!(e);
-    let _ = writeln!(e, "Open this URL in any browser:");
-    let _ = writeln!(e, "  {}", dc.verification_uri);
-    let _ = writeln!(e, "Enter this code:");
-    let _ = writeln!(e, "  {}", dc.user_code);
-    let _ = writeln!(e);
-    let _ = writeln!(
-        e,
-        "Waiting for GitHub approval (expires in {}s)...",
-        dc.expires_in
-    );
-    let _ = e.flush();
-
-    loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return Err(
-                "GitHub device code expired before approval; rerun setup to try again".into(),
-            );
-        }
-        std::thread::sleep(Duration::from_secs(interval).min(remaining));
-
-        let outcome = block_on(llm::providers::copilot_auth::poll_device_flow(&dc.device_code))?
-            .map_err(|err| format!("oauth-poll: {err}"))?;
-        use llm::providers::copilot_auth::PollOutcome;
-        match outcome {
-            PollOutcome::Pending => {
-                let _ = write!(e, ".");
-                let _ = e.flush();
-            }
-            PollOutcome::SlowDown { interval: next } => {
-                interval = next.max(MIN_OAUTH_POLL_SECS);
-                let _ = writeln!(e);
-                let _ = writeln!(e, "GitHub asked us to slow down; polling every {interval}s.");
-                let _ = e.flush();
-            }
-            PollOutcome::Expired => {
-                let _ = writeln!(e);
-                return Err(
-                    "GitHub device code expired before approval; rerun setup to try again".into(),
-                );
-            }
-            PollOutcome::Denied => {
-                let _ = writeln!(e);
-                return Err("GitHub Copilot sign-in was denied".into());
-            }
-            PollOutcome::Authorized { github_token, .. } => {
-                let _ = writeln!(e);
-                store_credential(COPILOT_GITHUB_TOKEN_CREDENTIAL, &github_token).map_err(|err| {
-                    format!(
-                        "oauth-poll: stored token rejected by credential store: {err}\n\
-                         hint: rerun as a user with write access to the agent credential namespace."
-                    )
-                })?;
-                let _ = writeln!(
-                    e,
-                    "✓ GitHub sign-in complete; credential stored as `{}`",
-                    COPILOT_GITHUB_TOKEN_CREDENTIAL
-                );
-                let models = match fetch_copilot_model_names(&github_token) {
-                    Ok(models) => models,
-                    Err(err) => {
-                        let _ = writeln!(
-                            e,
-                            "⚠  signed in, but Copilot model discovery failed: {err}"
-                        );
-                        Vec::new()
-                    }
-                };
-                return Ok(OAuthTerminalLogin {
-                    credential_name: COPILOT_GITHUB_TOKEN_CREDENTIAL.to_string(),
-                    models,
-                });
-            }
-        }
-    }
-}
-
-fn fetch_copilot_model_names(github_token: &str) -> Result<Vec<String>, String> {
-    Ok(model_names_from_values(block_on(fetch_copilot_models(
-        github_token,
-    ))??))
-}
-
-fn model_names_from_values(values: Vec<Value>) -> Vec<String> {
-    values
-        .into_iter()
-        .filter_map(|v| {
-            v.get("name")
-                .and_then(|name| name.as_str())
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(ToOwned::to_owned)
-        })
-        .collect()
-}
-
-fn pick_oauth_model(
-    provider: &str,
-    models: &[String],
-    e: &mut impl Write,
-) -> Result<String, String> {
-    let preferred_default = default_model_name(provider);
-    let default = if models.is_empty() {
-        preferred_default.unwrap_or_default()
-    } else {
-        preferred_default
-            .filter(|candidate| models.iter().any(|m| m == candidate))
-            .or_else(|| models.first().cloned())
-            .unwrap_or_default()
-    };
-
-    if models.is_empty() {
-        let _ = writeln!(
-            e,
-            "No live model list was returned for `{provider}` — enter a Copilot model identifier."
-        );
-    } else {
-        let _ = writeln!(e, "Available models for `{provider}`:");
-        for (i, model) in models.iter().enumerate() {
-            let _ = writeln!(e, "  {:>2}. {}", i + 1, model);
-        }
-    }
-
-    if models.is_empty() {
-        if default.is_empty() {
-            let _ = write!(e, "Model name: ");
-        } else {
-            let _ = write!(e, "Model name [{default}]: ");
-        }
-    } else if default.is_empty() {
-        let _ = write!(e, "Pick a number (1-{}) or type a model name: ", models.len());
-    } else {
-        let _ = write!(
-            e,
-            "Pick a number (1-{}) or type a model name [{}]: ",
-            models.len(),
-            default
-        );
-    }
-    let _ = e.flush();
-    let raw = read_line()?.trim().to_string();
-    if raw.is_empty() {
-        if default.is_empty() {
-            return Err("model name cannot be empty".into());
-        }
-        return Ok(default);
-    }
-
-    if !models.is_empty() {
-        if let Ok(idx) = raw.parse::<usize>() {
-            if idx < 1 || idx > models.len() {
-                return Err(format!(
-                    "out of range: {idx} (expected 1-{})",
-                    models.len()
-                ));
-            }
-            return Ok(models[idx - 1].clone());
-        }
-        if !models.iter().any(|m| m == &raw) {
-            let _ = writeln!(e);
-            let _ = writeln!(e, "⚠  `{raw}` was not returned by Copilot model discovery.");
-            let _ = write!(e, "Use it anyway? (y/N): ");
-            let _ = e.flush();
-            let yn = read_line()?.trim().to_ascii_lowercase();
-            if !matches!(yn.as_str(), "y" | "yes") {
-                return Err("aborted: unknown Copilot model name".into());
-            }
-        }
-    }
-    Ok(raw)
-}
-
-fn require_provider(provider: Option<&str>, sub: &str) -> Result<String, String> {
-    match provider {
-        Some(p) if !p.trim().is_empty() => Ok(p.trim().to_string()),
-        _ => Err(format!(
-            "`{sub}` requires --provider <name>. Only `copilot` is supported today."
-        )),
-    }
-}
-
-fn ensure_oauth_provider(provider: &str) -> Result<(), String> {
-    match auth_kind_for(provider) {
-        Some(_) => Ok(()),
-        None => Err(format!(
-            "provider `{provider}` does not use OAuth device flow. \
-             Use `apply --api-key{{,-stdin,-env}}` instead."
-        )),
-    }
-}
-
-fn block_on<F, T>(fut: F) -> Result<T, String>
-where
-    F: std::future::Future<Output = T>,
-{
-    let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .map_err(|e| format!("tokio runtime: {e}"))?;
-    Ok(rt.block_on(fut))
-}
-
-/// `cos agent setup oauth-start --provider copilot` → emits the
-/// device-authorization codes the UI shows the user.
-fn oauth_start_cmd(provider: Option<&str>) -> Result<Value, String> {
-    let provider = require_provider(provider, "oauth-start")?;
-    ensure_oauth_provider(&provider)?;
-    // Only Copilot for now — keep the dispatch explicit so adding a
-    // second OAuth provider is a visible diff.
-    if provider != "copilot" {
-        return Err(format!("oauth-start: unsupported provider `{provider}`"));
-    }
-    let dc = block_on(llm::providers::copilot_auth::start_device_flow())?
-        .map_err(|e| format!("oauth-start: {e}"))?;
-    Ok(json!({
-        "provider": provider,
-        "device_code": dc.device_code,
-        "user_code": dc.user_code,
-        "verification_uri": dc.verification_uri,
-        "expires_in": dc.expires_in,
-        "interval": dc.interval,
-    }))
-}
-
-/// `cos agent setup oauth-poll --provider copilot --device-code <code>`
-/// → single poll. The UI loops on its own schedule and stops when this
-/// command emits `status: "ok"` (token stored) or a terminal failure.
-fn oauth_poll_cmd(provider: Option<&str>, device_code: Option<&str>) -> Result<Value, String> {
-    let provider = require_provider(provider, "oauth-poll")?;
-    ensure_oauth_provider(&provider)?;
-    if provider != "copilot" {
-        return Err(format!("oauth-poll: unsupported provider `{provider}`"));
-    }
-    let code = device_code
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .ok_or_else(|| "oauth-poll requires --device-code <code>".to_string())?;
-    let outcome = block_on(llm::providers::copilot_auth::poll_device_flow(code))?
-        .map_err(|e| format!("oauth-poll: {e}"))?;
-    use llm::providers::copilot_auth::PollOutcome;
-    match outcome {
-        PollOutcome::Pending => Ok(json!({"status": "pending"})),
-        PollOutcome::SlowDown { interval } => {
-            Ok(json!({"status": "slow_down", "interval": interval}))
-        }
-        PollOutcome::Expired => Ok(json!({"status": "expired"})),
-        PollOutcome::Denied => Ok(json!({"status": "denied"})),
-        PollOutcome::Authorized { github_token, .. } => {
-            // Persist the long-lived GitHub token so subsequent `apply`
-            // + chat traffic can exchange it for short-lived Copilot
-            // tokens on demand. We store under a fixed credential name
-            // so a re-sign-in cleanly overwrites the prior token.
-            store_credential(COPILOT_GITHUB_TOKEN_CREDENTIAL, &github_token).map_err(|e| {
-                format!(
-                    "oauth-poll: stored token rejected by credential store: {e}\n\
-                     hint: rerun as a user with write access to the agent credential namespace."
-                )
-            })?;
-            Ok(json!({
-                "status": "ok",
-                "provider": provider,
-                "credential": COPILOT_GITHUB_TOKEN_CREDENTIAL,
-            }))
-        }
-    }
-}
-
-/// `cos agent setup models --provider copilot` → fetch the live model
-/// catalogue from Copilot's `/models` endpoint using the stored token.
-/// Returns selectable chat models with their negotiated wire protocol.
-/// Embedding, internal, disabled, and unsupported-endpoint entries are
-/// excluded before UIs render the dropdown.
-fn models_cmd(provider: Option<&str>) -> Result<Value, String> {
-    let provider = require_provider(provider, "models")?;
-    if provider != "copilot" {
-        return Err("models: live discovery is only supported for `copilot` today; \
-             other providers expose their model lists via `--providers`".to_string());
-    }
-    let github_token = crate::credential::try_load(COPILOT_GITHUB_TOKEN_CREDENTIAL, "agent")
-        .map_err(|e| format!("read credential `{COPILOT_GITHUB_TOKEN_CREDENTIAL}`: {e}"))?
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            "GitHub Copilot is not signed in. Run `oauth-start` + `oauth-poll` first \
-             (or use the desktop AI settings page)."
-                .to_string()
-        })?;
-
-    let models = block_on(fetch_copilot_models(&github_token))??;
-    Ok(json!({
-        "provider": provider,
-        "models": models,
-    }))
-}
-
-async fn fetch_copilot_models(
-    github_token: &str,
-) -> Result<Vec<Value>, String> {
-    let copilot = llm::providers::copilot_auth::ensure_copilot_token(github_token)
-        .await
-        .map_err(|e| format!("copilot auth: {e}"))?;
-    let models = llm::providers::copilot_auth::ensure_copilot_models(&copilot)
-        .await
-        .map_err(|e| format!("Copilot /models: {e}"))?;
-
-    let mut out: Vec<Value> = models
-        .iter()
-        .filter(|model| model.is_selectable_chat_model())
-        .filter_map(|model| {
-            let wire_api = model.wire_api()?;
-            Some(json!({
-                "name": model.id,
-                "wire_api": wire_api.config_name(),
-            }))
-        })
-        .collect();
-    out.sort_by(|a, b| {
-        a.get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .cmp(b.get("name").and_then(|v| v.as_str()).unwrap_or(""))
-    });
-    Ok(out)
-}
-
 fn truncate_for_log(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
@@ -2565,16 +2270,20 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
         return Err("--model cannot be empty".into());
     }
 
-    let resolved_base_url =
-        resolve_base_url_args(&provider, args.base_url.as_deref(), args.api_version.as_deref())?;
+    let resolved_base_url = resolve_base_url_args(
+        &provider,
+        args.base_url.as_deref(),
+        args.api_version.as_deref(),
+    )?;
 
     let needs_cred = provider_needs_credential(&provider);
     let credential_hint = format!("{provider}_api_key");
-    let (credential_name, credential_env) = if auth_kind_for(&provider) == Some("oauth_device") {
-        resolve_oauth_credential(&args, &provider)?
-    } else {
-        resolve_key_args(&args, &provider, &credential_hint, needs_cred)?
-    };
+    let (credential_name, credential_env) =
+        if copilot::auth_kind_for(&provider) == Some("oauth_device") {
+            resolve_oauth_credential(&args, &provider)?
+        } else {
+            resolve_key_args(&args, &provider, &credential_hint, needs_cred)?
+        };
 
     let path = config_path();
     let mut cfg = read_config_or_empty(&path)?;
@@ -2582,9 +2291,7 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
         cfg = json!({});
     }
     let root = cfg.as_object_mut().expect("ensured object above");
-    let agent = root
-        .entry("agent".to_string())
-        .or_insert_with(|| json!({}));
+    let agent = root.entry("agent".to_string()).or_insert_with(|| json!({}));
     if !agent.is_object() {
         *agent = json!({});
     }
@@ -2608,10 +2315,7 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
     }))
 }
 
-fn apply_media(
-    spec: &'static media::ModalitySpec,
-    args: ApplyArgs,
-) -> Result<Value, String> {
+fn apply_media(spec: &'static media::ModalitySpec, args: ApplyArgs) -> Result<Value, String> {
     let provider_name = args
         .provider
         .as_deref()
@@ -2725,9 +2429,7 @@ fn resolve_key_args(
     ];
     let count: u8 = supplied.iter().map(|b| *b as u8).sum();
     if count > 1 {
-        return Err(
-            "specify at most one of --api-key / --api-key-stdin / --api-key-env".into(),
-        );
+        return Err("specify at most one of --api-key / --api-key-stdin / --api-key-env".into());
     }
     if !needs_credential {
         if count > 0 {
@@ -2791,7 +2493,7 @@ fn resolve_oauth_credential(
         return Ok((None, Some(env.to_string())));
     }
     let credential_name = match provider_name {
-        "copilot" => COPILOT_GITHUB_TOKEN_CREDENTIAL,
+        "copilot" => copilot::COPILOT_GITHUB_TOKEN_CREDENTIAL,
         other => {
             return Err(format!(
                 "internal: provider `{other}` advertises auth_kind=oauth_device but no credential mapping is defined"
@@ -2850,12 +2552,10 @@ fn resolve_base_url_args(
 ) -> Result<Option<String>, String> {
     let trimmed = base_url.map(str::trim).filter(|s| !s.is_empty());
     if provider_name == "azure" && trimmed.is_none() {
-        return Err(
-            "provider `azure` requires --base-url <RESOURCE_ROOT> \
+        return Err("provider `azure` requires --base-url <RESOURCE_ROOT> \
              (e.g. https://<resource>.openai.azure.com/). The /openai/deployments/… \
              path is added automatically using the --model value as the deployment name."
-                .into(),
-        );
+            .into());
     }
     let Some(base) = trimmed else {
         return Ok(None);
@@ -2868,13 +2568,11 @@ fn resolve_base_url_args(
     if provider_name == "azure" {
         let lower = base.to_ascii_lowercase();
         if lower.contains("/openai/deployments/") || lower.contains("/openai/responses") {
-            return Err(
-                "azure --base-url should be the resource root \
+            return Err("azure --base-url should be the resource root \
                  (e.g. https://<resource>.openai.azure.com/), not the full \
                  deployment URL. Pass the deployment name via --model and the \
                  API version via --api-version."
-                    .into(),
-            );
+                .into());
         }
     }
 
@@ -2891,10 +2589,7 @@ fn resolve_base_url_args(
 /// produces a deterministic shape so a re-apply can clear a previously
 /// stored value: explicitly setting `null` when the caller decided not
 /// to override and the provider doesn't require it.
-fn apply_base_url_to_block(
-    block: &mut serde_json::Map<String, Value>,
-    base_url: Option<&str>,
-) {
+fn apply_base_url_to_block(block: &mut serde_json::Map<String, Value>, base_url: Option<&str>) {
     match base_url {
         Some(url) => {
             block.insert("base_url".into(), json!(url));
@@ -2946,8 +2641,8 @@ fn read_config_or_empty(path: &Path) -> Result<Value, String> {
     if !path.is_file() {
         return Ok(json!({}));
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    let text =
+        std::fs::read_to_string(path).map_err(|e| format!("read {}: {e}", path.display()))?;
     if text.trim().is_empty() {
         return Ok(json!({}));
     }

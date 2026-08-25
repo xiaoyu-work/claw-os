@@ -21,6 +21,7 @@ surfaces.
 | --- | --- |
 | `mod.rs` | `cos agent` command family and user-facing probes |
 | `setup.rs` | Provider/modality setup, OAuth, model discovery, verification |
+| `setup/copilot.rs` | Copilot OAuth device flow and live model discovery |
 | `setup/tests.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |

@@ -589,26 +589,28 @@ fn providers_cmd_llm_marks_copilot_as_oauth_device_and_no_one_else() {
 fn oauth_subcommands_reject_non_copilot_provider() {
     // The error surface is the UI's safety net: typos in --provider
     // must surface as actionable errors, not crashes.
-    let err = oauth_start_cmd(Some("openai")).expect_err("non-copilot provider rejected");
+    let err = copilot::oauth_start_cmd(Some("openai")).expect_err("non-copilot provider rejected");
     assert!(err.contains("does not use OAuth device flow"), "{err}");
-    let err =
-        oauth_poll_cmd(Some("openai"), Some("xxx")).expect_err("non-copilot provider rejected");
+    let err = copilot::oauth_poll_cmd(Some("openai"), Some("xxx"))
+        .expect_err("non-copilot provider rejected");
     assert!(err.contains("does not use OAuth device flow"), "{err}");
-    let err = models_cmd(Some("openai")).expect_err("models only supports copilot today");
+    let err = copilot::models_cmd(Some("openai")).expect_err("models only supports copilot today");
     assert!(err.contains("only supported for `copilot`"), "{err}");
 }
 
 #[test]
 fn oauth_poll_requires_device_code() {
-    let err = oauth_poll_cmd(Some("copilot"), None).expect_err("missing device-code rejected");
+    let err =
+        copilot::oauth_poll_cmd(Some("copilot"), None).expect_err("missing device-code rejected");
     assert!(err.contains("--device-code"), "{err}");
-    let err = oauth_poll_cmd(Some("copilot"), Some("  ")).expect_err("blank device-code rejected");
+    let err = copilot::oauth_poll_cmd(Some("copilot"), Some("  "))
+        .expect_err("blank device-code rejected");
     assert!(err.contains("--device-code"), "{err}");
 }
 
 #[test]
 fn model_names_from_values_trims_and_drops_invalid_entries() {
-    let names = model_names_from_values(vec![
+    let names = copilot::model_names_from_values(vec![
         json!({"name": " gpt-4o "}),
         json!({"name": ""}),
         json!({"id": "missing-name"}),
@@ -619,11 +621,11 @@ fn model_names_from_values_trims_and_drops_invalid_entries() {
 
 #[test]
 fn require_provider_rejects_empty_and_missing() {
-    assert!(require_provider(None, "oauth-start").is_err());
-    assert!(require_provider(Some(""), "oauth-start").is_err());
-    assert!(require_provider(Some("   "), "oauth-start").is_err());
+    assert!(copilot::require_provider(None, "oauth-start").is_err());
+    assert!(copilot::require_provider(Some(""), "oauth-start").is_err());
+    assert!(copilot::require_provider(Some("   "), "oauth-start").is_err());
     assert_eq!(
-        require_provider(Some(" copilot "), "oauth-start").unwrap(),
+        copilot::require_provider(Some(" copilot "), "oauth-start").unwrap(),
         "copilot"
     );
 }
