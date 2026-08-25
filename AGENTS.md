@@ -20,9 +20,9 @@ Read only the documents relevant to the task:
 6. The nearest component README, especially
    [`desktop/README.md`](desktop/README.md) before desktop work.
 7. The nearest maintained `MODULE.md` for local responsibilities, key files,
-   dependencies, and tests. Major guides exist under `core/`,
-   `core/src/agent/`, `apps/`, `claw-os-sdk/`, `rootfs/`, `packaging/`, and
-   `targets/`.
+   dependencies, and tests. Guides cover the major core/agent subsystems,
+   apps/adapters, SDK/runtime/crates/extensions, rootfs/targets/packaging,
+   scripts, and workflows.
 
 Source code and manifests are authoritative when prose is stale.
 
