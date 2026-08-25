@@ -17,6 +17,7 @@ library API exported by `core/src/lib.rs`.
 | Path | Role |
 | --- | --- |
 | `main.rs`, `router.rs` | `cos` entry and top-level dispatch |
+| `router/app_commands.rs` | App lint/install/create/tool/consent management |
 | `router/tests.rs` | Router help/schema/app/dispatch regression tests |
 | `lib.rs` | Library module surface |
 | `bin/` | `clawd` and helper binary entries |
