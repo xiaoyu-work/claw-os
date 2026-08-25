@@ -27,6 +27,29 @@ use crate::agent::safety::redact::Redactor;
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
 use crate::config::AgentConfig;
 
+const TURN_LIMIT_FINALIZATION_PROMPT: &str = "\
+This is the final allowed model turn for the current request. Do not call any \
+tools. Use only the conversation and tool results already available to give \
+the user the best concise answer now. Say what was completed, and if anything \
+is unfinished, explain that this attempt reached its work limit and that the \
+user can ask you to continue. Do not expose internal runtime details.";
+
+const TURN_LIMIT_FALLBACK: &str = "\
+I stopped this attempt after reaching its tool-work limit before I could \
+finish the summary. Ask me to continue and I will resume from the results \
+already collected.";
+
+fn append_turn_limit_fallback(messages: &mut Vec<Message>) -> String {
+    let answer = TURN_LIMIT_FALLBACK.to_string();
+    messages.push(Message {
+        role: llm::Role::Assistant,
+        content: vec![llm::ContentBlock::Text {
+            text: answer.clone(),
+        }],
+    });
+    answer
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
     #[error("provider not registered or misconfigured: {0}")]
@@ -512,7 +535,14 @@ async fn ask_inner(
     };
     let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
-    for turn in 1..=cfg.max_turns {
+    let turn_limit = cfg.max_turns.max(1);
+    for turn in 1..=turn_limit {
+        let force_finalize = turn == turn_limit;
+        let finalization_system = force_finalize.then(|| {
+            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
+        });
+        let turn_system = finalization_system.as_deref().unwrap_or(&system);
+
         if interrupt_handle.check() {
             return Err(AgentError::Interrupted(
                 interrupt_handle.session_id().to_string(),
@@ -529,6 +559,17 @@ async fn ask_inner(
             return Err(AgentError::Interrupted(format!(
                 "hook stop (pre_turn): {reason}"
             )));
+        }
+        if force_finalize {
+            if let Some((db, sid)) = recorder {
+                if let Err(e) = db.record_injected(
+                    sid,
+                    "turn_limit_finalization",
+                    TURN_LIMIT_FINALIZATION_PROMPT,
+                ) {
+                    tracing::warn!("memory: failed to record turn-limit finalization: {e}");
+                }
+            }
         }
 
         if cfg.think_scrub_enabled {
@@ -547,14 +588,14 @@ async fn ask_inner(
         }
 
         if let Some(c) = compressor.as_ref() {
-            if c.should_compress(Some(&system), &messages) {
+            if c.should_compress(Some(turn_system), &messages) {
                 let before = messages.len();
-                let est_before = compressor::estimate_total_tokens(Some(&system), &messages);
+                let est_before = compressor::estimate_total_tokens(Some(turn_system), &messages);
                 messages = c
-                    .compress(Some(&system), std::mem::take(&mut messages))
+                    .compress(Some(turn_system), std::mem::take(&mut messages))
                     .await;
                 let after = messages.len();
-                let est_after = compressor::estimate_total_tokens(Some(&system), &messages);
+                let est_after = compressor::estimate_total_tokens(Some(turn_system), &messages);
                 tracing::info!(
                     turn,
                     messages_before = before,
@@ -571,21 +612,40 @@ async fn ask_inner(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let outcome_result = super::turn::run_turn(
-            provider.clone(),
-            &cfg.model,
-            &system,
-            &mut messages,
-            tools,
-            &llm_tools,
-            cfg.max_tokens,
-            cfg.temperature,
-            recorder.map(|(_, sid)| sid),
-            retry_policy_from_cfg(cfg),
-            Some(&hook_ctx),
-            progress::null_progress(),
-        )
-        .await;
+        let retry_policy = retry_policy_from_cfg(cfg);
+        let outcome_result = if force_finalize {
+            super::turn::run_final_turn(
+                provider.clone(),
+                &cfg.model,
+                turn_system,
+                &mut messages,
+                tools,
+                &llm_tools,
+                cfg.max_tokens,
+                cfg.temperature,
+                recorder.map(|(_, sid)| sid),
+                retry_policy,
+                Some(&hook_ctx),
+                progress::null_progress(),
+            )
+            .await
+        } else {
+            super::turn::run_turn(
+                provider.clone(),
+                &cfg.model,
+                turn_system,
+                &mut messages,
+                tools,
+                &llm_tools,
+                cfg.max_tokens,
+                cfg.temperature,
+                recorder.map(|(_, sid)| sid),
+                retry_policy,
+                Some(&hook_ctx),
+                progress::null_progress(),
+            )
+            .await
+        };
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -645,8 +705,21 @@ async fn ask_inner(
                 post_hook_ctx.provider = provider.effective_provider_name();
                 post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
-                return Err(e);
+                if force_finalize {
+                    tracing::warn!("turn-limit finalization failed; using fallback: {e}");
+                    super::turn::TurnOutcome::Final(append_turn_limit_fallback(&mut messages))
+                } else {
+                    return Err(e);
+                }
             }
+        };
+        let outcome = match outcome {
+            super::turn::TurnOutcome::Final(answer)
+                if force_finalize && answer.trim().is_empty() =>
+            {
+                super::turn::TurnOutcome::Final(append_turn_limit_fallback(&mut messages))
+            }
+            other => other,
         };
         evidence_ledger.observe(&messages[len_before..]);
 
@@ -731,7 +804,7 @@ async fn ask_inner(
         }
     }
 
-    Err(AgentError::MaxTurnsExceeded(cfg.max_turns))
+    Err(AgentError::MaxTurnsExceeded(turn_limit))
 }
 
 /// Streaming twin of [`ask_inner`]. Identical behaviour except each
@@ -751,6 +824,8 @@ async fn ask_inner_streaming(
     initial_messages: Vec<Message>,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
+    let sink = super::presentation::user_visible_stream_sink(sink);
+    let progress = super::presentation::user_visible_progress_sink(progress);
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
     } else {
@@ -834,7 +909,14 @@ async fn ask_inner_streaming(
     };
     let mut evidence_ledger = super::evidence::EvidenceLedger::default();
 
-    for turn in 1..=cfg.max_turns {
+    let turn_limit = cfg.max_turns.max(1);
+    for turn in 1..=turn_limit {
+        let force_finalize = turn == turn_limit;
+        let finalization_system = force_finalize.then(|| {
+            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
+        });
+        let turn_system = finalization_system.as_deref().unwrap_or(&system);
+
         if interrupt_handle.check() {
             return Err(AgentError::Interrupted(
                 interrupt_handle.session_id().to_string(),
@@ -852,6 +934,17 @@ async fn ask_inner_streaming(
                 "hook stop (pre_turn): {reason}"
             )));
         }
+        if force_finalize {
+            if let Some((db, sid)) = recorder {
+                if let Err(e) = db.record_injected(
+                    sid,
+                    "turn_limit_finalization",
+                    TURN_LIMIT_FINALIZATION_PROMPT,
+                ) {
+                    tracing::warn!("memory: failed to record turn-limit finalization: {e}");
+                }
+            }
+        }
 
         if cfg.think_scrub_enabled {
             let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
@@ -859,9 +952,9 @@ async fn ask_inner_streaming(
         }
 
         if let Some(c) = compressor.as_ref() {
-            if c.should_compress(Some(&system), &messages) {
+            if c.should_compress(Some(turn_system), &messages) {
                 messages = c
-                    .compress(Some(&system), std::mem::take(&mut messages))
+                    .compress(Some(turn_system), std::mem::take(&mut messages))
                     .await;
             }
         }
@@ -871,21 +964,39 @@ async fn ask_inner_streaming(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let outcome_result = super::turn::run_turn_streaming(
-            provider.clone(),
-            &cfg.model,
-            &system,
-            &mut messages,
-            tools,
-            &llm_tools,
-            cfg.max_tokens,
-            cfg.temperature,
-            recorder.map(|(_, sid)| sid),
-            sink.clone(),
-            Some(&hook_ctx),
-            progress.clone(),
-        )
-        .await;
+        let outcome_result = if force_finalize {
+            super::turn::run_final_turn_streaming(
+                provider.clone(),
+                &cfg.model,
+                turn_system,
+                &mut messages,
+                tools,
+                &llm_tools,
+                cfg.max_tokens,
+                cfg.temperature,
+                recorder.map(|(_, sid)| sid),
+                sink.clone(),
+                Some(&hook_ctx),
+                progress.clone(),
+            )
+            .await
+        } else {
+            super::turn::run_turn_streaming(
+                provider.clone(),
+                &cfg.model,
+                turn_system,
+                &mut messages,
+                tools,
+                &llm_tools,
+                cfg.max_tokens,
+                cfg.temperature,
+                recorder.map(|(_, sid)| sid),
+                sink.clone(),
+                Some(&hook_ctx),
+                progress.clone(),
+            )
+            .await
+        };
 
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -945,8 +1056,29 @@ async fn ask_inner_streaming(
                 post_hook_ctx.provider = provider.effective_provider_name();
                 post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
-                return Err(e);
+                if force_finalize {
+                    tracing::warn!("turn-limit finalization failed; using fallback: {e}");
+                    let answer = append_turn_limit_fallback(&mut messages);
+                    sink.on_event(&llm::StreamEvent::TextDelta {
+                        text: answer.clone(),
+                    });
+                    super::turn::TurnOutcome::Final(answer)
+                } else {
+                    return Err(e);
+                }
             }
+        };
+        let outcome = match outcome {
+            super::turn::TurnOutcome::Final(answer)
+                if force_finalize && answer.trim().is_empty() =>
+            {
+                let answer = append_turn_limit_fallback(&mut messages);
+                sink.on_event(&llm::StreamEvent::TextDelta {
+                    text: answer.clone(),
+                });
+                super::turn::TurnOutcome::Final(answer)
+            }
+            other => other,
         };
         evidence_ledger.observe(&messages[len_before..]);
 
@@ -1014,7 +1146,7 @@ async fn ask_inner_streaming(
         }
     }
 
-    Err(AgentError::MaxTurnsExceeded(cfg.max_turns))
+    Err(AgentError::MaxTurnsExceeded(turn_limit))
 }
 
 /// Convenience: read `cfg` from global config, build the default tool
@@ -1679,27 +1811,62 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn max_turns_enforced_on_infinite_tool_use() {
+    async fn turn_limit_reserves_final_no_tool_summary() {
         let mut cfg = cfg();
         cfg.max_turns = 3;
         let mock = MockProvider::new(&cfg.model, &cfg);
-        // Five tool-use responses queued; loop must abort at turn 3.
-        for _ in 0..5 {
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "loop-1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "first"}),
+        }]));
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "loop-2".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "second"}),
+        }]));
+        mock.push_response(MockResponse::Text(
+            "I completed two checks, reached this attempt's work limit, and can continue.".into(),
+        ));
+        let mock = Arc::new(mock);
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+        let result = ask_with(provider, &cfg, "keep checking", &tools)
+            .await
+            .unwrap();
+
+        assert_eq!(result.turns, 3);
+        assert!(result.answer.contains("work limit"));
+        assert!(result.answer.contains("continue"));
+        let request = mock.last_request().expect("final request");
+        assert!(request.tools.is_empty());
+        assert!(matches!(request.tool_choice, llm::ToolChoice::None));
+        assert!(request
+            .system
+            .as_deref()
+            .is_some_and(|system| system.contains(TURN_LIMIT_FINALIZATION_PROMPT)));
+    }
+
+    #[tokio::test]
+    async fn turn_limit_returns_fallback_if_provider_ignores_no_tools() {
+        let mut cfg = cfg();
+        cfg.max_turns = 2;
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        for id in ["loop-1", "loop-2"] {
             mock.push_response(MockResponse::ToolUse(vec![ToolCall {
-                id: "loop".into(),
+                id: id.into(),
                 name: "echo".into(),
                 input: serde_json::json!({"text": "again"}),
             }]));
         }
         let provider: Arc<dyn Provider> = Arc::new(mock);
         let tools = builtin_only_registry();
-        let err = ask_with(provider, &cfg, "loop forever", &tools)
+        let result = ask_with(provider, &cfg, "loop forever", &tools)
             .await
-            .unwrap_err();
-        match err {
-            AgentError::MaxTurnsExceeded(3) => {}
-            other => panic!("expected MaxTurnsExceeded(3), got {other:?}"),
-        }
+            .unwrap();
+
+        assert_eq!(result.turns, 2);
+        assert_eq!(result.answer, TURN_LIMIT_FALLBACK);
     }
 
     #[tokio::test]
@@ -2646,6 +2813,73 @@ mod tests {
             events.iter().any(|e| matches!(e, StreamEvent::Done { .. })),
             "sink missing Done event; got {events:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn ask_with_stream_hides_evidence_markers_from_sink() {
+        let cfg = cfg();
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::Text(
+            "Network is stable. [evidence:call-1 confidence=0.99]".into(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(mock);
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+
+        let result = ask_with_stream(
+            provider,
+            &cfg,
+            "check the network",
+            &tools,
+            None,
+            sink.clone(),
+            progress::null_progress(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.answer, "Network is stable.");
+        let serialized = format!("{:?}", sink.events.lock().unwrap());
+        assert!(serialized.contains("Network is stable."));
+        assert!(!serialized.contains("[evidence:"));
+    }
+
+    #[tokio::test]
+    async fn streaming_turn_limit_emits_final_no_tool_summary() {
+        let mut cfg = cfg();
+        cfg.max_turns = 2;
+        let mock = MockProvider::new(&cfg.model, &cfg);
+        mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+            id: "stream-loop".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "checked"}),
+        }]));
+        mock.push_response(MockResponse::Text(
+            "The check completed. This attempt reached its work limit; ask me to continue.".into(),
+        ));
+        let mock = Arc::new(mock);
+        let provider: Arc<dyn Provider> = mock.clone();
+        let tools = builtin_only_registry();
+        let sink: Arc<CapturingSink> = Arc::default();
+
+        let result = ask_with_stream(
+            provider,
+            &cfg,
+            "keep checking",
+            &tools,
+            None,
+            sink.clone(),
+            progress::null_progress(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.turns, 2);
+        assert!(result.answer.contains("ask me to continue"));
+        assert!(format!("{:?}", sink.events.lock().unwrap()).contains("ask me to continue"));
+        let request = mock.last_request().expect("final request");
+        assert!(request.tools.is_empty());
+        assert!(matches!(request.tool_choice, llm::ToolChoice::None));
     }
 
     #[tokio::test]

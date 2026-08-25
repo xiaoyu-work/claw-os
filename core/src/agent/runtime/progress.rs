@@ -17,10 +17,9 @@
 //!   while a slow tool (e.g. `cos_sysinfo largest_files /`) crunches
 //!   the filesystem.
 //! * [`ProgressSink::on_tool_result`] — right after the tool returns,
-//!   so the UI can render `[tool_result id=… name=… ok ms=… bytes=…]`
-//!   with a truncated preview of the actual output. Errors are
-//!   surfaced **with full content** because the user needs the
-//!   message to understand why the agent is retrying.
+//!   so diagnostic sinks can record latency and a bounded output preview.
+//!   User-facing sinks are wrapped by `runtime::presentation`, which keeps
+//!   only tool identity and success/failure status.
 //!
 //! The trait is intentionally separate from `StreamSink`:
 //!
@@ -32,7 +31,7 @@
 //! * `ProgressSink` lives in the runtime crate — its events come from
 //!   the dispatch loop. A single sink implementor (e.g. `ChatSink` in
 //!   `agent/mod.rs`) can implement both traits and write to the same
-//!   terminal stream, so the user sees a unified log:
+//!   terminal stream, so a diagnostic client can see a unified log:
 //!
 //!   ```text
 //!   [tool_use id=toolu_X name=cos_sysinfo] {"command":"largest_files", ...}
@@ -40,10 +39,8 @@
 //!   {"search_root":"/", "files":[...], ...}
 //!   ```
 //!
-//! Non-interactive callers (clawd jobs, `agent ask --json`, headless
-//! integration tests) pass [`NullProgressSink`] which discards every
-//! event — they get the same JSON output they got before this module
-//! existed.
+//! Complete inputs and results remain in the runtime message trajectory and
+//! session/audit stores; presentation sinks never need to expose them.
 
 use std::collections::HashMap;
 use std::io::Write;

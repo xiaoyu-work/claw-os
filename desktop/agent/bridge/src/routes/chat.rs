@@ -4,8 +4,7 @@
 //!
 //! * submitted task/session identity → `task`
 //! * incremental answer text → `delta`
-//! * tool lifecycle → `tool_use_start`, `tool_input_delta`,
-//!   `tool_use`, `tool_start`, `tool_result`
+//! * tool lifecycle → `tool_use_start`, `tool_use`, `tool_start`, `tool_result`
 //! * recoverable provider notices → `warning` / `turn_done`
 //! * final task envelope → `done`
 //! * daemon / IO failures → `error`
@@ -150,6 +149,30 @@ fn json_event(name: &'static str, payload: Value) -> Event {
         .unwrap_or_default()
 }
 
+fn visible_tool_progress(progress: &Value) -> Option<(&'static str, Value)> {
+    let kind = progress.get("kind").and_then(Value::as_str).unwrap_or("");
+    match kind {
+        "tool_start" => Some((
+            "tool_start",
+            json!({
+                "kind": kind,
+                "id": progress.get("id").cloned().unwrap_or(Value::Null),
+                "name": progress.get("name").cloned().unwrap_or(Value::Null),
+            }),
+        )),
+        "tool_result" => Some((
+            "tool_result",
+            json!({
+                "kind": kind,
+                "id": progress.get("id").cloned().unwrap_or(Value::Null),
+                "name": progress.get("name").cloned().unwrap_or(Value::Null),
+                "ok": progress.get("ok").cloned().unwrap_or(Value::Null),
+            }),
+        )),
+        _ => None,
+    }
+}
+
 /// Translate one persisted clawd stream record into desktop SSE
 /// frames. `task.stream` returns records shaped as `{ts, event}` for
 /// model events and `{ts, progress}` for runtime tool progress.
@@ -159,12 +182,9 @@ fn events_from_stream_record(
     emitted_any_text: &mut bool,
 ) -> Vec<Event> {
     if let Some(progress) = record.get("progress") {
-        let kind = progress.get("kind").and_then(Value::as_str).unwrap_or("");
-        return match kind {
-            "tool_start" => vec![json_event("tool_start", progress.clone())],
-            "tool_result" => vec![json_event("tool_result", progress.clone())],
-            _ => Vec::new(),
-        };
+        return visible_tool_progress(progress)
+            .map(|(name, payload)| vec![json_event(name, payload)])
+            .unwrap_or_default();
     }
 
     let Some(event) = record.get("event") else {
@@ -189,22 +209,12 @@ fn events_from_stream_record(
                 "name": event.get("name").cloned().unwrap_or(Value::Null),
             }),
         )],
-        "tool_input_delta" => vec![json_event(
-            "tool_input_delta",
-            json!({
-                "id": event.get("id").cloned().unwrap_or(Value::Null),
-                "delta": event
-                    .get("partial_json")
-                    .cloned()
-                    .unwrap_or(Value::Null),
-            }),
-        )],
+        "tool_input_delta" => Vec::new(),
         "tool_use" => vec![json_event(
             "tool_use",
             json!({
                 "id": event.get("id").cloned().unwrap_or(Value::Null),
                 "name": event.get("name").cloned().unwrap_or(Value::Null),
-                "input": event.get("input").cloned().unwrap_or(Value::Null),
             }),
         )],
         "message" => {
@@ -223,7 +233,6 @@ fn events_from_stream_record(
                         json!({
                             "id": call.get("id").cloned().unwrap_or(Value::Null),
                             "name": call.get("name").cloned().unwrap_or(Value::Null),
-                            "input": call.get("input").cloned().unwrap_or(Value::Null),
                         }),
                     ));
                 }
@@ -480,6 +489,7 @@ mod tests {
                 "id": "tool-1",
                 "name": "fs.read",
                 "ok": true,
+                "input": {"path": "/private"},
                 "preview": "done",
             },
         });
@@ -487,5 +497,9 @@ mod tests {
             events_from_stream_record(&progress, &mut turn_text, &mut any_text).len(),
             1
         );
+        let (_, payload) = visible_tool_progress(&progress["progress"]).unwrap();
+        assert_eq!(payload["name"], "fs.read");
+        assert!(payload.get("input").is_none());
+        assert!(payload.get("preview").is_none());
     }
 }

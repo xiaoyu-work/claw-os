@@ -9,8 +9,8 @@
 //!
 //! * `text` — `{ "delta": "…" }` — incremental text delta from the model.
 //! * `tool_use_start` — `{ "id": "…", "name": "…" }` — a tool call is forming.
-//! * `tool_use` — `{ "id": "…", "name": "…", "input": …json }` — fully-formed call.
-//! * `tool_result` — `{ "id": "…", "name": "…", "ok": bool, "latency_ms": N, "bytes": N, "preview": "…" }`
+//! * `tool_use` — `{ "id": "…", "name": "…" }` — fully-formed call.
+//! * `tool_result` — `{ "id": "…", "name": "…", "ok": bool }`.
 //! * `warning` — `{ "message": "…" }`
 //! * `evidence` — structural citation binding and confidence metadata.
 //! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "evidence": …, "fallback": …, "finish": "…" }`
@@ -306,19 +306,13 @@ impl StreamSink for SseSink {
                     &json!({ "id": id, "name": name }),
                 ));
             }
-            StreamEvent::ToolInputDelta { id, partial_json } => {
-                self.send(sse::encode_event(
-                    "tool_input_delta",
-                    &json!({ "id": id, "partial": partial_json }),
-                ));
-            }
+            StreamEvent::ToolInputDelta { .. } => {}
             StreamEvent::ToolUse(call) => {
                 self.send(sse::encode_event(
                     "tool_use",
                     &json!({
                         "id": call.id,
                         "name": call.name,
-                        "input": call.input,
                     }),
                 ));
             }
@@ -347,7 +341,6 @@ impl StreamSink for SseSink {
                         &json!({
                             "id": call.id,
                             "name": call.name,
-                            "input": call.input,
                         }),
                     ));
                 }
@@ -381,10 +374,10 @@ impl StreamSink for SseSink {
 }
 
 impl ProgressSink for SseSink {
-    fn on_tool_start(&self, id: &str, name: &str, input: &Value) {
+    fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         self.send(sse::encode_event(
             "tool_start",
-            &json!({ "id": id, "name": name, "input": input }),
+            &json!({ "id": id, "name": name }),
         ));
     }
     fn on_tool_result(
@@ -392,9 +385,9 @@ impl ProgressSink for SseSink {
         id: &str,
         name: &str,
         ok: bool,
-        latency_ms: u64,
-        bytes_returned: usize,
-        content_preview: &str,
+        _latency_ms: u64,
+        _bytes_returned: usize,
+        _content_preview: &str,
     ) {
         self.send(sse::encode_event(
             "tool_result",
@@ -402,9 +395,6 @@ impl ProgressSink for SseSink {
                 "id": id,
                 "name": name,
                 "ok": ok,
-                "latency_ms": latency_ms,
-                "bytes": bytes_returned,
-                "preview": content_preview,
             }),
         ));
     }
@@ -432,5 +422,51 @@ impl<T> Stream for ReceiverStream<T> {
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
         self.rx.poll_recv(cx)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::llm::ToolCall;
+
+    #[test]
+    fn user_facing_tool_events_omit_inputs_and_results() {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let sink = SseSink::new(tx);
+
+        sink.on_event(&StreamEvent::ToolInputDelta {
+            id: "call-1".into(),
+            partial_json: r#"{"secret":"input"}"#.into(),
+        });
+        sink.on_event(&StreamEvent::ToolUse(ToolCall {
+            id: "call-1".into(),
+            name: "cos_sysinfo".into(),
+            input: json!({"secret": "input"}),
+        }));
+        sink.on_tool_start(
+            "call-1",
+            "cos_sysinfo",
+            &json!({"secret": "input"}),
+        );
+        sink.on_tool_result(
+            "call-1",
+            "cos_sysinfo",
+            true,
+            12,
+            128,
+            "secret result",
+        );
+        drop(sink);
+
+        let mut output = String::new();
+        while let Ok(frame) = rx.try_recv() {
+            output.push_str(std::str::from_utf8(&frame.unwrap()).unwrap());
+        }
+        assert!(output.contains("cos_sysinfo"));
+        assert!(!output.contains("secret"));
+        assert!(!output.contains("\"input\""));
+        assert!(!output.contains("preview"));
+        assert!(!output.contains("tool_input_delta"));
     }
 }

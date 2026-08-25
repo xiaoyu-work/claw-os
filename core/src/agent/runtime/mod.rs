@@ -8,6 +8,7 @@ pub mod hooks;
 pub mod hooks_config;
 pub mod interrupt;
 pub mod loop_;
+pub mod presentation;
 pub mod progress;
 pub mod semantic_indexer;
 pub mod turn;

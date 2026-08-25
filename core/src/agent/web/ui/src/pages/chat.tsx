@@ -10,8 +10,8 @@
  *   - sticky composer at the bottom
  *
  * Frames consumed (from core/src/agent/web/routes/chat.rs):
- *   text, tool_use_start, tool_input_delta, tool_use, tool_result,
- *   tool_start, warning, turn_done, done, error.
+ *   text, tool_use_start, tool_use, tool_result, tool_start, warning,
+ *   turn_done, done, error.
  */
 
 import { ArrowUp, Loader2, Square, Wrench, AlertTriangle } from "lucide-react";
@@ -28,12 +28,8 @@ import { Textarea } from "@/components/ui/textarea";
 type ToolCall = {
   id: string;
   name: string;
-  input?: any;
-  inputAccum: string;
-  result?: any;
   isError?: boolean;
   finished: boolean;
-  progress?: string;
 };
 
 type Msg = {
@@ -100,9 +96,8 @@ export function ChatPage({ meta }: { meta: any }) {
             for (const res of results) {
               for (let j = restored.length - 1; j >= 0; j--) {
                 if (restored[j].role !== "assistant") continue;
-                const slot = restored[j].tools.find((t) => t.result == null);
+                const slot = restored[j].tools.find((t) => !t.finished);
                 if (slot) {
-                  slot.result = res?.text ?? "";
                   slot.isError = !!res?.is_error;
                   slot.finished = true;
                   break;
@@ -115,8 +110,6 @@ export function ChatPage({ meta }: { meta: any }) {
           const tools: ToolCall[] = calls.map((c, k) => ({
             id: `${m.id ?? i}-${k}`,
             name: String(c?.name || "tool"),
-            input: c?.input,
-            inputAccum: "",
             finished: false,
           }));
           restored.push({
@@ -270,42 +263,22 @@ function applyFrame(msg: Msg, event: string, data: any) {
       msg.text += typeof data === "string" ? data : data?.delta || "";
       break;
     case "tool_use_start":
-      msg.tools.push({
-        id: String(data?.id || uid()),
-        name: String(data?.name || "tool"),
-        inputAccum: "",
-        finished: false,
-      });
+      upsertTool(msg, data);
       break;
-    case "tool_input_delta": {
-      const t = msg.tools.find((t) => t.id === String(data?.id));
-      if (t) t.inputAccum += data?.delta || "";
+    case "tool_input_delta":
       break;
-    }
-    case "tool_use": {
-      const t =
-        msg.tools.find((t) => t.id === String(data?.id)) ||
-        msg.tools[msg.tools.length - 1];
-      if (t) {
-        t.input = data?.input ?? t.input;
-        t.name = data?.name || t.name;
-      }
+    case "tool_use":
+      upsertTool(msg, data);
       break;
-    }
     case "tool_result": {
-      const t = msg.tools.find((t) => t.id === String(data?.id));
-      if (t) {
-        t.result = data?.output ?? data?.content ?? data?.text;
-        t.isError = !!data?.is_error;
-        t.finished = true;
-      }
+      const t = upsertTool(msg, data);
+      t.isError = !!data?.is_error || data?.ok === false;
+      t.finished = true;
       break;
     }
-    case "tool_start": {
-      const t = msg.tools[msg.tools.length - 1];
-      if (t) t.progress = data?.message || data?.note || "";
+    case "tool_start":
+      upsertTool(msg, data);
       break;
-    }
     case "warning":
       msg.warnings.push(stringifyServerMessage(data, "warning"));
       break;
@@ -318,6 +291,22 @@ function applyFrame(msg: Msg, event: string, data: any) {
       msg.error = stringifyServerMessage(data, "stream error");
       break;
   }
+}
+
+function upsertTool(msg: Msg, data: any): ToolCall {
+  const id = String(data?.id || uid());
+  const existing = msg.tools.find((tool) => tool.id === id);
+  if (existing) {
+    existing.name = String(data?.name || existing.name || "tool");
+    return existing;
+  }
+  const tool = {
+    id,
+    name: String(data?.name || "tool"),
+    finished: false,
+  };
+  msg.tools.push(tool);
+  return tool;
 }
 
 // The agent server emits errors as
@@ -389,47 +378,17 @@ function Message({ m }: { m: Msg }) {
 }
 
 function ToolCard({ t }: { t: ToolCall }) {
-  const [open, setOpen] = useState(false);
-  const summary = (() => {
-    if (t.input && typeof t.input === "object") {
-      const first = Object.entries(t.input)[0];
-      if (first) return `${first[0]}: ${JSON.stringify(first[1]).slice(0, 60)}`;
-    }
-    return t.progress || (t.finished ? "complete" : "running…");
-  })();
+  const status = t.isError ? "failed" : t.finished ? "called" : "running…";
   return (
     <Card className="border-muted px-3 py-2 text-xs">
-      <button
-        type="button"
-        className="flex w-full items-center justify-between gap-2"
-        onClick={() => setOpen((v) => !v)}
-      >
+      <div className="flex w-full items-center justify-between gap-2">
         <span className="flex items-center gap-2">
           <Wrench className={cn("h-3.5 w-3.5", t.isError && "text-destructive")} />
           <span className="font-mono font-semibold">{t.name}</span>
-          <span className="text-muted-foreground">{summary}</span>
+          <span className="text-muted-foreground">{status}</span>
         </span>
         {!t.finished && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
-      </button>
-      {open && (
-        <div className="mt-2 grid gap-2">
-          {t.input != null && (
-            <pre className="overflow-x-auto rounded bg-muted px-2 py-1 text-[11px]">
-              {JSON.stringify(t.input, null, 2)}
-            </pre>
-          )}
-          {t.result != null && (
-            <pre
-              className={cn(
-                "overflow-x-auto rounded px-2 py-1 text-[11px]",
-                t.isError ? "bg-destructive/10 text-destructive" : "bg-muted",
-              )}
-            >
-              {typeof t.result === "string" ? t.result : JSON.stringify(t.result, null, 2)}
-            </pre>
-          )}
-        </div>
-      )}
+      </div>
     </Card>
   );
 }

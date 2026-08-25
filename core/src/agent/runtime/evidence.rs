@@ -376,7 +376,6 @@ pub(crate) fn strip_markers(value: &str) -> String {
             output.pop();
         }
         let Some(relative_end) = value[start..].find(']') else {
-            output.push_str(&value[start..]);
             cursor = value.len();
             break;
         };

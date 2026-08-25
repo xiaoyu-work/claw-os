@@ -1737,9 +1737,6 @@ struct JobProgressSink {
     job_id: String,
 }
 
-const MAX_PROGRESS_PREVIEW_CHARS: usize = 4096;
-const MAX_PROGRESS_INPUT_CHARS: usize = 16 * 1024;
-
 fn clip_progress_text(value: &str, max_chars: usize) -> String {
     if value.chars().count() <= max_chars {
         return value.to_string();
@@ -1749,25 +1746,12 @@ fn clip_progress_text(value: &str, max_chars: usize) -> String {
     clipped
 }
 
-fn bounded_progress_input(input: &Value) -> Value {
-    let serialized = serde_json::to_string(input).unwrap_or_default();
-    if serialized.chars().count() <= MAX_PROGRESS_INPUT_CHARS {
-        input.clone()
-    } else {
-        json!({
-            "truncated": true,
-            "preview": clip_progress_text(&serialized, MAX_PROGRESS_INPUT_CHARS),
-        })
-    }
-}
-
 impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
-    fn on_tool_start(&self, id: &str, name: &str, input: &Value) {
+    fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         let progress = json!({
             "kind": "tool_start",
             "id": id,
             "name": name,
-            "input": bounded_progress_input(input),
         });
         if let Err(err) = Store::open_default()
             .and_then(|store| store.append_stream_progress(&self.job_id, progress))
@@ -1786,8 +1770,8 @@ impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
         name: &str,
         ok: bool,
         latency_ms: u64,
-        bytes_returned: usize,
-        content_preview: &str,
+        _bytes_returned: usize,
+        _content_preview: &str,
     ) {
         let progress = json!({
             "kind": "tool_result",
@@ -1795,8 +1779,6 @@ impl crate::agent::runtime::progress::ProgressSink for JobProgressSink {
             "name": name,
             "ok": ok,
             "latency_ms": latency_ms,
-            "bytes": bytes_returned,
-            "preview": clip_progress_text(content_preview, MAX_PROGRESS_PREVIEW_CHARS),
         });
         if let Err(err) = Store::open_default()
             .and_then(|store| store.append_stream_progress(&self.job_id, progress))
@@ -1912,17 +1894,12 @@ mod tests {
     }
 
     #[test]
-    fn progress_payloads_are_bounded() {
-        let oversized = "x".repeat(MAX_PROGRESS_PREVIEW_CHARS + 100);
+    fn progress_text_clipping_is_bounded() {
+        const MAX_CHARS: usize = 4096;
+        let oversized = "x".repeat(MAX_CHARS + 100);
         assert!(
-            clip_progress_text(&oversized, MAX_PROGRESS_PREVIEW_CHARS)
-                .chars()
-                .count()
-                <= MAX_PROGRESS_PREVIEW_CHARS + 2
+            clip_progress_text(&oversized, MAX_CHARS).chars().count() <= MAX_CHARS + 2
         );
-        let input = json!({ "payload": "x".repeat(MAX_PROGRESS_INPUT_CHARS + 100) });
-        let bounded = bounded_progress_input(&input);
-        assert_eq!(bounded["truncated"], true);
     }
 
     #[test]

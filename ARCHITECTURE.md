@@ -136,15 +136,20 @@ CLI / web UI / bridge
   -> traced system prompt + persisted conversation
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
+  -> user-visible stream projection (tool identity only; evidence markers hidden)
   -> tool registry / guardrails / hooks
   -> parallel-safe or serial tool execution
   -> tool results appended to conversation
   -> repeat until final response or max_turns
+  -> final no-tools synthesis when the work limit is reached
   -> usage/session/audit records
 ```
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
 authorization, execution ordering, hooks, and conversation history meet.
+The projection in `core/src/agent/runtime/presentation.rs` affects display
+events only; complete tool inputs/results remain in the runtime trajectory,
+session memory, audit records, and evidence verifier.
 
 ### App invocation
 

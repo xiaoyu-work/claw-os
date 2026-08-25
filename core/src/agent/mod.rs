@@ -2844,6 +2844,7 @@ async fn live_cmd_async(
 ) -> Result<Value, String> {
     use crate::agent::llm::accumulate::StreamSink;
     use crate::agent::llm::types::StreamEvent;
+    use std::collections::HashSet;
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
@@ -2853,12 +2854,12 @@ async fn live_cmd_async(
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
 
-    /// Stream sink that mirrors the `cos agent stream` UX: tokens to
-    /// stderr live, tool starts/inputs as bracketed lines, warnings
-    /// flagged. Captures everything the envelope needs to summarise
-    /// the run (the loop itself returns just the final answer text).
+    /// Stream sink that writes tokens live, announces tool names without
+    /// payloads, and flags warnings. Captures the metadata the envelope needs
+    /// to summarise the run (the loop itself returns final answer text).
     struct LiveSink {
         tool_calls: Mutex<Vec<serde_json::Value>>,
+        announced_tools: Mutex<HashSet<String>>,
         warnings: Mutex<Vec<String>>,
         // Final usage + finish reason from the LAST `Done` event in
         // the multi-turn run. Earlier turns' Done events are still
@@ -2871,6 +2872,15 @@ async fn live_cmd_async(
         // Reuse the same heartbeat implementation as the chat REPL.
         heartbeat: crate::agent::runtime::progress::Heartbeat,
     }
+    impl LiveSink {
+        fn announce_tool(&self, id: &str, name: &str, out: &mut impl Write) {
+            let should_announce =
+                id.is_empty() || mlock(&self.announced_tools).insert(id.to_string());
+            if should_announce {
+                let _ = writeln!(out, "\n[tool: {name}]");
+            }
+        }
+    }
     impl StreamSink for LiveSink {
         fn on_event(&self, event: &StreamEvent) {
             let stderr = std::io::stderr();
@@ -2881,22 +2891,14 @@ async fn live_cmd_async(
                     let _ = err_lock.flush();
                 }
                 StreamEvent::ToolUseStart { id, name } => {
-                    let _ = writeln!(err_lock, "\n[tool_use_start id={id} name={name}]");
+                    self.announce_tool(id, name, &mut err_lock);
                 }
-                StreamEvent::ToolInputDelta { partial_json, .. } => {
-                    let _ = err_lock.write_all(partial_json.as_bytes());
-                    let _ = err_lock.flush();
-                }
+                StreamEvent::ToolInputDelta { .. } => {}
                 StreamEvent::ToolUse(call) => {
-                    let _ = writeln!(
-                        err_lock,
-                        "\n[tool_use id={} name={}] {}",
-                        call.id, call.name, call.input
-                    );
+                    self.announce_tool(&call.id, &call.name, &mut err_lock);
                     mlock(&self.tool_calls).push(serde_json::json!({
                         "id": call.id,
                         "name": call.name,
-                        "input": call.input,
                     }));
                 }
                 StreamEvent::Reasoning { .. } => {}
@@ -2908,15 +2910,10 @@ async fn live_cmd_async(
                         }
                     }
                     for call in &resp.tool_calls {
-                        let _ = writeln!(
-                            err_lock,
-                            "\n[tool_use id={} name={}] {}",
-                            call.id, call.name, call.input
-                        );
+                        self.announce_tool(&call.id, &call.name, &mut err_lock);
                         mlock(&self.tool_calls).push(serde_json::json!({
                             "id": call.id,
                             "name": call.name,
-                            "input": call.input,
                         }));
                     }
                     let _ = err_lock.flush();
@@ -2938,13 +2935,10 @@ async fn live_cmd_async(
         fn on_tool_start(
             &self,
             id: &str,
-            _name: &str,
+            name: &str,
             _input: &serde_json::Value,
         ) {
-            // Start emitting heartbeat dots after 2s. The
-            // `[tool_use id=…]` line printed by StreamSink already
-            // tells the user which tool is running, so we don't
-            // duplicate that here — just signal life with dots.
+            self.announce_tool(id, name, &mut std::io::stderr().lock());
             self.heartbeat.start(id, "");
         }
 
@@ -2953,27 +2947,20 @@ async fn live_cmd_async(
             id: &str,
             name: &str,
             ok: bool,
-            latency_ms: u64,
-            bytes_returned: usize,
-            content_preview: &str,
+            _latency_ms: u64,
+            _bytes_returned: usize,
+            _content_preview: &str,
         ) {
             self.heartbeat.stop(id);
-            let stderr = std::io::stderr();
-            let mut e = stderr.lock();
-            let _ = crate::agent::runtime::progress::write_result_block(
-                &mut e,
-                id,
-                name,
-                ok,
-                latency_ms,
-                bytes_returned,
-                content_preview,
-            );
+            if !ok {
+                let _ = writeln!(std::io::stderr().lock(), "\n[tool failed: {name}]");
+            }
         }
     }
 
     let sink_obj = Arc::new(LiveSink {
         tool_calls: Mutex::new(Vec::new()),
+        announced_tools: Mutex::new(HashSet::new()),
         warnings: Mutex::new(Vec::new()),
         last_usage: Mutex::new(None),
         last_finish: Mutex::new(None),
@@ -3328,6 +3315,7 @@ async fn chat_cmd_async(
 ) -> Result<Value, String> {
     use crate::agent::llm::accumulate::StreamSink;
     use crate::agent::llm::types::StreamEvent;
+    use std::collections::HashSet;
     use std::io::{BufRead, Write};
     use std::sync::{Arc, Mutex};
 
@@ -3409,6 +3397,7 @@ async fn chat_cmd_async(
     struct ChatSink {
         verbose_telemetry: bool,
         tool_calls: Mutex<Vec<serde_json::Value>>,
+        announced_tools: Mutex<HashSet<String>>,
         warnings: Mutex<Vec<String>>,
         last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
         last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
@@ -3416,7 +3405,7 @@ async fn chat_cmd_async(
         // dispatches a tool (via `ProgressSink::on_tool_start`),
         // cancelled when the result arrives. Without it the REPL
         // appeared frozen during slow filesystem walks — the user
-        // saw the `[tool_use …]` line and nothing else for 60s+.
+        // saw the `[tool: name]` line and nothing else for 60s+.
         heartbeat: crate::agent::runtime::progress::Heartbeat,
     }
     impl ChatSink {
@@ -3424,6 +3413,7 @@ async fn chat_cmd_async(
             Self {
                 verbose_telemetry,
                 tool_calls: Mutex::new(Vec::new()),
+                announced_tools: Mutex::new(HashSet::new()),
                 warnings: Mutex::new(Vec::new()),
                 last_usage: Mutex::new(None),
                 last_finish: Mutex::new(None),
@@ -3432,9 +3422,18 @@ async fn chat_cmd_async(
         }
         fn reset(&self) {
             mlock(&self.tool_calls).clear();
+            mlock(&self.announced_tools).clear();
             mlock(&self.warnings).clear();
             *mlock(&self.last_usage) = None;
             *mlock(&self.last_finish) = None;
+        }
+
+        fn announce_tool(&self, id: &str, name: &str, out: &mut impl Write) {
+            let should_announce =
+                id.is_empty() || mlock(&self.announced_tools).insert(id.to_string());
+            if should_announce {
+                let _ = writeln!(out, "\n[tool: {name}]");
+            }
         }
     }
     impl StreamSink for ChatSink {
@@ -3447,22 +3446,14 @@ async fn chat_cmd_async(
                     let _ = e.flush();
                 }
                 StreamEvent::ToolUseStart { id, name } => {
-                    let _ = writeln!(e, "\n[tool_use_start id={id} name={name}]");
+                    self.announce_tool(id, name, &mut e);
                 }
-                StreamEvent::ToolInputDelta { partial_json, .. } => {
-                    let _ = e.write_all(partial_json.as_bytes());
-                    let _ = e.flush();
-                }
+                StreamEvent::ToolInputDelta { .. } => {}
                 StreamEvent::ToolUse(call) => {
-                    let _ = writeln!(
-                        e,
-                        "\n[tool_use id={} name={}] {}",
-                        call.id, call.name, call.input
-                    );
+                    self.announce_tool(&call.id, &call.name, &mut e);
                     mlock(&self.tool_calls).push(serde_json::json!({
                         "id": call.id,
                         "name": call.name,
-                        "input": call.input,
                     }));
                 }
                 StreamEvent::Reasoning { .. } => {}
@@ -3474,15 +3465,10 @@ async fn chat_cmd_async(
                         }
                     }
                     for call in &resp.tool_calls {
-                        let _ = writeln!(
-                            e,
-                            "\n[tool_use id={} name={}] {}",
-                            call.id, call.name, call.input
-                        );
+                        self.announce_tool(&call.id, &call.name, &mut e);
                         mlock(&self.tool_calls).push(serde_json::json!({
                             "id": call.id,
                             "name": call.name,
-                            "input": call.input,
                         }));
                     }
                     let _ = e.flush();
@@ -3511,12 +3497,10 @@ async fn chat_cmd_async(
         fn on_tool_start(
             &self,
             id: &str,
-            _name: &str,
+            name: &str,
             _input: &serde_json::Value,
         ) {
-            // Heartbeat dots after 2s. The `[tool_use …]` line is
-            // already in flight from `on_event`; we just keep the
-            // user company while the tool churns.
+            self.announce_tool(id, name, &mut std::io::stderr().lock());
             self.heartbeat.start(id, "");
         }
 
@@ -3525,22 +3509,14 @@ async fn chat_cmd_async(
             id: &str,
             name: &str,
             ok: bool,
-            latency_ms: u64,
-            bytes_returned: usize,
-            content_preview: &str,
+            _latency_ms: u64,
+            _bytes_returned: usize,
+            _content_preview: &str,
         ) {
             self.heartbeat.stop(id);
-            let stderr = std::io::stderr();
-            let mut e = stderr.lock();
-            let _ = crate::agent::runtime::progress::write_result_block(
-                &mut e,
-                id,
-                name,
-                ok,
-                latency_ms,
-                bytes_returned,
-                content_preview,
-            );
+            if !ok {
+                let _ = writeln!(std::io::stderr().lock(), "\n[tool failed: {name}]");
+            }
         }
     }
 
@@ -3733,18 +3709,7 @@ async fn chat_cmd_async(
                 ) {
                     let _ = writeln!(
                         stderr.lock(),
-                        "[evidence: {} binding={} claim={}]",
-                        ask_result.evidence.status.as_str(),
-                        ask_result
-                            .evidence
-                            .binding_confidence
-                            .map(|value| format!("{value:.2}"))
-                            .unwrap_or_else(|| "n/a".to_string()),
-                        ask_result
-                            .evidence
-                            .claim_confidence
-                            .map(|value| format!("{value:.2}"))
-                            .unwrap_or_else(|| "n/a".to_string())
+                        "[warning: response could not be fully verified]"
                     );
                 }
                 if ask_result

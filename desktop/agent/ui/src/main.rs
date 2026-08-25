@@ -2345,7 +2345,7 @@ fn message_bubble(message: &ChatMessage, index: usize, compact: bool) -> Element
                     .align_x(Alignment::End),
                 );
             }
-            for result in &message.tool_results {
+            for result in message.tool_results.iter().filter(|result| result.is_error) {
                 column = column.push(tool_result_card(result, compact));
             }
             column.width(Length::Fill).into()
@@ -2374,7 +2374,7 @@ fn message_bubble(message: &ChatMessage, index: usize, compact: bool) -> Element
             for call in &message.tool_calls {
                 column = column.push(tool_call_card(call, compact));
             }
-            for result in &message.tool_results {
+            for result in message.tool_results.iter().filter(|result| result.is_error) {
                 column = column.push(tool_result_card(result, compact));
             }
             for warning in &message.warnings {
@@ -2408,7 +2408,7 @@ fn message_bubble(message: &ChatMessage, index: usize, compact: bool) -> Element
 
 fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
-    let mut column = Column::new()
+    let column = Column::new()
         .push(
             Row::new()
                 .push(widget::icon::from_name("system-run-symbolic").size(16))
@@ -2433,14 +2433,6 @@ fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
                 .align_y(Alignment::Center),
         )
         .spacing(spacing.space_xxs);
-    let preview = if !call.partial_json.trim().is_empty() {
-        clip_preview(&call.partial_json, 600)
-    } else {
-        format_input_preview(&call.input)
-    };
-    if !preview.is_empty() {
-        column = column.push(text(preview).size(if compact { 10.0 } else { 11.0 }));
-    }
     container(column)
         .padding([spacing.space_xxs, spacing.space_s])
         .class(theme::Container::custom(tool_card_style))
@@ -2448,18 +2440,18 @@ fn tool_call_card(call: &ToolCallView, compact: bool) -> Element<'_, Message> {
         .into()
 }
 
-fn tool_result_card(result: &ToolResultView, compact: bool) -> Element<'_, Message> {
+fn tool_result_card(result: &ToolResultView, _compact: bool) -> Element<'_, Message> {
     let spacing = theme::active().cosmic().spacing;
-    let label = if result.is_error {
+    let mut label = if result.is_error {
         fl!("tool-error")
     } else {
         fl!("tool-result")
     };
-    let mut column = Column::new().push(text(label).size(11.0));
-    let preview = clip_preview(&result.text, 600);
-    if !preview.is_empty() {
-        column = column.push(text(preview).size(if compact { 10.0 } else { 11.0 }));
+    if !result.name.trim().is_empty() {
+        label.push_str(": ");
+        label.push_str(&result.name);
     }
+    let column = Column::new().push(text(label).size(11.0));
     container(column.spacing(spacing.space_xxs))
         .padding([spacing.space_xxs, spacing.space_s])
         .class(theme::Container::custom(if result.is_error {
@@ -2482,19 +2474,6 @@ fn warning_card(warning: &str) -> Element<'_, Message> {
     .padding([spacing.space_xxs, spacing.space_s])
     .class(theme::Container::custom(tool_card_style))
     .into()
-}
-
-fn format_input_preview(value: &serde_json::Value) -> String {
-    if value.is_null() {
-        String::new()
-    } else if let Some(value) = value.as_str() {
-        clip_preview(value, 600)
-    } else {
-        clip_preview(
-            &serde_json::to_string_pretty(value).unwrap_or_default(),
-            600,
-        )
-    }
 }
 
 fn clip_preview(input: &str, max_chars: usize) -> String {

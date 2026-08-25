@@ -67,12 +67,90 @@ pub async fn run_turn(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        true,
+    )
+    .await
+}
+
+/// Final synthesis turn used when the agent reaches its configured work
+/// limit. Tool schemas are removed and `tool_choice` is forced to `none`, so
+/// the provider must answer from results already present in `messages`.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_final_turn(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn_inner(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    allow_tools: bool,
+) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
         system: Some(system.to_string()),
-        tools: llm_tools.to_vec(),
-        tool_choice: ToolChoice::Auto,
+        tools: if allow_tools {
+            llm_tools.to_vec()
+        } else {
+            Vec::new()
+        },
+        tool_choice: if allow_tools {
+            ToolChoice::Auto
+        } else {
+            ToolChoice::None
+        },
         max_tokens: Some(max_tokens),
         temperature: Some(temperature),
         top_p: None,
@@ -162,7 +240,7 @@ pub async fn run_turn(
 
     let tool_calls = collect_tool_calls(&response);
 
-    if tool_calls.is_empty() {
+    if tool_calls.is_empty() || !allow_tools {
         let text = extract_text(&response);
         return Ok(TurnReport {
             outcome: TurnOutcome::Final(text),
@@ -242,12 +320,88 @@ pub async fn run_turn_streaming(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_streaming_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        sink,
+        hook_ctx,
+        progress,
+        true,
+    )
+    .await
+}
+
+/// Streaming counterpart of [`run_final_turn`].
+#[allow(clippy::too_many_arguments)]
+pub async fn run_final_turn_streaming(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    sink: Arc<dyn StreamSink>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_streaming_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        sink,
+        hook_ctx,
+        progress,
+        false,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn_streaming_inner(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    sink: Arc<dyn StreamSink>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    allow_tools: bool,
+) -> Result<TurnReport, super::loop_::AgentError> {
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
         system: Some(system.to_string()),
-        tools: llm_tools.to_vec(),
-        tool_choice: ToolChoice::Auto,
+        tools: if allow_tools {
+            llm_tools.to_vec()
+        } else {
+            Vec::new()
+        },
+        tool_choice: if allow_tools {
+            ToolChoice::Auto
+        } else {
+            ToolChoice::None
+        },
         max_tokens: Some(max_tokens),
         temperature: Some(temperature),
         top_p: None,
@@ -310,7 +464,7 @@ pub async fn run_turn_streaming(
     let usage = response.usage.clone();
     let tool_calls = collect_tool_calls(&response);
 
-    if tool_calls.is_empty() {
+    if tool_calls.is_empty() || !allow_tools {
         let text = extract_text(&response);
         return Ok(TurnReport {
             outcome: TurnOutcome::Final(text),
