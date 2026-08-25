@@ -67,4 +67,3 @@ cargo test -p cos agent::llm::accumulate::tests -- --test-threads=1
 For an LLM-provider change, test setup/discovery, auth, request serialization,
 non-streaming parsing, SSE conversion, tool/reasoning round-trips, and
 pool/fallback classification.
-
