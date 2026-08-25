@@ -19,6 +19,7 @@ separate description from system authority.
 | `catalog.rs` | Known capability verbs and metadata |
 | `scope.rs` | Scope kinds, normalization, containment |
 | `manifest.rs` | `app.json` schema and validation |
+| `manifest/tests.rs` | Manifest parsing, need binding, AI/session/desktop tests |
 | `enforcement.rs` | Permission decision path |
 | `mod.rs` | Shared capability types and exports |
 

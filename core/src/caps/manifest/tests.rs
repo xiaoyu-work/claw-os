@@ -1,0 +1,847 @@
+use super::*;
+
+fn parse(s: &str) -> Manifest {
+    Manifest::from_json(s).expect("manifest should be valid")
+}
+
+#[test]
+fn minimal_manifest_parses() {
+    let m = parse(
+        r#"{
+              "id": "fs",
+              "version": "0.2.0",
+              "name": "Files"
+            }"#,
+    );
+    assert_eq!(m.id, "fs");
+    assert_eq!(m.runtime, Runtime::Python);
+    assert!(m.operations.is_empty());
+}
+
+#[test]
+fn invalid_id_rejected() {
+    let err = Manifest::from_json(r#"{"id":"FS!","version":"0","name":"X"}"#).unwrap_err();
+    assert!(matches!(err, ManifestError::InvalidId(_)));
+}
+
+#[test]
+fn unknown_verb_rejected_at_parse_time() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "x": {
+                  "label": "X",
+                  "args": [],
+                  "needs": [
+                    {"verb": "fs.nonsense", "scope": {"kind":"wild"}, "why": "..."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    // Serde error, not validate(): the unknown verb is caught at
+    // deserialization time by Verb's manual impl.
+    assert!(matches!(err, ManifestError::Json(_)));
+}
+
+#[test]
+fn need_referencing_undeclared_arg_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "rm": {
+                  "label": "Delete",
+                  "args": [],
+                  "needs": [
+                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": "y"}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    match err {
+        ManifestError::NeedRefsUndeclaredArg { op, idx, arg } => {
+            assert_eq!(op, "rm");
+            assert_eq!(idx, 0);
+            assert_eq!(arg, "path");
+        }
+        other => panic!("expected NeedRefsUndeclaredArg, got {other:?}"),
+    }
+}
+
+#[test]
+fn need_binding_to_text_arg_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "rm": {
+                  "label": "Delete",
+                  "args": [{"name": "path", "kind": "text"}],
+                  "needs": [
+                    {"verb": "fs.delete", "scope": {"kind":"from-arg","arg":"path"}, "why": "y"}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::NeedArgKindMismatch { .. }));
+}
+
+#[test]
+fn duplicate_arg_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "x": {
+                  "label": "X",
+                  "args": [
+                    {"name": "p", "kind": "path"},
+                    {"name": "p", "kind": "path"}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::DuplicateArg { .. }));
+}
+
+#[test]
+fn missing_english_in_top_level_name_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": {"zh-CN": "文件"}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::TopLevelTextInvalid { field: "name", .. }
+    ));
+}
+
+#[test]
+fn missing_english_in_op_label_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "ls": {
+                  "label": {"zh-CN": "列表"}
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::LocalizedTextInvalid { field: "label", .. }
+    ));
+}
+
+#[test]
+fn resolve_needs_substitutes_runtime_arg_value() {
+    let m = parse(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "rm": {
+                  "label": "Delete",
+                  "args": [{"name": "path", "kind": "path", "required": true}],
+                  "needs": [
+                    {"verb": "fs.delete",
+                     "scope": {"kind":"from-arg","arg":"path"},
+                     "why": "Remove the file you specified."}
+                  ]
+                }
+              }
+            }"#,
+    );
+    let mut args = BTreeMap::new();
+    args.insert("path".to_string(), serde_json::json!("/home/jay/x.md"));
+    let caps = m.resolve_needs("rm", &args).unwrap();
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0].verb, Verb::FS_DELETE);
+    assert_eq!(caps[0].scope, Scope::path("/home/jay/x.md"));
+}
+
+#[test]
+fn resolve_needs_with_fixed_scope() {
+    let m = parse(
+        r#"{
+              "id": "log",
+              "version": "0.1",
+              "name": "Log",
+              "operations": {
+                "tail": {
+                  "label": "Tail logs",
+                  "needs": [
+                    {"verb": "data.log.read",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"system/*"}},
+                     "why": "Read recent log lines."}
+                  ]
+                }
+              }
+            }"#,
+    );
+    let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
+    assert_eq!(caps[0].verb, Verb::DATA_LOG_READ);
+    assert_eq!(caps[0].scope, Scope::name("system/*"));
+}
+
+#[test]
+fn resolve_needs_missing_arg_at_runtime_is_error() {
+    let m = parse(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "rm": {
+                  "label": "Delete",
+                  "args": [{"name": "path", "kind": "path", "required": true}],
+                  "needs": [
+                    {"verb": "fs.delete",
+                     "scope": {"kind":"from-arg","arg":"path"},
+                     "why": "Remove the file you specified."}
+                  ]
+                }
+              }
+            }"#,
+    );
+    let err = m.resolve_needs("rm", &BTreeMap::new()).unwrap_err();
+    match err {
+        ManifestError::NeedInvalid { op, detail, .. } => {
+            assert_eq!(op, "rm");
+            assert!(detail.contains("not supplied"));
+        }
+        other => panic!("expected NeedInvalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn runtime_default_is_python() {
+    let m = parse(r#"{"id":"x","version":"0","name":"X"}"#);
+    assert_eq!(m.runtime, Runtime::Python);
+    assert_eq!(m.runtime.default_entry(), "main.py");
+}
+
+#[test]
+fn full_example_round_trips() {
+    let src = r#"{
+          "id": "fs",
+          "version": "0.2.0",
+          "name": "Files",
+          "summary": "Browse, read, write, and search files.",
+          "icon": "📁",
+          "runtime": "python",
+          "entry": "main.py",
+          "operations": {
+            "ls": {
+              "label": "List files",
+              "summary": "Show the names of files inside a folder.",
+              "args": [{"name":"path","kind":"path","required":true}],
+              "needs": [
+                {"verb":"fs.meta",
+                 "scope":{"kind":"from-arg","arg":"path"},
+                 "why":"Read directory entries to list files."}
+              ]
+            },
+            "mv": {
+              "label": "Move a file",
+              "args": [
+                {"name":"src","kind":"path","required":true},
+                {"name":"dst","kind":"path","required":true}
+              ],
+              "needs": [
+                {"verb":"fs.read",   "scope":{"kind":"from-arg","arg":"src"}, "why":"Read the source file."},
+                {"verb":"fs.write",  "scope":{"kind":"from-arg","arg":"dst"}, "why":"Write to the destination."},
+                {"verb":"fs.delete", "scope":{"kind":"from-arg","arg":"src"}, "why":"Remove the source after copying."}
+              ]
+            }
+          }
+        }"#;
+    let m = Manifest::from_json(src).unwrap();
+    let json = serde_json::to_string(&m).unwrap();
+    let back = Manifest::from_json(&json).unwrap();
+    assert_eq!(back.id, m.id);
+    assert_eq!(back.operations.len(), m.operations.len());
+    assert_eq!(back.operations["mv"].needs.len(), 3);
+}
+
+// ---------------------------------------------------------------
+// AI policy block
+// ---------------------------------------------------------------
+
+#[test]
+fn ai_block_with_valid_policy_parses() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 100000},
+                "safety": "strict",
+                "origins": ["external-content"]
+              },
+              "operations": {
+                "run": {
+                  "label": "Summarize text",
+                  "needs": [
+                    {"verb": "ai.chat.untrusted",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
+                     "why": "Summarize the input text."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap();
+    let policy = m.ai.as_ref().unwrap();
+    assert_eq!(policy.safety, AiSafety::Strict);
+    assert_eq!(policy.origins, vec![PromptOrigin::ExternalContent]);
+    assert_eq!(policy.budget.monthly_units, 100000);
+}
+
+#[test]
+fn ai_need_without_ai_block_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "rogue",
+              "version": "0.1",
+              "name": "Rogue",
+              "operations": {
+                "run": {
+                  "label": "Run",
+                  "needs": [
+                    {"verb": "ai.chat",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
+                     "why": "Talk to a model without declaring a policy."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    match err {
+        ManifestError::AiNeedMissingPolicy { op, verb, .. } => {
+            assert_eq!(op, "run");
+            assert_eq!(verb, "ai.chat");
+        }
+        other => panic!("expected AiNeedMissingPolicy, got {other:?}"),
+    }
+}
+
+#[test]
+fn ai_bypass_rejected_for_apps() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "rogue",
+              "version": "0.1",
+              "name": "Rogue",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "minimal",
+                "origins": ["trusted"]
+              },
+              "operations": {
+                "run": {
+                  "label": "Run",
+                  "needs": [
+                    {"verb": "ai.bypass",
+                     "scope": {"kind":"fixed","scope":{"kind":"name","value":"*"}},
+                     "why": "Skip safety pipeline."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::AiBypassNotAllowedForApps { .. }
+    ));
+}
+
+#[test]
+fn ai_block_with_empty_origins_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": []
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::AiPolicyNoOrigins));
+}
+
+#[test]
+fn ai_origins_default_to_trusted() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict"
+              }
+            }"#,
+    )
+    .unwrap();
+    let policy = m.ai.as_ref().unwrap();
+    assert_eq!(policy.origins, vec![PromptOrigin::Trusted]);
+}
+
+#[test]
+fn ai_tools_default_to_empty_list() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"]
+              }
+            }"#,
+    )
+    .unwrap();
+    let policy = m.ai.as_ref().unwrap();
+    assert!(policy.tools.is_empty());
+}
+
+#[test]
+fn ai_tools_duplicate_entry_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get", "fs.read_text"]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::AiDuplicateTool { ref name } if name == "fs.read_text"));
+}
+
+#[test]
+fn ai_tools_unknown_name_rejected_against_catalog() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "fs.unicorn"]
+              }
+            }"#,
+    )
+    .unwrap();
+    let err = m
+        .validate_tools_against_catalog(&["fs.read_text", "kv.get"])
+        .unwrap_err();
+    assert!(matches!(err, ManifestError::AiUnknownTool { ref name } if name == "fs.unicorn"));
+}
+
+#[test]
+fn ai_tools_known_names_pass_catalog_check() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "ai": {
+                "budget": {"monthly_units": 1},
+                "safety": "strict",
+                "origins": ["trusted"],
+                "tools": ["fs.read_text", "kv.get"]
+              }
+            }"#,
+    )
+    .unwrap();
+    assert!(m
+        .validate_tools_against_catalog(&["fs.read_text", "fs.list", "kv.get"])
+        .is_ok());
+}
+
+#[test]
+fn manifest_without_ai_block_skips_tool_catalog_check() {
+    let m = Manifest::from_json(
+        r#"{
+              "id": "calc",
+              "version": "0.1",
+              "name": "Calc"
+            }"#,
+    )
+    .unwrap();
+    assert!(m.validate_tools_against_catalog(&[]).is_ok());
+}
+
+// -----------------------------------------------------------------
+// Session block tests (Phase 11)
+// -----------------------------------------------------------------
+
+#[test]
+fn session_block_parses_with_minimal_tool() {
+    let m = parse(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "entry": "server.py",
+                "tools": [
+                  {
+                    "name": "kv.list",
+                    "summary": "List keys.",
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"wild"},
+                       "why": "Scan every key."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    );
+    let session = m.session.expect("session block parsed");
+    assert_eq!(session.entry.as_deref(), Some("server.py"));
+    assert_eq!(session.transport, SessionTransport::Stdio);
+    assert_eq!(session.tools.len(), 1);
+    assert_eq!(session.tools[0].name, "kv.list");
+}
+
+#[test]
+fn session_tool_default_entry_per_runtime() {
+    assert_eq!(Runtime::Python.default_session_entry(), "server.py");
+    assert_eq!(Runtime::Node.default_session_entry(), "server.js");
+}
+
+#[test]
+fn session_tool_resolve_needs_from_arg() {
+    let m = parse(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get a value.",
+                    "args": [{"name":"key","kind":"name","required":true}],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read the value at the named key."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    );
+    let mut args = BTreeMap::new();
+    args.insert("key".to_string(), serde_json::json!("user/jay"));
+    let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0].verb, Verb::DATA_KV_READ);
+    assert_eq!(caps[0].scope, Scope::name("user/jay"));
+}
+
+#[test]
+fn session_tool_resolve_needs_unknown_tool_errors() {
+    let m = parse(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": { "tools": [] }
+            }"#,
+    );
+    let err = m
+        .resolve_session_tool_needs("kv.ghost", &BTreeMap::new())
+        .unwrap_err();
+    assert!(matches!(err, ManifestError::SessionNeedInvalid { .. }));
+}
+
+#[test]
+fn session_tool_resolve_needs_no_session_errors() {
+    let m = parse(r#"{"id":"kv","version":"0","name":"KV"}"#);
+    let err = m
+        .resolve_session_tool_needs("kv.get", &BTreeMap::new())
+        .unwrap_err();
+    match err {
+        ManifestError::SessionNeedInvalid { detail, .. } => {
+            assert!(detail.contains("no `session` block"));
+        }
+        other => panic!("expected SessionNeedInvalid, got {other:?}"),
+    }
+}
+
+#[test]
+fn session_tool_invalid_name_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {"name": "KV.Get", "summary": "Get"}
+                ]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::SessionToolInvalidName { .. }));
+}
+
+#[test]
+fn session_duplicate_tool_name_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {"name": "kv.get", "summary": "Get"},
+                  {"name": "kv.get", "summary": "Get again"}
+                ]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ManifestError::SessionDuplicateTool { .. }));
+}
+
+#[test]
+fn session_need_refs_undeclared_arg_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get",
+                    "args": [],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::SessionNeedRefsUndeclaredArg { .. }
+    ));
+}
+
+#[test]
+fn session_need_binding_to_text_arg_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "kv",
+              "version": "0.1",
+              "name": "KV",
+              "session": {
+                "tools": [
+                  {
+                    "name": "kv.get",
+                    "summary": "Get",
+                    "args": [{"name":"key","kind":"text"}],
+                    "needs": [
+                      {"verb": "data.kv.read",
+                       "scope": {"kind":"from-arg","arg":"key"},
+                       "why": "Read."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::SessionNeedArgKindMismatch { .. }
+    ));
+}
+
+#[test]
+fn session_ai_verb_without_policy_rejected() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "summarize",
+              "version": "0.1",
+              "name": "Summarize",
+              "session": {
+                "tools": [
+                  {
+                    "name": "summarize.run",
+                    "summary": "Summarize text.",
+                    "needs": [
+                      {"verb": "ai.chat",
+                       "scope": {"kind":"wild"},
+                       "why": "Call the model."}
+                    ]
+                  }
+                ]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::SessionAiNeedMissingPolicy { .. }
+    ));
+}
+
+#[test]
+fn desktop_block_parses_with_defaults() {
+    let m = parse(
+        r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": {}
+            }"#,
+    );
+    let d = m.desktop.expect("desktop block present");
+    assert_eq!(d.exec, "--gui");
+    assert!(!d.single_instance);
+    assert!(!d.panel_applet);
+    assert!(d.categories.is_empty());
+}
+
+#[test]
+fn desktop_panel_applet_round_trips() {
+    let m = parse(
+        r#"{
+              "id": "widget",
+              "version": "0.1",
+              "name": "Widget",
+              "desktop": {
+                "panel_applet": true
+              }
+            }"#,
+    );
+    assert!(
+        m.desktop
+            .as_ref()
+            .expect("desktop block present")
+            .panel_applet
+    );
+
+    let json = serde_json::to_string(&m).expect("serialize manifest");
+    let back = Manifest::from_json(&json).expect("parse serialized manifest");
+    assert!(
+        back.desktop
+            .as_ref()
+            .expect("desktop block present")
+            .panel_applet
+    );
+}
+
+#[test]
+fn desktop_block_full_parses() {
+    let m = parse(
+        r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": {
+                "exec": "--ui",
+                "name": "My Notes",
+                "icon": "notes",
+                "categories": ["Utility", "TextEditor"],
+                "mime_types": ["text/markdown"],
+                "single_instance": true
+              }
+            }"#,
+    );
+    let d = m.desktop.expect("desktop block present");
+    assert_eq!(d.exec, "--ui");
+    assert_eq!(d.name.unwrap().en_str(), "My Notes");
+    assert_eq!(d.categories, vec!["Utility", "TextEditor"]);
+    assert_eq!(d.mime_types, vec!["text/markdown"]);
+    assert!(d.single_instance);
+}
+
+#[test]
+fn desktop_rejects_category_with_separator() {
+    let err = Manifest::from_json(
+        r#"{
+              "id": "notes",
+              "version": "0.1",
+              "name": "Notes",
+              "desktop": { "categories": ["Utility;Evil"] }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::DesktopInvalid {
+            field: "categories",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn desktop_rejects_control_char_in_exec() {
+    let err = Manifest::from_json(
+        "{\"id\":\"notes\",\"version\":\"0.1\",\"name\":\"Notes\",\
+             \"desktop\":{\"exec\":\"--gui\\nExec=evil\"}}",
+    )
+    .unwrap_err();
+    assert!(matches!(
+        err,
+        ManifestError::DesktopInvalid { field: "exec", .. }
+    ));
+}
