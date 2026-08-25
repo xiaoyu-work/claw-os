@@ -895,7 +895,7 @@ fn status_embed_auto_prompts_when_local_stack_missing() {
 
 #[test]
 fn providers_embed_defaults_away_from_local_when_unavailable() {
-    let expected = if local_embed_precheck(&json!({}), None).is_err() {
+    let expected = if media::local_embed_precheck(&json!({}), None).is_err() {
         "openai"
     } else {
         "local"
@@ -906,7 +906,7 @@ fn providers_embed_defaults_away_from_local_when_unavailable() {
 
 #[test]
 fn apply_embed_local_rejects_missing_local_stack() {
-    if local_embed_precheck(&json!({}), None).is_ok() {
+    if media::local_embed_precheck(&json!({}), None).is_ok() {
         eprintln!("(skipping: local embedding stack is installed)");
         return;
     }
