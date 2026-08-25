@@ -1,0 +1,56 @@
+# Core Module
+
+## Purpose
+
+`core/` builds the `cos` CLI/library, the `clawd` system broker, and small
+privileged helper binaries. It owns system authority, capability enforcement,
+agent orchestration, persistence, and structured primitive dispatch.
+
+## Responsibilities
+
+- Parse and route `cos` commands.
+- Broker privileged and session-scoped operations through `clawd`.
+- Run the multi-turn agent, tool registry, memory, and provider integrations.
+- Discover app manifests and bridge bundled app execution.
+- Enforce capability scopes and write audit/session records.
+
+## Key Files
+
+| Path | Role |
+| --- | --- |
+| `src/main.rs` | `cos` process entry and output format selection |
+| `src/router.rs` | Top-level command and hidden bridge dispatch |
+| `src/bin/clawd.rs` | System daemon entry |
+| `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
+| `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
+| `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
+| `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
+| `src/audit.rs` | Hash-chained audit persistence |
+| `src/session/` | Session storage and lifecycle |
+
+## Dependencies
+
+Entry points and orchestration depend on stable service/capability definitions.
+Providers implement those definitions; consumers must not import around them.
+`clawd` is the privileged boundary. App code and model output are untrusted
+inputs at this layer.
+
+Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
+Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).
+
+## Tests
+
+```bash
+# Narrow test or module
+cargo test -p cos <test-filter> -- --test-threads=1
+
+# Full core suite
+(cd core && cargo test -- --test-threads=1)
+
+# CI lint
+(cd core && cargo clippy -- -D warnings)
+```
+
+Many tests mutate process-global environment variables; combined runs stay
+single-threaded.
+
