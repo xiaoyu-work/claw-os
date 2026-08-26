@@ -42,7 +42,7 @@ editing additional surfaces.
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
 | Python app operation | `apps/<id>/app.json`, `apps/<id>/main.py` | `test_main.py`, `cos_runtime.policy`, app lint |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
-| App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings and conformance tests |
+| App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |

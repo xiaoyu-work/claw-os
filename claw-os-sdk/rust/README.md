@@ -1,7 +1,5 @@
 # claw-os-sdk (Rust)
 
-[![Crates.io](https://img.shields.io/crates/v/claw-os-sdk.svg)](https://crates.io/crates/claw-os-sdk)
-
 The official Rust SDK for Claw OS. Use this crate to talk to the
 `cos` kernel CLI from a Rust app — typed, documented, audited.
 
@@ -24,7 +22,10 @@ The official Rust SDK for Claw OS. Use this crate to talk to the
 
 ```toml
 [dependencies]
-claw-os-sdk = "0.1"
+claw-os-sdk = {
+    git = "https://github.com/xiaoyu-work/claw-os.git",
+    tag = "sdk-v0.1.0",
+}
 ```
 
 ## Use it

@@ -13,7 +13,8 @@ runs.
 ## Install
 
 ```sh
-npm install @claw-os/sdk
+npm install \
+  https://github.com/xiaoyu-work/claw-os/releases/download/sdk-v0.1.0/claw-os-sdk-node-0.1.0.tgz
 ```
 
 ## Modules

@@ -13,11 +13,11 @@ runs.
 ## Install
 
 ```sh
-go get github.com/xiaoyu-work/claw-os-sdk/go
+go get github.com/xiaoyu-work/claw-os/claw-os-sdk/go@v0.1.0
 ```
 
 ```go
-import clawossdk "github.com/xiaoyu-work/claw-os-sdk/go"
+import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 ```
 
 ## Surface
@@ -35,7 +35,7 @@ import clawossdk "github.com/xiaoyu-work/claw-os-sdk/go"
 ```go
 package main
 
-import clawossdk "github.com/xiaoyu-work/claw-os-sdk/go"
+import clawossdk "github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
 
 // A single entry serves both the one-shot operation and the GUI window.
 func run(command string, args map[string]any) (any, error) {

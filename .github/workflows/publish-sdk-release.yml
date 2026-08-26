@@ -1,0 +1,184 @@
+name: Publish SDK Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "SDK SemVer already declared by Python, Node, and Rust (for example 0.1.0)"
+        required: true
+        default: "0.1.0"
+        type: string
+
+concurrency:
+  group: claw-os-sdk-release
+  cancel-in-progress: false
+  queue: max
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    env:
+      SDK_VERSION: ${{ inputs.version }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: claw-os-sdk/node/package-lock.json
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: claw-os-sdk/go/go.mod
+          cache: false
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Validate release version
+        run: |
+          if ! [[ "$SDK_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "error: invalid SDK SemVer: $SDK_VERSION" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import tomllib
+
+          root = pathlib.Path("claw-os-sdk")
+          expected = os.environ["SDK_VERSION"]
+          versions = {
+              "python": tomllib.loads(
+                  (root / "python" / "pyproject.toml").read_text(encoding="utf-8")
+              )["project"]["version"],
+              "node": json.loads(
+                  (root / "node" / "package.json").read_text(encoding="utf-8")
+              )["version"],
+              "node-lock": json.loads(
+                  (root / "node" / "package-lock.json").read_text(encoding="utf-8")
+              )["version"],
+              "node-lock-package": json.loads(
+                  (root / "node" / "package-lock.json").read_text(encoding="utf-8")
+              )["packages"][""]["version"],
+              "rust": tomllib.loads(
+                  (root / "rust" / "Cargo.toml").read_text(encoding="utf-8")
+              )["package"]["version"],
+          }
+          cargo_lock = tomllib.loads(pathlib.Path("Cargo.lock").read_text(encoding="utf-8"))
+          versions["rust-lock"] = next(
+              package["version"]
+              for package in cargo_lock["package"]
+              if package["name"] == "claw-os-sdk"
+          )
+          mismatches = {name: version for name, version in versions.items() if version != expected}
+          if mismatches:
+              raise SystemExit(f"SDK version mismatch; expected {expected}: {mismatches}")
+
+          module = (root / "go" / "go.mod").read_text(encoding="utf-8").splitlines()[0]
+          expected_module = "module github.com/xiaoyu-work/claw-os/claw-os-sdk/go"
+          if module != expected_module:
+              raise SystemExit(f"unexpected Go module path: {module!r}")
+          PY
+
+      - name: Regenerate wire bindings
+        run: |
+          python3 claw-os-sdk/wire/codegen.py
+          git diff --exit-code -- \
+            claw-os-sdk/rust/src/generated.rs \
+            claw-os-sdk/python/src/claw_os_sdk/generated.py \
+            claw-os-sdk/node/src/generated.ts \
+            claw-os-sdk/go/generated.go
+
+      - name: Install SDK test and build dependencies
+        run: |
+          python3 -m pip install --upgrade build pytest
+          npm ci --prefix claw-os-sdk/node
+
+      - name: Test all SDK bindings
+        run: |
+          PYTHONPATH=claw-os-sdk/python/src \
+            python3 -m pytest -q claw-os-sdk/python/src
+          npm test --prefix claw-os-sdk/node
+          cargo test -p claw-os-sdk
+          (cd claw-os-sdk/go && go test ./...)
+
+      - name: Build SDK release artifacts
+        run: |
+          mkdir -p dist
+
+          python3 -m build --outdir "$GITHUB_WORKSPACE/dist" claw-os-sdk/python
+
+          npm run build --prefix claw-os-sdk/node
+          test -f claw-os-sdk/node/dist/index.js
+          test -f claw-os-sdk/node/dist/index.d.ts
+          npm pack ./claw-os-sdk/node \
+            --pack-destination "$GITHUB_WORKSPACE/dist" \
+            --json > "$RUNNER_TEMP/npm-pack.json"
+          node_tarball="$(
+            node -e 'console.log(require(process.argv[1])[0].filename)' \
+              "$RUNNER_TEMP/npm-pack.json"
+          )"
+          mv "dist/$node_tarball" "dist/claw-os-sdk-node-$SDK_VERSION.tgz"
+
+          cargo package -p claw-os-sdk
+          cp "target/package/claw-os-sdk-$SDK_VERSION.crate" dist/
+
+          git archive \
+            --format=tar.gz \
+            --prefix="claw-os-sdk-go-$SDK_VERSION/" \
+            --output="dist/claw-os-sdk-go-$SDK_VERSION.tar.gz" \
+            HEAD:claw-os-sdk/go
+          git archive \
+            --format=tar.gz \
+            --prefix="claw-os-sdk-$SDK_VERSION/" \
+            --output="dist/claw-os-sdk-$SDK_VERSION-source.tar.gz" \
+            HEAD:claw-os-sdk
+
+          (cd dist && sha256sum * > SHA256SUMS)
+          ls -lh dist
+
+      - name: Upload SDK artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-sdk-${{ inputs.version }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Create SDK and Go tags
+        run: |
+          sdk_tag="sdk-v$SDK_VERSION"
+          go_tag="claw-os-sdk/go/v$SDK_VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$sdk_tag" >/dev/null 2>&1 \
+              || git ls-remote --exit-code --tags origin "refs/tags/$go_tag" >/dev/null 2>&1; then
+            echo "error: SDK release tag already exists" >&2
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$sdk_tag" -m "Claw OS SDK v$SDK_VERSION"
+          git tag -a "$go_tag" -m "Claw OS Go SDK v$SDK_VERSION"
+          git push --atomic origin "refs/tags/$sdk_tag" "refs/tags/$go_tag"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "sdk-v$SDK_VERSION" \
+            dist/* \
+            --verify-tag \
+            --title "Claw OS SDK v$SDK_VERSION" \
+            --generate-notes

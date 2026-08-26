@@ -6,11 +6,12 @@ The official Python SDK for Claw OS. Every Python app under
 ## Install
 
 ```sh
-pip install claw-os-sdk
+pip install \
+  https://github.com/xiaoyu-work/claw-os/releases/download/sdk-v0.1.0/claw_os_sdk-0.1.0-py3-none-any.whl
 ```
 
 On a Claw OS system this is pre-installed (sources are baked into
-the rootfs at `/usr/lib/cos/claw_os_sdk/`).
+the rootfs at `/usr/lib/cos/python/claw_os_sdk/`).
 
 ## Use
 

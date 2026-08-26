@@ -146,6 +146,13 @@ sudo apt install claw-os-agent
 
 For details see `packaging/README.md`.
 
+### SDK release
+
+The manually dispatched **Publish SDK Release** workflow validates one SemVer
+across Python, Node, Rust, and Go, regenerates wire bindings, runs all SDK
+tests, and publishes GitHub Release artifacts plus the matching SDK and Go
+module tags. It does not publish to PyPI, npm, or crates.io.
+
 ### Run Locally (Development)
 
 ```bash

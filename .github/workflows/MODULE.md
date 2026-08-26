@@ -22,6 +22,7 @@ pipelines.
 | `publish-base-package.yml` | Independent Claw OS Base build and publication |
 | `publish-desktop-package.yml` | Independent full-rootfs Desktop build and publication |
 | `publish-apt-repo.yml` | Internal cumulative signed-repository publisher |
+| `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
 | `release.yml` | Umbrella test + all publication channels |
 
 ## Dependencies

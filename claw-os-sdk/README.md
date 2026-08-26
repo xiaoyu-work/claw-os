@@ -51,7 +51,7 @@ claw-os-sdk/
 │       ├── ai.ts, tools.ts
 │       └── generated.ts         codegen output
 │
-├── go/                  Go SDK (module github.com/xiaoyu-work/claw-os-sdk/go)
+├── go/                  Go SDK (module github.com/xiaoyu-work/claw-os/claw-os-sdk/go)
 │   ├── go.mod
 │   ├── README.md
 │   ├── transport.go
@@ -135,8 +135,8 @@ python3 wire/codegen.py            # writes generated.* into each language tree
 
 - **Wire protocol** has its own version (`v1`, `v2`, …) bumped only on
   envelope-breaking changes.
-- **Each language SDK** has its own SemVer (Cargo / pip / npm / Go modules).
-  Their CHANGELOGs note which wire version they target.
+- **SDK bindings** share one SemVer and are released together so Python, Node,
+  Rust, and Go always target the same generated wire contract.
 - All SDKs handshake on start-up: each library calls `cos --version` and
   refuses to operate against a `cos` binary that's older than the
   minimum wire-version it requires.
@@ -147,6 +147,23 @@ claw-os is pre-1.0. Breaking changes in the wire protocol are allowed
 and announced in `wire/CHANGELOG.md`. SDKs may pin to a specific wire
 version and refuse to run against incompatible kernels.
 
+## Releases
+
+SDK releases are published through GitHub rather than PyPI, npm, or crates.io.
+The manually dispatched **Publish SDK Release** workflow validates a single
+SemVer across all language manifests, regenerates wire bindings, runs every
+language test suite, and creates:
+
+- `sdk-v<version>` for the GitHub Release and Python/Node/Rust consumers;
+- `claw-os-sdk/go/v<version>` for Go module resolution;
+- Python wheel and source distribution;
+- Node package tarball;
+- Rust `.crate` archive;
+- Go and complete SDK source archives;
+- `SHA256SUMS`.
+
+Install from an immutable release artifact or tag, never from `main`.
+
 ## Status (2026-05-15)
 
 | Component | Status |
@@ -154,7 +171,7 @@ version and refuse to run against incompatible kernels.
 | `wire/v1` schemas | Initial draft |
 | `wire/codegen.py` | Initial — emits Rust + Python; Node + Go are placeholder generators |
 | `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
-| `python/` | Moved from `apps/_lib`; published as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
+| `python/` | Moved from `apps/_lib`; packaged as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
 | `node/` | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
 | `go/`   | Built out — `ai`, `tools`, `gui` over wire v1, with tests |
 
