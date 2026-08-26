@@ -54,6 +54,7 @@ use crate::paths::agent_jobs_dir;
 /// [`Store::recover_orphaned_jobs`]). Stops a job that crashes every
 /// worker from looping forever and starving the queue.
 const MAX_RECOVERIES: u32 = 3;
+const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -255,8 +256,23 @@ impl Store {
         self.root.join("streams").join(format!("{id}.jsonl"))
     }
 
+    fn stream_prune_tombstone_path(&self, id: &str) -> PathBuf {
+        self.root
+            .join("streams")
+            .join(format!("{id}{STREAM_PRUNE_TOMBSTONE_SUFFIX}"))
+    }
+
     fn job_lock_path(&self, id: &str) -> PathBuf {
         self.root.join("locks").join(format!("{id}.lock"))
+    }
+
+    fn active_job_exists(&self, id: &str) -> io::Result<bool> {
+        for status in [JobStatus::Pending, JobStatus::Running] {
+            if path_exists(&self.path_for(status, id))? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     pub fn append_stream_event(
@@ -843,10 +859,92 @@ impl Store {
         }
     }
 
+    /// Resolve stream staging left by an interrupted prune before selecting
+    /// new terminal records: restore it when the record survived, otherwise
+    /// finish removing the orphaned payload.
+    fn recover_prune_tombstones(&self) -> io::Result<()> {
+        let stream_dir = self.root.join("streams");
+        let mut tombstones = Vec::new();
+        for entry in fs::read_dir(&stream_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            let Some(id) = file_name.strip_suffix(STREAM_PRUNE_TOMBSTONE_SUFFIX) else {
+                continue;
+            };
+            if validate_job_id(id).is_err() {
+                continue;
+            }
+            tombstones.push((id.to_string(), path));
+        }
+
+        for (id, tombstone_path) in tombstones {
+            let _job_lock = match self.lock_for_id(&id) {
+                Ok(lock) => lock,
+                Err(_) => continue,
+            };
+            if !matches!(self.active_job_exists(&id), Ok(false)) {
+                continue;
+            }
+
+            let stream_path = self.stream_path(&id);
+            let record_path = self.path_for(JobStatus::Ok, &id);
+            let _ = crate::filelock::with_exclusive_path_lock(&stream_path, || {
+                let record_exists = path_exists(&record_path)
+                    .map_err(|error| format!("inspect {}: {error}", record_path.display()))?;
+                let stream_exists = path_exists(&stream_path)
+                    .map_err(|error| format!("inspect {}: {error}", stream_path.display()))?;
+
+                if record_exists && !stream_exists {
+                    fs::rename(&tombstone_path, &stream_path).map_err(|error| {
+                        format!(
+                            "restore {} to {}: {error}",
+                            tombstone_path.display(),
+                            stream_path.display()
+                        )
+                    })?;
+                    sync_directory_best_effort(&stream_dir);
+                } else if record_exists {
+                    if remove_file_if_exists(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
+                    {
+                        sync_directory_best_effort(&stream_dir);
+                    }
+                } else {
+                    let stream_removed = remove_file_if_exists(&stream_path)
+                        .map_err(|error| format!("remove {}: {error}", stream_path.display()))?;
+                    let tombstone_removed = remove_file_if_exists(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
+                    if stream_removed || tombstone_removed {
+                        sync_directory_best_effort(&stream_dir);
+                    }
+                }
+                Ok(())
+            });
+        }
+
+        Ok(())
+    }
+
     /// Delete terminal jobs older than `older_than` (mtime-based) and
     /// beyond the most recent `keep_last`, including their stream payloads.
     /// Returns the number of complete job records removed.
     pub fn prune(&self, older_than: Duration, keep_last: usize) -> io::Result<usize> {
+        self.prune_with_record_remove(older_than, keep_last, remove_file_if_exists)
+    }
+
+    fn prune_with_record_remove<F>(
+        &self,
+        older_than: Duration,
+        keep_last: usize,
+        mut remove_record: F,
+    ) -> io::Result<usize>
+    where
+        F: FnMut(&Path) -> io::Result<bool>,
+    {
+        self.recover_prune_tombstones()?;
         let dir = self.bucket_dir(JobStatus::Ok);
         let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
         for e in fs::read_dir(&dir)? {
@@ -876,64 +974,127 @@ impl Store {
             let Some(id) = p.file_stem().and_then(|stem| stem.to_str()) else {
                 continue;
             };
-            let job_lock = match self.lock_for_id(id) {
+            let _job_lock = match self.lock_for_id(id) {
                 Ok(lock) => lock,
                 Err(_) => continue,
             };
 
             // A stale/duplicated done entry must never cause the payload for
             // a live job with the same id to be removed.
-            let active_job_exists = [
-                self.path_for(JobStatus::Pending, id),
-                self.path_for(JobStatus::Running, id),
-            ]
-            .iter()
-            .try_fold(false, |active, path| {
-                path_exists(path).map(|exists| active || exists)
-            });
-            if !matches!(active_job_exists, Ok(false)) {
+            if !matches!(self.active_job_exists(id), Ok(false)) {
                 continue;
             }
 
             let stream_path = self.stream_path(id);
-            let stream_lock_path = crate::filelock::lock_sentinel_path(&stream_path);
+            let tombstone_path = self.stream_prune_tombstone_path(id);
             let cleanup = crate::filelock::with_exclusive_path_lock(&stream_path, || {
-                match remove_file_if_exists(&stream_path) {
-                    Ok(true) => sync_directory_best_effort(&self.root.join("streams")),
-                    Ok(false) => {}
+                if path_exists(&tombstone_path)
+                    .map_err(|error| format!("inspect {}: {error}", tombstone_path.display()))?
+                {
+                    return Err(format!(
+                        "stream prune tombstone already exists: {}",
+                        tombstone_path.display()
+                    ));
+                }
+
+                let stream_staged = match fs::symlink_metadata(&stream_path) {
+                    Ok(metadata) => {
+                        let file_type = metadata.file_type();
+                        if !file_type.is_file() && !file_type.is_symlink() {
+                            return Err(format!(
+                                "stream payload is not a file: {}",
+                                stream_path.display()
+                            ));
+                        }
+                        fs::rename(&stream_path, &tombstone_path).map_err(|error| {
+                            format!(
+                                "stage {} as {}: {error}",
+                                stream_path.display(),
+                                tombstone_path.display()
+                            )
+                        })?;
+                        sync_directory_best_effort(&self.root.join("streams"));
+                        true
+                    }
+                    Err(error) if error.kind() == ErrorKind::NotFound => false,
                     Err(error) => {
-                        return Err(format!("remove {}: {error}", stream_path.display()));
+                        return Err(format!("inspect {}: {error}", stream_path.display()));
+                    }
+                };
+
+                let record_removed = match remove_record(&p) {
+                    Ok(removed) => removed,
+                    Err(error) => {
+                        if stream_staged {
+                            restore_staged_stream(
+                                &stream_path,
+                                &tombstone_path,
+                                &self.root.join("streams"),
+                            )
+                            .map_err(|restore_error| {
+                                format!(
+                                    "remove {}: {error}; restore stream: {restore_error}",
+                                    p.display()
+                                )
+                            })?;
+                        }
+                        return Err(format!("remove {}: {error}", p.display()));
+                    }
+                };
+
+                if record_removed {
+                    sync_directory_best_effort(&dir);
+                } else {
+                    match path_exists(&p) {
+                        Ok(false) => {}
+                        Ok(true) => {
+                            if stream_staged {
+                                restore_staged_stream(
+                                    &stream_path,
+                                    &tombstone_path,
+                                    &self.root.join("streams"),
+                                )
+                                .map_err(|error| format!("restore stream: {error}"))?;
+                            }
+                            return Err(format!(
+                                "record remover left terminal record in place: {}",
+                                p.display()
+                            ));
+                        }
+                        Err(error) => {
+                            if stream_staged {
+                                restore_staged_stream(
+                                    &stream_path,
+                                    &tombstone_path,
+                                    &self.root.join("streams"),
+                                )
+                                .map_err(|restore_error| {
+                                    format!(
+                                        "inspect {}: {error}; restore stream: {restore_error}",
+                                        p.display()
+                                    )
+                                })?;
+                            }
+                            return Err(format!("inspect {}: {error}", p.display()));
+                        }
                     }
                 }
 
-                // Remove the record last. If stream cleanup fails, the
-                // terminal record remains available for a later prune retry.
-                match remove_file_if_exists(&p) {
-                    Ok(true) => {
-                        sync_directory_best_effort(&dir);
-                        Ok(true)
-                    }
-                    Ok(false) => Ok(false),
-                    Err(error) => Err(format!("remove {}: {error}", p.display())),
+                if stream_staged
+                    && remove_file_if_exists(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
+                {
+                    sync_directory_best_effort(&self.root.join("streams"));
                 }
+                Ok(record_removed)
             });
 
             let Ok(record_removed) = cleanup else {
                 continue;
             };
 
-            // The stream sentinel is only obsolete after its payload and
-            // terminal record are gone and its exclusive lock is released.
-            if remove_file_if_exists(&stream_lock_path).unwrap_or(false) {
-                sync_directory_best_effort(&self.root.join("streams"));
-            }
-
-            let job_lock_path = self.job_lock_path(id);
-            drop(job_lock);
-            if remove_file_if_exists(&job_lock_path).unwrap_or(false) {
-                sync_directory_best_effort(&self.root.join("locks"));
-            }
-
+            // Keep both lock sentinels. Unlinking either after releasing its
+            // flock can split queued waiters and new callers across inodes.
             if record_removed {
                 removed += 1;
             }
@@ -1088,11 +1249,30 @@ fn remove_file_if_exists(path: &Path) -> io::Result<bool> {
 }
 
 fn path_exists(path: &Path) -> io::Result<bool> {
-    match fs::metadata(path) {
+    match fs::symlink_metadata(path) {
         Ok(_) => Ok(true),
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+fn restore_staged_stream(
+    stream_path: &Path,
+    tombstone_path: &Path,
+    stream_dir: &Path,
+) -> io::Result<()> {
+    if path_exists(stream_path)? {
+        return Err(io::Error::new(
+            ErrorKind::AlreadyExists,
+            format!(
+                "refusing to replace stream created during rollback: {}",
+                stream_path.display()
+            ),
+        ));
+    }
+    fs::rename(tombstone_path, stream_path)?;
+    sync_directory_best_effort(stream_dir);
+    Ok(())
 }
 
 fn sync_directory_best_effort(path: &Path) {

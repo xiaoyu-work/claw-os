@@ -4,6 +4,33 @@ fn fresh_root() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
 }
 
+fn lock_sentinel_path(path: &Path) -> PathBuf {
+    let mut lock_path = path.as_os_str().to_os_string();
+    lock_path.push(".lock");
+    PathBuf::from(lock_path)
+}
+
+fn finished_job_with_stream(store: &Store) -> Job {
+    let _ = store.submit("p".into(), None, None, None, None).unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
+        .unwrap();
+    store
+        .finish(
+            claimed,
+            FinishOutcome::Ok {
+                response: "x".into(),
+                turns_used: 1,
+                provider: "m".into(),
+                model: "m".into(),
+                evidence: Box::new(None),
+                fallback: Box::new(None),
+            },
+        )
+        .unwrap()
+}
+
 #[test]
 fn tool_progress_round_trips_through_task_stream() {
     let root = fresh_root();
@@ -572,7 +599,7 @@ fn prune_drops_aged_files_beyond_keep_last() {
     for id in ids {
         let done_exists = store.path_for(JobStatus::Ok, &id).exists();
         let stream_path = store.stream_path(&id);
-        let stream_lock_path = crate::filelock::lock_sentinel_path(&stream_path);
+        let stream_lock_path = lock_sentinel_path(&stream_path);
         if done_exists {
             retained += 1;
             assert!(stream_path.exists());
@@ -580,8 +607,8 @@ fn prune_drops_aged_files_beyond_keep_last() {
             assert!(store.job_lock_path(&id).exists());
         } else {
             assert!(!stream_path.exists());
-            assert!(!stream_lock_path.exists());
-            assert!(!store.job_lock_path(&id).exists());
+            assert!(stream_lock_path.exists());
+            assert!(store.job_lock_path(&id).exists());
         }
     }
     assert_eq!(retained, 1);
@@ -607,31 +634,14 @@ fn prune_does_not_touch_stream_for_active_duplicate() {
     assert!(done_path.exists());
     assert!(store.stream_path(&claimed.id).exists());
     assert!(store.job_lock_path(&claimed.id).exists());
-    assert!(crate::filelock::lock_sentinel_path(&store.stream_path(&claimed.id)).exists());
+    assert!(lock_sentinel_path(&store.stream_path(&claimed.id)).exists());
 }
 
 #[test]
 fn prune_keeps_record_when_stream_cleanup_fails() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let _ = store.submit("p".into(), None, None, None, None).unwrap();
-    let claimed = store.claim_one().unwrap().unwrap();
-    store
-        .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
-        .unwrap();
-    let finished = store
-        .finish(
-            claimed,
-            FinishOutcome::Ok {
-                response: "x".into(),
-                turns_used: 1,
-                provider: "m".into(),
-                model: "m".into(),
-                evidence: Box::new(None),
-                fallback: Box::new(None),
-            },
-        )
-        .unwrap();
+    let finished = finished_job_with_stream(&store);
     let stream_path = store.stream_path(&finished.id);
     fs::remove_file(&stream_path).unwrap();
     fs::create_dir(&stream_path).unwrap();
@@ -641,6 +651,53 @@ fn prune_keeps_record_when_stream_cleanup_fails() {
     assert!(store.path_for(JobStatus::Ok, &finished.id).exists());
     assert!(stream_path.is_dir());
     assert!(store.job_lock_path(&finished.id).exists());
+}
+
+#[test]
+fn prune_restores_stream_when_record_remove_fails() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let finished = finished_job_with_stream(&store);
+    let record_path = store.path_for(JobStatus::Ok, &finished.id);
+    let stream_path = store.stream_path(&finished.id);
+    let tombstone_path = store.stream_prune_tombstone_path(&finished.id);
+    let expected_stream = fs::read(&stream_path).unwrap();
+
+    let removed = store
+        .prune_with_record_remove(Duration::ZERO, 0, |path| {
+            assert_eq!(path, record_path);
+            Err(io::Error::new(
+                ErrorKind::PermissionDenied,
+                "injected record delete failure",
+            ))
+        })
+        .unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(record_path.exists());
+    assert_eq!(fs::read(&stream_path).unwrap(), expected_stream);
+    assert!(!tombstone_path.exists());
+    assert!(lock_sentinel_path(&stream_path).exists());
+    assert!(store.job_lock_path(&finished.id).exists());
+}
+
+#[test]
+fn prune_recovers_stream_staged_before_interruption() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let finished = finished_job_with_stream(&store);
+    let record_path = store.path_for(JobStatus::Ok, &finished.id);
+    let stream_path = store.stream_path(&finished.id);
+    let tombstone_path = store.stream_prune_tombstone_path(&finished.id);
+    let expected_stream = fs::read(&stream_path).unwrap();
+    fs::rename(&stream_path, &tombstone_path).unwrap();
+
+    let removed = store.prune(Duration::ZERO, 1).unwrap();
+
+    assert_eq!(removed, 0);
+    assert!(record_path.exists());
+    assert_eq!(fs::read(&stream_path).unwrap(), expected_stream);
+    assert!(!tombstone_path.exists());
 }
 
 #[test]
