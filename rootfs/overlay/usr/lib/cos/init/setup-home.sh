@@ -69,8 +69,28 @@ OVERLAY_DIR="/var/lib/cos/overlay"
 BASE="$OVERLAY_DIR/base"
 UPPER="$OVERLAY_DIR/upper"
 WORK="$OVERLAY_DIR/work"
+MOUNT_TARGET_FILE="$OVERLAY_DIR/mount-target"
+
+record_mount_target() {
+    marker_tmp="$MOUNT_TARGET_FILE.new"
+    umask 077
+    if printf '%s\n' "$TARGET" > "$marker_tmp" &&
+        mv -f "$marker_tmp" "$MOUNT_TARGET_FILE"; then
+        return
+    fi
+    rm -f "$marker_tmp" || true
+    return 0
+}
 
 if mountpoint -q "$TARGET" 2>/dev/null; then
+    mount_options=$(findmnt -rn -M "$TARGET" -o OPTIONS 2>/dev/null || true)
+    case ",$mount_options," in
+        *",lowerdir=$BASE,"*)
+            if mkdir -p "$OVERLAY_DIR"; then
+                record_mount_target
+            fi
+            ;;
+    esac
     printf '{"overlay": "already-mounted", "path": "%s"}\n' "$TARGET"
     exit 0
 fi
@@ -117,6 +137,7 @@ fi
 if mount_error=$(mount -t overlay overlay \
     -o "lowerdir=$BASE,upperdir=$UPPER,workdir=$WORK" \
     "$TARGET" 2>&1); then
+    record_mount_target
     printf '{"overlay": "mounted", "path": "%s", "upper": "%s"}\n' "$TARGET" "$UPPER"
 else
     printf '{"overlay": "failed", "path": "%s", "error": "%s", "warning": "checkpoints disabled — run with --privileged or --cap-add SYS_ADMIN"}\n' \

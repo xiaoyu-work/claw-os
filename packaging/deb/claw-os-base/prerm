@@ -6,7 +6,22 @@ set -e
 case "$1" in
     remove)
         if [ -d /run/systemd/system ]; then
-            deb-systemd-invoke stop cos-home-setup.service >/dev/null || true
+            if ! deb-systemd-invoke stop cos-home-setup.service >/dev/null; then
+                echo "claw-os-base: could not stop cos-home-setup.service; refusing removal" >&2
+                echo "Close active setup jobs and retry: sudo apt remove claw-os-base" >&2
+                exit 1
+            fi
+        fi
+        if [ ! -x /usr/lib/cos/init/remove-home-overlay.sh ]; then
+            echo "claw-os-base: managed-home removal helper is missing; refusing removal" >&2
+            echo "Reinstall claw-os-base, then retry removal so home data can be preserved." >&2
+            exit 1
+        fi
+        if ! /usr/lib/cos/init/remove-home-overlay.sh; then
+            if [ -d /run/systemd/system ]; then
+                deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+            fi
+            exit 1
         fi
         if [ -x /usr/bin/deb-systemd-helper ]; then
             deb-systemd-helper disable cos-home-setup.service >/dev/null || true

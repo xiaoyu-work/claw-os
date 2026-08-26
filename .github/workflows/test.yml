@@ -38,6 +38,9 @@ jobs:
       - name: Test APT package synchronization
         run: bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 
+      - name: Test managed-home package removal
+        run: bash packaging/deb/tests/test-remove-home-overlay.sh
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:

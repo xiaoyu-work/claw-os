@@ -432,6 +432,8 @@ install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
     "$BASE_STAGE/usr/local/bin/cos-init"
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/setup-home.sh" \
     "$BASE_STAGE/usr/lib/cos/init/setup-home.sh"
+install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh" \
+    "$BASE_STAGE/usr/lib/cos/init/remove-home-overlay.sh"
 install -m 644 "$SYSTEM_UNITS_SRC/cos-home-setup.service" \
     "$BASE_STAGE/usr/lib/systemd/system/cos-home-setup.service"
 install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-home" \

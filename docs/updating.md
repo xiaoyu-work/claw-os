@@ -59,6 +59,44 @@ rerunning the setup wizard:
 cos agent setup text --verify-only
 ```
 
+## Removing the Claw OS integration package
+
+Removing `claw-os-base` also removes the service that presents the managed
+OverlayFS home. Its `prerm` therefore preserves the currently visible merged
+home before any package file is deleted. It makes the merged mount read-only,
+copies that view with ownership, modes, timestamps, links, ACLs, and extended
+attributes, unmounts it, and materializes the copy as the ordinary home.
+Copying the merged view rather than the upper directory resolves whiteouts and
+opaque directories, so files deleted while the overlay was active stay
+deleted.
+
+Use the normal package command:
+
+```bash
+sudo apt remove claw-os-base
+```
+
+Removal stops instead of exposing an older underlying home when the snapshot
+cannot be made consistent, a nested filesystem or active process prevents a
+clean unmount, stale recovery state exists, or the flattened copy cannot be
+installed. The package and OverlayFS data remain installed, and the error
+prints the exact managed home and retained snapshot path when one exists.
+
+After resolving the reported busy mount or filesystem error, restore the
+managed view and retry:
+
+```bash
+sudo systemctl start cos-home-setup.service
+sudo apt remove claw-os-base
+```
+
+Do not delete `/var/lib/cos/overlay`,
+`/var/lib/cos/overlay/removal-snapshot`, or
+`/var/lib/cos/overlay/removal-underlay` after a failed removal. They are
+recovery sources. If the service cannot restore the managed view, preserve
+those paths and repair or copy the retained snapshot from a recovery
+environment before retrying package removal.
+
 ## Check that the Claw OS repository is configured
 
 Official installed images built with the `apt-source` feature contain:

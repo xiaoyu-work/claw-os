@@ -23,6 +23,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/*/{postinst,prerm,postrm}` | Upgrade/install/remove behavior |
 | `apt-repo/sync-existing-packages.sh` | Merge local artifacts without replacing equal or newer signed candidates |
 | `apt-repo/tests/test-sync-existing-packages.sh` | Package merge and first-publication regression scenarios |
+| `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |
+| `deb/tests/test-remove-home-overlay.sh` | Merged-tree, metadata, whiteout, and opaque-directory removal regression tests |
 | `apt-repo/build-repo.sh` | Multi-arch index, Release, and GPG signatures |
 | [`../web/`](../web/) | Independent web source; `dist/` is consumed during Pages composition |
 | [`README.md`](README.md) | Package contract and manual commands |
@@ -41,6 +43,8 @@ without forcing synchronized versions or publication schedules.
 ```bash
 ARCH=amd64 ./packaging/deb/build-debs.sh
 bash packaging/apt-repo/tests/test-sync-existing-packages.sh
+bash packaging/deb/tests/test-remove-home-overlay.sh
+sudo bash packaging/deb/tests/test-remove-home-overlay.sh --privileged-integration
 GPG_KEY_ID=<fingerprint> ./packaging/apt-repo/build-repo.sh
 ```
 

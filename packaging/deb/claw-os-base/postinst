@@ -40,7 +40,12 @@ case "$1" in
             fi
         fi
         ;;
-    abort-upgrade|abort-remove|abort-deconfigure)
+    abort-remove)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+        fi
+        ;;
+    abort-upgrade|abort-deconfigure)
         ;;
     *)
         echo "postinst called with unknown argument '$1'" >&2

@@ -32,6 +32,11 @@ packaging/
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser` and all command-style apps. `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
+When `claw-os-base` is removed, its maintainer script first snapshots the
+visible managed home, unmounts OverlayFS, and materializes that merged view in
+the underlying home. A migration or unmount failure blocks package removal and
+retains the overlay/recovery data; see
+[`docs/updating.md`](../docs/updating.md#removing-the-claw-os-integration-package).
 
 ## Build
 
