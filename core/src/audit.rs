@@ -13,14 +13,42 @@ const CHAIN_VERSION: u64 = 1;
 const GENESIS_HASH: &str = "0000000000000000000000000000000000000000000000000000000000000000";
 const MAX_AUDIT_LINE_BYTES: usize = 1024 * 1024;
 const MAX_ARCHIVE_DEPTH: usize = 64;
+const REDACTED_ARG: &str = "***REDACTED***";
+const SECRET_VALUE_FLAGS: [&str; 4] = ["--bearer", "--basic", "--api-key", "--hmac-sha256"];
 
 /// Redact sensitive patterns from args before logging.
-/// Catches bearer/token prefixes, common API key prefixes, URL
-/// userinfo segments, and authorization headers (both as their own
+/// Catches known secret-bearing flags, bearer/token prefixes, common API key
+/// prefixes, URL userinfo segments, and authorization headers (both as their own
 /// arg and as a substring of a larger arg like `--header
 /// "Authorization: Bearer ..."` or `-H Authorization: ...`).
 fn redact_args(args: &[String]) -> Vec<String> {
-    args.iter().map(|arg| redact_one(arg)).collect()
+    let mut redact_next = false;
+
+    args.iter()
+        .map(|arg| {
+            if redact_next {
+                redact_next = false;
+                return REDACTED_ARG.to_string();
+            }
+
+            if is_secret_value_flag(arg) {
+                redact_next = true;
+                return arg.clone();
+            }
+
+            if let Some((flag, _value)) = arg.split_once('=') {
+                if is_secret_value_flag(flag) {
+                    return format!("{flag}={REDACTED_ARG}");
+                }
+            }
+
+            redact_one(arg)
+        })
+        .collect()
+}
+
+fn is_secret_value_flag(arg: &str) -> bool {
+    SECRET_VALUE_FLAGS.contains(&arg)
 }
 
 fn wholly_legacy_log(bytes: &[u8]) -> bool {

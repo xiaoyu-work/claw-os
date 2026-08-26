@@ -89,6 +89,76 @@ fn safe_args_pass_through() {
 }
 
 #[test]
+fn redact_webhook_secret_flag_values() {
+    let args = vec![
+        "https://hooks.example/notify".to_string(),
+        "deploy failed in us-west-2".to_string(),
+        "--bearer".to_string(),
+        "generic.jwt.value".to_string(),
+        "--basic".to_string(),
+        "operator:correct-horse".to_string(),
+        "--api-key".to_string(),
+        "plain-api-key".to_string(),
+        "--hmac-sha256".to_string(),
+        "plain-hmac-secret".to_string(),
+        "--raw".to_string(),
+    ];
+
+    assert_eq!(
+        redact_args(&args),
+        vec![
+            "https://hooks.example/notify",
+            "deploy failed in us-west-2",
+            "--bearer",
+            "***REDACTED***",
+            "--basic",
+            "***REDACTED***",
+            "--api-key",
+            "***REDACTED***",
+            "--hmac-sha256",
+            "***REDACTED***",
+            "--raw",
+        ]
+    );
+}
+
+#[test]
+fn redact_webhook_secret_flag_equals_values() {
+    let args = vec![
+        "--bearer=generic.jwt.value".to_string(),
+        "--basic=operator:correct-horse".to_string(),
+        "--api-key=plain-api-key".to_string(),
+        "--hmac-sha256=plain-hmac-secret".to_string(),
+        "--output=json".to_string(),
+    ];
+
+    assert_eq!(
+        redact_args(&args),
+        vec![
+            "--bearer=***REDACTED***",
+            "--basic=***REDACTED***",
+            "--api-key=***REDACTED***",
+            "--hmac-sha256=***REDACTED***",
+            "--output=json",
+        ]
+    );
+}
+
+#[test]
+fn similar_nonsecret_flags_are_not_redacted() {
+    let args = vec![
+        "--bearer-mode".to_string(),
+        "optional".to_string(),
+        "--basic-auth=disabled".to_string(),
+        "--api-key-file=credentials.txt".to_string(),
+        "--hmac-sha256-output".to_string(),
+        "signature.txt".to_string(),
+    ];
+
+    assert_eq!(redact_args(&args), args);
+}
+
+#[test]
 fn mixed_safe_and_sensitive_args() {
     let args = vec![
         "--header".to_string(),
