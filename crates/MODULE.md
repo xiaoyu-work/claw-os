@@ -28,6 +28,10 @@ new crate only for a coherent reusable responsibility.
 
 ## Tests
 
+Each Rust crate stores private-access unit-test bodies under its own
+`test/unit/` tree, mirroring `src/`. Public integration tests may still use the
+Cargo-standard `tests/` directory.
+
 ```bash
 cargo test -p <package-name>
 ```

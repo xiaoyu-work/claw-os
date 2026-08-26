@@ -10,6 +10,7 @@ Rust, Python, Node, and Go bindings.
 - Maintain versioned wire types and operation/capability schemas.
 - Provide public SDK calls without exposing internal broker details.
 - Keep language bindings behaviorally compatible.
+- Release every language binding at the same SDK SemVer through GitHub.
 - Generate, rather than hand-edit, generated bindings.
 
 ## Key Files
@@ -22,6 +23,7 @@ Rust, Python, Node, and Go bindings.
 | `node/` | Node public SDK |
 | `go/` | Go public SDK |
 | `python/src/claw_os_sdk/generated.py` | Generated Python wire bindings |
+| `../.github/workflows/publish-sdk-release.yml` | GitHub-only multi-language SDK release |
 
 `cos-runtime/` is a separate internal package for bundled apps; public apps
 must not depend on its policy/runtime internals.
@@ -33,6 +35,9 @@ Serialization changes stay backwards compatible unless introduced under a new
 wire version.
 
 ## Tests
+
+Rust SDK unit tests mirror `rust/src/` under `rust/test/unit/`; production files
+only contain cfg(test) include declarations.
 
 Regenerate from this directory after wire changes:
 

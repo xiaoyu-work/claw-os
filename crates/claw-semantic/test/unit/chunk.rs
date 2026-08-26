@@ -1,0 +1,40 @@
+use super::*;
+
+#[test]
+fn empty_input_yields_no_chunks() {
+    assert!(chunks_for("/a", "", 100, 10).is_empty());
+    assert!(chunks_for("/a", "   \n\t  ", 100, 10).is_empty());
+}
+
+#[test]
+fn short_input_yields_one_chunk() {
+    let cs = chunks_for("/a", "hello world", 100, 10);
+    assert_eq!(cs.len(), 1);
+    assert_eq!(cs[0].chunk_id, 0);
+    assert_eq!(cs[0].text, "hello world");
+}
+
+#[test]
+fn overlap_is_respected() {
+    let text: String = (0..200).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+    let cs = chunks_for("/a", &text, 100, 20);
+    // step = 80, expected starts: 0, 80, 160 → 3 windows
+    assert_eq!(cs.len(), 3);
+    assert!(cs[0].text.len() == 100);
+    // Last 20 chars of window 0 == first 20 of window 1.
+    let tail0: String = cs[0].text.chars().rev().take(20).collect::<String>()
+        .chars().rev().collect();
+    let head1: String = cs[1].text.chars().take(20).collect();
+    assert_eq!(tail0, head1);
+}
+
+#[test]
+fn multibyte_chars_are_not_split() {
+    let text = "中文测试一二三四五六七八九十".repeat(20);
+    let cs = chunks_for("/a", &text, 30, 5);
+    for c in &cs {
+        // If we split a multibyte char, this would panic.
+        assert!(c.text.is_char_boundary(0));
+        assert!(c.text.is_char_boundary(c.text.len()));
+    }
+}
