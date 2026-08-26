@@ -46,7 +46,7 @@ editing additional surfaces.
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |
-| Marketing website | `web/index.html`, `web/MODULE.md` | `web/style.css`, `web/app.js`, `packaging/apt-repo/build-repo.sh` |
+| Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; workflows are manually dispatched |
 

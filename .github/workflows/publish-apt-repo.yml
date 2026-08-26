@@ -1,11 +1,12 @@
-name: Publish package artifacts to APT
+name: Compose website and APT for Pages
 
 on:
   workflow_call:
     inputs:
       artifact_pattern:
         description: "Artifact pattern produced by the calling package workflow"
-        required: true
+        required: false
+        default: ""
         type: string
       pages_artifact_name:
         description: "Unique Pages artifact name for this package publisher"
@@ -18,7 +19,36 @@ on:
         required: false
 
 jobs:
+  build-website:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Build website
+        run: |
+          npm ci --prefix web --no-audit --no-fund \
+            --registry=https://registry.npmjs.org \
+            --replace-registry-host=always
+          npm run build --prefix web
+
+      - name: Upload website artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: website-${{ inputs.pages_artifact_name }}
+          path: web/dist
+          if-no-files-found: error
+
   publish:
+    needs: build-website
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     concurrency:
@@ -37,7 +67,14 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Download website artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: website-${{ inputs.pages_artifact_name }}
+          path: build/web-dist
+
       - name: Download newly built package artifacts
+        if: inputs.artifact_pattern != ''
         uses: actions/download-artifact@v4
         with:
           pattern: ${{ inputs.artifact_pattern }}
@@ -48,6 +85,7 @@ jobs:
         env:
           CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
           GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+          CLAW_OS_WEB_DIST_DIR: ${{ github.workspace }}/build/web-dist
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq apt-utils gnupg

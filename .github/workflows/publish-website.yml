@@ -1,0 +1,16 @@
+name: Publish Website
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish-website:
+    uses: ./.github/workflows/publish-apt-repo.yml
+    with:
+      pages_artifact_name: github-pages-website
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

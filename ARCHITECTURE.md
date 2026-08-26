@@ -51,7 +51,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries | `desktop/` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
-| Website | Framework-free marketing site composed into the GitHub Pages/APT artifact | `web/`, `packaging/apt-repo/build-repo.sh` |
+| Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
 
 ## Dependency Rules
@@ -192,7 +192,14 @@ source + compiled binaries
 source + compiled binaries
   -> packaging/deb/build-debs.sh
   -> amd64/arm64 .deb artifacts
-  -> signed APT repository
+  -> signed APT repository artifact
+
+web source
+  -> npm run build
+  -> independent web artifact
+
+signed APT repository artifact + web artifact
+  -> Pages composition
   -> GitHub Pages
 ```
 
@@ -215,6 +222,8 @@ combined Docker/WSL channel and the independent APT channel.
 | Top-level target build | `build.sh` | WSL/Docker/VM/ISO/Azure dispatcher |
 | Debian package build | `packaging/deb/build-debs.sh` | Installed package artifacts |
 | APT repository build | `packaging/apt-repo/build-repo.sh` | Signed repository assembly |
+| Web desktop | `web/src/App.tsx` | Browser-based Linux desktop composition |
+| Website publication | `.github/workflows/publish-website.yml` | Independent web build and Pages composition |
 | CI test workflow | `.github/workflows/test.yml` | Manual/reusable test workflow |
 | Full release workflow | `.github/workflows/release.yml` | Manual umbrella publication |
 

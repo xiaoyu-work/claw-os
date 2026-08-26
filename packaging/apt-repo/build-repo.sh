@@ -173,19 +173,20 @@ echo "  :: signed; public key at $REPO_DIR/claw-os-archive-keyring.gpg"
 # GitHub Pages homepage. Keep this at the repo root so the APT paths remain
 # stable: /dists/... and /pool/... are still served beside the marketing page.
 #
-# The marketing site lives under web/ as plain HTML/CSS/JS. We copy it into
-# the published repository root and substitute build-time tokens (git sha,
-# suite) in-place.
-SITE_DIR="$PROJECT_DIR/web"
-if [ -d "$SITE_DIR" ]; then
-    echo ":: copying marketing site from web/"
-    # Keep repository-only generators and module documentation out of Pages.
+# The React/Vite desktop lives under web/. CI builds it before repository
+# assembly; its dist/ output includes the desktop and the embedded site.
+SITE_DIR="${CLAW_OS_WEB_DIST_DIR:-$PROJECT_DIR/web/dist}"
+if [ -f "$SITE_DIR/index.html" ]; then
+    echo ":: copying built website from web/dist/"
     find "$SITE_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name '*.py' ! -name '*.md' -exec cp -R {} "$REPO_DIR/" \;
+        -exec cp -R {} "$REPO_DIR/" \;
 
     GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     # `sed -i` differs between BSD (macOS) and GNU. `-i.bak` is portable.
-    for f in "$REPO_DIR/index.html" "$REPO_DIR/style.css" "$REPO_DIR/app.js"; do
+    for f in \
+        "$REPO_DIR/site/index.html" \
+        "$REPO_DIR/site/style.css" \
+        "$REPO_DIR/site/app.js"; do
         [ -f "$f" ] || continue
         sed -i.bak \
             -e "s|@@GIT_SHA@@|$GIT_SHA|g" \
@@ -194,7 +195,8 @@ if [ -d "$SITE_DIR" ]; then
         rm -f "$f.bak"
     done
 else
-    echo "warning: $SITE_DIR not found — apt repo will not have a homepage" >&2
+    echo "error: built website not found at $SITE_DIR; run npm ci and npm run build in web/" >&2
+    exit 1
 fi
 
 # GitHub Pages should publish the APT repository verbatim, without Jekyll

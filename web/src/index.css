@@ -1,0 +1,110 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light gray-white palette */
+    --bg-base: #E8E8E8;
+    --bg-workspace: #F2F2F2;
+    --bg-workspace-alt: #ECECEC;
+    --bg-panel: #F5F5F5;
+    --bg-window: #FFFFFF;
+    --bg-window-inactive: #F0F0F0;
+    --bg-input: #FFFFFF;
+    --bg-input-focus: #F8F8F8;
+    --bg-hover: #E0E0E0;
+    --bg-active: #D8D8D8;
+    --bg-selected: #D0D0D0;
+    --bg-tooltip: #F5F5F5;
+    --accent-silver: #7D8B96;
+    --accent-dark-gray: #5A6670;
+    --accent-warm: #9AA5AD;
+    --accent-glow: rgba(125,139,150,0.15);
+    --text-primary: #1A1A1A;
+    --text-secondary: #5A5A5A;
+    --text-muted: #888888;
+    --text-accent: #7D8B96;
+    --border-subtle: rgba(0,0,0,0.06);
+    --border-medium: rgba(0,0,0,0.12);
+    --border-active: #7D8B96;
+    --success: #4A9A5E;
+    --warning: #B89A60;
+    --error: #C45050;
+    --info: #5A7A8A;
+    --shadow-sm: 0 1px 2px rgba(0,0,0,0.08);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.1);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.12);
+    --shadow-window: 0 12px 40px rgba(0,0,0,0.15), 0 0 0 1px rgba(0,0,0,0.06);
+    --shadow-window-inactive: 0 4px 16px rgba(0,0,0,0.08), 0 0 0 1px rgba(0,0,0,0.04);
+    --shadow-panel: 0 -2px 12px rgba(0,0,0,0.08);
+    --radius-sm: 4px;
+    --radius-md: 8px;
+    --radius-lg: 12px;
+    --radius-xl: 16px;
+    --radius-window: 8px;
+    --ease-default: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+    --ease-spring: cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    --ease-smooth: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-out: cubic-bezier(0, 0, 0.2, 1);
+  }
+
+  * {
+    @apply border-[rgba(0,0,0,0.06)];
+  }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+    margin: 0;
+    padding: 0;
+    user-select: none;
+  }
+
+  ::selection {
+    background: rgba(125,139,150,0.25);
+    color: var(--text-primary);
+  }
+
+  ::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--accent-silver);
+    border-radius: 2px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #5A6670;
+  }
+}
+
+@layer components {
+  .glass-panel {
+    background: rgba(245,245,245,0.95);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+
+  .glass-panel-light {
+    background: rgba(232,232,232,0.9);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+  }
+
+  .font-mono {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}

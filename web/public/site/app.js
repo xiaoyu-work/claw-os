@@ -60,7 +60,7 @@
   // ---------- Guided Claw OS experience ----------
   const demo = document.getElementById("clawOsDemo");
   if (demo) {
-    const agentImage = "assets/brand/clawos-symbol.png";
+    const agentImage = "../assets/brand/clawos-symbol.png";
     const scenarios = {
       health: {
         icon: "◎",

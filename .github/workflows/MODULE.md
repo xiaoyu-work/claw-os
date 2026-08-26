@@ -10,6 +10,7 @@ pipelines.
 - Run core/browser/Python validation.
 - Build shared Docker/WSL images per architecture.
 - Build and sign independent multi-architecture APT packages/repository.
+- Build the React/Vite web desktop as an independent Pages input.
 - Publish GHCR manifests, WSL releases, and GitHub Pages.
 
 ## Key Files
@@ -21,7 +22,8 @@ pipelines.
 | `publish-agent-package.yml` | Independent Agent build, Ubuntu smoke test, and publication |
 | `publish-base-package.yml` | Independent Claw OS Base build and publication |
 | `publish-desktop-package.yml` | Independent full-rootfs Desktop build and publication |
-| `publish-apt-repo.yml` | Internal cumulative signed-repository publisher |
+| `publish-website.yml` | Website-only manual publication |
+| `publish-apt-repo.yml` | Internal web/APT artifact composition and Pages deployment |
 | `publish-sdk-release.yml` | GitHub SDK artifacts and synchronized language tags |
 | `release.yml` | Umbrella test + all publication channels |
 

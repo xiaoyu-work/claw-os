@@ -61,7 +61,11 @@ cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 # The desktop rootfs feature builds Desktop independently:
 # -> build/debs/claw-os-desktop_<version>_amd64.deb
 
-# Build apt repo
+# Build the independent website artifact
+npm ci --prefix web --replace-registry-host=always
+npm run build --prefix web
+
+# Compose it beside the signed apt repo
 GPG_KEY_ID=<signing-key-fingerprint> ./packaging/apt-repo/build-repo.sh
 # -> build/apt-repo/dists/trixie/main/binary-amd64/Packages.gz
 # -> build/apt-repo/dists/trixie/main/binary-arm64/Packages.gz
