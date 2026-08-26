@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Palette, Monitor, Wifi, Volume2, Info } from 'lucide-react';
+import { Palette, Monitor, Wifi, Volume2, Info, Sparkles } from 'lucide-react';
 import AppearanceTab from './AppearanceTab';
 import DisplayTab from './DisplayTab';
 import NetworkTab from './NetworkTab';
 import SoundTab from './SoundTab';
 import AboutTab from './AboutTab';
+import SettingsAiPanel from './SettingsAiPanel';
 
 const tabs = [
   { id: 'appearance', name: 'Appearance', icon: Palette },
@@ -16,11 +17,25 @@ const tabs = [
 
 export default function Settings() {
   const [activeTab, setActiveTab] = useState('appearance');
+  const [aiOpen, setAiOpen] = useState(false);
 
   return (
-    <div className="w-full h-full flex text-sm" style={{ background: 'var(--bg-workspace)' }}>
+    <div className="relative w-full h-full flex text-sm" style={{ background: 'var(--bg-workspace)' }}>
       {/* Sidebar */}
       <div className="w-14 shrink-0 py-2 sm:w-48" style={{ background: 'var(--bg-window)', borderRight: '1px solid rgba(0,0,0,0.06)' }}>
+        <button
+          type="button"
+          data-settings-ai="toggle"
+          onClick={() => setAiOpen((value) => !value)}
+          className="mb-2 flex w-full items-center justify-center gap-3 px-2 py-2.5 text-[#005CFE] transition-colors hover:bg-[var(--bg-hover)] sm:justify-start sm:px-4"
+          aria-label="Toggle Settings Assistant"
+          aria-expanded={aiOpen}
+          title="Ask Settings Assistant"
+        >
+          <Sparkles size={18} />
+          <span className="hidden text-sm font-medium sm:inline">Ask AI</span>
+        </button>
+        <div className="mx-2 mb-2 h-px" style={{ background: 'rgba(0,0,0,0.06)' }} />
         {tabs.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -40,13 +55,20 @@ export default function Settings() {
         })}
       </div>
 
-      {/* Content */}
-      <div className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
-        {activeTab === 'appearance' && <AppearanceTab />}
-        {activeTab === 'display' && <DisplayTab />}
-        {activeTab === 'network' && <NetworkTab />}
-        {activeTab === 'sound' && <SoundTab />}
-        {activeTab === 'about' && <AboutTab />}
+      <div className="relative flex min-w-0 flex-1">
+        {/* Content */}
+        <div className="min-w-0 flex-1 overflow-y-auto p-3 sm:p-6">
+          {activeTab === 'appearance' && <AppearanceTab />}
+          {activeTab === 'display' && <DisplayTab />}
+          {activeTab === 'network' && <NetworkTab />}
+          {activeTab === 'sound' && <SoundTab />}
+          {activeTab === 'about' && <AboutTab />}
+        </div>
+        <SettingsAiPanel
+          open={aiOpen}
+          onClose={() => setAiOpen(false)}
+          onShowTab={setActiveTab}
+        />
       </div>
     </div>
   );

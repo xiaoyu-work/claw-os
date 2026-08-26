@@ -16,7 +16,7 @@ export default function AppearanceTab() {
   ];
 
   const accentColors = [
-    '#7D8B96', '#5A6670', '#B89A60', '#6A7A8A', '#8A9AA6',
+    '#005CFE', '#7C3AED', '#7D8B96', '#5A6670', '#B89A60', '#6A7A8A', '#8A9AA6',
     '#8A8A8A', '#A0AAB0', '#7A8A96', '#8A96A2', '#5A6A72',
   ];
 

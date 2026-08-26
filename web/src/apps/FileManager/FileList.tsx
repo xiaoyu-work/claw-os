@@ -46,7 +46,10 @@ export default function FileList({
             className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-all ${
               selectedNode === node.id ? 'bg-[rgba(125,139,150,0.2)]' : 'hover:bg-[var(--bg-hover)]'
             }`}
-            onClick={() => onSelect(node.id)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onSelect(node.id);
+            }}
             onDoubleClick={() => onDoubleClick(node)}
             onContextMenu={(e) => onContextMenu(e, node)}
           >
@@ -89,7 +92,10 @@ export default function FileList({
           className={`grid grid-cols-[24px_minmax(0,1fr)] px-3 py-1.5 text-sm items-center cursor-pointer transition-colors sm:grid-cols-[24px_minmax(0,1fr)_80px_100px_120px_80px] ${
             selectedNode === node.id ? 'bg-[rgba(125,139,150,0.15)]' : 'hover:bg-[var(--bg-hover)]'
           }`}
-          onClick={() => onSelect(node.id)}
+          onClick={(event) => {
+            event.stopPropagation();
+            onSelect(node.id);
+          }}
           onDoubleClick={() => onDoubleClick(node)}
           onContextMenu={(e) => onContextMenu(e, node)}
         >

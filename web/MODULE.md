@@ -17,6 +17,12 @@ Pages root. It is based on
   through plan review, scoped approval, visible tools, and audited result.
 - Keep all six Agent scenarios available after the guided path, together with
   the freeform chat demo.
+- Give Files a grounded AI conversation panel for natural-language search,
+  summaries, storage analysis, duplicate detection, and safe organization
+  previews.
+- Provide scripted AI-style assistants in App Store, Settings, and Browser for
+  app recommendations, direct demo-setting changes, page explanations, and
+  in-page navigation without external model calls.
 - Reuse the native Claw OS application icons under `public/app-icons/`.
 - Open the current Claw OS marketing website from the **Claw OS Website**
   desktop shortcut in the built-in browser.
@@ -34,7 +40,12 @@ Pages root. It is based on
 | `src/components/AppRegistry.tsx` | Application implementation registry |
 | `src/components/AppIcon.tsx` | Shared native-icon and Lucide icon renderer |
 | `src/components/GuideOverlay.tsx` | Blocking spotlight for the first-run Agent path |
+| `src/components/ScriptedAssistantPanel.tsx` | Shared chat UI for local scripted app assistants |
 | `src/apps/Agent/index.tsx` | Guided system Agent demo |
+| `src/apps/FileManager/FilesAiPanel.tsx` | Grounded Files AI chat and quick actions |
+| `src/apps/AppStore/StoreAiPanel.tsx` | Scripted app-need recommendations |
+| `src/apps/Settings/SettingsAiPanel.tsx` | Natural-language demo setting changes |
+| `src/apps/Browser/BrowserAiPanel.tsx` | Scripted page help and navigation |
 | `src/apps/AppStore/index.tsx` | First-party application catalog demo |
 | `src/apps/MediaPlayer/index.tsx` | Local media-player demo |
 | `src/apps/Screenshot/index.tsx` | Screenshot workflow demo |
@@ -76,5 +87,9 @@ input outside the highlighted target. Complete the seven-step Agent path, then
 exercise all six scenarios, freeform Agent chat, every registered app, App
 Store updates, media controls, screenshot options, Settings About, the
 **Claw OS Website** shortcut, browser navigation, and window controls at
-desktop and mobile widths. Fail on console errors, broken assets, missing
-routes, inaccessible controls, incorrect window bounds, or viewport overflow.
+desktop and mobile widths. In Files, exercise the AI quick actions, selected
+file summaries, natural-language search, result navigation, and read-only
+organization preview. Also verify App Finder recommendations and app opening,
+Settings Assistant changes, and Browser Assistant answers and section
+navigation. Fail on console errors, broken assets, missing routes, inaccessible
+controls, incorrect window bounds, or viewport overflow.

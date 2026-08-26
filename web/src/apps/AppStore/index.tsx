@@ -1,13 +1,17 @@
 import { useMemo, useState } from 'react';
-import { Check, RefreshCw, Search, ShieldCheck } from 'lucide-react';
+import { Check, RefreshCw, Search, ShieldCheck, Sparkles } from 'lucide-react';
 import AppIcon from '@/components/AppIcon';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
+import { useWindowStore } from '@/stores/useWindowStore';
+import StoreAiPanel from './StoreAiPanel';
 
 export default function AppStore() {
   const apps = useAppRegistryStore((state) => state.apps);
+  const openWindow = useWindowStore((state) => state.openWindow);
   const [query, setQuery] = useState('');
   const [category, setCategory] = useState('All');
   const [updates, setUpdates] = useState(() => new Set(['agent', 'store']));
+  const [aiOpen, setAiOpen] = useState(false);
 
   const catalog = useMemo(
     () => Object.values(apps).filter((app) => app.id !== 'browser'),
@@ -28,13 +32,32 @@ export default function AppStore() {
     });
   };
 
+  const openRecommendedApp = (app: (typeof catalog)[number]) => {
+    openWindow(app.id, app.name, {
+      width: app.defaultWidth,
+      height: app.defaultHeight,
+    });
+  };
+
   return (
-    <div className="flex h-full min-h-0 flex-col text-sm" style={{ background: 'var(--bg-workspace)' }}>
+    <div className="relative flex h-full min-h-0 flex-col text-sm" style={{ background: 'var(--bg-workspace)' }}>
       <header className="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-3" style={{ background: 'var(--bg-window)', borderColor: 'rgba(0,0,0,0.06)' }}>
         <div>
           <h2 className="font-semibold text-[var(--text-primary)]">Claw OS App Store</h2>
           <p className="text-[11px] text-[var(--text-muted)]">First-party demo applications</p>
         </div>
+        <button
+          type="button"
+          data-store-ai="toggle"
+          onClick={() => setAiOpen((value) => !value)}
+          className="flex h-9 shrink-0 items-center gap-1.5 rounded-lg px-3 text-xs font-medium text-white"
+          style={{ background: '#005CFE' }}
+          aria-label="Toggle App Finder"
+          aria-expanded={aiOpen}
+        >
+          <Sparkles size={15} />
+          Ask AI
+        </button>
         <div className="relative ml-auto min-w-52 flex-1 sm:max-w-xs">
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
@@ -63,8 +86,9 @@ export default function AppStore() {
         ))}
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        <div className="mb-4 rounded-xl border p-4" style={{ background: 'var(--bg-window)', borderColor: 'rgba(0,0,0,0.06)' }}>
+      <div className="relative flex min-h-0 flex-1">
+        <div className="min-w-0 flex-1 overflow-y-auto p-4">
+          <div className="mb-4 rounded-xl border p-4" style={{ background: 'var(--bg-window)', borderColor: 'rgba(0,0,0,0.06)' }}>
           <div className="flex items-start gap-3">
             <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#005CFE]/10 text-[#005CFE]">
               <ShieldCheck size={21} />
@@ -78,8 +102,8 @@ export default function AppStore() {
           </div>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {visibleApps.map((app) => {
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {visibleApps.map((app) => {
             const hasUpdate = updates.has(app.id);
             return (
               <article
@@ -109,14 +133,21 @@ export default function AppStore() {
                 </button>
               </article>
             );
-          })}
-        </div>
-
-        {visibleApps.length === 0 && (
-          <div className="py-16 text-center text-sm text-[var(--text-muted)]">
-            No apps match your search.
+            })}
           </div>
-        )}
+
+          {visibleApps.length === 0 && (
+            <div className="py-16 text-center text-sm text-[var(--text-muted)]">
+              No apps match your search.
+            </div>
+          )}
+        </div>
+        <StoreAiPanel
+          open={aiOpen}
+          apps={catalog}
+          onClose={() => setAiOpen(false)}
+          onOpenApp={openRecommendedApp}
+        />
       </div>
     </div>
   );

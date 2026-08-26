@@ -7,10 +7,12 @@ import {
   LockKeyhole,
   MoreVertical,
   RotateCw,
+  Sparkles,
   Star,
   X,
 } from 'lucide-react';
 import { publicAsset } from '@/lib/publicAsset';
+import BrowserAiPanel from './BrowserAiPanel';
 
 export default function Browser() {
   const homeUrl = useMemo(
@@ -22,6 +24,7 @@ export default function Browser() {
   const [address, setAddress] = useState(homeUrl);
   const [frameKey, setFrameKey] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [aiOpen, setAiOpen] = useState(false);
   const currentUrl = history[historyIndex];
 
   const normalizeAddress = (value: string) => {
@@ -71,6 +74,12 @@ export default function Browser() {
     navigate(homeUrl);
   };
 
+  const navigateToSection = (section: string) => {
+    const next = new URL(homeUrl);
+    next.hash = section;
+    navigate(next.href);
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg-window)]">
       <div
@@ -103,7 +112,7 @@ export default function Browser() {
           aria-label="Back"
           disabled={historyIndex === 0}
           onClick={goBack}
-          className="grid h-8 w-8 place-items-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-30"
+          className="hidden h-8 w-8 place-items-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] disabled:opacity-30 sm:grid"
         >
           <ArrowLeft size={17} />
         </button>
@@ -123,7 +132,7 @@ export default function Browser() {
             setFrameKey((key) => key + 1);
             setLoading(true);
           }}
-          className="grid h-8 w-8 place-items-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+          className="hidden h-8 w-8 place-items-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] sm:grid"
         >
           <RotateCw size={16} className={loading ? 'animate-spin' : ''} />
         </button>
@@ -157,6 +166,17 @@ export default function Browser() {
 
         <button
           type="button"
+          data-browser-ai="toggle"
+          aria-label="Toggle Browser Assistant"
+          aria-expanded={aiOpen}
+          onClick={() => setAiOpen((value) => !value)}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#005CFE] hover:bg-[var(--bg-hover)]"
+        >
+          <Sparkles size={17} />
+        </button>
+
+        <button
+          type="button"
           aria-label="Browser menu"
           className="grid h-8 w-8 place-items-center rounded-md text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
         >
@@ -164,7 +184,7 @@ export default function Browser() {
         </button>
       </div>
 
-      <div className="relative min-h-0 flex-1 bg-white">
+      <div className="relative flex min-h-0 flex-1 bg-white">
         {loading && (
           <div className="absolute inset-x-0 top-0 z-10 h-0.5 overflow-hidden bg-[var(--bg-hover)]">
             <div className="h-full w-1/3 animate-pulse bg-[var(--accent-silver)]" />
@@ -174,9 +194,14 @@ export default function Browser() {
           key={`${currentUrl}-${frameKey}`}
           src={currentUrl}
           title="Claw OS website"
-          className="h-full w-full border-0 bg-white"
+          className="h-full min-w-0 flex-1 border-0 bg-white"
           allow="clipboard-write; fullscreen"
           onLoad={() => setLoading(false)}
+        />
+        <BrowserAiPanel
+          open={aiOpen}
+          onClose={() => setAiOpen(false)}
+          onNavigateSection={navigateToSection}
         />
       </div>
     </div>

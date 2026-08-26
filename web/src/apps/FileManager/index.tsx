@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { ArrowLeft, ArrowUp, RefreshCw, Plus, Trash2, Grid, List as ListIcon, Search } from 'lucide-react';
+import { ArrowLeft, ArrowUp, RefreshCw, Plus, Trash2, Grid, List as ListIcon, Search, Sparkles } from 'lucide-react';
 import { useFileSystemStore, type FSNode } from '@/stores/useFileSystemStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
 import { queueFileOpen } from '@/lib/pendingFileOpen';
 import PathBar from './PathBar';
 import FileList from './FileList';
+import FilesAiPanel from './FilesAiPanel';
 
 export default function FileManager() {
   const currentDirectory = useFileSystemStore((s) => s.currentDirectory);
@@ -29,10 +30,12 @@ export default function FileManager() {
   const [showProperties, setShowProperties] = useState<FSNode | null>(null);
   const [navHistory, setNavHistory] = useState<string[]>(['fs-user']);
   const [historyPos, setHistoryPos] = useState(0);
+  const [aiOpen, setAiOpen] = useState(false);
 
   const children = getChildren(currentDirectory).filter(
     (c) => !searchQuery || c.name.toLowerCase().includes(searchQuery.toLowerCase())
   );
+  const selected = selectedNode ? getNode(selectedNode) ?? null : null;
 
   const navigateTo = (nodeId: string) => {
     setCurrentDirectory(nodeId);
@@ -163,8 +166,14 @@ export default function FileManager() {
     setSelectedNode(null);
   };
 
+  const revealNode = (node: FSNode) => {
+    if (!node.parentId) return;
+    if (node.parentId !== currentDirectory) navigateTo(node.parentId);
+    setSelectedNode(node.id);
+  };
+
   return (
-    <div className="w-full h-full flex flex-col text-sm" style={{ background: 'var(--bg-workspace)' }}>
+    <div className="relative w-full h-full flex flex-col text-sm" style={{ background: 'var(--bg-workspace)' }}>
       {/* Toolbar */}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b" style={{ borderColor: 'rgba(0,0,0,0.06)', background: 'var(--bg-window)' }}>
         <button onClick={goBack} className="p-1.5 rounded hover:bg-[var(--bg-hover)] transition-colors" title="Back">
@@ -176,11 +185,11 @@ export default function FileManager() {
         <button onClick={handleRefresh} className="p-1.5 rounded hover:bg-[var(--bg-hover)] transition-colors" title="Refresh">
           <RefreshCw size={16} className="text-[var(--text-secondary)]" />
         </button>
-        <div className="w-px h-5 mx-1" style={{ background: 'rgba(0,0,0,0.06)' }} />
-        <button onClick={handleCreateFolder} className="p-1.5 rounded hover:bg-[var(--bg-hover)] transition-colors" title="New Folder">
+        <div className="mx-1 hidden h-5 w-px sm:block" style={{ background: 'rgba(0,0,0,0.06)' }} />
+        <button onClick={handleCreateFolder} className="hidden p-1.5 rounded hover:bg-[var(--bg-hover)] transition-colors sm:block" title="New Folder">
           <Plus size={16} className="text-[var(--text-secondary)]" />
         </button>
-        <button onClick={() => { if (selectedNode) handleDelete(); }} className={`p-1.5 rounded transition-colors ${selectedNode ? 'hover:bg-[var(--bg-hover)]' : 'opacity-30'}`} title="Delete">
+        <button onClick={() => { if (selectedNode) handleDelete(); }} className={`hidden p-1.5 rounded transition-colors sm:block ${selectedNode ? 'hover:bg-[var(--bg-hover)]' : 'opacity-30'}`} title="Delete">
           <Trash2 size={16} className="text-[var(--text-secondary)]" />
         </button>
         <div className="mx-2 min-w-0 flex-1">
@@ -196,6 +205,22 @@ export default function FileManager() {
             style={{ background: 'var(--bg-input)', color: 'var(--text-primary)', border: '1px solid rgba(0,0,0,0.06)' }}
           />
         </div>
+        <button
+          type="button"
+          data-files-ai="toggle"
+          onClick={() => setAiOpen((value) => !value)}
+          className="flex h-8 shrink-0 items-center gap-1.5 rounded-lg px-2 text-xs font-medium transition-colors"
+          style={{
+            background: aiOpen ? '#005CFE' : 'var(--bg-input)',
+            color: aiOpen ? '#fff' : 'var(--text-secondary)',
+          }}
+          aria-label="Toggle Files AI"
+          aria-expanded={aiOpen}
+          title="Ask Files AI"
+        >
+          <Sparkles size={15} />
+          <span className="hidden xl:inline">Ask AI</span>
+        </button>
         <div className="flex items-center ml-1 rounded overflow-hidden" style={{ background: 'var(--bg-input)' }}>
           <button onClick={() => setViewMode('list')} className={`p-1.5 ${viewMode === 'list' ? 'bg-[var(--bg-active)]' : ''}`}>
             <ListIcon size={16} className="text-[var(--text-secondary)]" />
@@ -206,26 +231,38 @@ export default function FileManager() {
         </div>
       </div>
 
-      {/* File list */}
-      <div className="flex-1 overflow-y-auto" onContextMenu={(e) => handleContextMenu(e)} onClick={() => setSelectedNode(null)}>
-        <FileList
-          nodes={children}
-          viewMode={viewMode}
-          selectedNode={selectedNode}
-          onSelect={setSelectedNode}
-          onDoubleClick={handleDoubleClick}
-          onContextMenu={handleContextMenu}
-          renaming={renaming}
-          renameValue={renameValue}
-          setRenameValue={setRenameValue}
-          onRenameSubmit={handleRenameSubmit}
-        />
-      </div>
+      <div className="relative flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          {/* File list */}
+          <div className="flex-1 overflow-y-auto" onContextMenu={(e) => handleContextMenu(e)} onClick={() => setSelectedNode(null)}>
+            <FileList
+              nodes={children}
+              viewMode={viewMode}
+              selectedNode={selectedNode}
+              onSelect={setSelectedNode}
+              onDoubleClick={handleDoubleClick}
+              onContextMenu={handleContextMenu}
+              renaming={renaming}
+              renameValue={renameValue}
+              setRenameValue={setRenameValue}
+              onRenameSubmit={handleRenameSubmit}
+            />
+          </div>
 
-      {/* Status bar */}
-      <div className="flex items-center justify-between px-3 py-1 text-xs" style={{ background: 'var(--bg-window)', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
-        <span className="text-[var(--text-muted)]">{children.length} items</span>
-        <span className="text-[var(--text-muted)]">{getPath(currentDirectory)}</span>
+          {/* Status bar */}
+          <div className="flex items-center justify-between px-3 py-1 text-xs" style={{ background: 'var(--bg-window)', borderTop: '1px solid rgba(0,0,0,0.06)' }}>
+            <span className="text-[var(--text-muted)]">{children.length} items</span>
+            <span className="text-[var(--text-muted)]">{getPath(currentDirectory)}</span>
+          </div>
+        </div>
+
+        <FilesAiPanel
+          open={aiOpen}
+          currentDirectoryId={currentDirectory}
+          selectedNode={selected}
+          onClose={() => setAiOpen(false)}
+          onRevealNode={revealNode}
+        />
       </div>
 
       {/* Context menu */}
