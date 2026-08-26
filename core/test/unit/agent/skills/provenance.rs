@@ -259,6 +259,43 @@ fn parse_trusted_keys_rejects_non_hex() {
 }
 
 #[test]
+fn signature_config_from_env_rejects_any_malformed_trusted_key() {
+    let _lock = crate::test_env::lock_env();
+    let raw = format!("{}:not-hex", "aa".repeat(32));
+    let _trusted_keys =
+        crate::test_env::TestEnvVarGuard::set(ENV_TRUSTED_KEYS, raw);
+
+    let err = SignatureVerifyConfig::from_env().unwrap_err();
+    let message = err.to_string();
+
+    assert!(matches!(
+        err,
+        SignatureConfigError::InvalidTrustedKeys(SignatureError::InvalidHex { .. })
+    ));
+    assert!(message.contains(ENV_TRUSTED_KEYS));
+    assert!(message.contains("not valid hex"));
+}
+
+#[test]
+fn signature_config_from_env_preserves_valid_and_absent_values() {
+    let _lock = crate::test_env::lock_env();
+    let _require_signature =
+        crate::test_env::TestEnvVarGuard::set(ENV_REQUIRE_SIGNATURE, "yes");
+    let _trusted_keys =
+        crate::test_env::TestEnvVarGuard::set(ENV_TRUSTED_KEYS, "");
+
+    std::env::remove_var(ENV_TRUSTED_KEYS);
+    let absent = SignatureVerifyConfig::from_env().unwrap();
+    assert!(absent.require_signature);
+    assert!(absent.trusted_keys.is_none());
+
+    std::env::set_var(ENV_TRUSTED_KEYS, "ab".repeat(32));
+    let valid = SignatureVerifyConfig::from_env().unwrap();
+    assert!(valid.require_signature);
+    assert_eq!(valid.trusted_keys, Some(vec![[0xab; 32]]));
+}
+
+#[test]
 fn verify_signature_passes_for_valid_block_and_canonical_input() {
     use ed25519_dalek::{Signer, SigningKey};
     let signing_key = SigningKey::from_bytes(&[7u8; 32]);

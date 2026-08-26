@@ -33,7 +33,9 @@ use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 use super::manifest::{self, ManifestError};
-use super::provenance::{self, SignatureCheck, SignatureError, SignatureVerifyConfig};
+use super::provenance::{
+    self, SignatureCheck, SignatureConfigError, SignatureError, SignatureVerifyConfig,
+};
 
 /// Hard cap on how much *uncompressed* data a single zip may produce,
 /// regardless of advertised entry sizes. Defends against zip bombs.
@@ -96,18 +98,21 @@ pub enum SyncError {
     ZipPathTooDeep { name: String, cap: usize },
     #[error("archive integrity check failed: expected sha256 {expected}, got {actual}")]
     ChecksumMismatch { expected: String, actual: String },
+    #[error("skill signature configuration error: {0}")]
+    SignatureConfig(#[from] SignatureConfigError),
     #[error("manifest signature rejected: {0}")]
     Signature(#[from] SignatureError),
 }
 
 /// Install a skill bundle into the default agent skills directory.
 pub fn install_from_archive(archive: &Path, force: bool) -> Result<SyncResult, SyncError> {
+    let signature_config = SignatureVerifyConfig::from_env()?;
     install_into_with_policy_reserved(
         archive,
         &crate::paths::agent_skills_dir(),
         force,
         None,
-        &SignatureVerifyConfig::from_env(),
+        &signature_config,
         Some(&crate::paths::system_skills_dir()),
     )
 }
@@ -121,12 +126,13 @@ pub fn install_from_archive_verified(
     force: bool,
     expected_sha256: Option<&str>,
 ) -> Result<SyncResult, SyncError> {
+    let signature_config = SignatureVerifyConfig::from_env()?;
     install_into_with_policy_reserved(
         archive,
         &crate::paths::agent_skills_dir(),
         force,
         expected_sha256,
-        &SignatureVerifyConfig::from_env(),
+        &signature_config,
         Some(&crate::paths::system_skills_dir()),
     )
 }
@@ -154,12 +160,13 @@ pub fn install_into_verified(
     force: bool,
     expected_sha256: Option<&str>,
 ) -> Result<SyncResult, SyncError> {
+    let signature_config = SignatureVerifyConfig::from_env()?;
     install_into_with_policy(
         archive,
         skills_root,
         force,
         expected_sha256,
-        &SignatureVerifyConfig::from_env(),
+        &signature_config,
     )
 }
 

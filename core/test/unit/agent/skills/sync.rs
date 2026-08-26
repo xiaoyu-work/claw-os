@@ -414,6 +414,65 @@ fn install_verifies_sha256_when_provided() {
 
 // ----- ed25519 signature flow -----
 
+#[test]
+fn install_rejects_malformed_trusted_keys_before_side_effects() {
+    let _lock = crate::test_env::lock_env();
+    let _trusted_keys = crate::test_env::TestEnvVarGuard::set(
+        provenance::ENV_TRUSTED_KEYS,
+        "not-hex",
+    );
+    let tmp = TempDir::new().unwrap();
+    let archive = tmp.path().join("unsigned.zip");
+    make_zip(
+        &archive,
+        &[("SKILL.md", &good_skill_md("must-not-install"))],
+    );
+    let dest = tmp.path().join("skills");
+
+    let err = install_into(&archive, &dest, false).unwrap_err();
+    let message = err.to_string();
+
+    assert!(matches!(err, SyncError::SignatureConfig(_)));
+    assert!(message.contains(provenance::ENV_TRUSTED_KEYS));
+    assert!(message.contains("not valid hex"));
+    assert!(!dest.exists(), "install created the skills directory");
+}
+
+#[test]
+fn install_honors_valid_trusted_keys_from_env() {
+    let _lock = crate::test_env::lock_env();
+    let _require_signature = crate::test_env::TestEnvVarGuard::set(
+        provenance::ENV_REQUIRE_SIGNATURE,
+        "true",
+    );
+    let _trusted_keys = crate::test_env::TestEnvVarGuard::set(
+        provenance::ENV_TRUSTED_KEYS,
+        hex::encode([7u8; 32]),
+    );
+    let tmp = TempDir::new().unwrap();
+    let archive = tmp.path().join("signed.zip");
+    let (md, signer_key) = signed_skill_md("env-signed", "0.1.0");
+    make_zip(&archive, &[("SKILL.md", &md)]);
+    let dest = tmp.path().join("skills");
+
+    let err = install_into(&archive, &dest, false).unwrap_err();
+    assert!(matches!(
+        err,
+        SyncError::Signature(SignatureError::UntrustedKey { .. })
+    ));
+    assert!(
+        !dest.join("env-signed").exists(),
+        "untrusted skill was installed"
+    );
+
+    std::env::set_var(
+        provenance::ENV_TRUSTED_KEYS,
+        hex::encode(signer_key),
+    );
+    let installed = install_into(&archive, &dest, false).unwrap();
+    assert_eq!(installed.id, "env-signed");
+}
+
 /// Build a SKILL.md whose signature block authenticates the
 /// canonical signing input for the rest of the manifest.
 fn signed_skill_md(name: &str, version: &str) -> (String, [u8; 32]) {

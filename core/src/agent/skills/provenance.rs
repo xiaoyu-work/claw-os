@@ -300,6 +300,14 @@ pub enum SignatureError {
     UntrustedKey { public_key: String },
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum SignatureConfigError {
+    #[error("COS_SKILLS_TRUSTED_KEYS is invalid: {0}")]
+    InvalidTrustedKeys(#[source] SignatureError),
+    #[error("COS_SKILLS_TRUSTED_KEYS contains non-Unicode data")]
+    NonUnicodeTrustedKeys,
+}
+
 /// Outcome of attempting to verify a skill's signature.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SignatureCheck {
@@ -316,7 +324,7 @@ pub enum SignatureCheck {
 
 /// Policy knobs for [`verify_signature`]. Construct via
 /// [`SignatureVerifyConfig::from_env`] to pick up env-var driven
-/// production defaults.
+/// production defaults and reject invalid configuration.
 #[derive(Debug, Clone, Default)]
 pub struct SignatureVerifyConfig {
     /// When `true`, an unsigned manifest is rejected. When `false`,
@@ -334,22 +342,26 @@ impl SignatureVerifyConfig {
     ///
     /// * `COS_SKILLS_REQUIRE_SIGNATURE` truthy → `require_signature = true`.
     /// * `COS_SKILLS_TRUSTED_KEYS` set       → parse colon-separated
-    ///   hex keys; any unparseable entry causes the env var to be
-    ///   ignored *and* the config to flip to `require_signature = true`
-    ///   so we don't silently widen trust on a typo.
-    pub fn from_env() -> Self {
+    ///   hex keys; any unparseable entry returns an error so a typo
+    ///   can never silently widen trust.
+    pub fn from_env() -> Result<Self, SignatureConfigError> {
         let require = match std::env::var(ENV_REQUIRE_SIGNATURE) {
             Ok(v) => matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"),
             Err(_) => false,
         };
         let trusted_keys = match std::env::var(ENV_TRUSTED_KEYS) {
-            Ok(v) if !v.trim().is_empty() => parse_trusted_keys(&v).ok(),
-            _ => None,
+            Ok(v) if !v.trim().is_empty() => {
+                Some(parse_trusted_keys(&v).map_err(SignatureConfigError::InvalidTrustedKeys)?)
+            }
+            Ok(_) | Err(std::env::VarError::NotPresent) => None,
+            Err(std::env::VarError::NotUnicode(_)) => {
+                return Err(SignatureConfigError::NonUnicodeTrustedKeys);
+            }
         };
-        Self {
+        Ok(Self {
             require_signature: require,
             trusted_keys,
-        }
+        })
     }
 }
 
