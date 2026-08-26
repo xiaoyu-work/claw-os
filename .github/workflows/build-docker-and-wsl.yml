@@ -4,6 +4,13 @@ on:
   workflow_dispatch:
   workflow_call:
 
+# Queue the complete shared-rootfs build so mutable Docker and WSL outputs are
+# published in dispatch order without dropping immutable tag runs.
+concurrency:
+  group: claw-os-docker-wsl-publication
+  cancel-in-progress: false
+  queue: max
+
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
