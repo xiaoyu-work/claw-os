@@ -81,7 +81,7 @@ pub struct AgentConfig {
     /// "anthropic", "openai", "ollama"). Default is empty string,
     /// meaning **not configured** — every AI call will fail with
     /// `LlmError::NotConfigured` until the operator runs
-    /// `cos agent setup llm apply ...` (or the desktop initial-setup
+    /// `cos agent setup text apply ...` (or the desktop initial-setup
     /// AI page). The "mock" provider is registered for tests but is
     /// never picked up automatically.
     #[serde(default = "default_agent_provider")]
@@ -1026,7 +1026,7 @@ pub fn load_from_path(path: &Path) -> CosConfig {
 // `/root/.config/cos/config.json` — empty by default. But the agent
 // jobs it executes were submitted by *user* shells (uid != 0), whose
 // per-user `~/.config/cos/config.json` carries the provider config the
-// user actually set up via `cos agent setup llm`.
+// user actually set up via `cos agent setup text`.
 //
 // To bridge the two we install a per-async-task override: clawd's
 // worker resolves the job's owner home, loads that user's config, and

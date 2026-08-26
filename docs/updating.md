@@ -54,7 +54,7 @@ After an LLM-provider update, its live connectivity can be retested without
 rerunning the setup wizard:
 
 ```bash
-cos agent setup llm --verify-only
+cos agent setup text --verify-only
 ```
 
 ## Check that the Claw OS repository is configured

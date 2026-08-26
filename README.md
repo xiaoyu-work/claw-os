@@ -112,21 +112,9 @@ systemctl is-enabled clawd.service
 systemctl is-active clawd.service
 sudo systemctl status clawd.service --no-pager
 
-cos agent setup llm
+cos agent setup text
 cos agent chat
 ```
-
-Authorize Google Gmail/Calendar or Microsoft Outlook/Calendar through the
-normal browser/device login flow:
-
-```bash
-cos credential oauth-login google
-cos credential oauth-login microsoft
-```
-
-The package keeps Ubuntu as the host distribution. `cos sys info` reports
-Ubuntu under `distribution` and reports Claw separately as the installed
-system-agent layer; only a complete Claw OS image reports `claw_os: true`.
 
 ### Updating an existing installation
 

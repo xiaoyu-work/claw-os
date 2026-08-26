@@ -297,7 +297,7 @@ impl OpenAICompatProvider {
                 None => self.cfg.api_key.clone().ok_or_else(|| {
                     LlmError::NotConfigured(
                         "GitHub Copilot is not signed in. Run \
-                         `cos agent setup llm oauth-start --provider copilot` \
+                         `cos agent setup text oauth-start --provider copilot` \
                          or use the desktop AI settings page to sign in with GitHub."
                             .into(),
                     )
@@ -473,7 +473,7 @@ impl Provider for OpenAICompatProvider {
                 "azure provider needs `agent.base_url` set to the Azure OpenAI \
                  resource root (e.g. https://<resource>.openai.azure.com/). The \
                  model field is treated as the deployment name. Run \
-                 `cos agent setup llm apply --provider azure \
+                 `cos agent setup text apply --provider azure \
                  --base-url https://<resource>.openai.azure.com/ \
                  --model <deployment> --api-version <version> \
                  --api-key-stdin`."

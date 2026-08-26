@@ -76,7 +76,7 @@ fn is_ready_blocks_on_unconfigured_default() {
     // install can never accidentally run AI calls against `mock`.
     let err = is_ready(&unconfigured_cfg()).unwrap_err();
     assert!(err.contains("agent not configured"));
-    assert!(err.contains("no LLM provider"));
+    assert!(err.contains("no text-model provider"));
     assert!(err.contains("cos agent setup"));
 }
 
@@ -160,7 +160,7 @@ fn bare_setup_on_non_tty_requires_modality() {
     assert!(err.contains("requires a modality"), "got {err}");
     // The envelope should also list the valid modalities so callers
     // can self-correct.
-    for m in ["llm", "tts", "stt", "imagegen", "embed", "all"] {
+    for m in ["text", "tts", "stt", "imagegen", "embed", "all"] {
         assert!(err.contains(m), "expected `{m}` in envelope; got {err}");
     }
 }
@@ -180,7 +180,7 @@ fn bare_status_defaults_to_all_modalities() {
         .get("modalities")
         .and_then(|s| s.as_object())
         .expect("modalities map");
-    for k in ["llm", "tts", "stt", "imagegen", "embed"] {
+    for k in ["text", "tts", "stt", "imagegen", "embed"] {
         assert!(
             modalities.contains_key(k),
             "missing modality `{k}` in bare status"
@@ -208,14 +208,16 @@ fn help_subcommand_lists_modes() {
     let modalities = v.get("modalities").and_then(|s| s.as_object());
     assert!(modalities.is_some(), "expected modalities table in help");
     let m = modalities.unwrap();
-    for k in ["llm", "tts", "stt", "imagegen", "embed", "all"] {
+    for k in ["text", "tts", "stt", "imagegen", "embed", "all"] {
         assert!(m.contains_key(k), "expected modality `{k}` in help");
     }
+    assert!(!m.contains_key("llm"), "legacy `llm` modality leaked");
 }
 
 #[test]
 fn modality_parses_aliases() {
-    assert_eq!(Modality::parse("llm"), Some(Modality::Llm));
+    assert_eq!(Modality::parse("llm"), None);
+    assert_eq!(Modality::parse("text"), Some(Modality::Llm));
     assert_eq!(Modality::parse("speech"), Some(Modality::Tts));
     assert_eq!(Modality::parse("asr"), Some(Modality::Stt));
     assert_eq!(Modality::parse("image"), Some(Modality::ImageGen));
@@ -346,7 +348,7 @@ fn status_all_reports_every_modality() {
         .get("modalities")
         .and_then(|s| s.as_object())
         .expect("modalities map");
-    for k in ["llm", "tts", "stt", "imagegen", "embed"] {
+    for k in ["text", "tts", "stt", "imagegen", "embed"] {
         assert!(
             modalities.contains_key(k),
             "missing modality `{k}` in status"
@@ -633,7 +635,7 @@ fn require_provider_rejects_empty_and_missing() {
 #[test]
 fn user_facing_providers_hides_mock_and_llama_local() {
     // Same contract as the GUI catalogue, but for the interactive
-    // `cos agent setup llm` wizard's provider picker — it consumes
+    // `cos agent setup text` wizard's provider picker — it consumes
     // `user_facing_providers()` instead of `available_providers()`
     // so neither test-only `mock` nor `llama_local` (managed via
     // `cos model load`) show up in the numbered list. Power users
@@ -661,7 +663,7 @@ fn azure_apply_without_base_url_errors() {
     std::env::set_var("COS_CONFIG_PATH", &cfg_path);
 
     let err = run(&[
-        "llm".into(),
+        "text".into(),
         "apply".into(),
         "--provider".into(),
         "azure".into(),
@@ -688,7 +690,7 @@ fn azure_apply_persists_base_url_with_api_version() {
     std::env::set_var("COS_CONFIG_PATH", &cfg_path);
 
     let v = run(&[
-        "llm".into(),
+        "text".into(),
         "apply".into(),
         "--provider".into(),
         "azure".into(),
@@ -733,7 +735,7 @@ fn azure_apply_rejects_deployment_in_base_url() {
     std::env::set_var("COS_CONFIG_PATH", &cfg_path);
 
     let err = run(&[
-        "llm".into(),
+        "text".into(),
         "apply".into(),
         "--provider".into(),
         "azure".into(),

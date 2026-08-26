@@ -43,11 +43,11 @@ pub const REGISTERED: &[&str] = &[
 /// (which would print the misleading message `unknown provider ''`).
 /// This is the default state on a fresh install — `AgentConfig::default()`
 /// leaves `provider` empty so the OS owner is forced to pick one via
-/// `cos agent setup llm apply ...` or the desktop initial-setup AI page.
+/// `cos agent setup text apply ...` or the desktop initial-setup AI page.
 pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn Provider>> {
     if name.is_empty() {
         return Err(LlmError::NotConfigured(
-            "no LLM provider configured. Run `cos agent setup llm apply \
+            "no text-model provider configured. Run `cos agent setup text apply \
              --provider <name> --model <id> [--api-key <key>]` or open the \
              desktop initial-setup AI page to pick one."
                 .into(),

@@ -1,12 +1,12 @@
 /**
- * Settings page. Sub-nav for the five modalities (llm/embed/tts/stt/imagegen)
+ * Settings page. Sub-nav for the five modalities (text/embed/tts/stt/imagegen)
  * plus an About panel.
  *
  * Each modality form is built dynamically from the response of
  * `GET /api/setup/providers/{modality}`, which returns the same shape
  * `cos agent setup providers <modality>` prints. Apply hits
  * `POST /api/setup/apply`. Verify hits `POST /api/setup/test/{modality}`.
- * OAuth flows for `llm` use `oauth/start` + `oauth/poll`.
+ * OAuth flows for `text` use `oauth/start` + `oauth/poll`.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -28,7 +28,7 @@ import {
 } from "@/components/ui/select";
 
 const MODALITIES = [
-  { key: "llm", label: "LLM" },
+  { key: "text", label: "Text model" },
   { key: "embed", label: "Embeddings" },
   { key: "tts", label: "Text → speech" },
   { key: "stt", label: "Speech → text" },
@@ -40,7 +40,7 @@ export function SettingsPage({ meta }: { meta: any }) {
   const modality = useMemo(() => {
     if (route === "/settings/about") return "about";
     const m = route.match(/^\/settings\/([^/]+)/);
-    return m?.[1] || "llm";
+    return m?.[1] || "text";
   }, [route]);
 
   return (
@@ -55,7 +55,7 @@ export function SettingsPage({ meta }: { meta: any }) {
               key={m.key}
               label={m.label}
               href={`/settings/${m.key}`}
-              active={isActive(`/settings/${m.key}`, route) || (m.key === "llm" && route === "/settings")}
+              active={isActive(`/settings/${m.key}`, route) || (m.key === "text" && route === "/settings")}
             />
           ))}
           <div className="my-2 border-t" />

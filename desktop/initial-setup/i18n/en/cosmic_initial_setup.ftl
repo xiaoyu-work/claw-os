@@ -75,13 +75,13 @@ launcher-page = Fast and efficient
 # Skippable: the system can run fine without an LLM (every AI call just
 # fails with "not configured").
 ai-page = Configure AI
-    .description = ClawOS ships with an AI agent that runs locally and shells out to the LLM provider you pick here. You can skip this and configure it later with `cos agent setup llm`.
+    .description = ClawOS ships with an AI agent that runs locally and shells out to the text-model provider you pick here. You can skip this and configure it later with `cos agent setup text`.
     .provider = Provider
     .provider-description = Where to send chat requests.
     .model = Model
     .model-description = Provider-specific model identifier (e.g. `claude-sonnet-4-5`, `gpt-4o-mini`, `llama3.2:3b`).
     .api-key = API key
-    .api-key-description = Optional — leave blank and add it later via `cos agent setup llm apply --api-key-stdin`.
+    .api-key-description = Optional — leave blank and add it later via `cos agent setup text apply --api-key-stdin`.
     .azure-endpoint = Azure endpoint
     .azure-endpoint-description = Resource root URL from your Azure OpenAI portal (e.g. `https://acme.openai.azure.com/`). Do not append `/openai/deployments/…` — that path is constructed automatically from the model field, which must match your Azure deployment name.
     .azure-api-version = API version

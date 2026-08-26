@@ -237,7 +237,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
     // Deliberately do *not* short-circuit on `is_ready`: the UI itself
     // remains useful for inspecting tasks, approvals, inbox, sysinfo,
     // and serves as the place a user discovers they still need to run
-    // `cos agent setup llm`. The chat SSE handler surfaces the
+    // `cos agent setup text`. The chat SSE handler surfaces the
     // `is_ready` error inline as a streamed `error` frame, so the
     // user gets actionable feedback in the browser instead of a
     // command that refuses to start.

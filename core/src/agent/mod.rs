@@ -251,7 +251,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                     let fix = parsed
                         .get("fix")
                         .cloned()
-                        .unwrap_or_else(|| json!("cos agent setup llm"));
+                        .unwrap_or_else(|| json!("cos agent setup text"));
                     (false, err, fix)
                 }
             };
@@ -3842,7 +3842,7 @@ fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
     } else if active_name.is_empty() {
         json!({
             "attempted": false,
-            "reason": "no LLM provider configured — run `cos agent setup llm` first (probe needs an active provider)",
+            "reason": "no text-model provider configured — run `cos agent setup text` first (probe needs an active provider)",
         })
     } else if !active_in_scope {
         json!({

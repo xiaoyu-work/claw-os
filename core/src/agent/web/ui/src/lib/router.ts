@@ -11,8 +11,8 @@
  *   #/approvals              → approvals
  *   #/inbox                  → inbox
  *   #/system                 → sysinfo
- *   #/settings               → settings overview (LLM)
- *   #/settings/llm           → settings :: llm modality
+ *   #/settings               → settings overview (text model)
+ *   #/settings/text          → settings :: text modality
  *   #/settings/embed         → settings :: embed
  *   #/settings/tts           → settings :: tts
  *   #/settings/stt           → settings :: stt

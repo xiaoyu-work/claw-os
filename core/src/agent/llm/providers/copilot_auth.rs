@@ -208,7 +208,7 @@ fn truncate(s: &str, max: usize) -> String {
 // ---------------------------------------------------------------------------
 
 /// Server response to a device-code request. Public so the
-/// `cos agent setup llm oauth-start` subcommand can serialize it
+/// `cos agent setup text oauth-start` subcommand can serialize it
 /// straight to JSON.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DeviceCode {

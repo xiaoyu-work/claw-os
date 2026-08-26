@@ -59,7 +59,7 @@ impl Modality {
 
     pub const fn as_arg(self) -> &'static str {
         match self {
-            Modality::Llm => "llm",
+            Modality::Llm => "text",
             Modality::Tts => "tts",
             Modality::Stt => "stt",
             Modality::Imagegen => "imagegen",
@@ -1157,7 +1157,7 @@ async fn reset(modality: Modality) -> Result<(), String> {
 const MIN_OAUTH_POLL_SECS: u64 = 5;
 
 async fn oauth_start(provider: &str) -> Result<DeviceCodeView, String> {
-    let stdout = cos_setup(&["llm", "oauth-start", "--provider", provider], None).await?;
+    let stdout = cos_setup(&["text", "oauth-start", "--provider", provider], None).await?;
     let v: serde_json::Value =
         serde_json::from_str(&stdout).map_err(|e| format!("invalid oauth-start JSON: {e}"))?;
     let user_code = v
@@ -1190,7 +1190,7 @@ async fn oauth_start(provider: &str) -> Result<DeviceCodeView, String> {
 async fn oauth_poll(provider: &str, device_code: &str) -> Result<PollStatus, String> {
     let stdout = cos_setup(
         &[
-            "llm",
+            "text",
             "oauth-poll",
             "--provider",
             provider,
@@ -1228,7 +1228,7 @@ async fn oauth_poll(provider: &str, device_code: &str) -> Result<PollStatus, Str
 }
 
 async fn fetch_oauth_models(provider: &str) -> Result<Vec<String>, String> {
-    let stdout = cos_setup(&["llm", "models", "--provider", provider], None).await?;
+    let stdout = cos_setup(&["text", "models", "--provider", provider], None).await?;
     let v: serde_json::Value =
         serde_json::from_str(&stdout).map_err(|e| format!("invalid models JSON: {e}"))?;
     let arr = v

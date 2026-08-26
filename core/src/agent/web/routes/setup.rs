@@ -132,12 +132,12 @@ pub async fn test(
 #[derive(Deserialize)]
 pub struct OauthStartReq {
     pub provider: String,
-    #[serde(default = "default_llm_modality")]
+    #[serde(default = "default_text_modality")]
     pub modality: String,
 }
 
-fn default_llm_modality() -> String {
-    "llm".into()
+fn default_text_modality() -> String {
+    "text".into()
 }
 
 pub async fn oauth_start(
@@ -157,7 +157,7 @@ pub async fn oauth_start(
 pub struct OauthPollReq {
     pub provider: String,
     pub device_code: String,
-    #[serde(default = "default_llm_modality")]
+    #[serde(default = "default_text_modality")]
     pub modality: String,
 }
 

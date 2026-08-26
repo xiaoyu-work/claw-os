@@ -156,7 +156,7 @@ fn redirect_user_data_dir() -> UserDataDirGuard {
 /// which is `root:root 0755` on a real install. This is the
 /// regression that produced
 ///   `Permission denied (no active session): secret.write on *`
-/// when `cos agent setup llm` tried to store the GitHub Copilot
+/// when `cos agent setup text` tried to store the GitHub Copilot
 /// OAuth token.
 #[test]
 fn bootstrap_writes_to_user_data_dir_when_cos_data_dir_unset() {

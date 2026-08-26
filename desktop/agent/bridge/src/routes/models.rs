@@ -39,8 +39,8 @@ pub struct ModelsResponse {
 pub async fn list(
     State(_state): State<AppState>,
 ) -> Result<Json<ModelsResponse>, (StatusCode, Json<Value>)> {
-    let status = run_json(&["agent", "setup", "llm", "--status"]).await?;
-    let catalogue = run_json(&["agent", "setup", "llm", "--providers"]).await?;
+    let status = run_json(&["agent", "setup", "text", "--status"]).await?;
+    let catalogue = run_json(&["agent", "setup", "text", "--providers"]).await?;
     build_response(&status, &catalogue)
         .map(Json)
         .map_err(|error| (StatusCode::BAD_GATEWAY, Json(json!({ "error": error }))))

@@ -2,7 +2,7 @@
 //
 // Initial-setup AI page — picks the system-wide LLM provider/model
 // (and optionally an API key) so the OS owner doesn't have to drop to
-// a terminal post-install to run `cos agent setup llm apply`.
+// a terminal post-install to run `cos agent setup text apply`.
 //
 // Pre-1.0 design notes:
 //
@@ -10,10 +10,10 @@
 //     `AgentConfig::provider = ""` (not configured), and that's a
 //     perfectly fine state to leave the system in — every AI call
 //     just fails fast with `LlmError::NotConfigured`. The user can
-//     return here via `cos agent setup llm apply ...` at any time.
+//     return here via `cos agent setup text apply ...` at any time.
 //
 //   * Applying writes to `~/.config/cos/config.json` by invoking the
-//     existing `cos agent setup llm apply` CLI through cos-runtime
+//     existing `cos agent setup text apply` CLI through cos-runtime
 //     exec.run. The bridge runs as the same unprivileged user as the
 //     desktop session, so the config file lives under the running
 //     user's `$HOME` and no privilege escalation is needed.
@@ -24,7 +24,7 @@
 //     duration of the call — initial-setup runs once, on a freshly
 //     installed system, so the leak window is acceptable; users who
 //     need stronger handling can leave the field blank here and run
-//     `sudo cos agent setup llm apply --api-key-stdin <key.txt` from
+//     `sudo cos agent setup text apply --api-key-stdin <key.txt` from
 //     a terminal afterwards.
 //
 //   * Per-provider extras (Azure endpoint + API version, today) are
@@ -150,7 +150,7 @@ pub enum Message {
     AppliedResult(ApplyOutcome),
     /// User clicked "Sign in with GitHub" on the OAuth panel.
     StartOauth,
-    /// `cos agent setup llm oauth-start --provider copilot` returned
+    /// `cos agent setup text oauth-start --provider copilot` returned
     /// the device-authorization codes. The wizard displays the
     /// `user_code` and starts the polling task.
     OauthStarted {
@@ -496,7 +496,7 @@ impl page::Page for Page {
     }
 
     /// Persist the picked provider/model/api-key by invoking
-    /// `cos agent setup llm apply` through claw-os-sdk. Runs on
+    /// `cos agent setup text apply` through claw-os-sdk. Runs on
     /// `Finish` (see main.rs Message::Finish), same as every other
     /// page's `apply_settings`. Failure is logged AND surfaced into
     /// the page state so the next render shows a redacted reason.
@@ -570,7 +570,7 @@ fn apply_blocking(
         "cos",
         "agent",
         "setup",
-        "llm",
+        "text",
         "apply",
         "--provider",
         provider,
@@ -590,7 +590,7 @@ fn apply_blocking(
             tracing::info!(
                 provider,
                 model,
-                "cos agent setup llm apply succeeded via claw-os-sdk"
+                "cos agent setup text apply succeeded via claw-os-sdk"
             );
             ApplyOutcome::Ok
         }
@@ -610,15 +610,15 @@ fn apply_blocking(
                 model,
                 exit_code = r.exit_code,
                 stderr = %r.stderr,
-                "cos agent setup llm apply failed (non-zero exit)"
+                "cos agent setup text apply failed (non-zero exit)"
             );
             ApplyOutcome::Failed(summary)
         }
         Err(why) => {
             if why.is_denied() {
-                tracing::warn!(?why, "exec.run cos agent setup llm apply denied by claw-os-sdk");
+                tracing::warn!(?why, "exec.run cos agent setup text apply denied by claw-os-sdk");
             } else {
-                tracing::error!(?why, "exec.run cos agent setup llm apply failed");
+                tracing::error!(?why, "exec.run cos agent setup text apply failed");
             }
             ApplyOutcome::Failed(format!("{why}"))
         }
@@ -630,10 +630,10 @@ fn apply_blocking(
 //
 // The CLI surface we drive:
 //
-//   cos agent setup llm oauth-start --provider copilot
+//   cos agent setup text oauth-start --provider copilot
 //     → prints `{user_code, verification_uri, device_code, interval, …}`
 //
-//   cos agent setup llm oauth-poll --provider copilot --device-code <c>
+//   cos agent setup text oauth-poll --provider copilot --device-code <c>
 //     → prints `{status: "pending" | "slow_down" | "expired" |
 //                          "denied"   | "ok"}`
 //
@@ -659,7 +659,7 @@ struct OauthStart {
     interval: u64,
 }
 
-/// Run `cos agent setup llm oauth-start --provider X` and parse the
+/// Run `cos agent setup text oauth-start --provider X` and parse the
 /// emitted JSON. The CLI prints the whole envelope to stdout; we ignore
 /// extras (`expires_in`) the UI doesn't render.
 fn oauth_start_blocking(provider: &str) -> Result<OauthStart, String> {
@@ -667,7 +667,7 @@ fn oauth_start_blocking(provider: &str) -> Result<OauthStart, String> {
         "cos",
         "agent",
         "setup",
-        "llm",
+        "text",
         "oauth-start",
         "--provider",
         provider,
@@ -676,9 +676,9 @@ fn oauth_start_blocking(provider: &str) -> Result<OauthStart, String> {
         Ok(r) => r,
         Err(why) => {
             if why.is_denied() {
-                tracing::warn!(?why, "exec.run cos agent setup llm oauth-start denied");
+                tracing::warn!(?why, "exec.run cos agent setup text oauth-start denied");
             } else {
-                tracing::error!(?why, "exec.run cos agent setup llm oauth-start failed");
+                tracing::error!(?why, "exec.run cos agent setup text oauth-start failed");
             }
             return Err(format!("{why}"));
         }
@@ -720,7 +720,7 @@ fn oauth_start_blocking(provider: &str) -> Result<OauthStart, String> {
     })
 }
 
-/// Block-poll `cos agent setup llm oauth-poll` until the device-flow
+/// Block-poll `cos agent setup text oauth-poll` until the device-flow
 /// returns a terminal outcome or the overall deadline expires.
 fn oauth_poll_blocking(
     provider: &str,
@@ -739,7 +739,7 @@ fn oauth_poll_blocking(
             "cos",
             "agent",
             "setup",
-            "llm",
+            "text",
             "oauth-poll",
             "--provider",
             provider,
@@ -752,7 +752,7 @@ fn oauth_poll_blocking(
                 // Transient bridge errors get retried — the deadline
                 // above caps total wait. Permanent errors surface as
                 // non-zero exit_code below.
-                tracing::debug!(?why, "exec.run cos agent setup llm oauth-poll errored, retrying");
+                tracing::debug!(?why, "exec.run cos agent setup text oauth-poll errored, retrying");
                 continue;
             }
         };

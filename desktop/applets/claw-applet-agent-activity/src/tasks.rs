@@ -125,13 +125,13 @@ fn parse_tasks_output(output: std::process::Output) -> Result<Vec<Task>, LoadErr
 /// migration rules belong to the kernel.
 pub fn load_mode() -> Result<AgentMode, LoadError> {
     let output = Command::new(cos_binary())
-        .args(["agent", "setup", "llm", "--status"])
+        .args(["agent", "setup", "text", "--status"])
         .output()
         .map_err(|e| LoadError(format!("spawn cos: {e}")))?;
     if !output.status.success() {
         let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
         return Err(LoadError(if err.is_empty() {
-            format!("cos agent setup llm --status exited with {}", output.status)
+            format!("cos agent setup text --status exited with {}", output.status)
         } else {
             err
         }));

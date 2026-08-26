@@ -1,7 +1,7 @@
 //! `cos agent setup` — per-modality config wizard.
 //!
 //! Replaces the previous `cos agent onboarding` family. Pick a
-//! modality (llm / tts / stt / imagegen / embed / all), then walk
+//! modality (text / tts / stt / imagegen / embed / all), then walk
 //! through provider → model → API key → persist → optional probe.
 //! Each modality writes to its own `~/.config/cos/config.json` block
 //! (`[agent]`, `[tts]`, `[stt]`, `[imagegen]`, `[embed]`) and stores
@@ -37,7 +37,7 @@ mod media;
 pub fn run(args: &[String]) -> Result<Value, String> {
     // Parse: optional --no-verify / --verify-only / --status / --reset /
     // --providers / --help, plus a required leading positional modality:
-    //   llm | tts | stt | imagegen | embed | all
+    //   text | tts | stt | imagegen | embed | all
     //
     // Extra non-interactive subcommands take per-modality flags:
     //   apply       --provider X --model Y [--api-key K | --api-key-stdin | --api-key-env E]
@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
     //
     // Bare `cos agent setup` (no positional, no flags) opens an
     // interactive modality picker on a TTY and prints help otherwise —
-    // we deliberately do NOT auto-pick `llm` for the user.
+    // we deliberately do NOT auto-pick `text` for the user.
     let mut verify_after = true;
     let mut explicit_verify = false;
     let mut sub: Option<&str> = None;
@@ -143,7 +143,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                     ));
                 } else if sub.is_none() {
                     return Err(format!(
-                        "unknown setup modality/subcommand: {other}. try: llm | tts | stt | imagegen | embed | all | apply | test | oauth-start | oauth-poll | models | --status | --reset | --providers | --verify-only"
+                        "unknown setup modality/subcommand: {other}. try: text | tts | stt | imagegen | embed | all | apply | test | oauth-start | oauth-poll | models | --status | --reset | --providers | --verify-only"
                     ));
                 }
             }
@@ -188,7 +188,7 @@ pub fn run(args: &[String]) -> Result<Value, String> {
             Some("reset") => reset_cmd(Modality::All),
             Some("providers") => providers_cmd(Modality::All),
             Some("apply") => Err(
-                "`apply` requires a modality: cos agent setup <llm|tts|stt|imagegen|embed> apply ..."
+                "`apply` requires a modality: cos agent setup <text|tts|stt|imagegen|embed> apply ..."
                     .into(),
             ),
             Some("test") => verify_cmd(Modality::All),
@@ -207,9 +207,9 @@ pub fn run(args: &[String]) -> Result<Value, String> {
                 } else {
                     Err(json!({
                         "error": "cos agent setup requires a modality",
-                        "hint": "pick one of: llm | tts | stt | imagegen | embed | all",
+                        "hint": "pick one of: text | tts | stt | imagegen | embed | all",
                         "examples": [
-                            "cos agent setup llm",
+                            "cos agent setup text",
                             "cos agent setup tts",
                             "cos agent setup all",
                         ],
@@ -267,8 +267,8 @@ fn pick_modality_interactively() -> Result<Modality, String> {
     let options = [
         (
             Modality::Llm,
-            "llm",
-            "Conversational LLM (required for ask/chat)",
+            "text",
+            "Conversational text model (required for ask/chat)",
         ),
         (Modality::Tts, "tts", "Text-to-speech"),
         (Modality::Stt, "stt", "Speech-to-text"),
@@ -321,7 +321,7 @@ pub enum Modality {
 impl Modality {
     pub fn parse(s: &str) -> Option<Self> {
         match s {
-            "llm" | "agent" => Some(Self::Llm),
+            "text" | "agent" => Some(Self::Llm),
             "tts" | "speech" => Some(Self::Tts),
             "stt" | "transcribe" | "asr" => Some(Self::Stt),
             "imagegen" | "image" | "image-gen" => Some(Self::ImageGen),
@@ -332,7 +332,7 @@ impl Modality {
     }
     pub fn name(self) -> &'static str {
         match self {
-            Self::Llm => "llm",
+            Self::Llm => "text",
             Self::Tts => "tts",
             Self::Stt => "stt",
             Self::ImageGen => "imagegen",
@@ -347,7 +347,7 @@ fn help_doc() -> Value {
         "command": "cos agent setup <MODALITY> [SUBCOMMAND]",
         "summary": "Per-modality config wizard: pick a provider, a model, store an API key, and verify it works.",
         "modalities": {
-            "llm":       "Conversational LLM (under [agent]). Required for `cos agent ask`/`chat`.",
+            "text":      "Conversational text model (stored under [agent]). Required for `cos agent ask`/`chat`.",
             "tts":       "Text-to-speech (under [tts]). Used by voice output / `cos agent voice`.",
             "stt":       "Speech-to-text (under [stt]). Used by voice input / `cos model transcribe`.",
             "imagegen":  "Image generation (under [imagegen]). Used by `cos agent image`.",
@@ -378,20 +378,20 @@ fn help_doc() -> Value {
             "--device-code C":  "(oauth-poll only) The opaque device_code returned by `oauth-start`. The UI keeps it private and only forwards it to the kernel.",
         },
         "examples": [
-            "cos agent setup llm                                                  # wizard for LLM",
+            "cos agent setup text                                                 # wizard for conversational text",
             "cos agent setup all                                                  # walk every modality, asking before each",
             "cos agent setup --status                                             # report readiness across all modalities",
             "cos agent setup --providers                                          # JSON catalogue of all providers + models",
-            "cos agent setup llm apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
-            "cos agent setup llm apply --provider azure --model my-deployment \\",
+            "cos agent setup text apply --provider openai --model gpt-4o --api-key-stdin  < key.txt",
+            "cos agent setup text apply --provider azure --model my-deployment \\",
             "    --base-url https://acme.openai.azure.com/openai/deployments/my-deployment \\",
             "    --api-version 2024-12-01-preview --api-key-stdin                # Azure OpenAI",
             "cos agent setup tts apply --provider edge --model en-US-AriaNeural   # no key needed",
             "cos agent setup imagegen test                                        # probe configured imagegen provider",
-            "cos agent setup llm oauth-start --provider copilot                   # GitHub Copilot device-flow start",
-            "cos agent setup llm oauth-poll  --provider copilot --device-code D   # poll until status=ok",
-            "cos agent setup llm apply       --provider copilot --model gpt-4o    # reuse stored token (no --api-key)",
-            "cos agent setup llm models      --provider copilot                   # refresh Copilot model list",
+            "cos agent setup text oauth-start --provider copilot                  # GitHub Copilot device-flow start",
+            "cos agent setup text oauth-poll  --provider copilot --device-code D  # poll until status=ok",
+            "cos agent setup text apply       --provider copilot --model gpt-4o   # reuse stored token (no --api-key)",
+            "cos agent setup text models      --provider copilot                  # refresh Copilot model list",
         ],
         "notes": [
             "Bare `cos agent setup` (no args) opens an interactive picker on a TTY; on a non-TTY it errors and lists the modalities.",
@@ -409,7 +409,7 @@ fn verify_cmd(modality: Modality) -> Result<Value, String> {
         Modality::All => {
             let mut report = serde_json::Map::new();
             report.insert(
-                "llm".into(),
+                "text".into(),
                 verify_llm().unwrap_or_else(|e| json!({"error": e})),
             );
             for m in [
@@ -431,16 +431,16 @@ fn verify_llm() -> Result<Value, String> {
     if let Err(reason) = is_ready(cfg) {
         let reason_val: Value = serde_json::from_str(&reason).unwrap_or_else(|_| json!(reason));
         return Ok(json!({
-            "modality": "llm",
+            "modality": "text",
             "ok": false,
             "attempted": false,
             "reason": reason_val,
-            "hint": "run `cos agent setup llm` to configure a provider first",
+            "hint": "run `cos agent setup text` to configure a provider first",
         }));
     }
     if !provider_needs_credential(&cfg.provider) {
         return Ok(json!({
-            "modality": "llm",
+            "modality": "text",
             "ok": true,
             "attempted": false,
             "reason": format!("provider `{}` does not need credentials; skipping probe", cfg.provider),
@@ -451,7 +451,7 @@ fn verify_llm() -> Result<Value, String> {
     let mut e = std::io::stderr();
     let _ = writeln!(
         e,
-        "probing llm: {} ({}) — up to 30s...",
+        "probing text model: {} ({}) — up to 30s...",
         cfg.provider, cfg.model
     );
     let verdict = super::run_active_provider_probe(&cfg.provider, cfg, 30);
@@ -463,10 +463,10 @@ fn verify_llm() -> Result<Value, String> {
         if let Some(msg) = verdict.get("error_message").and_then(|v| v.as_str()) {
             let _ = writeln!(e, "  {msg}");
         }
-        let _ = writeln!(e, "  hint: re-run `cos agent setup llm` or fix the credential, then `cos agent setup llm --verify-only`");
+        let _ = writeln!(e, "  hint: re-run `cos agent setup text` or fix the credential, then `cos agent setup text --verify-only`");
     }
     Ok(json!({
-        "modality": "llm",
+        "modality": "text",
         "ok": ok,
         "attempted": true,
         "provider": cfg.provider,
@@ -482,22 +482,22 @@ fn verify_llm() -> Result<Value, String> {
 /// Whether `cos agent {ask,chat,live,stream}` can usefully run.
 ///
 /// Returns `Err(json)` with a structured payload pointing at
-/// `cos agent setup llm` when the agent is still on the mock provider or
+/// `cos agent setup text` when the agent is still on the mock provider or
 /// the configured provider has no resolvable credential.
 pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     if cfg.provider.is_empty() {
         return Err(json!({
             "error": "agent not configured",
-            "fix": "cos agent setup llm",
-            "details": "no LLM provider is configured. Run `cos agent setup llm` to pick one (or use the desktop initial-setup AI page).",
+            "fix": "cos agent setup text",
+            "details": "no text-model provider is configured. Run `cos agent setup text` to pick one (or use the desktop initial-setup AI page).",
         })
         .to_string());
     }
     if cfg.provider == "mock" {
         return Err(json!({
             "error": "agent not configured",
-            "fix": "cos agent setup llm",
-            "details": "the `mock` provider returns canned answers. Run `cos agent setup llm` to pick a real LLM provider.",
+            "fix": "cos agent setup text",
+            "details": "the `mock` provider returns canned answers. Run `cos agent setup text` to pick a real provider.",
         })
         .to_string());
     }
@@ -526,7 +526,7 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     Err(json!({
         "error": "agent provider configured but no credential found",
         "provider": cfg.provider,
-        "fix": "cos agent setup llm",
+        "fix": "cos agent setup text",
         "details": format!(
             "no credential resolvable for provider `{}` (checked credential store namespace `agent` and env vars).",
             cfg.provider
@@ -611,7 +611,7 @@ fn status_cmd(modality: Modality) -> Result<Value, String> {
         Modality::Llm => Ok(status_llm()),
         Modality::All => {
             let mut map = serde_json::Map::new();
-            map.insert("llm".into(), status_llm());
+            map.insert("text".into(), status_llm());
             for m in [
                 Modality::Tts,
                 Modality::Stt,
@@ -639,7 +639,7 @@ fn status_llm() -> Value {
     };
     let (base_url, api_version) = split_base_url_and_api_version(cfg.base_url.as_deref());
     json!({
-        "modality": "llm",
+        "modality": "text",
         "ready": ready.is_ok(),
         "provider": cfg.provider,
         "model": cfg.model,
@@ -775,7 +775,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
 
     let stderr = std::io::stderr();
     let mut e = stderr.lock();
-    let _ = writeln!(e, "cos agent setup llm — conversational LLM wizard");
+    let _ = writeln!(e, "cos agent setup text — conversational text-model wizard");
     let _ = writeln!(e);
 
     // ---- Step 1: provider ------------------------------------------------
@@ -1023,7 +1023,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
                 );
                 let _ = writeln!(
                     e,
-                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup llm`)."
+                    "a privileged session (e.g. `sudo COS_CONFIG_PATH=$COS_CONFIG_PATH cos agent setup text`)."
                 );
                 credential_env = Some(env_name);
             }
@@ -1095,7 +1095,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         let _ = writeln!(e);
         let _ = writeln!(
             e,
-            "(skipping live probe; re-run with `cos agent setup llm --verify-only` to confirm later)"
+            "(skipping live probe; re-run with `cos agent setup text --verify-only` to confirm later)"
         );
     } else if !needs_probe {
         let _ = writeln!(e);
@@ -1130,7 +1130,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
             }
             let _ = writeln!(
                 e,
-                "  hint: fix the credential, then run `cos agent setup llm --verify-only` to retest (no re-wizard)."
+                "  hint: fix the credential, then run `cos agent setup text --verify-only` to retest (no re-wizard)."
             );
         }
         probe_ok = Some(ok);
@@ -1169,7 +1169,7 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     let _ = writeln!(e);
 
     let modalities = [
-        ("llm", "Conversational LLM (required for `ask`/`chat`)"),
+        ("text", "Conversational text model (required for `ask`/`chat`)"),
         ("tts", "Text-to-speech"),
         ("stt", "Speech-to-text"),
         ("imagegen", "Image generation"),
@@ -1247,7 +1247,7 @@ pub fn status_for(modality: Modality) -> Value {
         Modality::Llm => status_llm(),
         Modality::All => {
             let mut map = serde_json::Map::new();
-            map.insert("llm".into(), status_llm());
+            map.insert("text".into(), status_llm());
             for m in [
                 Modality::Tts,
                 Modality::Stt,
@@ -1317,7 +1317,7 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
         Modality::Llm => Ok(providers_llm()),
         Modality::All => {
             let mut m = serde_json::Map::new();
-            m.insert("llm".into(), providers_llm());
+            m.insert("text".into(), providers_llm());
             for md in [
                 Modality::Tts,
                 Modality::Stt,
@@ -1332,11 +1332,11 @@ fn providers_cmd(modality: Modality) -> Result<Value, String> {
     }
 }
 
-/// Providers shown in user-facing pickers (`cos agent setup llm` wizard,
+/// Providers shown in user-facing pickers (`cos agent setup text` wizard,
 /// the desktop catalogue consumed by cosmic-settings, the initial-setup
 /// AI page). Filters out `mock` (test-only) and `llama_local` (managed
 /// via `cos model load`, not the standard credential flow). Power users
-/// can still address these by name via `cos agent setup llm apply
+/// can still address these by name via `cos agent setup text apply
 /// --provider mock ...` or by editing ~/.config/cos/config.json directly —
 /// only the lists are hidden, not the registry.
 fn user_facing_providers() -> Vec<&'static str> {
@@ -1390,7 +1390,7 @@ fn providers_llm() -> Value {
         })
         .collect();
     json!({
-        "modality": "llm",
+        "modality": "text",
         "providers": providers,
     })
 }
@@ -1479,7 +1479,7 @@ fn apply_cmd(modality: Modality, args: ApplyArgs) -> Result<Value, String> {
     match modality {
         Modality::Llm => apply_llm(args),
         Modality::All => Err(
-            "`apply` requires a single modality (one of: llm | tts | stt | imagegen | embed)"
+            "`apply` requires a single modality (one of: text | tts | stt | imagegen | embed)"
                 .into(),
         ),
         Modality::Tts => apply_media(media::tts_spec(), args),
@@ -1554,7 +1554,7 @@ fn apply_llm(args: ApplyArgs) -> Result<Value, String> {
 
     Ok(json!({
         "ok": true,
-        "modality": "llm",
+        "modality": "text",
         "provider": provider,
         "model": model,
         "api_key_credential": credential_name,
@@ -1731,7 +1731,7 @@ fn resolve_oauth_credential(
     if args.api_key.is_some() || args.api_key_stdin {
         return Err(format!(
             "provider `{provider_name}` uses OAuth device flow; \
-             use `cos agent setup llm oauth-start` instead of --api-key/--api-key-stdin. \
+             use `cos agent setup text oauth-start` instead of --api-key/--api-key-stdin. \
              (--api-key-env is still accepted for non-interactive overrides.)"
         ));
     }
@@ -1757,7 +1757,7 @@ fn resolve_oauth_credential(
     if !exists {
         return Err(format!(
             "provider `{provider_name}` is not signed in yet. \
-             Run `cos agent setup llm oauth-start --provider {provider_name}` first \
+             Run `cos agent setup text oauth-start --provider {provider_name}` first \
              (or use the desktop AI settings page), or pass --api-key-env <ENV> to use \
              a GitHub token from the environment."
         ));
