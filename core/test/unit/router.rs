@@ -1,4 +1,4 @@
-use super::app_commands::{consent_cmd, create_cmd, install_cmd};
+use super::app_commands::{consent_cmd, create_cmd, install_cmd, stage_app_install_with_rename};
 use super::help::{command_schemas, show_builtin_schema, show_command_schema};
 use super::*;
 
@@ -590,6 +590,17 @@ fn write_min_app(dir: &std::path::Path, id: &str, body: &str) {
     std::fs::write(dir.join("main.py"), format!("# stub for {id}\n")).unwrap();
 }
 
+fn install_scratch_entries(root: &std::path::Path, id: &str) -> Vec<String> {
+    let prefix = format!(".{id}.install-");
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| name.starts_with(&prefix))
+        .collect()
+}
+
 #[test]
 fn install_generates_desktop_entry_for_gui_app() {
     let pid = std::process::id();
@@ -1075,6 +1086,136 @@ fn install_force_replaces_existing_install() {
 
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&dst);
+}
+
+#[test]
+fn install_force_lint_failure_preserves_existing_install() {
+    let pid = std::process::id();
+    let src = std::env::temp_dir().join(format!("cos-install-atomic-lint-src-{pid}"));
+    let dst = std::env::temp_dir().join(format!("cos-install-atomic-lint-dst-{pid}"));
+    let installed = dst.join("atomic");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+
+    write_min_app(
+        &installed,
+        "atomic",
+        r#"{"id":"atomic","version":"0.0.1","name":"Atomic"}"#,
+    );
+    std::fs::write(installed.join("old-state"), b"still usable").unwrap();
+    write_min_app(
+        &src,
+        "atomic",
+        r#"{"id":"atomic","version":"0.0.2","name":"Atomic"}"#,
+    );
+    std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
+
+    let prev_apps = std::env::var_os("COS_APPS_DIR");
+    std::env::set_var("COS_APPS_DIR", &dst);
+    let err = install_cmd(&[src.display().to_string(), "--force".into()]).unwrap_err();
+    match prev_apps {
+        Some(x) => std::env::set_var("COS_APPS_DIR", x),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+
+    assert!(err.contains("staged app lint failed"), "got: {err}");
+    assert_eq!(
+        std::fs::read_to_string(installed.join("old-state")).unwrap(),
+        "still usable"
+    );
+    assert!(std::fs::read_to_string(installed.join("app.json"))
+        .unwrap()
+        .contains(r#""version":"0.0.1""#));
+    assert!(
+        install_scratch_entries(&dst, "atomic").is_empty(),
+        "failed install must clean staging and backup directories"
+    );
+
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+}
+
+#[test]
+fn install_force_publish_failure_restores_existing_install() {
+    let pid = std::process::id();
+    let src = std::env::temp_dir().join(format!("cos-install-atomic-rename-src-{pid}"));
+    let dst = std::env::temp_dir().join(format!("cos-install-atomic-rename-dst-{pid}"));
+    let installed = dst.join("rollback");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+
+    write_min_app(
+        &installed,
+        "rollback",
+        r#"{"id":"rollback","version":"0.0.1","name":"Rollback"}"#,
+    );
+    std::fs::write(installed.join("old-state"), b"restorable").unwrap();
+    write_min_app(
+        &src,
+        "rollback",
+        r#"{"id":"rollback","version":"0.0.2","name":"Rollback"}"#,
+    );
+
+    let mut rename_calls = 0;
+    let err = stage_app_install_with_rename(&src, &installed, true, "rollback", |from, to| {
+        rename_calls += 1;
+        if rename_calls == 2 {
+            Err(std::io::Error::other("injected publish failure"))
+        } else {
+            std::fs::rename(from, to)
+        }
+    })
+    .unwrap_err();
+
+    assert_eq!(rename_calls, 3, "backup, publish, then rollback");
+    assert!(err.contains("injected publish failure"), "got: {err}");
+    assert!(err.contains("previous install restored"), "got: {err}");
+    assert_eq!(
+        std::fs::read_to_string(installed.join("old-state")).unwrap(),
+        "restorable"
+    );
+    assert!(std::fs::read_to_string(installed.join("app.json"))
+        .unwrap()
+        .contains(r#""version":"0.0.1""#));
+    assert!(
+        install_scratch_entries(&dst, "rollback").is_empty(),
+        "rollback must clean staging and consume the backup"
+    );
+
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+}
+
+#[test]
+fn install_same_path_keeps_development_tree_in_place() {
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("cos-install-in-place-{pid}"));
+    let source = root.join("devapp");
+    let _ = std::fs::remove_dir_all(&root);
+    write_min_app(
+        &source,
+        "devapp",
+        r#"{"id":"devapp","version":"0.0.1","name":"Dev App"}"#,
+    );
+    std::fs::write(source.join("working-copy"), b"preserve me").unwrap();
+
+    let prev_apps = std::env::var_os("COS_APPS_DIR");
+    std::env::set_var("COS_APPS_DIR", &root);
+    let value = parse(install_cmd(&[source.display().to_string(), "--force".into()]).unwrap());
+    match prev_apps {
+        Some(x) => std::env::set_var("COS_APPS_DIR", x),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+
+    assert_eq!(value["in_place"], true);
+    assert_eq!(value["copied"], false);
+    assert_eq!(
+        std::fs::read_to_string(source.join("working-copy")).unwrap(),
+        "preserve me"
+    );
+    assert!(install_scratch_entries(&root, "devapp").is_empty());
+
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 /// Regression: a symlink anywhere in the install source tree must

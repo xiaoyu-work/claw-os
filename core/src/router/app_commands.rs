@@ -1,6 +1,8 @@
 //! App developer and management commands for the `cos app` namespace.
 
 use std::env;
+use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
@@ -150,8 +152,7 @@ fn lint_apps(
     };
 
     for app in apps_to_check {
-        let mut violations = scan_app_for_ai_imports(&app.dir);
-        violations.extend(scan_session_block(app));
+        let violations = app_lint_violations(app);
         if !violations.is_empty() {
             any_violation = true;
         }
@@ -176,6 +177,12 @@ fn lint_apps(
         })
         .to_string(),
     ))
+}
+
+fn app_lint_violations(app: &apps::App) -> Vec<Value> {
+    let mut violations = scan_app_for_ai_imports(&app.dir);
+    violations.extend(scan_session_block(app));
+    violations
 }
 
 /// On-disk lint checks for an app's `session` block. The manifest
@@ -373,9 +380,14 @@ fn walk_py(dir: &Path, f: &mut dyn FnMut(&Path, &str)) {
 ///     someone runs `cos app install apps/<id>` against the bundled
 ///     tree), the copy step is skipped and only validation +
 ///     consent run.
+///   * Otherwise the source is copied to a hidden sibling staging
+///     directory, linted and fsynced there, then renamed into place.
 ///   * If the destination already exists and `--force` was not passed,
 ///     the install fails with a helpful message rather than silently
 ///     overwriting an existing App.
+///   * Forced replacement retains the old tree under a hidden sibling
+///     backup until the staged tree has been published. A failed
+///     publish restores the backup.
 ///
 /// Consent:
 ///   * Apps without an `ai` block have nothing to consent to and the
@@ -411,7 +423,7 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     }
     let body = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("read {}: {e}", manifest_path.display()))?;
-    let manifest = apps::AppManifest::from_json(&body)
+    let mut manifest = apps::AppManifest::from_json(&body)
         .map_err(|e| format!("parse {}: {e}", manifest_path.display()))?;
     let catalog = crate::ai::tools::list_names();
     manifest
@@ -428,26 +440,22 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         .unwrap_or(false);
 
     if same_path {
+        manifest = validate_install_tree(&source, &manifest.id, "in-place app")?;
         copied = false;
-    } else if dest.exists() {
-        if !force {
+    } else {
+        if path_entry_exists(&dest)
+            .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?
+            && !force
+        {
             return Err(format!(
                 "destination `{}` already exists. Re-run with --force to overwrite.",
                 dest.display()
             ));
         }
-        std::fs::remove_dir_all(&dest)
-            .map_err(|e| format!("remove existing {}: {e}", dest.display()))?;
-        copy_dir_recursive(&source, &dest)
-            .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
-        copied = true;
-    } else {
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("create {}: {e}", parent.display()))?;
-        }
-        copy_dir_recursive(&source, &dest)
-            .map_err(|e| format!("copy {} -> {}: {e}", source.display(), dest.display()))?;
+        manifest =
+            stage_app_install_with_rename(&source, &dest, force, &manifest.id, |from, to| {
+                fs::rename(from, to)
+            })?;
         copied = true;
     }
 
@@ -802,6 +810,214 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
         .status();
 
     Ok(Some(file.display().to_string()))
+}
+
+fn validate_install_tree(
+    dir: &Path,
+    expected_id: &str,
+    description: &str,
+) -> Result<apps::AppManifest, String> {
+    let manifest_path = dir.join("app.json");
+    let body = fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "read {description} manifest {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest = apps::AppManifest::from_json(&body).map_err(|e| {
+        format!(
+            "parse {description} manifest {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    if manifest.id != expected_id {
+        return Err(format!(
+            "{description} manifest id changed during install: expected `{expected_id}`, got `{}`",
+            manifest.id
+        ));
+    }
+    manifest
+        .validate_tools_against_catalog(&crate::ai::tools::list_names())
+        .map_err(|e| format!("{description} manifest catalog check: {e}"))?;
+
+    let app = apps::App {
+        manifest: manifest.clone(),
+        dir: dir.to_path_buf(),
+    };
+    let violations = app_lint_violations(&app);
+    if !violations.is_empty() {
+        let details = serde_json::to_string(&violations)
+            .unwrap_or_else(|_| "lint violations could not be rendered".to_string());
+        return Err(format!(
+            "{description} lint failed for `{expected_id}`: {details}"
+        ));
+    }
+    Ok(manifest)
+}
+
+/// Copy, validate, and durably publish an App tree.
+///
+/// `staging` and any forced-install backup are siblings of `dest`, so
+/// every rename stays on one filesystem. The rename callback keeps the
+/// rollback path deterministic in unit tests while production passes
+/// [`fs::rename`].
+pub(super) fn stage_app_install_with_rename<R>(
+    source: &Path,
+    dest: &Path,
+    force: bool,
+    expected_id: &str,
+    mut rename: R,
+) -> Result<apps::AppManifest, String>
+where
+    R: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    let parent = dest
+        .parent()
+        .ok_or_else(|| format!("install destination `{}` has no parent", dest.display()))?;
+    fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+
+    let token = uuid::Uuid::new_v4();
+    let staging = parent.join(format!(".{expected_id}.install-staging-{token}"));
+    fs::create_dir(&staging).map_err(|e| format!("create staging {}: {e}", staging.display()))?;
+    let _staging_guard = InstallStagingGuard(staging.clone());
+
+    copy_dir_recursive(source, &staging)
+        .map_err(|e| format!("copy {} -> {}: {e}", source.display(), staging.display()))?;
+    let manifest = validate_install_tree(&staging, expected_id, "staged app")?;
+    sync_install_tree(&staging)
+        .map_err(|e| format!("fsync staged app {}: {e}", staging.display()))?;
+
+    let destination_exists = path_entry_exists(dest)
+        .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?;
+    if destination_exists && !force {
+        return Err(format!(
+            "destination `{}` already exists. Re-run with --force to overwrite.",
+            dest.display()
+        ));
+    }
+
+    let backup = if destination_exists {
+        let backup = parent.join(format!(
+            ".{expected_id}.install-backup-{}",
+            uuid::Uuid::new_v4()
+        ));
+        rename(dest, &backup).map_err(|e| {
+            format!(
+                "move existing {} -> {}: {e}",
+                dest.display(),
+                backup.display()
+            )
+        })?;
+        Some(backup)
+    } else {
+        None
+    };
+
+    if let Err(publish_error) = rename(&staging, dest) {
+        let publish_message = format!(
+            "publish staged app {} -> {}: {publish_error}",
+            staging.display(),
+            dest.display()
+        );
+        if let Some(backup) = backup.as_ref() {
+            match rename(backup, dest) {
+                Ok(()) => {
+                    sync_directory_best_effort(parent);
+                    return Err(format!("{publish_message}; previous install restored"));
+                }
+                Err(rollback_error) => {
+                    sync_directory_best_effort(parent);
+                    return Err(format!(
+                        "{publish_message}; rollback {} -> {} failed: {rollback_error}; \
+                         previous install retained at {}",
+                        backup.display(),
+                        dest.display(),
+                        backup.display()
+                    ));
+                }
+            }
+        }
+        return Err(publish_message);
+    }
+
+    sync_directory_best_effort(parent);
+    if let Some(backup) = backup {
+        if let Err(error) = remove_path(&backup) {
+            tracing::warn!(
+                path = %backup.display(),
+                %error,
+                "app install committed but old backup cleanup failed"
+            );
+        }
+        sync_directory_best_effort(parent);
+    }
+    Ok(manifest)
+}
+
+struct InstallStagingGuard(PathBuf);
+
+impl Drop for InstallStagingGuard {
+    fn drop(&mut self) {
+        let _ = remove_path(&self.0);
+    }
+}
+
+fn path_entry_exists(path: &Path) -> io::Result<bool> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn remove_path(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {
+            fs::remove_dir_all(path)
+        }
+        Ok(_) => fs::remove_file(path),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+fn sync_install_tree(path: &Path) -> io::Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to fsync symlink at `{}`", path.display()),
+        ));
+    }
+    if metadata.is_file() {
+        return fs::File::open(path)?.sync_all();
+    }
+    if !metadata.is_dir() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("unsupported app install entry at `{}`", path.display()),
+        ));
+    }
+
+    for entry in fs::read_dir(path)? {
+        sync_install_tree(&entry?.path())?;
+    }
+    sync_directory(path)
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> io::Result<()> {
+    fs::File::open(path)?.sync_all()
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
+
+fn sync_directory_best_effort(path: &Path) {
+    let _ = sync_directory(path);
 }
 
 /// Plain recursive directory copy. **Symlinks are rejected** with an
