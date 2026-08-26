@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::llm::accumulate::{accumulate_stream, NullSink};
 use crate::agent::llm::{Message, Role, Tool};
 
 fn cfg() -> AgentConfig {
@@ -337,6 +338,89 @@ fn parses_simple_text_response() {
     assert!(matches!(chat.finish_reason, FinishReason::Stop));
     assert_eq!(chat.usage.input_tokens, 10);
     assert_eq!(chat.usage.output_tokens, 3);
+}
+
+#[tokio::test]
+async fn buffered_stream_emits_complete_message_without_text_delta() {
+    let call = ToolCall {
+        id: "lookup::0".into(),
+        name: "lookup".into(),
+        input: serde_json::json!({"q": "weather"}),
+    };
+    let response = ChatResponse {
+        model: "gemini-2.0-flash-001".into(),
+        content: vec![
+            ContentBlock::Text {
+                text: "weather report".into(),
+            },
+            ContentBlock::ToolUse {
+                id: call.id.clone(),
+                name: call.name.clone(),
+                input: call.input.clone(),
+            },
+        ],
+        tool_calls: vec![call],
+        finish_reason: FinishReason::ToolUse,
+        usage: Usage {
+            input_tokens: 10,
+            output_tokens: 3,
+            cache_read_tokens: 2,
+            cache_write_tokens: 0,
+        },
+    };
+
+    let events = buffered_response_stream(response.clone())
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>>>()
+        .unwrap();
+
+    assert_eq!(events.len(), 2);
+    assert!(
+        events
+            .iter()
+            .all(|event| !matches!(event, StreamEvent::TextDelta { .. })),
+        "buffered text must be represented only by Message"
+    );
+    match &events[0] {
+        StreamEvent::Message(message) => {
+            assert_eq!(message.model, "gemini-2.0-flash-001");
+            assert_eq!(message.content.len(), 2);
+            assert_eq!(message.tool_calls.len(), 1);
+            assert_eq!(message.tool_calls[0].name, "lookup");
+            assert!(matches!(message.finish_reason, FinishReason::ToolUse));
+            assert_eq!(message.usage.input_tokens, 10);
+            assert_eq!(message.usage.output_tokens, 3);
+            assert_eq!(message.usage.cache_read_tokens, 2);
+        }
+        other => panic!("expected complete Message, got {other:?}"),
+    }
+    match &events[1] {
+        StreamEvent::Done { finish, usage } => {
+            assert!(matches!(finish, FinishReason::ToolUse));
+            assert_eq!(usage.input_tokens, 10);
+            assert_eq!(usage.output_tokens, 3);
+            assert_eq!(usage.cache_read_tokens, 2);
+        }
+        other => panic!("expected Done, got {other:?}"),
+    }
+
+    let accumulated = accumulate_stream(
+        buffered_response_stream(response),
+        Arc::new(NullSink),
+        "fallback",
+    )
+    .await
+    .unwrap();
+    assert_eq!(accumulated.model, "gemini-2.0-flash-001");
+    assert_eq!(accumulated.content.len(), 2);
+    assert_eq!(accumulated.tool_calls.len(), 1);
+    assert_eq!(accumulated.tool_calls[0].input["q"], "weather");
+    assert!(matches!(accumulated.finish_reason, FinishReason::ToolUse));
+    assert_eq!(accumulated.usage.input_tokens, 10);
+    assert_eq!(accumulated.usage.output_tokens, 3);
+    assert_eq!(accumulated.usage.cache_read_tokens, 2);
 }
 
 #[test]

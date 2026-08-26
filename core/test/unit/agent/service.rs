@@ -1,4 +1,6 @@
 use super::*;
+use crate::agent::llm::accumulate::StreamSink;
+use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, StreamEvent, ToolCall, Usage};
 
 fn fresh_root() -> tempfile::TempDir {
     tempfile::tempdir().unwrap()
@@ -53,6 +55,70 @@ fn tool_progress_round_trips_through_task_stream() {
     assert_eq!(cursor, 1);
     assert_eq!(events[0]["progress"]["kind"], "tool_result");
     assert_eq!(events[0]["progress"]["id"], "tool-1");
+}
+
+#[test]
+fn buffered_message_is_persisted_as_one_text_representation() {
+    let root = fresh_root();
+    let _guard = EnvGuard::set(root.path());
+    let store = Store::open_default().unwrap();
+    let job = store.submit("test".into(), None, None, None, None).unwrap();
+    let sink = JobStreamSink {
+        job_id: job.id.clone(),
+    };
+    let usage = Usage {
+        input_tokens: 8,
+        output_tokens: 5,
+        ..Usage::default()
+    };
+
+    sink.on_event(&StreamEvent::Message(ChatResponse {
+        model: "gemini-test".into(),
+        content: vec![ContentBlock::Text {
+            text: "buffered answer".into(),
+        }],
+        tool_calls: vec![ToolCall {
+            id: "lookup::0".into(),
+            name: "lookup".into(),
+            input: json!({"q": "weather"}),
+        }],
+        finish_reason: FinishReason::ToolUse,
+        usage: usage.clone(),
+    }));
+    sink.on_event(&StreamEvent::Done {
+        finish: FinishReason::ToolUse,
+        usage,
+    });
+
+    let (cursor, events) = store.read_stream_events(&job.id, 0).unwrap();
+    assert_eq!(cursor, 2);
+    assert_eq!(events.len(), 2);
+
+    let mut text_representations = Vec::new();
+    for record in &events {
+        let event = &record["event"];
+        match event["kind"].as_str() {
+            Some("text_delta") => {
+                text_representations.push(event["text"].as_str().unwrap().to_string());
+            }
+            Some("message") => {
+                for block in event["content"].as_array().unwrap() {
+                    if block["type"] == "text" {
+                        text_representations.push(block["text"].as_str().unwrap().to_string());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(text_representations, vec!["buffered answer"]);
+    assert_eq!(events[0]["event"]["kind"], "message");
+    assert_eq!(events[0]["event"]["tool_calls"][0]["name"], "lookup");
+    assert_eq!(events[0]["event"]["finish_reason"], "tool_use");
+    assert_eq!(events[0]["event"]["usage"]["input_tokens"], 8);
+    assert_eq!(events[1]["event"]["kind"], "done");
+    assert_eq!(events[1]["event"]["finish"], "tool_use");
+    assert_eq!(events[1]["event"]["usage"]["output_tokens"], 5);
 }
 
 #[test]

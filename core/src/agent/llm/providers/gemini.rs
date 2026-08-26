@@ -176,6 +176,16 @@ impl GeminiProvider {
     }
 }
 
+fn buffered_response_stream(response: ChatResponse) -> BoxStream<'static, Result<StreamEvent>> {
+    let finish = response.finish_reason;
+    let usage = response.usage.clone();
+    futures_util::stream::iter([
+        Ok(StreamEvent::Message(response)),
+        Ok(StreamEvent::Done { finish, usage }),
+    ])
+    .boxed()
+}
+
 #[async_trait]
 impl Provider for GeminiProvider {
     fn name(&self) -> &str {
@@ -312,31 +322,14 @@ impl Provider for GeminiProvider {
         // larger refactor (incremental candidate parts + finish
         // events). Until that lands, we route through `chat()` so
         // callers at least get the (now body-capped) full response;
-        // the shim still surfaces TextDelta + Done so downstream
-        // streaming consumers don't break.
+        // like the other buffered providers, the shim emits one
+        // complete Message followed by Done.
         //
         // TODO: implement an OpenAi-style streaming converter for
         // Gemini's SSE shape (see openai_compat::wire::OpenAiStream
         // for the pattern). Tracked in the LLM hardening backlog.
         let response = self.chat(request).await?;
-        let finish = response.finish_reason;
-        let usage = response.usage.clone();
-        let mut events: Vec<std::result::Result<StreamEvent, LlmError>> = Vec::new();
-        // Surface any text content as a single TextDelta so the
-        // caller's SSE consumer sees the same event shape as a real
-        // streaming provider.
-        for block in &response.content {
-            if let ContentBlock::Text { text } = block {
-                if !text.is_empty() {
-                    events.push(Ok(StreamEvent::TextDelta {
-                        text: text.clone(),
-                    }));
-                }
-            }
-        }
-        events.push(Ok(StreamEvent::Message(response)));
-        events.push(Ok(StreamEvent::Done { finish, usage }));
-        Ok(futures_util::stream::iter(events).boxed())
+        Ok(buffered_response_stream(response))
     }
 }
 

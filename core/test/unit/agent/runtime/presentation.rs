@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::llm::{FinishReason, ToolCall, Usage};
+use crate::agent::llm::{ChatResponse, FinishReason, ToolCall, Usage};
 
 #[derive(Default)]
 struct CapturingStreamSink {
@@ -112,6 +112,70 @@ fn tool_progress_hides_inputs_and_result_previews() {
 
     assert_eq!(*captured.input.lock().unwrap(), Some(Value::Null));
     assert_eq!(captured.preview.lock().unwrap().as_deref(), Some(""));
+}
+
+#[test]
+fn buffered_message_projects_text_once_and_preserves_terminal_metadata() {
+    let captured = Arc::new(CapturingStreamSink::default());
+    let sink = user_visible_stream_sink(captured.clone());
+    let usage = Usage {
+        input_tokens: 8,
+        output_tokens: 5,
+        ..Usage::default()
+    };
+
+    sink.on_event(&StreamEvent::Message(ChatResponse {
+        model: "gemini-test".into(),
+        content: vec![ContentBlock::Text {
+            text: "buffered answer".into(),
+        }],
+        tool_calls: vec![ToolCall {
+            id: "lookup::0".into(),
+            name: "lookup".into(),
+            input: serde_json::json!({"secret": "value"}),
+        }],
+        finish_reason: FinishReason::ToolUse,
+        usage: usage.clone(),
+    }));
+    sink.on_event(&StreamEvent::Done {
+        finish: FinishReason::ToolUse,
+        usage,
+    });
+
+    let events = captured.events.lock().unwrap();
+    let mut visible_text = Vec::new();
+    for event in events.iter() {
+        match event {
+            StreamEvent::TextDelta { text } => visible_text.push(text.clone()),
+            StreamEvent::Message(response) => {
+                visible_text.extend(response.content.iter().filter_map(|block| match block {
+                    ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                }));
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(visible_text, vec!["buffered answer"]);
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+        StreamEvent::Message(response) => {
+            assert_eq!(response.tool_calls.len(), 1);
+            assert!(response.tool_calls[0].input.is_null());
+            assert!(matches!(response.finish_reason, FinishReason::ToolUse));
+            assert_eq!(response.usage.input_tokens, 8);
+            assert_eq!(response.usage.output_tokens, 5);
+        }
+        other => panic!("expected projected Message, got {other:?}"),
+    }
+    match &events[1] {
+        StreamEvent::Done { finish, usage } => {
+            assert!(matches!(finish, FinishReason::ToolUse));
+            assert_eq!(usage.input_tokens, 8);
+            assert_eq!(usage.output_tokens, 5);
+        }
+        other => panic!("expected Done, got {other:?}"),
+    }
 }
 
 #[test]

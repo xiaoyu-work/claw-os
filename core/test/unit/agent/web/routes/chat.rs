@@ -1,5 +1,5 @@
 use super::*;
-use crate::agent::llm::ToolCall;
+use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, ToolCall, Usage};
 
 #[test]
 fn generated_sessions_get_independent_turn_leases() {
@@ -195,4 +195,54 @@ async fn response_drop_signals_interrupt_and_aborts_drive_task() {
         state.try_acquire_turn(session_id).is_ok(),
         "disconnect cancellation must release the session turn lease"
     );
+}
+
+#[test]
+fn buffered_message_emits_one_text_frame_with_tools_and_terminal_metadata() {
+    let (tx, mut rx) = mpsc::channel(16);
+    let sink = SseSink::new(tx, "buffered-message-test".into());
+
+    sink.on_event(&StreamEvent::Message(ChatResponse {
+        model: "gemini-test".into(),
+        content: vec![
+            ContentBlock::Text {
+                text: "buffered ".into(),
+            },
+            ContentBlock::Text {
+                text: "answer".into(),
+            },
+        ],
+        tool_calls: vec![ToolCall {
+            id: "lookup::0".into(),
+            name: "lookup".into(),
+            input: json!({"q": "weather"}),
+        }],
+        finish_reason: FinishReason::ToolUse,
+        usage: Usage {
+            input_tokens: 8,
+            output_tokens: 5,
+            ..Usage::default()
+        },
+    }));
+    sink.on_event(&StreamEvent::Done {
+        finish: FinishReason::ToolUse,
+        usage: Usage {
+            input_tokens: 8,
+            output_tokens: 5,
+            ..Usage::default()
+        },
+    });
+    drop(sink);
+
+    let mut output = String::new();
+    while let Ok(frame) = rx.try_recv() {
+        output.push_str(std::str::from_utf8(&frame.unwrap()).unwrap());
+    }
+    assert_eq!(output.matches("event: text\n").count(), 1);
+    assert_eq!(output.matches(r#""delta":"buffered answer""#).count(), 1);
+    assert_eq!(output.matches("event: tool_use\n").count(), 1);
+    assert_eq!(output.matches("event: turn_done\n").count(), 1);
+    assert!(output.contains(r#""finish":"tooluse""#));
+    assert!(output.contains(r#""input_tokens":8"#));
+    assert!(output.contains(r#""output_tokens":5"#));
 }
