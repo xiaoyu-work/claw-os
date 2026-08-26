@@ -739,4 +739,9 @@ pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Arc<dyn 
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/llm/providers/openai_compat.rs"
+    ));
+}

@@ -19,7 +19,7 @@ library API exported by `core/src/lib.rs`.
 | `main.rs`, `router.rs` | `cos` entry and top-level dispatch |
 | `router/app_commands.rs` | App lint/install/create/tool/consent management |
 | `router/help.rs` | User help, built-in catalog, and command schemas |
-| `router/tests.rs` | Router help/schema/app/dispatch regression tests |
+| `../test/unit/router.rs` | Router help/schema/app/dispatch regression tests |
 | `lib.rs` | Library module surface |
 | `bin/` | `clawd` and helper binary entries |
 | `agent/` | Agent runtime and AI-facing tools |
@@ -28,7 +28,7 @@ library API exported by `core/src/lib.rs`.
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |
-| `service.rs`, `service/tests.rs` | Managed service lifecycle and regressions |
+| `service.rs`, `../test/unit/service.rs` | Managed service lifecycle and regressions |
 
 ## Dependencies
 
@@ -39,7 +39,8 @@ on CLI presentation.
 
 ## Tests
 
-Tests are inline or in local `tests.rs` modules:
+Unit test bodies mirror source paths under `core/test/unit/`. Source modules
+include them only when `cfg(test)` is active:
 
 ```bash
 cargo test -p cos <module-or-test-filter> -- --test-threads=1

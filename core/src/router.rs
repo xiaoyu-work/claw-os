@@ -1534,4 +1534,9 @@ fn dispatch_builtin(
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/router.rs"
+    ));
+}

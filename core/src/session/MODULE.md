@@ -17,7 +17,7 @@ and lifecycle state used across broker and agent operations.
 | Path | Role |
 | --- | --- |
 | `mod.rs` | Session API and lifecycle |
-| `tests.rs` | Persistence, expiry, concurrency, and validation tests |
+| `../../test/unit/session.rs` | Persistence, expiry, concurrency, and validation tests |
 
 ## Dependencies
 

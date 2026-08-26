@@ -134,11 +134,8 @@ pub fn list() -> Result<Vec<Manifest>, RegistryError> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn list_handles_missing_root_dir() {
-        // Best-effort: should not panic if /var/lib/cos/models doesn't exist.
-        let _ = list();
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/model/registry.rs"
+    ));
 }

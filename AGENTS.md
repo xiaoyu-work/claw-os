@@ -84,6 +84,15 @@ python3 wire/codegen.py
 Use the narrowest existing test first. Core tests that mutate process-wide
 environment variables must run serially when combined.
 
+Rust unit-test bodies live outside production source trees under each crate's
+`test/unit/` directory, mirroring the `src/` path. Production modules contain
+only a small `include!` declaration so unit tests retain private access.
+
+During initial task discovery, do **not** scan `test/` or `tests/`. Read the
+production entry point, types, and callers first. Open only the matching unit
+test file after selecting the implementation, when confirming existing
+behavior, adding a regression, or diagnosing a failure.
+
 ```bash
 # One Rust test or module
 cargo test -p cos <test-filter> -- --test-threads=1

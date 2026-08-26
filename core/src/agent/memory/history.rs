@@ -149,75 +149,8 @@ pub fn parse_stored_content(role: &str, content: &str) -> ParsedRow {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn assistant_row_splits_text_and_tool_use() {
-        let body = "Let me check.\n[tool_use:cos_sysinfo] {\"command\":\"largest_files\",\"args\":[\"/\"]}";
-        let p = parse_stored_content("assistant", body);
-        assert_eq!(p.text, "Let me check.");
-        assert_eq!(p.tool_calls.len(), 1);
-        assert_eq!(p.tool_calls[0]["name"], "cos_sysinfo");
-        assert_eq!(p.tool_calls[0]["input"]["command"], "largest_files");
-    }
-
-    #[test]
-    fn assistant_history_hides_legacy_evidence_markers() {
-        let body = "Network is idle. [evidence:call_1 confidence=0.95]";
-        let parsed = parse_stored_content("assistant", body);
-        assert_eq!(parsed.text, "Network is idle.");
-    }
-
-    #[test]
-    fn assistant_row_with_only_tool_use_has_empty_text() {
-        let body = "[tool_use:cos_sysinfo] {\"command\":\"info\"}";
-        let p = parse_stored_content("assistant", body);
-        assert!(p.text.is_empty());
-        assert_eq!(p.tool_calls.len(), 1);
-    }
-
-    #[test]
-    fn user_row_tool_result_is_extracted() {
-        let body = "[tool_result] {\"files\":[]}";
-        let p = parse_stored_content("user", body);
-        assert!(p.text.is_empty());
-        assert_eq!(p.tool_results.len(), 1);
-        assert_eq!(p.tool_results[0]["text"], "{\"files\":[]}");
-        assert_eq!(p.tool_results[0]["is_error"], false);
-    }
-
-    #[test]
-    fn tool_result_error_marker_sets_is_error() {
-        let body = "[tool_result:error] EACCES";
-        let p = parse_stored_content("user", body);
-        assert_eq!(p.tool_results[0]["is_error"], true);
-        assert_eq!(p.tool_results[0]["text"], "EACCES");
-    }
-
-    #[test]
-    fn multiline_tool_result_body_is_captured() {
-        let body = "[tool_result] {\n  \"a\": 1,\n  \"b\": 2\n}";
-        let p = parse_stored_content("user", body);
-        assert_eq!(p.tool_results.len(), 1);
-        let txt = p.tool_results[0]["text"].as_str().unwrap();
-        assert!(txt.contains("\"a\": 1"));
-        assert!(txt.contains("\"b\": 2"));
-    }
-
-    #[test]
-    fn malformed_tool_use_stays_in_text() {
-        let body = "Plain prose\n[tool_use:unterminated";
-        let p = parse_stored_content("assistant", body);
-        assert!(p.tool_calls.is_empty());
-        assert!(p.text.contains("[tool_use:unterminated"));
-    }
-
-    #[test]
-    fn empty_body_yields_empty_parsed_row() {
-        let body = "";
-        let p = parse_stored_content("user", body);
-        assert!(p.text.is_empty());
-        assert!(p.tool_calls.is_empty());
-        assert!(p.tool_results.is_empty());
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/memory/history.rs"
+    ));
 }

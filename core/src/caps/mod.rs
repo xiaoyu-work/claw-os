@@ -49,7 +49,12 @@ pub mod verb;
 pub mod bootstrap;
 
 #[cfg(test)]
-pub(crate) mod test_env_lock;
+pub(crate) mod test_env_lock {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/caps/test_env_lock.rs"
+    ));
+}
 
 pub use cap::{Cap, CapSet};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
@@ -77,10 +82,8 @@ pub fn self_check() -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn boot_self_check_passes() {
-        self_check().unwrap();
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/caps.rs"
+    ));
 }

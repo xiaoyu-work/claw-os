@@ -23,10 +23,10 @@ surfaces.
 | `setup.rs` | Provider/modality setup, OAuth, model discovery, verification |
 | `setup/copilot.rs` | Copilot OAuth device flow and live model discovery |
 | `setup/media.rs` | TTS/STT/image/embedding specs, wizards, status, and probes |
-| `setup/tests.rs` | Setup, status, apply, OAuth, and config regression tests |
+| `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
-| `service.rs`, `service/tests.rs` | Agent daemon/task service lifecycle and tests |
+| `service.rs`, `../../test/unit/agent/service.rs` | Agent daemon/task service lifecycle and tests |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |

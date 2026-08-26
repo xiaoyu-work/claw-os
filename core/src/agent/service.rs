@@ -1823,4 +1823,9 @@ fn parse_status(s: &str) -> Result<JobStatus, String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/service.rs"
+    ));
+}

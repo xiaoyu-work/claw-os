@@ -60,7 +60,12 @@ mod store;
 mod turn;
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/session.rs"
+    ));
+}
 
 pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};

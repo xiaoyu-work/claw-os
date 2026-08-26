@@ -1502,4 +1502,9 @@ fn cmd_register(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/service.rs"
+    ));
+}

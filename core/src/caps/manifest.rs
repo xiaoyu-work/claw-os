@@ -1294,4 +1294,9 @@ fn is_valid_operation_key(s: &str) -> bool {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/caps/manifest.rs"
+    ));
+}

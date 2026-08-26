@@ -46,4 +46,9 @@ pub mod triggers;
 pub mod watch;
 
 #[cfg(test)]
-pub mod test_env;
+pub mod test_env {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/test_env.rs"
+    ));
+}

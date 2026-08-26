@@ -1940,4 +1940,9 @@ fn store_credential(name: &str, value: &str) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/setup.rs"
+    ));
+}
