@@ -77,19 +77,14 @@ one integrated agent-native OS layer.
 
 ## Quick Start
 
-Pick an entry point:
-
-- **Ubuntu** — install the system Agent layer without replacing Ubuntu
-- **WSL** — recommended
-- **Docker / OrbStack** — recommended
-- **Desktop / ISO / VM** — experimental
-- **Azure Compute Gallery** — generalized fixed VHD
-
 All artifacts share the same composed Debian rootfs; platform profiles only
 add their user, boot, and provisioning policy. See
 [Image architecture](docs/image-architecture.md).
 
-### Ubuntu — install the Agent layer
+Pick an entry point:
+
+<details>
+<summary><strong>Ubuntu — install the Agent layer without replacing Ubuntu</strong></summary>
 
 Install the signed `claw-os-agent` package on an existing Ubuntu system:
 
@@ -107,34 +102,18 @@ sudo apt update
 sudo apt install claw-os-agent
 ```
 
-Verify the daemon and configure a model provider:
+Verify the daemon:
 
 ```bash
 systemctl is-enabled clawd.service
 systemctl is-active clawd.service
 sudo systemctl status clawd.service --no-pager
-
-cos agent setup text
-cos agent chat
 ```
 
-### Updating an existing installation
+</details>
 
-Package-level fixes to `cos`, `clawd`, bundled apps, browser automation, and
-systemd units do **not** require reinstalling the operating system or replacing
-its image. Claw OS uses the same signed APT update path across WSL, installed
-desktop/VM systems, Azure instances, and long-running containers:
-
-```bash
-sudo apt update
-sudo apt full-upgrade
-```
-
-See [Updating Claw OS](docs/updating.md) for repository checks, setup for older
-images, service restart behavior, container guidance, and the exceptional cases
-that require a new image.
-
-### WSL
+<details>
+<summary><strong>WSL — recommended</strong></summary>
 
 Install the latest successfully published `main` WSL distribution (`wsl-latest`,
 rolling pre-release):
@@ -149,7 +128,10 @@ curl.exe -L --fail --retry 5 --retry-delay 3 -C - --output $package $url
 wsl --install --from-file ".\$package" --name claw-os --location $installPath --version 2
 ```
 
-### Docker
+</details>
+
+<details>
+<summary><strong>Docker / OrbStack — recommended</strong></summary>
 
 Run the container:
 
@@ -167,15 +149,19 @@ Replace `yourname` with the UNIX username to create. The default UID/GID is
 1000; set `CLAW_UID` and `CLAW_GID` when a Linux host needs numeric ownership
 to match a bind mount.
 
-### Desktop / ISO / VM
+</details>
 
-Desktop images are **experimental**.
+<details>
+<summary><strong>Desktop / ISO / VM — experimental</strong></summary>
 
 Build a bootable desktop VM disk image and load it in VMware — see
 [Building the Claw OS Desktop Image](docs/building-desktop.md) for the steps on
 Windows (WSL2), macOS, and Linux.
 
-### Azure Compute Gallery
+</details>
+
+<details>
+<summary><strong>Azure Compute Gallery — generalized fixed VHD</strong></summary>
 
 Build a generalized Hyper-V Generation 2 fixed VHD:
 
@@ -187,6 +173,27 @@ Azure supplies the administrator and SSH key for each VM through cloud-init.
 See [Building an Azure Compute Gallery image](docs/building-azure.md) for
 desktop builds and publishing commands.
 
+</details>
+
+<details>
+<summary><strong>Updating an existing installation</strong></summary>
+
+Package-level fixes to `cos`, `clawd`, bundled apps, browser automation, and
+systemd units do **not** require reinstalling the operating system or replacing
+its image. Claw OS uses the same signed APT update path across WSL, installed
+desktop/VM systems, Azure instances, and long-running containers:
+
+```bash
+sudo apt update
+sudo apt full-upgrade
+```
+
+See [Updating Claw OS](docs/updating.md) for repository checks, setup for older
+images, service restart behavior, container guidance, and the exceptional cases
+that require a new image.
+
+</details>
+
 ### Drive the OS with the agent
 
 Call structured system primitives directly, or ask the built-in agent to choose
@@ -195,27 +202,11 @@ and combine them:
 ```bash
 cos  # list primitives
 cos app web read https://example.com  # fetch URL → {url, title, text, links}
-cos agent setup  # configure providers and credentials
+cos agent setup text  # configure the conversational text model
 cos agent ask "why is my network so slow right now?"
 cos agent ask "why did my last app crash?"
 cos agent chat  # interactive REPL with cross-app memory
 ```
-
-### Connect Discord or Telegram
-
-The same system agent can receive and answer allowlisted Discord DMs, server
-mentions, threads, and Telegram chats:
-
-```bash
-cos credential store discord_bot_token "<bot-token>"
-cos app gateway-discord configure \
-  "users=<discord-user-id> guilds=<discord-server-id> require_mention=true"
-cos app gateway-discord start
-```
-
-See [External communications](docs/external-communications.md) for Discord bot
-permissions, persistent service setup, Telegram, security policy, and the
-current platform support matrix.
 
 ## License
 
