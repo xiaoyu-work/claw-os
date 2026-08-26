@@ -447,9 +447,10 @@ pub(super) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::positional(
                             "provider",
                             "string",
-                            true,
-                            "OAuth provider (google or microsoft)",
+                            false,
+                            "OAuth provider (google or microsoft); may also be passed with --provider",
                         ),
+                        Param::flag("--provider", "string", false, "OAuth provider"),
                         Param::flag("--namespace", "string", false, "Namespace"),
                         Param::flag("--no-open", "bool", false, "Print URL without opening browser"),
                         Param::flag("--timeout", "integer", false, "Callback timeout in seconds"),

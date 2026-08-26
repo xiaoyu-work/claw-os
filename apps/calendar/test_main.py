@@ -227,6 +227,10 @@ class TestProviderErrors(unittest.TestCase):
             result["setup"]["login_command"],
             "cos credential oauth-login google",
         )
+        self.assertIn(
+            "`cos credential oauth-login google`",
+            result["setup"]["message"],
+        )
 
     def test_google_no_token_create(self):
         result = run("create", [
@@ -261,6 +265,10 @@ class TestProviderErrors(unittest.TestCase):
         self.assertEqual(
             result["setup"]["login_command"],
             "cos credential oauth-login microsoft",
+        )
+        self.assertIn(
+            "`cos credential oauth-login microsoft`",
+            result["setup"]["message"],
         )
 
     def test_outlook_no_token_create(self):

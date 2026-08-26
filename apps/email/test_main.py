@@ -188,6 +188,10 @@ class TestCredentialStoreIntegration(unittest.TestCase):
             result["setup"]["login_command"],
             "cos credential oauth-login google",
         )
+        self.assertIn(
+            "`cos credential oauth-login google`",
+            result["setup"]["message"],
+        )
 
     @patch(
         "claw_test_email_main.load_credential",
@@ -202,6 +206,10 @@ class TestCredentialStoreIntegration(unittest.TestCase):
         self.assertEqual(
             result["setup"]["login_command"],
             "cos credential oauth-login google",
+        )
+        self.assertIn(
+            "`cos credential oauth-login google`",
+            result["setup"]["message"],
         )
 
 

@@ -171,6 +171,11 @@ def _outlook_token():
 
 def _provider_auth_error(provider, detail):
     title = "Google Calendar" if provider == "google" else "Outlook Calendar"
+    login_command = (
+        "cos credential oauth-login google"
+        if provider == "google"
+        else "cos credential oauth-login microsoft"
+    )
     return {
         "error": f"{title} authorization is required or has expired",
         "provider": provider,
@@ -179,12 +184,10 @@ def _provider_auth_error(provider, detail):
         "detail": detail,
         "setup": {
             "interactive_oauth_available": True,
-            "login_command": (
-                "cos credential oauth-login google"
-                if provider == "google"
-                else "cos credential oauth-login microsoft"
+            "login_command": login_command,
+            "message": (
+                f"Run exactly `{login_command}` directly in the user's terminal."
             ),
-            "message": "Run the login command directly in the user's terminal.",
         },
     }
 
