@@ -4,7 +4,7 @@
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
+REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT = REPO_ROOT / "assets" / "brand" / "og.png"
 SYMBOL = REPO_ROOT / "assets" / "brand" / "clawos-symbol.png"
 WORDMARK = REPO_ROOT / "assets" / "brand" / "clawos-wordmark.png"

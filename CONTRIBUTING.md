@@ -197,6 +197,7 @@ claw-os/
 ├── rootfs/            Linux rootfs build scripts + overlay
 ├── targets/           Per-distribution build scripts (docker, wsl, iso, vm)
 │   └── docker/          Dockerfiles + build.sh for the docker target
+├── web/               Framework-free marketing website
 ├── build.sh           Top-level dispatcher (./build.sh <target>)
 ├── cli/               cos-ctl management tool
 ├── clients/           Bridge (LLM ↔ Claw OS)

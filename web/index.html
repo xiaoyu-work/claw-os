@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Claw OS marketing website -->
 <html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
@@ -309,72 +310,142 @@
 
   <section class="section section-demo" id="demo">
     <div class="container">
-      <div class="kicker mono"><span class="kicker-dot"></span>live demo</div>
-      <h2 class="h2">Four scenes. One agent. <span class="muted">Zero shell guessing.</span></h2>
+      <div class="kicker mono"><span class="kicker-dot"></span>interactive Claw OS</div>
+      <h2 class="h2">Ask the OS. <span class="gradient">See every step.</span></h2>
+      <p class="section-lede">
+        Pick a task, send the suggested prompt, approve the exact access, and
+        follow the built-in agent as it works across Linux and your apps.
+      </p>
 
-      <div class="demo-shell">
-        <div class="demo-tabs mono" role="tablist" aria-label="Live demo scenarios">
-          <button class="demo-tab is-active" role="tab" aria-selected="true" data-tab="service">service repair</button>
-          <button class="demo-tab" role="tab" aria-selected="false" data-tab="browser">browser triage</button>
-          <button class="demo-tab" role="tab" aria-selected="false" data-tab="schedule">scheduled task</button>
-          <button class="demo-tab" role="tab" aria-selected="false" data-tab="model">local model</button>
+      <ol class="sim-guide" aria-label="How to use the Claw OS experience">
+        <li class="is-active" data-sim-guide="0">
+          <span class="sim-guide-number mono">1</span>
+          <span><strong>Choose a task</strong><small>Pick what the OS should do.</small></span>
+        </li>
+        <li data-sim-guide="1">
+          <span class="sim-guide-number mono">2</span>
+          <span><strong>Ask the agent</strong><small>Send the suggested prompt.</small></span>
+        </li>
+        <li data-sim-guide="2">
+          <span class="sim-guide-number mono">3</span>
+          <span><strong>Approve access</strong><small>Review every exact scope.</small></span>
+        </li>
+        <li data-sim-guide="3">
+          <span class="sim-guide-number mono">4</span>
+          <span><strong>Inspect the result</strong><small>See evidence and audit history.</small></span>
+        </li>
+      </ol>
+    </div>
+
+    <div class="sim-breakout">
+      <div class="sim-scenario-bar" role="tablist" aria-label="Choose a Claw OS task">
+        <button class="sim-scenario is-active" type="button" role="tab" aria-selected="true" data-sim-scenario="health">
+          <span class="sim-scenario-icon" aria-hidden="true">◎</span>
+          <span><strong>System health</strong><small>Explain slow network</small></span>
+        </button>
+        <button class="sim-scenario" type="button" role="tab" aria-selected="false" data-sim-scenario="crash">
+          <span class="sim-scenario-icon" aria-hidden="true">!</span>
+          <span><strong>App crash</strong><small>Logs + permissions</small></span>
+        </button>
+        <button class="sim-scenario" type="button" role="tab" aria-selected="false" data-sim-scenario="workflow">
+          <span class="sim-scenario-icon" aria-hidden="true">⇄</span>
+          <span><strong>App workflow</strong><small>Files → AI → Mail → Calendar</small></span>
+        </button>
+        <button class="sim-scenario" type="button" role="tab" aria-selected="false" data-sim-scenario="models">
+          <span class="sim-scenario-icon sim-scenario-icon-text" aria-hidden="true">AI</span>
+          <span><strong>Shared models</strong><small>One AI layer for every app</small></span>
+        </button>
+        <button class="sim-scenario" type="button" role="tab" aria-selected="false" data-sim-scenario="memory">
+          <span class="sim-scenario-icon sim-scenario-icon-text" aria-hidden="true">M</span>
+          <span><strong>Memory</strong><small>Recall across apps</small></span>
+        </button>
+        <button class="sim-scenario" type="button" role="tab" aria-selected="false" data-sim-scenario="access">
+          <span class="sim-scenario-icon" aria-hidden="true">✓</span>
+          <span><strong>App access</strong><small>Who can reach what?</small></span>
+        </button>
+      </div>
+
+      <div class="sim-shell" id="clawOsDemo" data-sim-step="0">
+        <div class="sim-os-bar mono">
+          <div class="sim-os-brand">
+            <img src="assets/brand/clawos-symbol.png" alt="">
+            <span>Activities</span>
+          </div>
+          <div class="sim-os-clock">Tue 10:32</div>
+          <div class="sim-os-status">
+            <span><i class="sim-status-dot"></i> local AI ready</span>
+            <span>network</span>
+            <span>86%</span>
+            <button type="button" id="simFullscreenButton" aria-label="Enter full screen">
+              <span aria-hidden="true">⛶</span>
+              <span class="sim-fullscreen-label">Full screen</span>
+            </button>
+          </div>
         </div>
-        <figure class="window window-flush">
-          <div class="window-titlebar">
-            <div class="window-dots"><i></i><i></i><i></i></div>
-            <div class="window-address mono" id="demoAddress">cos · agent ask · service repair</div>
-            <div class="window-meta mono">json out</div>
+
+        <div class="sim-desktop">
+          <div class="sim-wallpaper-orb sim-wallpaper-orb-a" aria-hidden="true"></div>
+          <div class="sim-wallpaper-orb sim-wallpaper-orb-b" aria-hidden="true"></div>
+
+          <aside class="sim-dock" aria-label="Claw OS apps">
+            <button class="is-active" type="button" data-sim-dock="health" aria-label="Open System Monitor"><span>◎</span></button>
+            <button type="button" data-sim-dock="crash" aria-label="Open App Inspector"><span>!</span></button>
+            <button type="button" data-sim-dock="workflow" aria-label="Open Workflow"><span>⇄</span></button>
+            <button type="button" data-sim-dock="models" aria-label="Open Models"><span>AI</span></button>
+            <button type="button" data-sim-dock="memory" aria-label="Open Memory"><span>M</span></button>
+            <button type="button" data-sim-dock="access" aria-label="Open App Access"><span>✓</span></button>
+          </aside>
+
+          <div class="sim-window-grid">
+            <section class="sim-window sim-app-window" aria-label="Linux application window">
+              <header class="sim-window-titlebar">
+                <div class="sim-window-controls" aria-hidden="true"><i></i><i></i><i></i></div>
+                <div class="sim-window-title">
+                  <span class="sim-app-mark" id="simAppMark">◎</span>
+                  <span><strong id="simAppTitle">System Monitor</strong><small id="simAppSubtitle">Live system state</small></span>
+                </div>
+                <button class="sim-window-menu" type="button" id="simRestartButton" aria-label="Restart current task">↻</button>
+              </header>
+              <div class="sim-workspace" id="simWorkspace"></div>
+            </section>
+
+            <section class="sim-window sim-agent-window" aria-label="Built-in Claw Agent chat">
+              <header class="sim-agent-header">
+                <div class="sim-agent-identity">
+                  <span class="sim-agent-avatar" aria-hidden="true">
+                    <img src="assets/brand/clawos-symbol.png" alt="">
+                  </span>
+                  <span><strong>Claw Agent</strong><small>System-level · capability gated</small></span>
+                </div>
+                <span class="sim-model-pill mono" id="simModelPill">qwen3 · local</span>
+              </header>
+
+              <div class="sim-chat" id="simChat" aria-live="polite"></div>
+
+              <form class="sim-prompt-form" id="simPromptForm">
+                <label class="sr-only" for="simPromptInput">Prompt for Claw Agent</label>
+                <input id="simPromptInput" name="prompt" autocomplete="off" spellcheck="false">
+                <button type="submit" id="simPromptSend">Send</button>
+              </form>
+            </section>
           </div>
+        </div>
 
-          <div class="demo-panes">
-            <div class="demo-pane is-active" data-pane="service">
-<pre class="terminal mono">
-<span class="t-prompt">cos</span> agent ask "audit failed services and restart any that crashed"
-
-<span class="t-tag t-tag-approve">approval</span>     sys.service : clawd.service              <span class="t-green">[allow once]</span>
-<span class="t-tag t-tag-approve">approval</span>     sys.service : claw-recoll-index          <span class="t-green">[allow once]</span>
-<span class="t-tag t-tag-ok">applied</span>      2 ops in 312ms
-<span class="t-prompt">cos</span> service health
-<span class="t-out">{ "service":"clawd", "running":true, "healthy":true, "pid":1284 }</span>
-</pre>
-            </div>
-
-            <div class="demo-pane" data-pane="browser">
-<pre class="terminal mono">
-<span class="t-prompt">cos</span> agent ask "read the changelog and tell me what landed this week"
-
-<span class="t-tag t-tag-approve">approval</span>     net.dial : github.com:443                <span class="t-green">[allow once]</span>
-<span class="t-prompt">cos</span> app web read https://github.com/xiaoyu-work/claw-os/commits/main
-<span class="t-out">{ "title":"Commits · main", "markdown":"…", "links":[…] }</span>
-<span class="t-tag t-tag-ok">answer</span>       7 PRs merged · 3 site polish · 1 packaging fix · 1 feature
-</pre>
-            </div>
-
-            <div class="demo-pane" data-pane="schedule">
-<pre class="terminal mono">
-<span class="t-prompt">cos</span> agent ask "every weekday at 8am, summarize my unread email"
-
-<span class="t-tag t-tag-approve">approval</span>     time.cron    : 0 8 * * 1-5              <span class="t-green">[allow]</span>
-<span class="t-tag t-tag-approve">approval</span>     secret.read  : gmail-oauth              <span class="t-green">[allow]</span>
-<span class="t-tag t-tag-approve">approval</span>     ai.chat      : claude-sonnet · summarize <span class="t-green">[allow]</span>
-<span class="t-prompt">cos</span> cron add --schedule "0 8 * * 1-5" \
-    --command "cos agent ask 'summarize unread email'"
-<span class="t-out">{ "id":"morning-inbox", "schedule":"0 8 * * 1-5", "next":"Mon 08:00" }</span>
-</pre>
-            </div>
-
-            <div class="demo-pane" data-pane="model">
-<pre class="terminal mono">
-<span class="t-prompt">cos</span> model import ~/Downloads/qwen3-1.7b.gguf --as qwen3 --task llm --engine llama
-<span class="t-out">{ "name":"qwen3", "version":"1.7b", "engine":"llama", "size":"1.1 GiB" }</span>
-<span class="t-prompt">cos</span> model load qwen3
-<span class="t-tag t-tag-ok">ready</span>        runtime=llama.cpp  device=cuda  ctx=8192
-<span class="t-prompt">cos</span> agent ask --model qwen3 "summarize this week's commits"
-<span class="t-out">{ "answer":"3 files written under /etc/...", "tokens":214 }</span>
-</pre>
-            </div>
+        <div class="sim-next-bar">
+          <div class="sim-next-copy">
+            <span class="mono" id="simStepLabel">STEP 1 OF 4</span>
+            <strong id="simStepTitle">Choose a task</strong>
+            <small id="simStepHelp">Select a scenario above or use the highlighted app in the dock.</small>
           </div>
-        </figure>
+          <button class="sim-next-button" type="button" id="simNextButton">
+            Send suggested prompt
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
+
+        <p class="sim-disclosure mono">
+          Guided Claw OS experience · every action is scoped and audited
+        </p>
       </div>
     </div>
   </section>

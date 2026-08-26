@@ -11,7 +11,8 @@ Debian packages and a signed multi-architecture APT repository.
   `claw-os-desktop` independently.
 - Preserve conffiles and run service-safe maintainer scripts.
 - Build and sign Debian repository metadata for amd64 and arm64.
-- Publish repository site assets alongside `dists/` and `pool/`.
+- Compose the root `web/` site into the Pages artifact alongside `dists/` and
+  `pool/`.
 
 ## Key Files
 
@@ -22,6 +23,7 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/*/{postinst,prerm,postrm}` | Upgrade/install/remove behavior |
 | `apt-repo/sync-existing-packages.sh` | Retain signed packages not rebuilt by the current CI |
 | `apt-repo/build-repo.sh` | Multi-arch index, Release, and GPG signatures |
+| [`../web/`](../web/) | Marketing website source copied into the Pages/APT artifact |
 | [`README.md`](README.md) | Package contract and manual commands |
 | `../.github/workflows/publish-*-package.yml` | Independent package build/publication workflows |
 | `../.github/workflows/publish-apt-repo.yml` | Internal reusable signed-repository publisher |

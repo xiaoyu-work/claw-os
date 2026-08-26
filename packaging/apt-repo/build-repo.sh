@@ -173,15 +173,15 @@ echo "  :: signed; public key at $REPO_DIR/claw-os-archive-keyring.gpg"
 # GitHub Pages homepage. Keep this at the repo root so the APT paths remain
 # stable: /dists/... and /pool/... are still served beside the marketing page.
 #
-# The marketing site lives under packaging/apt-repo/site/ as plain HTML/CSS/JS
-# so it can be iterated on without escaping bash heredocs. We copy it into the
-# repo root and substitute build-time tokens (git sha, suite) in-place.
-SITE_DIR="$SCRIPT_DIR/site"
+# The marketing site lives under web/ as plain HTML/CSS/JS. We copy it into
+# the published repository root and substitute build-time tokens (git sha,
+# suite) in-place.
+SITE_DIR="$PROJECT_DIR/web"
 if [ -d "$SITE_DIR" ]; then
-    echo ":: copying marketing site from packaging/apt-repo/site/"
-    # Avoid copying the OG generator script into the published repo.
+    echo ":: copying marketing site from web/"
+    # Keep repository-only generators and module documentation out of Pages.
     find "$SITE_DIR" -mindepth 1 -maxdepth 1 \
-        ! -name '*.py' -exec cp -R {} "$REPO_DIR/" \;
+        ! -name '*.py' ! -name '*.md' -exec cp -R {} "$REPO_DIR/" \;
 
     GIT_SHA="$(git_readonly -C "$PROJECT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)"
     # `sed -i` differs between BSD (macOS) and GNU. `-i.bak` is portable.
