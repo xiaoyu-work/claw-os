@@ -16,8 +16,8 @@ A copy of the Apache License, Version 2.0 is included as LICENSE-APACHE at the
 repository root and inside each vendored crate. Modifications made by Claw OS
 contributors are tracked via the git history of this repository.
 
-The Claw OS components (everything outside crates/obscura-* and
-crates/cos-browser) remain MIT-licensed; see LICENSE.
+Original Claw OS components are licensed under the Apache License, Version 2.0;
+see LICENSE. Vendored components retain their upstream licenses.
 
 This product also includes a vendored fork of the COSMIC Desktop
 Environment by System76, located under desktop/. Each vendored

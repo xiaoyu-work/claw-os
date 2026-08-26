@@ -12,7 +12,7 @@
 <p align="center">
   <a href="https://xiaoyu-work.github.io/claw-os"><img alt="Website" src="https://img.shields.io/badge/website-xiaoyu--work.github.io%2Fclaw--os-2563eb?style=flat-square"></a>
   <a href="https://github.com/xiaoyu-work/claw-os/actions/workflows/release.yml"><img alt="Release pipeline" src="https://img.shields.io/github/actions/workflow/status/xiaoyu-work/claw-os/release.yml?branch=main&style=flat-square"></a>
-  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-MIT-1f7a3a?style=flat-square"></a>
+  <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-D22128?style=flat-square"></a>
   <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
 </p>
 
@@ -189,4 +189,5 @@ current platform support matrix.
 
 ## License
 
-MIT for the kernel and apps. See the [`NOTICE`](NOTICE) for vendored sources and their upstream licenses.
+Apache-2.0 for original Claw OS components. See the [`NOTICE`](NOTICE) for
+vendored sources and their upstream licenses.

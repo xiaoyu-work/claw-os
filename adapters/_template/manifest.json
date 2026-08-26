@@ -5,7 +5,7 @@
   "title": { "en": "Adapter Template" },
   "summary": { "en": "Skeleton for a new agent-API adapter." },
   "vendor": "claw-adapter",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "transport": "mcp+stdio",
   "command": "python3",
   "args": ["${manifest_dir}/main.py"],

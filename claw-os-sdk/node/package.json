@@ -2,7 +2,7 @@
   "name": "@claw-os/sdk",
   "version": "0.1.0",
   "description": "Official Node.js SDK for Claw OS — typed, gated access to the kernel's AI and tool surfaces, plus the desktop GUI bootstrap.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/xiaoyu-work/claw-os.git",
