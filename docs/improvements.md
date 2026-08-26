@@ -1,268 +1,179 @@
 # Improvements
 
-Tracked: outstanding design-level improvements to Claw OS. Each entry
-states the **problem**, the **cause**, and the **proposed fix** with
-concrete file-level pointers. Entries graduate to commits/PRs and
-then get crossed off here.
+This document tracks outstanding design-level improvements. It contains only
+work that remains relevant to the current architecture; completed or
+superseded proposals should be removed rather than left as ambiguous roadmap
+items.
 
----
+## Memory Subsystem
 
-## Memory subsystem: long-horizon scaling
+### Current state
 
-### Background — what each store actually does
+Claw OS uses four complementary memory stores:
 
-Claw OS ships four memory stores. They are **not** redundant; each
-covers a different access pattern. The curator writes to `MEMORY.md`;
-`USER.md` is reserved for **LLM-initiated** appends via the
-`cos_memory` tool.
+| Store | Purpose | Read path |
+| --- | --- | --- |
+| `USER.md` | Durable user preferences and persona facts | Bounded prompt-note selection |
+| `MEMORY.md` | Curated task and project context | Bounded prompt-note selection |
+| `memory.db` | Complete message history with SQLite FTS5 | `cos_recall` |
+| `semantic.db` | Model-defined embedding vectors in SQLite | `cos_recall_semantic` |
 
-| Store | Physical | Writer | When | Injected into prompt? | Read path |
-| --- | --- | --- | --- | --- | --- |
-| `USER.md` | `notes/USER.md` | **LLM only** (`cos_memory append USER.md`) | LLM judges a fact as stable user-persona info | ✅ every turn (≤32 KB cap) | direct file read |
-| `MEMORY.md` | `notes/MEMORY.md` | (a) LLM via `cos_memory`, (b) **curator** auto-extract | curator: background after every final answer; LLM: at its discretion | ✅ every turn (≤32 KB cap) | direct file read |
-| `memory.db` | SQLite + FTS5 | **runtime auto-record** | every message (user / assistant / tool) | ❌ | `cos_recall` (keyword) |
-| `semantic.db` | SQLite + 1536-dim vectors | **runtime auto-index** (calls embed API) | every non-empty message | ❌ | `cos_recall_semantic` (cosine) |
+Prompt assembly no longer injects an unbounded prefix of the two Markdown
+files. It selects a bounded note projection while preserving the complete
+files on disk. The curator also performs exact duplicate and correction
+handling before writing facts.
 
-Two orthogonal axes describe the design:
+SQLite memory already exposes explicit count/purge operations. What is still
+missing is automated retention policy and fuzzy duplicate handling.
 
-```
-                    │ auto-injected into prompt │ on-demand via LLM tool
-─────────────────────┼───────────────────────────┼────────────────────────
-human-readable (md) │ USER.md / MEMORY.md       │ —
-machine-indexed     │ —                         │ memory.db / semantic.db
-```
+### M1 — Semantic deduplication before curator append
 
-And two semantic tiers for the markdown:
-- **`USER.md`** = *about the person* — durable preferences, persona,
-  workflow. Updated rarely.
-- **`MEMORY.md`** = *about the task/context* — current projects,
-  things just learned. Updated often.
+**Problem.** Exact deduplication does not merge semantically equivalent facts
+such as "user prefers vim" and "the user's editor is vim".
 
-### The actual scaling problem
+**Proposed fix.**
 
-After running the numbers for a full year of daily use:
+1. Embed each candidate curator fact.
+2. Compare it with existing live facts.
+3. Above a documented similarity threshold, merge or replace the existing
+   fact instead of appending another line.
+4. Preserve the current correction behavior so a newer contradictory fact can
+   replace an older one.
 
-| usage | msg/day | `memory.db` 1y | `semantic.db` 1y | vector search latency |
-| --- | --- | --- | --- | --- |
-| light (10 turns) | ~30 | ~10 MB | ~75 MB | <5 ms |
-| medium (50 turns) | ~150 | ~55 MB | ~380 MB | ~20 ms |
-| heavy (200 turns) | ~600 | ~220 MB | ~1.5 GB | ~60 ms |
+**Primary code:** `core/src/agent/memory/curator.rs`
 
-`memory.db` and `semantic.db` **do not need time-bucket partitioning**.
-FTS5 is O(log n); brute-force cosine over 100 K vectors stays
-millisecond-class on a modern laptop. A soft TTL at the very end
-(e.g. purge raw messages past 1 y) is housekeeping, not urgent.
+**Acceptance:** repeating one preference in different wording leaves one
+current fact, while a genuine correction replaces the old value.
 
-**The real bottleneck is `MEMORY.md` and `USER.md`.** They are injected
-into the system prompt **every single turn**. Per-turn token cost
-scales linearly with their size — a 32 KB file is ~8 K tokens. After
-a year of unbounded appends, a heavy user could be paying
-8 K tokens/turn just to re-state historical facts.
+### M2 — `USER.md` deduplication
 
-`MAX_NOTE_CHARS_FOR_PROMPT = 32_768` in `core/src/agent/memory/notes.rs`
-caps the read-into-prompt size, but once we hit that cap the
-curator effectively stops adding value (older facts get truncated
-silently with no compaction strategy).
+**Problem.** `cos_memory append USER.md` remains unconditional, so the Agent
+can append the same durable preference in separate sessions.
 
-### Proposed improvements
+**Proposed fix.** Add default-on deduplication for `USER.md` using a cheap
+exact/token-set check, with an explicit override for intentional duplicates.
 
-#### M1 — Curator: semantic dedup before append
+**Primary code:** `core/src/agent/tools/cos_proxy/memory.rs`
 
-**Problem.** Curator already truncates at `MAX_FACTS` but appends
-near-duplicates verbatim ("user prefers vim" + "user's editor is
-vim"). MEMORY.md fills with redundant lines.
+**Acceptance:** two near-identical preference appends leave one line.
 
-**Fix.** Before `notes.append(MEMORY_FILE, …)`, embed each candidate
-fact and compute cosine vs. existing facts in MEMORY.md. If
-similarity > 0.92, **merge** (LLM rewrite of the existing line)
-instead of appending a new one.
+### M3 — Configurable raw-store retention
 
-**Files.**
-- `core/src/agent/memory/curator.rs:680-740` (write path)
-- New helper using `model::tasks::embed::build_default()` (already
-  default-on for openai-shape providers).
+**Problem.** `memory.db` and `semantic.db` have purge primitives but no
+configuration or scheduled janitor.
 
-**Acceptance.** A test session that repeats "I use vim" 5 times
-produces exactly **one** fact line in MEMORY.md.
+**Proposed fix.**
 
-#### M2 — MEMORY.md rolling archive
+- Add `agent.memory_ttl_days` and `agent.semantic_ttl_days`.
+- Default both to `0` (never purge).
+- Run a low-frequency janitor only when a TTL is configured.
+- Keep recently curated durable facts in Markdown before raw rows expire.
 
-**Problem.** When MEMORY.md crosses the 32 KB hard cap, the oldest
-facts get truncated from the prompt with no record kept.
+**Primary code:** memory stores, Agent config, and Agent service startup.
 
-**Fix.** When `MEMORY.md` size > 24 KB (75% of cap), curator rolls
-the oldest ~8 KB block into `journals/MEMORY-YYYY-MM-DD.md`, then
-prepends a one-paragraph LLM-summary of that block to the top of
-the live `MEMORY.md`. Live MEMORY.md stays bounded; older fidelity
-is on disk if needed via `cos_recall_journal <date>`.
+**Acceptance:** configured TTLs remove only expired rows and leave recent
+history untouched.
 
-**Files.**
-- `core/src/agent/memory/curator.rs` — new `compact_memory()` step
-  in the curate pipeline, runs after `extract_facts` when over
-  threshold.
-- `core/src/agent/memory/notes.rs` — new `journals_dir()` helper +
-  `archive_block(name, content)`.
+### Superseded memory proposals
 
-**Acceptance.** A session that pushes MEMORY.md past 24 KB results
-in (a) live file ≤ 24 KB with a summary header, (b) one new
-`journals/MEMORY-*.md` file, (c) total facts preserved across the
-two files modulo summarisation.
+The following older proposals are intentionally removed:
 
-#### M3 — `cos_recall_journal <date>` LLM tool
+- rolling `MEMORY.md` into date-based journal files,
+- adding `cos_recall_journal`,
+- time-bucket partitioning of the SQLite stores,
+- adding HNSW/IVF before current vector volumes justify it.
 
-**Problem.** Once M2 archives blocks, the LLM needs a way to pull a
-specific archived day on demand (e.g. "what did I work on last
-Tuesday?").
+Bounded prompt-note selection removed the immediate need for a rolling archive.
+The journal tool depended on that archive and therefore no longer has a source
+of data.
 
-**Fix.** New tool in `core/src/agent/tools/cos_proxy/` that:
-- `cos_recall_journal --date 2026-05-06` → returns
-  `journals/MEMORY-2026-05-06.md` content
-- `cos_recall_journal --list --since 7d` → lists available
-  journal files
-- `cos_recall_journal --search "v8 build" --since 30d` → grep
-  across archived journals
+## System Introspection
 
-**Files.**
-- New `core/src/agent/tools/cos_proxy/recall_journal.rs`
-- Register in `core/src/agent/tools/cos_proxy/mod.rs`
-- Add to `core/src/agent/tools/registry.rs`
+### Current state
 
-**Acceptance.** LLM can reliably retrieve "what was MEMORY.md on
-2026-05-06" via the tool, and the response stays under the
-per-tool response cap.
+`cos_sysinfo` provides request/response reads for process, network, storage,
+logs, systemd, and package state.
 
-#### M4 — `USER.md` dedup helper
+`clawd` already owns:
 
-**Problem.** `cos_memory append USER.md` is unconditional. The LLM
-sometimes appends the same preference twice across distant
-sessions.
+- desktop-control and clipboard providers,
+- a persistent event center,
+- udev, systemd, journal, storage, security, and pidfd process-exit event
+  sources.
 
-**Fix.** Add `--dedup` flag to `cos_memory append` (default on
-for `USER.md`). The tool reads the existing file, runs a cheap
-substring + token-set comparison against each existing line, and
-skips the append if a near-duplicate exists.
+New work should extend these existing providers rather than introduce a second
+event bus inside the Agent runtime.
 
-**Files.**
-- `core/src/agent/tools/cos_proxy/memory.rs` — append path.
+### S1 — Expose complete desktop state
 
-**Acceptance.** A test that issues two near-identical
-`cos_memory append USER.md` calls leaves USER.md with exactly one
-line.
+**Problem.** `cos_sysinfo desktop` still exposes environment hints rather than
+a complete view of active windows, displays, and clipboard availability.
 
-#### M5 — Raw-store TTL (housekeeping, low priority)
+**Proposed fix.**
 
-**Problem.** `memory.db` and `semantic.db` grow forever. Not
-urgent (see scaling numbers above) but eventually should be
-managed.
+- Reuse the existing `clawd` desktop and clipboard providers.
+- Add read-only window/display snapshot operations.
+- Keep clipboard content opt-in and capability-gated.
+- Project the resulting state through the Agent's normal tool and audit paths.
 
-**Fix.** Add `agent.memory_ttl_days` and
-`agent.semantic_ttl_days` (default `0` = never). When set, a
-daily janitor pass deletes rows older than the TTL. Curator
-should have already promoted important facts to `MEMORY.md` /
-`USER.md` by then.
+**Acceptance:** the Agent can identify active windows and displays without
+shelling out to desktop-specific commands, while clipboard content remains
+off by default.
 
-**Files.**
-- `core/src/agent/memory/sqlite_fts.rs` — new `purge_older_than(ms)`.
-- `core/src/agent/memory/semantic.rs` — same.
-- New cron-style entry in the agent service init.
+### S2 — Bridge `clawd` events into Agent wake-up
 
-**Acceptance.** With `memory_ttl_days = 30`, rows older than 30 d
-disappear on the next janitor run; recent rows untouched.
+**Problem.** `clawd::event_center` collects and persists system events, but the
+Agent does not yet have one complete wake/backlog path that turns selected
+events into resumable Agent work.
 
-### Out of scope (decided)
+**Proposed fix.**
 
-- **Time-bucket partitioning of `memory.db` / `semantic.db`** —
-  unnecessary at realistic data volumes (1.5 GB / year worst case;
-  search stays sub-100 ms). The per-day discriminant already
-  lives on the `timestamp_ms` column.
-- **Replacing `USER.md` with structured fields** — markdown stays;
-  it's intentionally agent-readable.
-- **HNSW / IVF index over `semantic.db`** — defer until brute-force
-  cosine becomes the bottleneck (500 K+ vectors).
+1. Keep `clawd::event_center` as the single system event collector.
+2. Add policy-controlled subscriptions that select which events can wake the
+   Agent.
+3. Persist the selected event cursor with Agent task/session state.
+4. Inject the event through the same traced context path used by interactive
+   requests.
 
-### Ordering
+**Acceptance:** a configured event can wake the Agent exactly once, survive a
+restart, and remain reconstructable from session/audit records.
 
-Suggested implementation order:
-1. **M1** (dedup before append) — biggest immediate win, no schema change.
-2. **M2** (rolling archive) — directly removes the unbounded growth.
-3. **M3** (recall_journal tool) — closes the loop for retrieval.
-4. **M4** (USER.md dedup) — quality-of-life.
-5. **M5** (TTL janitor) — housekeeping, defer until data actually justifies it.
+### S3 — Reversible signal log
 
----
+**Problem.** Process signal/kill operations do not preserve enough context to
+explain or partially recover from a mistaken termination.
 
-## System introspection — making the agent actually live in the OS
+**Proposed fix.**
 
-`core/src/sysinfo.rs` backs the `cos_sysinfo` tool (process/network/
-storage/log/systemd/package reads) and `cos_doctor` exposes
-`cos agent doctor` to the model. The gaps below are bigger
-architectural pieces that each deserve their own PR:
+- Record timestamp, PID, signal, command identity, and Agent session before
+  sending the signal.
+- Expose recent signal history through a read-only system tool.
+- Optionally support restarting the previous command when that is safe; do not
+  describe this as restoring lost in-memory process state.
 
-#### S1 — Full desktop state (windows, displays, clipboard)
+**Primary code:** `core/src/proc.rs` plus the system audit/query surface.
 
-`cos_sysinfo desktop` currently only returns XDG env-var hints.
-Real "what window is active / what's on my clipboard / what
-monitors are plugged in" requires:
+**Acceptance:** every Agent-issued signal has a durable breadcrumb, and an
+operator can identify what was terminated.
 
-- A Wayland protocol client (most likely a thin wrapper around
-  `wlr-foreign-toplevel-management-unstable-v1` or COSMIC's
-  equivalent) to enumerate toplevels.
-- A D-Bus client for COSMIC's display config service to enumerate
-  monitors at the protocol layer (not just `cosmic-randr-shell`,
-  which is x86-only).
-- An opt-in clipboard reader (Wayland's `wl_data_device` plus the
-  `clipboard-control` proposal). Must default to **off** with an
-  explicit per-session toggle — clipboard content is sensitive.
+### S4 — Two-sample metrics for remaining counters
 
-Suggested home: a new `core/src/sysinfo/desktop.rs` (split the
-module when this lands).
+`top`, `disk_io`, and `net_rate` already use two samples. Apply the same
+pattern where meaningful to:
 
-#### S2 — Event subscriptions (push, not poll)
+- per-cgroup CPU usage,
+- per-uid network usage,
+- per-process I/O rates.
 
-Today everything in `cos_sysinfo` is request/response: the LLM
-asks, the kernel reads, the answer flows back. There is no way for
-the OS to **wake the agent** when something happens. The natural
-event sources:
+**Acceptance:** rate fields are based on elapsed samples rather than raw
+cumulative counters.
 
-- **inotify** for file changes (`apps/notify` already uses this
-  shape for desktop notifications but not for the agent).
-- **udev** for hot-plug events (USB, displays, batteries).
-- **systemd D-Bus signals** — `JobNew`, `JobRemoved`, unit state
-  transitions, `PrepareForSleep`.
-- **journalctl `--follow`** for matching-priority log lines.
-- **`/proc/<pid>` death watches** via `pidfd_open` + epoll.
+## Suggested Order
 
-The right shape is probably an `AgentEventBus` (running inside
-the agent service) that fans these signals into LLM-readable
-inbox entries — similar to how `cos cron` already persists jobs.
-This pairs naturally with the durable-session work in
-`core/src/session/` (Phase 6 handover) so the agent can wake from
-checkpoint and immediately ingest backlog.
-
-#### S3 — Reversible signal log
-
-Today `cos_proc signal/kill` is fire-and-forget. If the LLM kills
-the wrong PID there is no breadcrumb. Proposal:
-
-- New file `$COS_DATA_DIR/agent/signal_log.jsonl`.
-- Every `proc.signal` invocation appends
-  `{ts, pid, signo, comm, cmdline, killer_session}` before sending
-  the signal.
-- New `cos_sysinfo signal_log [--lines N]` to surface recent
-  kills to the agent ("what did I just kill?").
-- Optional: pair with `core/src/checkpoint` so the agent can
-  `restart_last_killed --within 5m` (re-spawn the cmdline). True
-  rollback isn't possible — once a process is gone its in-memory
-  state is gone — but re-spawning the same cmdline is good enough
-  for daemons.
-
-Hook point: `core/src/proc.rs::cmd_signal` and
-`core/src/policy.rs` (where `proc.signal` is gated).
-
-#### S4 — Two-sample everywhere
-
-`top`, `disk_io`, `net_rate` already sample twice. Apply the same
-pattern to CPU usage per-cgroup, per-uid network usage
-(`/proc/net/netstat` + `/proc/net/sockstat`), and per-pid IO
-(`/proc/<pid>/io`). Cheap and high-signal.
-
+1. **S2** — complete the existing event-center-to-Agent path.
+2. **M1** — reduce long-term memory duplication.
+3. **S1** — expose complete desktop state through existing providers.
+4. **S3** — add durable signal breadcrumbs.
+5. **M2** — deduplicate Agent-authored user facts.
+6. **S4** — extend rate sampling.
+7. **M3** — add retention automation when real data volume requires it.
