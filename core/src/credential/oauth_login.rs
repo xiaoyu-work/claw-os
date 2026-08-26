@@ -65,16 +65,6 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
-            "--provider" if i + 1 < args.len() && !args[i + 1].starts_with("--") => {
-                if provider.is_some() {
-                    return Err("OAuth login provider specified more than once".to_string());
-                }
-                provider = Some(args[i + 1].clone());
-                i += 2;
-            }
-            "--provider" => {
-                return Err("--provider requires google or microsoft".to_string());
-            }
             "--namespace" if i + 1 < args.len() => {
                 namespace = args[i + 1].clone();
                 i += 2;
@@ -106,9 +96,7 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
     }
     super::validate_credential_component("namespace", &namespace)?;
     let provider = provider.ok_or(
-        "usage: cos credential oauth-login <google|microsoft> [--namespace NS] \
-         [--no-open] [--timeout SECS]; alternatively use --provider \
-         <google|microsoft>",
+        "usage: cos credential oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]",
     )?;
     Ok((namespace, provider, no_open, timeout_secs))
 }

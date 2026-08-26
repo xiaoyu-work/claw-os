@@ -33,7 +33,7 @@
 ///   list   [--namespace NS]         — omit NS to see all namespaces
 ///   bundle <name> --keys k1,k2,k3 [--namespace NS]
 ///   load-bundle <name> [--namespace NS]
-///   oauth-login <google|microsoft> [--provider PROVIDER] [--namespace NS] [--no-open] [--timeout SECS]
+///   oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]
 ///   oauth-refresh <google|microsoft> [--namespace NS]
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};

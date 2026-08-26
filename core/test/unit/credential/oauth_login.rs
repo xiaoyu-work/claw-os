@@ -72,35 +72,6 @@ fn parses_google_login_arguments() {
 }
 
 #[test]
-fn parses_google_login_provider_option() {
-    let parsed = parse_args(&[
-        "--provider".into(),
-        "google".into(),
-        "--namespace".into(),
-        "mail".into(),
-    ])
-    .unwrap();
-    assert_eq!(parsed, ("mail".into(), "google".into(), false, 300));
-}
-
-#[test]
-fn rejects_duplicate_oauth_login_provider() {
-    let error = parse_args(&[
-        "google".into(),
-        "--provider".into(),
-        "microsoft".into(),
-    ])
-    .unwrap_err();
-    assert!(error.contains("specified more than once"));
-}
-
-#[test]
-fn rejects_missing_provider_option_value() {
-    let error = parse_args(&["--provider".into(), "--no-open".into()]).unwrap_err();
-    assert!(error.contains("--provider requires"));
-}
-
-#[test]
 fn rejects_missing_oauth_provider() {
     assert!(parse_args(&[]).unwrap_err().contains("usage"));
 }
