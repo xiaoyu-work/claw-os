@@ -28,12 +28,17 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::agent::llm::accumulate::StreamSink;
+use crate::agent::llm::accumulate::{SinkReady, StreamSink};
 use crate::agent::llm::types::StreamEvent;
 use crate::agent::runtime;
-use crate::agent::runtime::progress::ProgressSink;
+use crate::agent::runtime::progress::{ProgressReady, ProgressSink};
 use crate::agent::web::sse;
 use crate::agent::web::state::AppState;
+
+type SseFrame = Result<bytes::Bytes, std::io::Error>;
+
+const SSE_CHANNEL_CAPACITY: usize = 64;
+const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
@@ -67,62 +72,45 @@ pub async fn handler(
         .filter(|s| !s.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let interrupt_scope = format!("web-{}", uuid::Uuid::new_v4().simple());
 
-    let (tx, rx) = mpsc::unbounded_channel::<Result<bytes::Bytes, std::io::Error>>();
-    let (done_tx, mut done_rx) = tokio::sync::oneshot::channel::<()>();
+    let (tx, rx) = mpsc::channel::<SseFrame>(SSE_CHANNEL_CAPACITY);
 
     // Spawn the runtime drive loop on a separate task so the HTTP
     // response stream returns immediately and we can push SSE frames
-    // as the model produces them.
+    // as the model produces them. The response stream owns the join
+    // handle and aborts it on drop, so this task cannot outlive a
+    // disconnected client.
     let state_cloned = state.clone();
     let prompt = req.prompt.clone();
     let sid_for_task = session_id.clone();
+    let scope_for_task = interrupt_scope.clone();
     let use_memory = req.use_memory;
-    let tx_for_drive = tx.clone();
-
-    tokio::spawn(async move {
-        if let Err(e) =
-            drive_chat(state_cloned, prompt, sid_for_task, use_memory, tx_for_drive.clone()).await
+    let drive_task = tokio::spawn(async move {
+        if let Err(e) = drive_chat(
+            state_cloned,
+            prompt,
+            sid_for_task.clone(),
+            scope_for_task.clone(),
+            use_memory,
+            tx.clone(),
+        )
+        .await
         {
             let payload = match serde_json::from_str::<serde_json::Value>(&e) {
                 Ok(v) => v,
                 Err(_) => json!({ "error": e }),
             };
-            let frame = sse::encode_event("error", &payload);
-            let _ = tx_for_drive.send(Ok(bytes::Bytes::from(frame)));
-        }
-        // Signal heartbeat to stop. The drive task's sender is
-        // dropped here, but heartbeat keeps the receiver alive
-        // through its own sender clone.
-        let _ = done_tx.send(());
-    });
-
-    // Heartbeat task: emit an SSE comment every 15s so the connection
-    // stays open through aggressive idle-timeout proxies.
-    let tx_hb = tx.clone();
-    tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15));
-        loop {
-            tokio::select! {
-                _ = ticker.tick() => {
-                    if tx_hb
-                        .send(Ok(bytes::Bytes::from(sse::encode_comment("ping"))))
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-                _ = &mut done_rx => break,
-            }
+            let _ = send_frame(
+                &tx,
+                &scope_for_task,
+                sse::encode_event("error", &payload),
+            )
+            .await;
         }
     });
 
-    // Original `tx` is dropped here; the channel stays open via the
-    // clones held by the drive and heartbeat tasks. When both finish
-    // the receiver sees end-of-stream and the SSE body closes.
-    drop(tx);
-
-    let stream = ReceiverStream::new(rx);
+    let stream = ReceiverStream::new(rx, CancelOnDrop::new(interrupt_scope, drive_task));
     let body = Body::from_stream(stream);
 
     Response::builder()
@@ -146,8 +134,9 @@ async fn drive_chat(
     state: AppState,
     prompt: String,
     session_id: String,
+    interrupt_scope: String,
     use_memory: bool,
-    tx: mpsc::UnboundedSender<Result<bytes::Bytes, std::io::Error>>,
+    tx: mpsc::Sender<SseFrame>,
 ) -> Result<(), String> {
     use crate::agent::{memory, setup};
 
@@ -192,7 +181,7 @@ async fn drive_chat(
         None
     };
 
-    let sink_obj = Arc::new(SseSink::new(tx.clone()));
+    let sink_obj = Arc::new(SseSink::new(tx.clone(), interrupt_scope.clone()));
     let sink: Arc<dyn StreamSink> = sink_obj.clone();
     let progress: Arc<dyn ProgressSink> = sink_obj.clone();
 
@@ -201,10 +190,15 @@ async fn drive_chat(
     // produces a single token. The `done` event also carries the id at
     // the very end, but emitting `session` early means navigation /
     // refresh / stop mid-stream all preserve the conversation.
-    let _ = tx.send(Ok(bytes::Bytes::from(sse::encode_event(
-        "session",
-        &json!({ "session_id": session_id }),
-    ))));
+    if !send_frame(
+        &tx,
+        &interrupt_scope,
+        sse::encode_event("session", &json!({ "session_id": session_id })),
+    )
+    .await
+    {
+        return Ok(());
+    }
 
     // When memory is enabled, replay this session's prior turns into
     // the LLM context so multi-turn chat actually *feels* multi-turn.
@@ -216,28 +210,32 @@ async fn drive_chat(
     // truncates long tool-result bodies before replay.
     let result = match memory_db.as_ref() {
         Some(db) => {
-            runtime::loop_::ask_with_stream_continuation(
+            runtime::loop_::ask_with_stream_continuation_scoped(
                 provider.clone(),
                 &cfg,
                 &prompt,
+                None,
                 &tools,
                 db,
                 &session_id,
                 100,
                 sink,
                 progress,
+                &interrupt_scope,
             )
             .await
         }
         None => {
-            runtime::loop_::ask_with_stream(
+            runtime::loop_::ask_with_stream_scoped(
                 provider.clone(),
                 &cfg,
                 &prompt,
+                None,
                 &tools,
                 None,
                 sink,
                 progress,
+                &interrupt_scope,
             )
             .await
         }
@@ -246,10 +244,15 @@ async fn drive_chat(
     match result {
         Ok(ask) => {
             let finish = sink_obj.snapshot_finish();
-            let _ = tx.send(Ok(bytes::Bytes::from(sse::encode_event(
-                "evidence",
-                &ask.evidence,
-            ))));
+            if !send_frame(
+                &tx,
+                &interrupt_scope,
+                sse::encode_event("evidence", &ask.evidence),
+            )
+            .await
+            {
+                return Ok(());
+            }
             let frame = sse::encode_event(
                 "done",
                 &json!({
@@ -263,26 +266,60 @@ async fn drive_chat(
                     "finish": finish,
                 }),
             );
-            let _ = tx.send(Ok(bytes::Bytes::from(frame)));
+            let _ = send_frame(&tx, &interrupt_scope, frame).await;
         }
         Err(e) => {
             let frame = sse::encode_event("error", &json!({ "error": e.to_string() }));
-            let _ = tx.send(Ok(bytes::Bytes::from(frame)));
+            let _ = send_frame(&tx, &interrupt_scope, frame).await;
         }
     }
     Ok(())
 }
 
+fn cancel_scope(interrupt_scope: &str) {
+    let _ = runtime::interrupt::signal(interrupt_scope);
+}
+
+async fn send_frame(tx: &mpsc::Sender<SseFrame>, interrupt_scope: &str, frame: String) -> bool {
+    if tx.send(Ok(bytes::Bytes::from(frame))).await.is_ok() {
+        true
+    } else {
+        cancel_scope(interrupt_scope);
+        false
+    }
+}
+
+fn try_send_frame(tx: &mpsc::Sender<SseFrame>, interrupt_scope: &str, frame: String) -> bool {
+    match tx.try_send(Ok(bytes::Bytes::from(frame))) {
+        Ok(()) => true,
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            tracing::debug!(
+                interrupt_scope,
+                capacity = SSE_CHANNEL_CAPACITY,
+                "web chat SSE client fell behind; cancelling request"
+            );
+            cancel_scope(interrupt_scope);
+            false
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            cancel_scope(interrupt_scope);
+            false
+        }
+    }
+}
+
 /// Stream sink that serializes provider events as SSE frames.
 struct SseSink {
-    tx: mpsc::UnboundedSender<Result<bytes::Bytes, std::io::Error>>,
+    tx: mpsc::Sender<SseFrame>,
+    interrupt_scope: String,
     last_finish: Mutex<Option<String>>,
 }
 
 impl SseSink {
-    fn new(tx: mpsc::UnboundedSender<Result<bytes::Bytes, std::io::Error>>) -> Self {
+    fn new(tx: mpsc::Sender<SseFrame>, interrupt_scope: String) -> Self {
         Self {
             tx,
+            interrupt_scope,
             last_finish: Mutex::new(None),
         }
     }
@@ -290,11 +327,26 @@ impl SseSink {
         self.last_finish.lock().ok().and_then(|g| g.clone())
     }
     fn send(&self, frame: String) {
-        let _ = self.tx.send(Ok(bytes::Bytes::from(frame)));
+        let _ = try_send_frame(&self.tx, &self.interrupt_scope, frame);
     }
 }
 
 impl StreamSink for SseSink {
+    fn wait_ready(&self) -> Option<SinkReady<'_>> {
+        Some(Box::pin(async move {
+            match self.tx.reserve().await {
+                Ok(permit) => {
+                    drop(permit);
+                    true
+                }
+                Err(_) => {
+                    cancel_scope(&self.interrupt_scope);
+                    false
+                }
+            }
+        }))
+    }
+
     fn on_event(&self, event: &StreamEvent) {
         match event {
             StreamEvent::TextDelta { text } => {
@@ -326,6 +378,7 @@ impl StreamSink for SseSink {
             }
             StreamEvent::ToolState { .. } => {}
             StreamEvent::Message(resp) => {
+                let mut frames = String::new();
                 let mut text = String::new();
                 for block in &resp.content {
                     if let crate::agent::llm::types::ContentBlock::Text { text: t } = block {
@@ -333,16 +386,19 @@ impl StreamSink for SseSink {
                     }
                 }
                 if !text.is_empty() {
-                    self.send(sse::encode_event("text", &json!({ "delta": text })));
+                    frames.push_str(&sse::encode_event("text", &json!({ "delta": text })));
                 }
                 for call in &resp.tool_calls {
-                    self.send(sse::encode_event(
+                    frames.push_str(&sse::encode_event(
                         "tool_use",
                         &json!({
                             "id": call.id,
                             "name": call.name,
                         }),
                     ));
+                }
+                if !frames.is_empty() {
+                    self.send(frames);
                 }
             }
             StreamEvent::Done { finish, usage } => {
@@ -374,6 +430,10 @@ impl StreamSink for SseSink {
 }
 
 impl ProgressSink for SseSink {
+    fn wait_ready(&self) -> Option<ProgressReady<'_>> {
+        <Self as StreamSink>::wait_ready(self)
+    }
+
     fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         self.send(sse::encode_event(
             "tool_start",
@@ -401,27 +461,70 @@ impl ProgressSink for SseSink {
 }
 
 // ---------------------------------------------------------------------------
-// Stream adapter: wraps tokio mpsc::UnboundedReceiver as a futures
-// Stream of byte chunks suitable for axum's Body::from_stream.
+// Stream adapter: wraps the bounded receiver as a futures Stream and
+// owns the runtime task for exactly as long as axum owns the body.
 // ---------------------------------------------------------------------------
 
-struct ReceiverStream<T> {
-    rx: mpsc::UnboundedReceiver<T>,
+struct CancelOnDrop {
+    interrupt_scope: String,
+    task: tokio::task::JoinHandle<()>,
 }
 
-impl<T> ReceiverStream<T> {
-    fn new(rx: mpsc::UnboundedReceiver<T>) -> Self {
-        Self { rx }
+impl CancelOnDrop {
+    fn new(interrupt_scope: String, task: tokio::task::JoinHandle<()>) -> Self {
+        Self {
+            interrupt_scope,
+            task,
+        }
     }
 }
 
-impl<T> Stream for ReceiverStream<T> {
-    type Item = T;
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        cancel_scope(&self.interrupt_scope);
+        self.task.abort();
+    }
+}
+
+struct ReceiverStream {
+    rx: mpsc::Receiver<SseFrame>,
+    heartbeat: tokio::time::Interval,
+    _cancel: CancelOnDrop,
+}
+
+impl ReceiverStream {
+    fn new(rx: mpsc::Receiver<SseFrame>, cancel: CancelOnDrop) -> Self {
+        let start = tokio::time::Instant::now() + HEARTBEAT_INTERVAL;
+        let mut heartbeat = tokio::time::interval_at(start, HEARTBEAT_INTERVAL);
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        Self {
+            rx,
+            heartbeat,
+            _cancel: cancel,
+        }
+    }
+}
+
+impl Stream for ReceiverStream {
+    type Item = SseFrame;
+
     fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
+        self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        self.rx.poll_recv(cx)
+        let this = self.get_mut();
+        match this.rx.poll_recv(cx) {
+            std::task::Poll::Ready(item) => std::task::Poll::Ready(item),
+            std::task::Poll::Pending => {
+                match std::pin::Pin::new(&mut this.heartbeat).poll_tick(cx) {
+                    std::task::Poll::Ready(_) => {
+                        let ping = bytes::Bytes::from(sse::encode_comment("ping"));
+                        std::task::Poll::Ready(Some(Ok(ping)))
+                    }
+                    std::task::Poll::Pending => std::task::Poll::Pending,
+                }
+            }
+        }
     }
 }
 

@@ -26,6 +26,32 @@ fn signal_flips_check_true() {
     assert!(h.check());
 }
 
+#[tokio::test]
+async fn signal_wakes_async_cancellation_waiter() {
+    let id = unique_id("async-wake");
+    let h = register(&id);
+    let waiter = h.clone();
+    let waiting = tokio::spawn(async move {
+        waiter.cancelled().await;
+    });
+
+    assert!(signal(&id));
+    tokio::time::timeout(std::time::Duration::from_secs(1), waiting)
+        .await
+        .expect("cancellation waiter did not wake")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn cancelled_returns_when_signal_precedes_wait() {
+    let id = unique_id("async-sticky");
+    let h = register(&id);
+    assert!(signal(&id));
+    tokio::time::timeout(std::time::Duration::from_secs(1), h.cancelled())
+        .await
+        .expect("pre-signalled cancellation was lost");
+}
+
 #[test]
 fn drop_removes_from_registry() {
     let id = unique_id("drop");

@@ -1,10 +1,10 @@
 //! Per-session interrupt signaling.
 //!
 //! The agent loop ([`super::loop_::ask_with`] / friends) checks for an
-//! interrupt at the top of every turn. When one is signaled, the loop
-//! returns [`AgentError::Interrupted`](super::loop_::AgentError) — the
-//! current in-flight turn (provider call + tool execution) is allowed
-//! to drain naturally, but no further turns run.
+//! interrupt at the top of every turn and while awaiting provider or
+//! tool work. When one is signaled, the loop returns
+//! [`AgentError::Interrupted`](super::loop_::AgentError) and drops the
+//! in-flight future at the next cancellation-aware await point.
 //!
 //! ## Why per-session?
 //!
@@ -33,10 +33,11 @@
 //!
 //! ## Concurrency
 //!
-//! The registry is a single `Mutex<HashMap<String, Arc<AtomicBool>>>`.
+//! The registry is a single `Mutex<HashMap<String, Arc<SignalState>>>`.
 //! Lock hold time is bounded to a hashmap lookup + clone of an `Arc`,
 //! so it's never held across an `await`. Hot-path `check()` reads the
-//! `AtomicBool` directly with `Ordering::Relaxed` — no lock.
+//! atomic flag directly with acquire ordering — no lock. Async
+//! waiters use a `Notify` paired with the same sticky flag.
 //!
 //! ## Re-registration semantics
 //!
@@ -44,17 +45,39 @@
 //! previous registration (sets its flag, so the old loop returns
 //! [`AgentError::Interrupted`]) and installs the new entry. The old
 //! handle's `Drop` no longer wipes the new entry — `RegistryGuard`
-//! holds its own `Arc<AtomicBool>` and only removes the map entry
-//! when the still-installed flag is pointer-equal to the one being
+//! holds its own `Arc<SignalState>` and only removes the map entry
+//! when the still-installed state is pointer-equal to the one being
 //! dropped.
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
+use tokio::sync::Notify;
+
+#[derive(Debug)]
+struct SignalState {
+    flag: AtomicBool,
+    wake: Notify,
+}
+
+impl SignalState {
+    fn new() -> Self {
+        Self {
+            flag: AtomicBool::new(false),
+            wake: Notify::new(),
+        }
+    }
+
+    fn cancel(&self) {
+        self.flag.store(true, Ordering::Release);
+        self.wake.notify_waiters();
+    }
+}
+
 /// Process-wide registry of in-flight sessions. Lazily initialized.
-fn registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<String, Arc<AtomicBool>>>> = OnceLock::new();
+fn registry() -> &'static Mutex<HashMap<String, Arc<SignalState>>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<String, Arc<SignalState>>>> = OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -66,11 +89,10 @@ fn registry() -> &'static Mutex<HashMap<String, Arc<AtomicBool>>> {
 #[derive(Debug, Clone)]
 pub struct Handle {
     session_id: String,
-    flag: Arc<AtomicBool>,
-    /// Counts strong refs of the underlying flag for the registry
-    /// cleanup. We use a separate `Arc<()>` because `Arc::strong_count`
-    /// on the flag itself races with external signalers that briefly
-    /// hold their own clone.
+    state: Arc<SignalState>,
+    /// Counts strong refs of the underlying state for the registry
+    /// cleanup. The separate guard avoids relying on `Arc::strong_count`,
+    /// which races with external signalers that briefly clone the state.
     _guard: Arc<RegistryGuard>,
 }
 
@@ -84,14 +106,14 @@ pub struct Handle {
 #[derive(Debug)]
 struct RegistryGuard {
     session_id: String,
-    flag: Arc<AtomicBool>,
+    state: Arc<SignalState>,
 }
 
 impl Drop for RegistryGuard {
     fn drop(&mut self) {
         if let Ok(mut map) = registry().lock() {
             if let Some(current) = map.get(&self.session_id) {
-                if Arc::ptr_eq(current, &self.flag) {
+                if Arc::ptr_eq(current, &self.state) {
                     map.remove(&self.session_id);
                 }
                 // Otherwise: someone re-registered under this id and
@@ -109,10 +131,27 @@ impl Handle {
     }
 
     /// True once any holder of this session id has been signaled.
-    /// Cheap — single relaxed atomic load. Safe to call in tight
+    /// Cheap — single atomic load. Safe to call in tight
     /// loops.
     pub fn check(&self) -> bool {
-        self.flag.load(Ordering::Relaxed)
+        self.state.flag.load(Ordering::Acquire)
+    }
+
+    /// Wait until this session is interrupted.
+    ///
+    /// The notification is paired with the sticky atomic flag so a
+    /// signal delivered immediately before the waiter is registered
+    /// cannot be lost.
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.state.wake.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if self.check() {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// Reset the flag to "not interrupted" — e.g. when an interactive
@@ -120,7 +159,7 @@ impl Handle {
     /// the user answers "no". Rare; the common case is to just let
     /// the handle drop and start a fresh session.
     pub fn clear(&self) {
-        self.flag.store(false, Ordering::Relaxed);
+        self.state.flag.store(false, Ordering::Release);
     }
 }
 
@@ -135,22 +174,21 @@ impl Handle {
 /// path is defence in depth against caller bugs and quick test loops.
 pub fn register(session_id: impl Into<String>) -> Handle {
     let session_id = session_id.into();
-    let flag = Arc::new(AtomicBool::new(false));
+    let state = Arc::new(SignalState::new());
     let guard = Arc::new(RegistryGuard {
         session_id: session_id.clone(),
-        flag: flag.clone(),
+        state: state.clone(),
     });
     if let Ok(mut map) = registry().lock() {
-        if let Some(old) = map.insert(session_id.clone(), flag.clone()) {
+        if let Some(old) = map.insert(session_id.clone(), state.clone()) {
             // Cancel any in-flight session that still observes the old
-            // flag — its loop will see `check() == true` and exit with
-            // `Interrupted` on its next turn boundary.
-            old.store(true, Ordering::Relaxed);
+            // state — its loop will wake and exit with `Interrupted`.
+            old.cancel();
         }
     }
     Handle {
         session_id,
-        flag,
+        state,
         _guard: guard,
     }
 }
@@ -159,13 +197,13 @@ pub fn register(session_id: impl Into<String>) -> Handle {
 /// the session was found and signaled, `false` if no live handle
 /// matches `session_id`.
 pub fn signal(session_id: &str) -> bool {
-    let flag = match registry().lock() {
+    let state = match registry().lock() {
         Ok(map) => map.get(session_id).cloned(),
         Err(_) => None,
     };
-    match flag {
-        Some(f) => {
-            f.store(true, Ordering::Relaxed);
+    match state {
+        Some(state) => {
+            state.cancel();
             true
         }
         None => false,

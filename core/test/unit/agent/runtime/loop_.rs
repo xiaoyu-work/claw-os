@@ -1566,6 +1566,239 @@ async fn ask_with_stream_propagates_provider_error() {
     assert!(matches!(res, Err(AgentError::Llm(_))));
 }
 
+struct DropFlag(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for DropFlag {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+struct PendingProvider {
+    entered: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl Provider for PendingProvider {
+    fn name(&self) -> &str {
+        "pending"
+    }
+
+    fn supported_models(&self) -> Vec<String> {
+        vec!["mock-model".into()]
+    }
+
+    fn is_configured(&self) -> bool {
+        true
+    }
+
+    async fn chat(&self, _request: llm::ChatRequest) -> llm::Result<llm::ChatResponse> {
+        Err(llm::LlmError::Internal(
+            "pending provider only supports streaming test path".into(),
+        ))
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: llm::ChatRequest,
+    ) -> llm::Result<futures_util::stream::BoxStream<'static, llm::Result<StreamEvent>>> {
+        let _drop_flag = DropFlag(self.dropped.clone());
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn interrupt_drops_in_flight_provider_future() {
+    let cfg = cfg();
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let provider: Arc<dyn Provider> = Arc::new(PendingProvider {
+        entered: entered.clone(),
+        dropped: dropped.clone(),
+    });
+    let tools = builtin_only_registry();
+    let sink: Arc<CapturingSink> = Arc::default();
+    let session_id = format!("provider-cancel-{}", uuid::Uuid::new_v4().simple());
+
+    let run = ask_with_stream_scoped(
+        provider,
+        &cfg,
+        "wait forever",
+        None,
+        &tools,
+        None,
+        sink,
+        progress::null_progress(),
+        &session_id,
+    );
+    let signal = async {
+        entered.notified().await;
+        assert!(interrupt::signal(&session_id));
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(run, signal)
+    })
+    .await
+    .expect("provider cancellation timed out");
+
+    assert!(matches!(result, Err(AgentError::Interrupted(_))));
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "interrupt must drop the provider future"
+    );
+}
+
+struct CountingTool {
+    starts: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::tools::Tool for CountingTool {
+    fn name(&self) -> &'static str {
+        "cancellation_counting_tool"
+    }
+
+    fn description(&self) -> &'static str {
+        "counts executions"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+        self.starts
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        crate::agent::tools::ToolResult::ok("started")
+    }
+}
+
+struct CancelOnToolStart {
+    session_id: String,
+}
+
+impl progress::ProgressSink for CancelOnToolStart {
+    fn on_tool_start(&self, _id: &str, _name: &str, _input: &serde_json::Value) {
+        assert!(interrupt::signal(&self.session_id));
+    }
+}
+
+#[tokio::test]
+async fn tool_does_not_start_after_progress_sink_observes_cancellation() {
+    let cfg = cfg();
+    let mock = MockProvider::new(&cfg.model, &cfg);
+    mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id: "cancel-before-tool".into(),
+        name: "cancellation_counting_tool".into(),
+        input: serde_json::json!({}),
+    }]));
+    let provider: Arc<dyn Provider> = Arc::new(mock);
+    let starts = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut tools = crate::agent::tools::registry::ToolRegistry::new();
+    tools.register(Arc::new(CountingTool {
+        starts: starts.clone(),
+    }));
+    let session_id = format!("pre-tool-cancel-{}", uuid::Uuid::new_v4().simple());
+    let progress: Arc<dyn progress::ProgressSink> = Arc::new(CancelOnToolStart {
+        session_id: session_id.clone(),
+    });
+
+    let result = ask_with_stream_scoped(
+        provider,
+        &cfg,
+        "cancel before tool",
+        None,
+        &tools,
+        None,
+        Arc::new(CapturingSink::default()),
+        progress,
+        &session_id,
+    )
+    .await;
+
+    assert!(matches!(result, Err(AgentError::Interrupted(_))));
+    assert_eq!(
+        starts.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "tool execution began after cancellation was observed"
+    );
+}
+
+struct BlockingTool {
+    entered: Arc<tokio::sync::Notify>,
+    dropped: Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[async_trait::async_trait]
+impl crate::agent::tools::Tool for BlockingTool {
+    fn name(&self) -> &'static str {
+        "cancellation_blocking_tool"
+    }
+
+    fn description(&self) -> &'static str {
+        "blocks until cancelled"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+        let _drop_flag = DropFlag(self.dropped.clone());
+        self.entered.notify_one();
+        std::future::pending().await
+    }
+}
+
+#[tokio::test]
+async fn interrupt_drops_in_flight_tool_future() {
+    let cfg = cfg();
+    let mock = MockProvider::new(&cfg.model, &cfg);
+    mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id: "cancel-running-tool".into(),
+        name: "cancellation_blocking_tool".into(),
+        input: serde_json::json!({}),
+    }]));
+    let provider: Arc<dyn Provider> = Arc::new(mock);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tools = crate::agent::tools::registry::ToolRegistry::new();
+    tools.register(Arc::new(BlockingTool {
+        entered: entered.clone(),
+        dropped: dropped.clone(),
+    }));
+    let session_id = format!("tool-cancel-{}", uuid::Uuid::new_v4().simple());
+
+    let run = ask_with_stream_scoped(
+        provider,
+        &cfg,
+        "start blocking tool",
+        None,
+        &tools,
+        None,
+        Arc::new(CapturingSink::default()),
+        progress::null_progress(),
+        &session_id,
+    );
+    let signal = async {
+        entered.notified().await;
+        assert!(interrupt::signal(&session_id));
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(run, signal)
+    })
+    .await
+    .expect("tool cancellation timed out");
+
+    assert!(matches!(result, Err(AgentError::Interrupted(_))));
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "interrupt must drop the in-flight tool future"
+    );
+}
+
 /// Pre-signaling a session id, then running the loop with that
 /// session id, must surface as `AgentError::Interrupted` on the
 /// very first turn — before any provider call.

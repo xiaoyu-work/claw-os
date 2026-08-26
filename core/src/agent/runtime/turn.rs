@@ -4,6 +4,7 @@
 //! turns until the provider stops requesting tool calls or `max_turns` is
 //! reached.
 
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -14,6 +15,7 @@ use crate::agent::llm::{
     ToolCall, ToolChoice, Usage,
 };
 use crate::agent::runtime::hooks::{self, HookContext};
+use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::tools::{registry::ToolRegistry, ToolResult};
 
@@ -36,6 +38,36 @@ pub enum TurnOutcome {
 pub struct TurnReport {
     pub outcome: TurnOutcome,
     pub usage: Usage,
+}
+
+fn interrupted(handle: &interrupt::Handle) -> super::loop_::AgentError {
+    super::loop_::AgentError::Interrupted(handle.session_id().to_string())
+}
+
+fn check_interrupted(handle: Option<&interrupt::Handle>) -> Result<(), super::loop_::AgentError> {
+    match handle {
+        Some(handle) if handle.check() => Err(interrupted(handle)),
+        _ => Ok(()),
+    }
+}
+
+async fn await_interruptible<F>(
+    handle: Option<&interrupt::Handle>,
+    future: F,
+) -> Result<F::Output, super::loop_::AgentError>
+where
+    F: Future,
+{
+    match handle {
+        Some(handle) => {
+            tokio::select! {
+                biased;
+                _ = handle.cancelled() => Err(interrupted(handle)),
+                output = future => Ok(output),
+            }
+        }
+        None => Ok(future.await),
+    }
 }
 
 /// Run a single turn against `provider` with the current `messages`.
@@ -81,6 +113,42 @@ pub async fn run_turn(
         hook_ctx,
         progress,
         true,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_turn_interruptible(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        true,
+        Some(interrupt),
     )
     .await
 }
@@ -117,6 +185,42 @@ pub async fn run_final_turn(
         hook_ctx,
         progress,
         false,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_final_turn_interruptible(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        retry_policy,
+        hook_ctx,
+        progress,
+        false,
+        Some(interrupt),
     )
     .await
 }
@@ -136,7 +240,9 @@ async fn run_turn_inner(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     allow_tools: bool,
+    interrupt: Option<&interrupt::Handle>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    check_interrupted(interrupt)?;
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
@@ -174,21 +280,25 @@ async fn run_turn_inner(
     }
 
     let start = Instant::now();
-    let chat_result = match retry_policy {
-        Some(policy) => {
-            // Clone the request per attempt: providers may consume
-            // owned `extra` fields, and the retry helper needs a
-            // fresh future each call.
-            let provider_for_retry = provider.clone();
-            crate::agent::llm::rate_limit::retry_with_backoff(policy, move || {
-                let p = provider_for_retry.clone();
-                let req = request.clone();
-                async move { p.chat(req).await }
-            })
-            .await
+    let chat_result = await_interruptible(interrupt, async {
+        match retry_policy {
+            Some(policy) => {
+                // Clone the request per attempt: providers may consume
+                // owned `extra` fields, and the retry helper needs a
+                // fresh future each call.
+                let provider_for_retry = provider.clone();
+                crate::agent::llm::rate_limit::retry_with_backoff(policy, move || {
+                    let p = provider_for_retry.clone();
+                    let req = request.clone();
+                    async move { p.chat(req).await }
+                })
+                .await
+            }
+            None => provider.chat(request).await,
         }
-        None => provider.chat(request).await,
-    };
+    })
+    .await?;
+    check_interrupted(interrupt)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     // Capture engine_info AFTER the call — for local engines the
@@ -263,8 +373,15 @@ async fn run_turn_inner(
     // Tools that opt into [`Tool::parallel_safe`] run concurrently
     // via `dispatch_calls`; others serialise. See that helper for the
     // ordering guarantees.
-    let (result_blocks, pending_stop) =
-        dispatch_calls(tools, hook_ctx, &tool_calls, session_id, progress.as_ref()).await;
+    let (result_blocks, pending_stop) = dispatch_calls(
+        tools,
+        hook_ctx,
+        &tool_calls,
+        session_id,
+        progress.as_ref(),
+        interrupt,
+    )
+    .await?;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -334,6 +451,42 @@ pub async fn run_turn_streaming(
         hook_ctx,
         progress,
         true,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_turn_streaming_interruptible(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    sink: Arc<dyn StreamSink>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_streaming_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        sink,
+        hook_ctx,
+        progress,
+        true,
+        Some(interrupt),
     )
     .await
 }
@@ -368,6 +521,42 @@ pub async fn run_final_turn_streaming(
         hook_ctx,
         progress,
         false,
+        None,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_final_turn_streaming_interruptible(
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &str,
+    system: &str,
+    messages: &mut Vec<Message>,
+    tools: &ToolRegistry,
+    llm_tools: &[LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&str>,
+    sink: Arc<dyn StreamSink>,
+    hook_ctx: Option<&HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt: &interrupt::Handle,
+) -> Result<TurnReport, super::loop_::AgentError> {
+    run_turn_streaming_inner(
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        sink,
+        hook_ctx,
+        progress,
+        false,
+        Some(interrupt),
     )
     .await
 }
@@ -387,7 +576,9 @@ async fn run_turn_streaming_inner(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
     allow_tools: bool,
+    interrupt: Option<&interrupt::Handle>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    check_interrupted(interrupt)?;
     let mut request = ChatRequest {
         model: model.to_string(),
         messages: messages.clone(),
@@ -417,11 +608,15 @@ async fn run_turn_streaming_inner(
     }
 
     let start = Instant::now();
-    let stream_result = provider.chat_stream(request).await;
-    let chat_result: crate::agent::llm::Result<ChatResponse> = match stream_result {
-        Ok(stream) => accumulate_stream(stream, sink.clone(), model).await,
-        Err(e) => Err(e),
-    };
+    let chat_result: crate::agent::llm::Result<ChatResponse> =
+        await_interruptible(interrupt, async {
+            match provider.chat_stream(request).await {
+                Ok(stream) => accumulate_stream(stream, sink.clone(), model).await,
+                Err(e) => Err(e),
+            }
+        })
+        .await?;
+    check_interrupted(interrupt)?;
     let duration_ms = start.elapsed().as_millis() as u64;
 
     let engine = provider.engine_info();
@@ -472,8 +667,15 @@ async fn run_turn_streaming_inner(
         });
     }
 
-    let (result_blocks, pending_stop) =
-        dispatch_calls(tools, hook_ctx, &tool_calls, session_id, progress.as_ref()).await;
+    let (result_blocks, pending_stop) = dispatch_calls(
+        tools,
+        hook_ctx,
+        &tool_calls,
+        session_id,
+        progress.as_ref(),
+        interrupt,
+    )
+    .await?;
     messages.push(Message {
         role: Role::User,
         content: result_blocks,
@@ -655,6 +857,22 @@ fn apply_pre_hook(hook_ctx: Option<&HookContext>, call: &ToolCall) -> (ToolCall,
     }
 }
 
+async fn wait_progress_ready(
+    progress: &dyn ProgressSink,
+    interrupt: Option<&interrupt::Handle>,
+) -> Result<(), super::loop_::AgentError> {
+    if let Some(ready) = progress.wait_ready() {
+        let ready = await_interruptible(interrupt, ready).await?;
+        check_interrupted(interrupt)?;
+        if !ready {
+            return Err(super::loop_::AgentError::Internal(
+                "tool progress sink closed".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Run a single tool call end-to-end: pre-hook, [`ProgressSink::on_tool_start`],
 /// dispatch (or deny short-circuit), latency, [`ProgressSink::on_tool_result`].
 /// Does NOT run the post-hook — that's the caller's job, sequentially
@@ -666,22 +884,31 @@ async fn dispatch_one(
     call: &ToolCall,
     session_id: Option<&str>,
     progress: &dyn ProgressSink,
-) -> DispatchOutcome {
+    interrupt: Option<&interrupt::Handle>,
+) -> Result<DispatchOutcome, super::loop_::AgentError> {
+    check_interrupted(interrupt)?;
     let (effective_call, decision_error) = apply_pre_hook(hook_ctx, call);
 
-    progress.on_tool_start(&effective_call.id, &effective_call.name, &effective_call.input);
+    wait_progress_ready(progress, interrupt).await?;
+    progress.on_tool_start(
+        &effective_call.id,
+        &effective_call.name,
+        &effective_call.input,
+    );
+    check_interrupted(interrupt)?;
 
     let started = Instant::now();
     let result = if let Some(reason) = decision_error {
         ToolResult::err(reason)
     } else {
-        dispatch_tool(tools, &effective_call, session_id).await
+        await_interruptible(interrupt, dispatch_tool(tools, &effective_call, session_id)).await?
     };
     let latency_ms = started.elapsed().as_millis() as u64;
 
     let ok = !result.is_error;
     let bytes = result.content.len();
     let preview = progress::render_preview(&result.content, ok);
+    wait_progress_ready(progress, interrupt).await?;
     progress.on_tool_result(
         &effective_call.id,
         &effective_call.name,
@@ -690,12 +917,13 @@ async fn dispatch_one(
         bytes,
         &preview,
     );
+    check_interrupted(interrupt)?;
 
-    DispatchOutcome {
+    Ok(DispatchOutcome {
         effective_call,
         result,
         latency_ms,
-    }
+    })
 }
 
 /// Dispatch every tool call in `tool_calls` and return `(result_blocks,
@@ -716,7 +944,9 @@ async fn dispatch_calls(
     tool_calls: &[ToolCall],
     session_id: Option<&str>,
     progress: &dyn ProgressSink,
-) -> (Vec<ContentBlock>, Option<String>) {
+    interrupt: Option<&interrupt::Handle>,
+) -> Result<(Vec<ContentBlock>, Option<String>), super::loop_::AgentError> {
+    check_interrupted(interrupt)?;
     // Partition into parallel-safe vs serial groups, preserving the
     // original index so we can interleave the results back in order.
     let mut parallel: Vec<usize> = Vec::new();
@@ -740,12 +970,14 @@ async fn dispatch_calls(
         let futs = parallel.iter().map(|&i| {
             let call = &tool_calls[i];
             async move {
-                let outcome = dispatch_one(tools, hook_ctx, call, session_id, progress).await;
-                (i, outcome)
+                let outcome =
+                    dispatch_one(tools, hook_ctx, call, session_id, progress, interrupt).await?;
+                Ok::<_, super::loop_::AgentError>((i, outcome))
             }
         });
         let results = futures_util::future::join_all(futs).await;
-        for (i, outcome) in results {
+        for result in results {
+            let (i, outcome) = result?;
             slots[i] = Some(outcome);
         }
     }
@@ -756,7 +988,15 @@ async fn dispatch_calls(
     // fs writes) then run with the latest state. Matches the
     // expected mental model: "do the safe reads, then the writes".
     for i in serial {
-        let outcome = dispatch_one(tools, hook_ctx, &tool_calls[i], session_id, progress).await;
+        let outcome = dispatch_one(
+            tools,
+            hook_ctx,
+            &tool_calls[i],
+            session_id,
+            progress,
+            interrupt,
+        )
+        .await?;
         slots[i] = Some(outcome);
     }
 
@@ -794,7 +1034,7 @@ async fn dispatch_calls(
             content: outcome.result.content,
         });
     }
-    (result_blocks, pending_stop)
+    Ok((result_blocks, pending_stop))
 }
 
 #[cfg(test)]

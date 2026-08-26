@@ -33,12 +33,22 @@ use futures_util::StreamExt;
 use super::types::{ChatResponse, ContentBlock, FinishReason, StreamEvent, ToolCall, Usage};
 use super::{LlmError, Result};
 
+pub type SinkReady<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>>;
+
 /// A consumer that wants to be notified of each [`StreamEvent`] as it
 /// flows past. Implementations must be `Send + Sync` because the
 /// stream is awaited inside a tokio task; they should also be cheap
 /// (the sink is invoked synchronously between event dequeue and
 /// accumulator update — slow sinks back-pressure the stream).
 pub trait StreamSink: Send + Sync {
+    /// Return a future that resolves once the sink can accept another
+    /// event. Bounded transports override this to apply backpressure
+    /// without blocking a tokio worker thread.
+    fn wait_ready(&self) -> Option<SinkReady<'_>> {
+        None
+    }
+
     fn on_event(&self, event: &StreamEvent);
 }
 
@@ -64,6 +74,11 @@ pub async fn accumulate_stream(
 
     while let Some(item) = stream.next().await {
         let event = item?;
+        if let Some(ready) = sink.wait_ready() {
+            if !ready.await {
+                return Err(LlmError::Stream("stream sink closed".into()));
+            }
+        }
         sink.on_event(&event);
         if accumulator.feed(event) {
             // `feed` returns true on terminal events. Stop draining.

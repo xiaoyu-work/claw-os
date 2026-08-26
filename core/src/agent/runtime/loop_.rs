@@ -620,7 +620,7 @@ async fn ask_inner(
             .unwrap_or(0);
         let retry_policy = retry_policy_from_cfg(cfg);
         let outcome_result = if force_finalize {
-            super::turn::run_final_turn(
+            super::turn::run_final_turn_interruptible(
                 provider.clone(),
                 &cfg.model,
                 turn_system,
@@ -633,10 +633,11 @@ async fn ask_inner(
                 retry_policy,
                 Some(&hook_ctx),
                 progress::null_progress(),
+                &interrupt_handle,
             )
             .await
         } else {
-            super::turn::run_turn(
+            super::turn::run_turn_interruptible(
                 provider.clone(),
                 &cfg.model,
                 turn_system,
@@ -649,6 +650,7 @@ async fn ask_inner(
                 retry_policy,
                 Some(&hook_ctx),
                 progress::null_progress(),
+                &interrupt_handle,
             )
             .await
         };
@@ -711,6 +713,9 @@ async fn ask_inner(
                 post_hook_ctx.provider = provider.effective_provider_name();
                 post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
+                if matches!(&e, AgentError::Interrupted(_)) {
+                    return Err(e);
+                }
                 if force_finalize {
                     tracing::warn!("turn-limit finalization failed; using fallback: {e}");
                     super::turn::TurnOutcome::Final(append_turn_limit_fallback(&mut messages))
@@ -719,6 +724,11 @@ async fn ask_inner(
                 }
             }
         };
+        if interrupt_handle.check() {
+            return Err(AgentError::Interrupted(
+                interrupt_handle.session_id().to_string(),
+            ));
+        }
         let outcome = match outcome {
             super::turn::TurnOutcome::Final(answer)
                 if force_finalize && answer.trim().is_empty() =>
@@ -971,7 +981,7 @@ async fn ask_inner_streaming(
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
         let outcome_result = if force_finalize {
-            super::turn::run_final_turn_streaming(
+            super::turn::run_final_turn_streaming_interruptible(
                 provider.clone(),
                 &cfg.model,
                 turn_system,
@@ -984,10 +994,11 @@ async fn ask_inner_streaming(
                 sink.clone(),
                 Some(&hook_ctx),
                 progress.clone(),
+                &interrupt_handle,
             )
             .await
         } else {
-            super::turn::run_turn_streaming(
+            super::turn::run_turn_streaming_interruptible(
                 provider.clone(),
                 &cfg.model,
                 turn_system,
@@ -1000,6 +1011,7 @@ async fn ask_inner_streaming(
                 sink.clone(),
                 Some(&hook_ctx),
                 progress.clone(),
+                &interrupt_handle,
             )
             .await
         };
@@ -1062,6 +1074,9 @@ async fn ask_inner_streaming(
                 post_hook_ctx.provider = provider.effective_provider_name();
                 post_hook_ctx.model = provider.effective_model_name(&cfg.model);
                 let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
+                if matches!(&e, AgentError::Interrupted(_)) {
+                    return Err(e);
+                }
                 if force_finalize {
                     tracing::warn!("turn-limit finalization failed; using fallback: {e}");
                     let answer = append_turn_limit_fallback(&mut messages);
@@ -1074,6 +1089,11 @@ async fn ask_inner_streaming(
                 }
             }
         };
+        if interrupt_handle.check() {
+            return Err(AgentError::Interrupted(
+                interrupt_handle.session_id().to_string(),
+            ));
+        }
         let outcome = match outcome {
             super::turn::TurnOutcome::Final(answer)
                 if force_finalize && answer.trim().is_empty() =>

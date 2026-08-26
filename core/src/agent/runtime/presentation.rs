@@ -10,11 +10,11 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
-use crate::agent::llm::accumulate::StreamSink;
+use crate::agent::llm::accumulate::{SinkReady, StreamSink};
 use crate::agent::llm::{ContentBlock, StreamEvent};
 
 use super::evidence;
-use super::progress::ProgressSink;
+use super::progress::{ProgressReady, ProgressSink};
 
 const EVIDENCE_PREFIX: &str = "[evidence:";
 
@@ -35,6 +35,10 @@ struct UserVisibleStreamSink {
 }
 
 impl StreamSink for UserVisibleStreamSink {
+    fn wait_ready(&self) -> Option<SinkReady<'_>> {
+        self.inner.wait_ready()
+    }
+
     fn on_event(&self, event: &StreamEvent) {
         match event {
             StreamEvent::TextDelta { text } => {
@@ -94,6 +98,10 @@ struct UserVisibleProgressSink {
 }
 
 impl ProgressSink for UserVisibleProgressSink {
+    fn wait_ready(&self) -> Option<ProgressReady<'_>> {
+        self.inner.wait_ready()
+    }
+
     fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
         self.inner.on_tool_start(id, name, &Value::Null);
     }

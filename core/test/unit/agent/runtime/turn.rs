@@ -498,8 +498,16 @@ async fn progress_sink_fires_for_every_dispatch_in_order() {
     let tool_calls = calls(&[("id-1", "w1"), ("id-2", "w1")]);
     let p = Arc::new(RecordingProgress::default());
     let (blocks, stop) =
-        dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
-            .await;
+        dispatch_calls(
+            &registry,
+            None,
+            &tool_calls,
+            None,
+            p.as_ref() as &dyn progress::ProgressSink,
+            None,
+        )
+        .await
+        .unwrap();
     assert!(stop.is_none());
     assert_eq!(blocks.len(), 2);
     let starts = p.starts.lock().unwrap();
@@ -532,8 +540,16 @@ async fn parallel_safe_tools_dispatch_concurrently() {
     let p = progress::null_progress();
     let started = std::time::Instant::now();
     let (blocks, _) =
-        dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
-            .await;
+        dispatch_calls(
+            &registry,
+            None,
+            &tool_calls,
+            None,
+            p.as_ref() as &dyn progress::ProgressSink,
+            None,
+        )
+        .await
+        .unwrap();
     let elapsed = started.elapsed();
     assert_eq!(blocks.len(), 3);
     // Sequential dispatch would take ~300ms. Concurrent
@@ -561,8 +577,16 @@ async fn serial_tools_remain_sequential() {
     let p = progress::null_progress();
     let started = std::time::Instant::now();
     let _ =
-        dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
-            .await;
+        dispatch_calls(
+            &registry,
+            None,
+            &tool_calls,
+            None,
+            p.as_ref() as &dyn progress::ProgressSink,
+            None,
+        )
+        .await
+        .unwrap();
     let elapsed = started.elapsed();
     assert!(
         elapsed >= std::time::Duration::from_millis(220),
@@ -595,8 +619,16 @@ async fn mixed_batch_preserves_declaration_order() {
     let tool_calls = calls(&[("id-w1", "w1"), ("id-r1", "r1"), ("id-w2", "w2")]);
     let p = progress::null_progress();
     let (blocks, _) =
-        dispatch_calls(&registry, None, &tool_calls, None, p.as_ref() as &dyn progress::ProgressSink)
-            .await;
+        dispatch_calls(
+            &registry,
+            None,
+            &tool_calls,
+            None,
+            p.as_ref() as &dyn progress::ProgressSink,
+            None,
+        )
+        .await
+        .unwrap();
     let ids: Vec<&str> = blocks
         .iter()
         .map(|b| match b {

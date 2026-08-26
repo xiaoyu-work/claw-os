@@ -51,6 +51,9 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+pub type ProgressReady<'a> =
+    std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send + 'a>>;
+
 /// Sink for tool-execution progress events emitted by the
 /// agent-runtime turn loop. Implementations must be `Send + Sync`
 /// because the dispatch loop runs inside a tokio task; they should
@@ -58,11 +61,17 @@ use tokio::sync::oneshot;
 /// dispatch begins, so a slow sink back-pressures the turn).
 ///
 /// Both methods default to no-ops so implementors can opt into only
-/// the events they care about. The runtime calls them in pairs:
-/// every `on_tool_start(id, …)` is followed by exactly one
-/// `on_tool_result(id, …)` with the same id (modulo a panic in
-/// `dispatch_tool`, which is fatal anyway).
+/// the events they care about. Completed dispatches call them in
+/// pairs; runtime cancellation may stop a tool after `on_tool_start`
+/// without emitting `on_tool_result`.
 pub trait ProgressSink: Send + Sync {
+    /// Wait until the sink can accept another progress event. Bounded
+    /// network sinks override this so a slow consumer back-pressures
+    /// tool dispatch instead of growing an unbounded queue.
+    fn wait_ready(&self) -> Option<ProgressReady<'_>> {
+        None
+    }
+
     /// Tool dispatch is about to begin. Useful for showing a spinner
     /// or "running…" indicator. The `input` is the parsed JSON the
     /// LLM produced; sinks should treat it as opaque.
