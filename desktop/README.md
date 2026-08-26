@@ -74,6 +74,20 @@ sudo just install rootdir="" prefix=/usr
 
 Dependencies (apt names) are declared in `rootfs/features/desktop/packages.txt`.
 
+## Testing
+
+Private-access Rust unit-test bodies live under each crate's `test/unit/`
+directory, mirroring its `src/` path. Production source files contain only a
+small `cfg(test)` include declaration. Existing Cargo integration tests remain
+under crate-level `tests/` directories.
+
+Run tests from the owning component or workspace manifest rather than assuming
+the repository root workspace contains desktop crates:
+
+```bash
+cargo test --manifest-path desktop/<component>/Cargo.toml -- --test-threads=1
+```
+
 ## Modifying
 
 This is **your codebase** — there is no upstream sync. Refactor, rename,

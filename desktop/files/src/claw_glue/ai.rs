@@ -186,56 +186,8 @@ fn parse_search_hits(value: &Value) -> Result<Vec<SearchHit>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn parse_search_hits_handles_well_formed_payload() {
-        let payload = json!({
-            "results": [
-                {
-                    "path": "/home/u/Documents/q3.pdf",
-                    "mime": "application/pdf",
-                    "mtime": "1700000000",
-                    "snippet": "Quarterly revenue summary…"
-                },
-                {
-                    "path": "/home/u/Documents/q3-notes.md",
-                    "mime": "text/markdown",
-                    "mtime": "1700100000",
-                    "snippet": ""
-                }
-            ]
-        });
-        let hits = parse_search_hits(&payload).expect("parse");
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].path, PathBuf::from("/home/u/Documents/q3.pdf"));
-        assert_eq!(hits[0].mime, "application/pdf");
-        assert_eq!(hits[0].mtime, "1700000000");
-        assert!(hits[0].snippet.starts_with("Quarterly"));
-        assert_eq!(hits[1].snippet, "");
-    }
-
-    #[test]
-    fn parse_search_hits_tolerates_partial_fields() {
-        let payload = json!({ "results": [ { "path": "/x" } ] });
-        let hits = parse_search_hits(&payload).expect("parse");
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].mime, "");
-        assert_eq!(hits[0].mtime, "");
-    }
-
-    #[test]
-    fn parse_search_hits_rejects_missing_results_key() {
-        let payload = json!({ "hits": [] });
-        let err = parse_search_hits(&payload).expect_err("missing key must error");
-        assert!(err.contains("'results'"));
-    }
-
-    #[test]
-    fn extract_string_field_returns_explicit_field_error() {
-        let payload = json!({ "explanation": "ok" });
-        let got = extract_string_field(&payload, "summary").expect_err("missing field");
-        assert!(got.contains("'summary'"));
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/claw_glue/ai.rs"
+    ));
 }

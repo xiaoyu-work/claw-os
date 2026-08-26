@@ -316,8 +316,8 @@ fn container_style(theme: &crate::Theme) -> iced_widget::container::Style {
 
 #[cfg(test)]
 mod tests {
-    #[test]
-    fn decrement() {
-        assert_eq!(super::decrement(0i32, 10, 15, 35), 15);
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/widget/spin_button.rs"
+    ));
 }

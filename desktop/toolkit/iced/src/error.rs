@@ -44,11 +44,8 @@ impl From<shell::Error> for Error {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn assert_send_sync() {
-        fn _assert<T: Send + Sync>() {}
-        _assert::<Error>();
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/error.rs"
+    ));
 }

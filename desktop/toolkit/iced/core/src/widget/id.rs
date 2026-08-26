@@ -43,13 +43,8 @@ enum Internal {
 
 #[cfg(test)]
 mod tests {
-    use super::Id;
-
-    #[test]
-    fn unique_generates_different_ids() {
-        let a = Id::unique();
-        let b = Id::unique();
-
-        assert_ne!(a, b);
-    }
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/widget/id.rs"
+    ));
 }
