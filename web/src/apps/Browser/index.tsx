@@ -7,10 +7,10 @@ import {
   LockKeyhole,
   MoreVertical,
   RotateCw,
-  Sparkles,
   Star,
   X,
 } from 'lucide-react';
+import ClawOsAiIcon from '@/components/ClawOsAiIcon';
 import { publicAsset } from '@/lib/publicAsset';
 import BrowserAiPanel from './BrowserAiPanel';
 
@@ -172,7 +172,7 @@ export default function Browser() {
           onClick={() => setAiOpen((value) => !value)}
           className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-[#005CFE] hover:bg-[var(--bg-hover)]"
         >
-          <Sparkles size={17} />
+          <ClawOsAiIcon size={19} />
         </button>
 
         <button

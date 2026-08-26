@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
-import { Check, RefreshCw, Search, ShieldCheck, Sparkles } from 'lucide-react';
+import { Check, RefreshCw, Search, ShieldCheck } from 'lucide-react';
 import AppIcon from '@/components/AppIcon';
+import ClawOsAiIcon from '@/components/ClawOsAiIcon';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import StoreAiPanel from './StoreAiPanel';
@@ -55,7 +56,7 @@ export default function AppStore() {
           aria-label="Toggle App Finder"
           aria-expanded={aiOpen}
         >
-          <Sparkles size={15} />
+          <ClawOsAiIcon size={17} />
           Ask AI
         </button>
         <div className="relative ml-auto min-w-52 flex-1 sm:max-w-xs">

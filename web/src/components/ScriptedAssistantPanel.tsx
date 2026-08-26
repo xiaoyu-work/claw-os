@@ -1,4 +1,4 @@
-import { Send, Sparkles, X, type LucideIcon } from 'lucide-react';
+import { Send, X, type LucideIcon } from 'lucide-react';
 import {
   useEffect,
   useRef,
@@ -6,6 +6,7 @@ import {
   type FormEvent,
   type ReactNode,
 } from 'react';
+import ClawOsAiIcon from '@/components/ClawOsAiIcon';
 
 export interface ScriptedAssistantAction {
   id: string;
@@ -112,9 +113,7 @@ export default function ScriptedAssistantPanel<Result>({
       }}
     >
       <header className="flex shrink-0 items-center gap-3 border-b px-3 py-3" style={{ borderColor: 'rgba(0,0,0,0.08)' }}>
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-[#005CFE] text-white shadow-lg shadow-[#005CFE]/20">
-          <Sparkles size={18} />
-        </div>
+        <ClawOsAiIcon size={36} className="rounded-xl shadow-lg shadow-[#005CFE]/20" />
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-[var(--text-primary)]">{title}</h2>
           <p className="truncate text-[10px] text-[var(--text-muted)]">{subtitle}</p>
