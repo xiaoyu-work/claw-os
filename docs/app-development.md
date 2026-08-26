@@ -12,23 +12,29 @@ of agent-callable tools). This document is the **how to** counterpart.
 
 ## 1. What is a Claw OS app?
 
-A Claw OS app is a directory containing two files:
+A Claw OS app is a directory whose minimum contents are a manifest and an
+entry point. Apps may also include a stateful session server, desktop surface,
+dependencies, tests, and arbitrary assets:
 
 ```
 my-app/
-├── app.json        ← manifest (id, ops, capability needs, AI policy)
-└── main.py         ← Python entry point
+├── app.json        ← required manifest
+├── main.py         ← default Python entry point
+├── server.py       ← optional stateful session-tool server
+└── assets/         ← optional app-owned files
 ```
 
-The `cos` kernel CLI discovers every subdirectory of
-`$COS_APPS_DIR` (default `/usr/lib/cos/apps/`) that has a valid
-`app.json`, then exposes each op as `cos app <id> <op>`
-([`core/src/apps.rs:29`](../core/src/apps.rs),
-[`core/src/router.rs:25`](../core/src/router.rs)).
+The manifest's `runtime` selects how the entry point is launched. Current
+values are `python`, `node`, `shell`, and `binary`; the default is `python`.
 
-Hard rule: **the directory name must equal `manifest.id`**
-([`apps.rs:61`](../core/src/apps.rs)). An app whose folder name and id
-disagree is silently skipped during discovery.
+The `cos` CLI recursively scans `$COS_APPS_DIR` (default
+`/usr/lib/cos/apps/`) for valid `app.json` files, then exposes each operation
+as `cos app <id> <op>` ([`core/src/apps.rs`](../core/src/apps.rs)).
+
+The manifest id must equal the app directory's **normalized path relative to
+`$COS_APPS_DIR`**, with path segments joined by `-`. For example,
+`gateway/discord/app.json` declares `id: "gateway-discord"`. An app whose
+path and id disagree is skipped during discovery.
 
 The id itself has to match `[a-z][a-z0-9_-]*`
 ([`manifest.rs:935`](../core/src/caps/manifest.rs)) — start with a
@@ -95,8 +101,7 @@ def run(command, args):
 The bridge calls `mod.run(command, args)` exactly once per invocation
 ([`bridge.rs:64`](../core/src/bridge.rs)). Two crucial details:
 
-* `command` is a **string** — the op name (`"say"` here, or the special
-  `"__schema__"` covered in §6).
+* `command` is a **string** — the operation name, such as `"say"`.
 * `args` is a **list of strings**, not a dict — every CLI token after
   the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`).
   Apps parse their own flags; see
@@ -108,12 +113,12 @@ Return `None` to print nothing.
 
 ## 4. The dev loop — no rebuild, no restart
 
-Every `cos app <id> <op>` call spawns a fresh `python3` subprocess and
-does `importlib.spec_from_file_location(...).loader.exec_module(...)`
-([`bridge.rs:61-63`](../core/src/bridge.rs)), so there is no caching
-and no daemon to restart. **Save the file, re-run the command, see
-the change.** This is true on-system too — `/usr/lib/cos/apps/<id>/main.py`
-edits are picked up immediately.
+Every one-shot `cos app <id> <op>` invocation launches the app entry point
+through the runtime selected by its manifest. Python apps run in a fresh
+subprocess and are imported from disk for every call, so there is no module
+cache or daemon to restart. **Save the file, re-run the command, see the
+change.** This is true on-system too — edits under
+`/usr/lib/cos/apps/<id>/` are picked up immediately.
 
 The simplest workflow is to point the kernel at a directory you own:
 
@@ -168,6 +173,11 @@ Declare it in `operations.<op>.needs[]`:
   reads the named op argument and constructs the scope from it. Only
   works for args of `kind` `path` / `host` / `name`; text args must
   use `"wild"` and the handler narrows the scope at runtime.
+* `"from-arg-map"` — map explicit argument values to predefined scopes:
+  `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
+* `"from-arg-or-wild"` — derive a scope from an argument normally, but use a
+  wildcard when it equals `wild_when`:
+  `{"kind": "from-arg-or-wild", "arg": "target", "wild_when": "all"}`.
 
 Check it at runtime by importing the internal runtime:
 
@@ -192,37 +202,31 @@ Pass exactly one scope keyword (or `wild=True` for unscoped verbs).
 Use `policy.check(...)` (same signature, returns the raw decision
 envelope) when you want to surface "would-be-denied" without aborting.
 
-## 6. Optional `__schema__` for richer help
+## 6. Manifest-derived schema and help
 
-`cos app <id> --schema` and `cos app <id> <op> --schema` print the
-manifest-derived schema by default, but they also call your app with
-`command="__schema__"` and merge any returned `parameters` /
-`example` fields into the output
-([`router.rs:1679-1716`](../core/src/router.rs)).
+`cos app <id> --schema` and `cos app <id> <op> --schema` generate their
+output **only from `app.json`**. Schema inspection never imports or executes
+the app entry point, so listing an untrusted app remains side-effect free.
 
-Return a dict keyed by op name:
+Describe every operation in the manifest:
 
-```python
-def _schema():
-    return {
-        "say": {
-            "description": "Say something",
-            "parameters": [
-                {"name": "message", "type": "string", "required": True,
-                 "kind": "positional", "description": "Text to say"},
-            ],
-            "example": "cos app hello say 'hi there'",
-        },
+```jsonc
+"say": {
+  "label": { "en": "Say something" },
+  "summary": { "en": "Return the supplied message." },
+  "args": [
+    {
+      "name": "message",
+      "kind": "text",
+      "required": true,
+      "label": { "en": "Message to return." }
     }
-
-def run(command, args):
-    if command == "__schema__":
-        return _schema()
-    ...
+  ]
+}
 ```
 
-See [`apps/notify/main.py:114-131`](../apps/notify/main.py) for the
-canonical pattern.
+Keep the manifest schema aligned with the entry point's argument parser. There
+is no `__schema__` callback or runtime merge step.
 
 ## 7. AI features
 
@@ -250,8 +254,10 @@ Three things this triggers:
    ([`manifest.rs:142-193`](../core/src/caps/manifest.rs)).
 2. Each op that calls AI must include the matching `ai.*` verb in
    `needs[]`.
-3. The user must grant consent **once per app** before any call is
-   allowed: `cos app consent grant <id>`.
+3. The user must grant consent for the app's current AI-policy snapshot before
+   any call is allowed: `cos app consent grant <id>`. Changing the app's
+   budget, safety profile, origins, or tool allowlist makes the saved consent
+   stale and requires a new grant.
 
 For the full AI integration model — `origin`, safety profiles, tool
 catalog, budget envelope, audit surface — read
@@ -268,11 +274,11 @@ and ship an app
 | `cos app` | List every discovered app under `$COS_APPS_DIR`. |
 | `cos app <id>` | Show ops + version for one app. |
 | `cos app <id> <op> [args…]` | Run an op. |
-| `cos app <id> --schema` | Full schema for the app (merges `__schema__` output). |
+| `cos app <id> --schema` | Full manifest-derived schema for the app. |
 | `cos app <id> <op> --schema` | Schema for one op. |
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
 | `cos app tool list [<id>]` | Show the session-tool surface this app exposes to the agent. |
-| `cos app install <dir> [--force] [--no-consent] [--yes]` | Validate the manifest, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. No-op `copied:false, in_place:true` if the source is already inside `$COS_APPS_DIR`. |
+| `cos app install <dir> [--force] [--no-consent] [--yes]` | Validate the manifest, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
 | `cos app consent grant <id> [--yes]` | Grant AI consent. |
@@ -289,9 +295,10 @@ Set explicitly only when overriding defaults
 | Variable | Purpose | Default |
 |---|---|---|
 | `COS_APPS_DIR` | Apps root the kernel scans. | `/usr/lib/cos/apps` |
-| `COS_DATA_DIR` | Where Python apps may persist data. | `/var/lib/cos` |
+| `COS_DATA_DIR` | Where the current process persists Claw OS data. | `$XDG_DATA_HOME/cos`, normally `~/.local/share/cos`; clawd overrides this to `/var/lib/cos` |
+| `COS_APPLICATIONS_DIR` | Where `cos app install` writes generated desktop launchers. | `/usr/share/applications` |
 | `COS_SDK_PYTHON_DIR` | Force the SDK lookup to a specific dir. Must contain both `claw_os_sdk/` and `cos_runtime/` as subdirs. | unset → kernel probes `/usr/lib/cos/python` + sibling dev paths |
-| `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** to the app's directory name; do not override. | (auto) |
+| `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** from `app.json`; do not override. | (auto) |
 | `COS_BIN` | Path to the `cos` binary the SDK shells back to. | `cos` (from `$PATH`) |
 | `COS_SESSION` | Session id for grouped multi-call audit. | unset |
 
