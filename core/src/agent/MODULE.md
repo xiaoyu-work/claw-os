@@ -26,6 +26,7 @@ surfaces.
 | `setup/tests.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
+| `service.rs`, `service/tests.rs` | Agent daemon/task service lifecycle and tests |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
