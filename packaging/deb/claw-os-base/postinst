@@ -3,29 +3,31 @@
 
 set -e
 
+enable_if_previously_enabled() {
+    unit="$1"
+    deb-systemd-helper unmask "$unit" >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled "$unit"; then
+        deb-systemd-helper enable "$unit" >/dev/null || true
+    else
+        deb-systemd-helper update-state "$unit" >/dev/null || true
+    fi
+}
+
 case "$1" in
     configure)
         if [ -x /usr/bin/deb-systemd-helper ]; then
-            deb-systemd-helper unmask cos-home-setup.service >/dev/null || true
-            deb-systemd-helper --quiet was-enabled cos-home-setup.service \
-                || deb-systemd-helper enable cos-home-setup.service >/dev/null || true
+            enable_if_previously_enabled cos-home-setup.service
 
             # These policies belong to the Claw OS distribution, not to a
             # reusable agent installed on an existing Debian/Ubuntu host.
             if [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
-                deb-systemd-helper unmask systemd-timesyncd.service >/dev/null || true
-                deb-systemd-helper --quiet was-enabled systemd-timesyncd.service \
-                    || deb-systemd-helper enable systemd-timesyncd.service >/dev/null || true
+                enable_if_previously_enabled systemd-timesyncd.service
             fi
             if [ -f /lib/systemd/system/ydotoold.service ]; then
-                deb-systemd-helper unmask ydotoold.service >/dev/null || true
-                deb-systemd-helper --quiet was-enabled ydotoold.service \
-                    || deb-systemd-helper enable ydotoold.service >/dev/null || true
+                enable_if_previously_enabled ydotoold.service
             fi
             if [ -f /lib/systemd/system/fwupd-refresh.timer ]; then
-                deb-systemd-helper unmask fwupd-refresh.timer >/dev/null || true
-                deb-systemd-helper --quiet was-enabled fwupd-refresh.timer \
-                    || deb-systemd-helper enable fwupd-refresh.timer >/dev/null || true
+                enable_if_previously_enabled fwupd-refresh.timer
             fi
         fi
 

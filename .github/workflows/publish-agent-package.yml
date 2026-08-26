@@ -86,8 +86,13 @@ jobs:
             fi
             sleep 1
           done
-          sudo systemctl is-active --quiet clawd.service
-          sudo test -S /run/cos/clawd.sock
+          if ! sudo systemctl is-enabled --quiet clawd.service \
+              || ! sudo systemctl is-active --quiet clawd.service \
+              || ! sudo test -S /run/cos/clawd.sock; then
+            sudo systemctl status clawd.service --no-pager || true
+            sudo journalctl -u clawd.service --no-pager -n 100 || true
+            exit 1
+          fi
           /usr/local/bin/cos-browser --help >/dev/null
           sudo python3 - <<'PY'
           import json

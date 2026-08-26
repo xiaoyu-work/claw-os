@@ -3,6 +3,16 @@
 
 set -e
 
+enable_if_previously_enabled() {
+    unit="$1"
+    deb-systemd-helper unmask "$unit" >/dev/null || true
+    if deb-systemd-helper --quiet was-enabled "$unit"; then
+        deb-systemd-helper enable "$unit" >/dev/null || true
+    else
+        deb-systemd-helper update-state "$unit" >/dev/null || true
+    fi
+}
+
 case "$1" in
     configure)
         install -d -m 0700 /var/lib/cos /var/log/cos
@@ -13,12 +23,10 @@ case "$1" in
             echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' \
                 >> /etc/bash.bashrc
         fi
-
         if [ -x /usr/bin/deb-systemd-helper ]; then
-            deb-systemd-helper unmask clawd.service >/dev/null || true
-            deb-systemd-helper --quiet was-enabled clawd.service \
-                || deb-systemd-helper enable clawd.service >/dev/null || true
+            enable_if_previously_enabled clawd.service
             deb-systemd-helper unmask cos-browser.service >/dev/null || true
+            deb-systemd-helper update-state cos-browser.service >/dev/null || true
         fi
 
         mkdir -p /etc/systemd/user/default.target.wants
