@@ -37,6 +37,41 @@ fn recent_respects_limit_and_returns_latest() {
 }
 
 #[test]
+fn recent_replayable_excludes_injected_before_limit_but_recent_retains_them() {
+    let db = db();
+    db.record_message("s1", "user", "old question").unwrap();
+    db.record_message("s1", "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    db.record_injected("s1", "memory_notes", "stale memory")
+        .unwrap();
+    db.record_injected("s1", "skills_catalog", "stale skills")
+        .unwrap();
+    db.record_injected("s1", "due_nudges", "stale nudge")
+        .unwrap();
+    db.record_message("s1", "user", "[tool_result] fresh result")
+        .unwrap();
+    db.record_message("s1", "assistant", "final answer")
+        .unwrap();
+
+    let replayable = db.recent_replayable("s1", 3).unwrap();
+    assert_eq!(replayable.len(), 3);
+    assert_eq!(replayable[0].content, "[tool_use:lookup] {}");
+    assert_eq!(replayable[1].content, "[tool_result] fresh result");
+    assert_eq!(replayable[2].content, "final answer");
+    assert!(replayable.iter().all(|row| row.role != INJECTED_ROLE));
+
+    let audit_rows = db.recent("s1", 10).unwrap();
+    let injected: Vec<_> = audit_rows
+        .iter()
+        .filter(|row| row.role == INJECTED_ROLE)
+        .collect();
+    assert_eq!(injected.len(), 3);
+    assert_eq!(injected[0].content, "[memory_notes]\nstale memory");
+    assert_eq!(injected[1].content, "[skills_catalog]\nstale skills");
+    assert_eq!(injected[2].content, "[due_nudges]\nstale nudge");
+}
+
+#[test]
 fn recent_isolates_by_session() {
     let db = db();
     db.record_message("a", "user", "alpha").unwrap();

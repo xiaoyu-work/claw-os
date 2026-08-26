@@ -253,9 +253,10 @@ pub async fn ask_with_stream_scoped(
 /// in particular — do not reject the request when ids no longer line
 /// up across a process boundary.
 ///
-/// `history_limit` caps the number of prior memory rows replayed (0
-/// means "load up to a sane default"). Practical chat UIs should keep
-/// this small enough to stay within the model's context window.
+/// `history_limit` caps the number of prior conversation rows replayed
+/// (0 means "load up to a sane default"). Audit-only injected prompt
+/// rows do not consume this budget. Practical chat UIs should keep the
+/// limit small enough to stay within the model's context window.
 pub async fn ask_with_stream_continuation(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
@@ -324,7 +325,7 @@ fn load_continuation_messages(
     } else {
         history_limit
     };
-    match db.recent(session_id, limit) {
+    match db.recent_replayable(session_id, limit) {
         Ok(rows) => rows_to_messages(&rows),
         Err(e) => {
             tracing::warn!(
@@ -346,6 +347,11 @@ fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
     use crate::agent::llm::{ContentBlock, Role};
     let mut out = Vec::with_capacity(rows.len());
     for row in rows {
+        // Keep this guard even though continuation loading filters in SQL:
+        // injected rows are audit evidence, never conversation content.
+        if row.role == sqlite_fts::INJECTED_ROLE {
+            continue;
+        }
         let role = match row.role.as_str() {
             "assistant" => Role::Assistant,
             "system" => Role::System,

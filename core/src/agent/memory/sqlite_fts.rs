@@ -21,6 +21,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 
+pub(crate) const INJECTED_ROLE: &str = "injected";
+
 #[derive(Debug, thiserror::Error)]
 pub enum MemoryError {
     #[error("sqlite: {0}")]
@@ -263,7 +265,7 @@ impl MemoryDb {
         content: &str,
     ) -> Result<i64, MemoryError> {
         let body = format!("[{source}]\n{content}");
-        self.record_message_at(session_id, "injected", &body, current_ts_ms())
+        self.record_message_at(session_id, INJECTED_ROLE, &body, current_ts_ms())
     }
 
     /// Most recent `limit` messages for `session_id`, oldest first.
@@ -284,6 +286,37 @@ impl MemoryDb {
         )?;
         let rows = stmt
             .query_map(params![session_id, limit as i64], row_to_message)?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    /// Most recent `limit` conversation rows for `session_id`, oldest first.
+    ///
+    /// Audit-only injected prompt rows are filtered before the limit is
+    /// applied, so they neither reach continuation requests nor displace
+    /// actual conversation history from the replay budget.
+    pub fn recent_replayable(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<MessageRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, session_id, role, content, ts_ms
+             FROM (
+                 SELECT id, session_id, role, content, ts_ms
+                 FROM messages
+                 WHERE session_id = ? AND role <> ?
+                 ORDER BY ts_ms DESC, id DESC
+                 LIMIT ?
+             )
+             ORDER BY ts_ms ASC, id ASC",
+        )?;
+        let rows = stmt
+            .query_map(
+                params![session_id, INJECTED_ROLE, limit as i64],
+                row_to_message,
+            )?
             .collect::<Result<Vec<_>, _>>()?;
         Ok(rows)
     }

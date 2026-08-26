@@ -110,8 +110,47 @@ fn rows_to_messages_skips_empty_payloads_and_maps_roles() {
     assert_eq!(final_text, "all done");
 }
 
+#[test]
+fn rows_to_messages_excludes_injected_prompt_audit_rows() {
+    let rows = vec![
+        row("user", "question"),
+        row("assistant", "[tool_use:lookup] {}"),
+        row(
+            "injected",
+            "[memory_notes]\nSTALE_MEMORY_NOTE_SHOULD_NOT_REPLAY",
+        ),
+        row(
+            "injected",
+            "[skills_catalog]\nSTALE_SKILL_CATALOG_SHOULD_NOT_REPLAY",
+        ),
+        row("injected", "[due_nudges]\nSTALE_NUDGE_SHOULD_NOT_REPLAY"),
+        row("user", "[tool_result] fresh result"),
+    ];
+
+    let messages = rows_to_messages(&rows);
+    let texts: Vec<&str> = messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        texts,
+        vec!["question", "[tool: lookup]", "[tool result]\nfresh result"]
+    );
+    assert!(matches!(messages[0].role, crate::agent::llm::Role::User));
+    assert!(matches!(
+        messages[1].role,
+        crate::agent::llm::Role::Assistant
+    ));
+    assert!(matches!(messages[2].role, crate::agent::llm::Role::User));
+}
+
 #[tokio::test]
-async fn streaming_continuation_replays_short_follow_up_context() {
+async fn streaming_continuation_excludes_injected_memory_notes_and_replays_context() {
     use crate::agent::memory::sqlite_fts::MemoryDb;
 
     let db = MemoryDb::open_in_memory().unwrap();
@@ -121,6 +160,12 @@ async fn streaming_continuation_replays_short_follow_up_context() {
         sid,
         "assistant",
         "你是想测：1. 宽带实际下载/上传速度 2. 当前实时网速占用",
+    )
+    .unwrap();
+    db.record_injected(
+        sid,
+        crate::agent::prompt::INJECTED_SOURCE_MEMORY_NOTES,
+        "STALE_MEMORY_NOTE_SHOULD_NOT_REPLAY",
     )
     .unwrap();
 
@@ -134,7 +179,7 @@ async fn streaming_continuation_replays_short_follow_up_context() {
     let sink = crate::agent::llm::accumulate::null_sink();
     let progress = progress::null_progress();
 
-    ask_with_stream_continuation(provider, &cfg, "1", &tools, &db, sid, 50, sink, progress)
+    ask_with_stream_continuation(provider, &cfg, "1", &tools, &db, sid, 2, sink, progress)
         .await
         .unwrap();
 
@@ -169,10 +214,16 @@ async fn streaming_continuation_replays_short_follow_up_context() {
         texts.iter().any(|t| t == "1"),
         "new user prompt missing from replay: {texts:?}"
     );
+    assert!(
+        texts
+            .iter()
+            .all(|t| !t.contains("STALE_MEMORY_NOTE_SHOULD_NOT_REPLAY")),
+        "injected memory note was replayed: {texts:?}"
+    );
 }
 
 #[tokio::test]
-async fn non_streaming_continuation_replays_short_follow_up_context() {
+async fn non_streaming_continuation_excludes_injected_skills_and_replays_context() {
     use crate::agent::memory::sqlite_fts::MemoryDb;
 
     let db = MemoryDb::open_in_memory().unwrap();
@@ -184,6 +235,12 @@ async fn non_streaming_continuation_replays_short_follow_up_context() {
         "你是想测：1. 宽带实际下载/上传速度 2. 当前实时网速占用",
     )
     .unwrap();
+    db.record_injected(
+        sid,
+        crate::agent::prompt::INJECTED_SOURCE_SKILLS_CATALOG,
+        "STALE_SKILL_CATALOG_SHOULD_NOT_REPLAY",
+    )
+    .unwrap();
 
     let cfg = cfg();
     let mock = MockProvider::new(&cfg.model, &cfg);
@@ -192,7 +249,7 @@ async fn non_streaming_continuation_replays_short_follow_up_context() {
     let provider: Arc<dyn Provider> = mock.clone();
     let tools = builtin_only_registry();
 
-    ask_with_memory_continuation(provider, &cfg, "1", &tools, &db, sid, 50)
+    ask_with_memory_continuation(provider, &cfg, "1", &tools, &db, sid, 2)
         .await
         .unwrap();
 
@@ -220,14 +277,26 @@ async fn non_streaming_continuation_replays_short_follow_up_context() {
         texts.iter().any(|t| t == "1"),
         "new user prompt missing from replay: {texts:?}"
     );
+    assert!(
+        texts
+            .iter()
+            .all(|t| !t.contains("STALE_SKILL_CATALOG_SHOULD_NOT_REPLAY")),
+        "injected skill catalog was replayed: {texts:?}"
+    );
 }
 
 #[tokio::test]
-async fn transient_context_reaches_model_but_not_memory() {
+async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_context_transient() {
     use crate::agent::memory::sqlite_fts::MemoryDb;
 
     let db = MemoryDb::open_in_memory().unwrap();
     let sid = "transient-context-test";
+    db.record_injected(
+        sid,
+        crate::agent::prompt::INJECTED_SOURCE_DUE_NUDGES,
+        "STALE_NUDGE_SHOULD_NOT_REPLAY",
+    )
+    .unwrap();
     let cfg = cfg();
     let mock = MockProvider::new(&cfg.model, &cfg);
     mock.push_response(MockResponse::Text("ok".into()));
@@ -260,6 +329,14 @@ async fn transient_context_reaches_model_but_not_memory() {
         .system
         .as_deref()
         .is_some_and(|system| system.contains("<untrusted_app_context>")));
+    assert!(request
+        .messages
+        .iter()
+        .all(|message| message.content.iter().all(|block| !matches!(
+            block,
+            crate::agent::llm::ContentBlock::Text { text }
+                if text.contains("STALE_NUDGE_SHOULD_NOT_REPLAY")
+        ))));
     let rows = db.recent(sid, 20).unwrap();
     assert!(rows.iter().any(|row| row.content == "visible question"));
     assert!(rows
