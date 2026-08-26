@@ -1,6 +1,6 @@
-# Claw OS Target System Design
+# Claw OS System Design
 
-## Target Architecture
+## High-Level Architecture
 
 ```text
 +--------------------------------------------------------------------------------------------------+
