@@ -77,12 +77,6 @@ one integrated agent-native OS layer.
 
 ## Quick Start
 
-All artifacts share the same composed Debian rootfs; platform profiles only
-add their user, boot, and provisioning policy. See
-[Image architecture](docs/image-architecture.md).
-
-Pick an entry point:
-
 <details>
 <summary><strong>Ubuntu — install the Agent layer without replacing Ubuntu</strong></summary>
 
