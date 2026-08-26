@@ -92,7 +92,9 @@ done
 mkdir -p "$REPO_DIR/dists/$SUITE/$COMPONENT/binary-all"
 mkdir -p "$REPO_DIR/assets/brand"
 cp "$BRAND_ASSETS_DIR/clawos-wordmark.png" \
+   "$BRAND_ASSETS_DIR/clawos-symbol.png" \
    "$BRAND_ASSETS_DIR/clawos-favicon-64.png" \
+   "$BRAND_ASSETS_DIR/clawos-icon-192.png" \
    "$REPO_DIR/assets/brand/"
 if [ -f "$BRAND_ASSETS_DIR/og.png" ]; then
     cp "$BRAND_ASSETS_DIR/og.png" "$REPO_DIR/assets/brand/"

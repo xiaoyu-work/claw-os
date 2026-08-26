@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light">
 <meta name="theme-color" content="#ffffff">
-<title>Claw OS — The first agent native operating system</title>
-<meta name="description" content="Claw OS is a complete Linux distribution rebuilt for AI agents. Structured cos primitives, scoped approvals, a system-level broker, and local model runtime — instead of letting agents guess at the shell.">
+<title>Claw OS — The first agent-native operating system</title>
+<meta name="description" content="Claw OS is a complete Linux distribution built around one system agent and shared model runtime. The agent understands the machine, apps use system AI, and typed app APIs compose into workflows.">
 
 <link rel="icon" type="image/png" sizes="64x64" href="assets/brand/clawos-favicon-64.png">
 <link rel="apple-touch-icon" sizes="192x192" href="assets/brand/clawos-icon-192.png">
@@ -15,16 +15,16 @@
 <link rel="stylesheet" href="https://rsms.me/inter/inter.css">
 <link rel="stylesheet" href="style.css?v=@@GIT_SHA@@">
 
-<meta property="og:title" content="Claw OS — The first agent native operating system">
-<meta property="og:description" content="A complete Linux distribution rebuilt for AI agents: structured cos primitives, scoped approvals, a system-level broker, and local model runtime.">
+<meta property="og:title" content="Claw OS — The first agent-native operating system">
+<meta property="og:description" content="One built-in agent across the whole system, one AI runtime for every app, and typed app APIs for cross-app workflows.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://xiaoyu-work.github.io/claw-os/">
 <meta property="og:image" content="https://xiaoyu-work.github.io/claw-os/assets/brand/og.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Claw OS — The first agent native operating system">
-<meta name="twitter:description" content="A complete Linux distribution rebuilt for AI agents.">
+<meta name="twitter:title" content="Claw OS — The first agent-native operating system">
+<meta name="twitter:description" content="One built-in agent across the system and every app.">
 <meta name="twitter:image" content="https://xiaoyu-work.github.io/claw-os/assets/brand/og.png">
 </head>
 <body>
@@ -67,10 +67,10 @@
           <span>operating system.</span>
         </h1>
         <p class="lede">
-          Claw OS is a complete Linux distribution rebuilt around the agent.
-          Structured <code>cos</code> primitives, scoped approvals, a
-          system-level broker, and a local model runtime — so an agent can
-          drive your machine without guessing at the shell.
+          Claw OS is a complete Linux distribution built around one system
+          agent and one shared model runtime. The agent understands the machine
+          and operates its apps; apps use system AI and expose typed operations
+          back to the agent — all through scoped approvals and audit.
         </p>
         <div class="cta-row">
           <a class="btn btn-primary" href="#install">
@@ -147,24 +147,26 @@
   <section class="section section-idea" id="why">
     <div class="container">
       <div class="kicker mono"><span class="kicker-dot"></span>the big idea</div>
-      <h2 class="h2">A shell wrapper can guess. An OS can <span class="gradient">guarantee</span>.</h2>
+      <h2 class="h2">One agent. Every app. <span class="gradient">The whole system.</span></h2>
       <p class="section-lede">
-        Most "AI for Linux" projects bolt an LLM onto bash. Claw OS instead
-        gives the agent typed operating-system surfaces, so every action is
-        named, gated, audited, and undoable.
+        AI is not a feature trapped inside one app. In Claw OS it is a shared
+        operating-system layer that understands the machine, provides
+        intelligence to apps, and uses apps as tools. System-level access
+        remains named, capability-gated, approved, and audited.
       </p>
 
       <div class="compare">
         <div class="compare-col compare-bad">
           <div class="compare-head mono">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-            Bare Linux + a shell-wrapped LLM
+            AI added on top
           </div>
           <ul>
-            <li>Holds a wide <code>sudo</code> token; risky ops blend in with safe ones.</li>
-            <li>Every call is unaudited — no journal, no redaction, no replay.</li>
-            <li>Local model lifecycle, secrets, jobs each have ad-hoc tooling.</li>
-            <li>Agent-vs-user boundary is invisible to the OS.</li>
+            <li>Each assistant is isolated inside one app and sees one sandbox.</li>
+            <li>App permissions, activity, history, logs, and crashes stay fragmented.</li>
+            <li>Context disappears when the user moves from one app to another.</li>
+            <li>Every app embeds a model or rebuilds provider and credential plumbing.</li>
+            <li>Apps expose UI, not typed operations one agent can compose safely.</li>
           </ul>
         </div>
         <div class="compare-col compare-good">
@@ -173,10 +175,11 @@
             Claw OS
           </div>
           <ul>
-            <li>Every risky op is a typed capability and waits at an approval gate.</li>
-            <li>Every call lands in an append-only journal — replayable, redacted.</li>
-            <li>Models, engines, credentials, jobs are first-class kernel surfaces.</li>
-            <li>A boot-time <code>clawd</code> service owns the agent / user boundary.</li>
+            <li>One built-in agent spans processes, resources, services, and every app.</li>
+            <li>Scoped tools connect app access, history, logs, and crash evidence to system state.</li>
+            <li>Persistent, user-controlled memory carries context across the machine.</li>
+            <li>Every app calls the same local or cloud model layer through the SDK.</li>
+            <li>Apps publish typed APIs the agent can combine into cross-app workflows.</li>
           </ul>
         </div>
       </div>
@@ -197,7 +200,7 @@
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16M4 12h16M4 17h10" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
           <h3>agent</h3>
-          <p>OS-native agent runtime — sessions, tools, memory, skills, providers.</p>
+          <p>Built-in system agent — cross-app sessions, persistent memory, tools, skills, providers.</p>
           <pre class="prim-code mono"><span class="t-prompt">cos</span> agent ask "<em>find the largest files and tell me why</em>"</pre>
         </article>
 
@@ -252,7 +255,7 @@
         <article class="prim-card">
           <div class="prim-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="12" r="3.4" stroke="currentColor" stroke-width="1.6"/></svg></div>
           <h3>ai</h3>
-          <p>App-gated single-shot AI for installed Apps — chat, embed, image, audio, video, tools.</p>
+          <p>Shared local or cloud model gate for every app — chat, embed, image, audio, video, tools.</p>
           <pre class="prim-code mono"><span class="t-prompt">cos</span> ai chat --app notes --prompt "summarize today"
 <span class="t-prompt">cos</span> ai tool web.read --app notes --args '{"url":"…"}'</pre>
         </article>
@@ -384,11 +387,11 @@
       <div class="stack">
         <div class="stack-layer stack-layer-agent">
           <div class="stack-name mono">agent runtime</div>
-          <div class="stack-detail">Sessions, skills, tools, providers · <code>cos agent</code></div>
+          <div class="stack-detail">Sessions, memory, app tools, providers · <code>cos agent</code></div>
         </div>
         <div class="stack-layer stack-layer-cos">
           <div class="stack-name mono">cos · user-mode primitives</div>
-          <div class="stack-detail">sys · service · credential · cron · ai · agent · model · engine</div>
+          <div class="stack-detail">sys · service · credential · cron · app · ai · agent · model · engine</div>
         </div>
         <div class="stack-layer stack-layer-clawd">
           <div class="stack-name mono">clawd · system broker</div>
@@ -458,11 +461,11 @@
       <div class="faq">
         <details class="faq-item" open>
           <summary>What does "agent-native" actually mean?</summary>
-          <p>The agent isn't a chrome on top of bash. It has typed kernel
-          surfaces (<code>cos</code> primitives), a system-level broker
-          (<code>clawd</code>), capability + approval enforcement, and an
-          append-only audit journal. The OS itself knows when an agent is
-          acting and what it's allowed to do.</p>
+          <p>The agent is a shared system layer, not a chatbot inside one app.
+          It can reason across system state, installed apps, and persistent
+          memory; every app can use the system model runtime and expose typed
+          operations back to the agent. Capabilities, approvals, and the audit
+          journal keep that system-level access under user control.</p>
         </details>
         <details class="faq-item">
           <summary>Does Claw OS replace my distro?</summary>
@@ -480,6 +483,14 @@
           ort-genai) side-by-side. <code>cos model import</code> registers
           local files; <code>cos engine</code> manages native runtimes with
           per-version pinning and rollback.</p>
+        </details>
+        <details class="faq-item">
+          <summary>How do apps work with the agent and models?</summary>
+          <p>Apps use the Claw OS SDK in both directions: they call the shared
+          local or cloud model gate instead of shipping their own model stack,
+          and they publish typed operations with explicit permission scopes.
+          The agent can discover those operations and combine several apps into
+          one workflow.</p>
         </details>
         <details class="faq-item">
           <summary>What stops the agent from breaking my machine?</summary>

@@ -77,7 +77,7 @@ def make() -> None:
     draw = ImageDraw.Draw(base)
 
     # ---- eyebrow chip ----
-    chip_text = "THE FIRST AGENT NATIVE OS"
+    chip_text = "THE FIRST AGENT-NATIVE OS"
     chip_font = _load_font(20, "bold")
     chip_w = draw.textlength(chip_text, font=chip_font)
     pad_x = 22
@@ -94,9 +94,17 @@ def make() -> None:
     draw.text((chip_x + 34, chip_y + 11), chip_text, font=chip_font, fill=(52, 64, 84, 255))
 
     # ---- title ----
-    title_font = _load_font(92, "bold")
-    line1 = "The first agent native"
+    line1 = "The first agent-native"
     line2 = "operating system."
+    title_size = 92
+    title_font = _load_font(title_size, "bold")
+    max_title_width = W - MARGIN * 2
+    while max(
+        draw.textlength(line1, font=title_font),
+        draw.textlength(line2, font=title_font),
+    ) > max_title_width:
+        title_size -= 2
+        title_font = _load_font(title_size, "bold")
     title_x = MARGIN
     title_y = 168
 
@@ -128,8 +136,8 @@ def make() -> None:
     # ---- lede ----
     draw = ImageDraw.Draw(base)
     lede_font = _load_font(26, "regular")
-    lede1 = "A Linux distribution rebuilt around the agent — structured cos"
-    lede2 = "primitives, scoped approvals, an audit journal, and local models."
+    lede1 = "One system agent across the whole machine. One shared AI runtime"
+    lede2 = "for every app. Typed app APIs compose into workflows."
     draw.text((title_x, title_y + 240), lede1, font=lede_font, fill=(52, 64, 84, 255))
     draw.text((title_x, title_y + 278), lede2, font=lede_font, fill=(52, 64, 84, 255))
 
