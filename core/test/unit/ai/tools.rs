@@ -66,6 +66,85 @@ fn derive_scope_uses_name_for_kv_tools() {
 }
 
 #[test]
+fn fs_read_text_expands_tilde_before_io() {
+    let _g = env_lock();
+    let dir = std::env::temp_dir().join(format!("cos-tools-home-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("note.txt"), "hello").unwrap();
+
+    let previous_home = std::env::var_os("HOME");
+    std::env::set_var("HOME", &dir);
+    let result = impl_fs_read_text(&json!({"path": "~/note.txt"}));
+    let scope = derive_scope(
+        lookup("fs.read_text").unwrap(),
+        &json!({"path": "~/note.txt"}),
+    );
+    match previous_home {
+        Some(value) => std::env::set_var("HOME", value),
+        None => std::env::remove_var("HOME"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let result = result.unwrap();
+    assert_eq!(result["path"], "~/note.txt");
+    assert_eq!(result["content"], "hello");
+    assert!(matches!(
+        scope.unwrap(),
+        Scope::Path(path) if path == dir.join("note.txt").to_string_lossy()
+    ));
+}
+
+#[test]
+fn fs_list_only_reports_size_for_files() {
+    let dir = std::env::temp_dir().join(format!("cos-tools-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("nested")).unwrap();
+    std::fs::write(dir.join("file.txt"), "hello").unwrap();
+
+    let result = impl_fs_list(&json!({"path": dir})).unwrap();
+    let entries = result["entries"].as_array().unwrap();
+    let file = entries
+        .iter()
+        .find(|entry| entry["name"] == "file.txt")
+        .unwrap();
+    let nested = entries
+        .iter()
+        .find(|entry| entry["name"] == "nested")
+        .unwrap();
+    assert_eq!(file["kind"], "file");
+    assert_eq!(file["size"], 5);
+    assert_eq!(nested["kind"], "dir");
+    assert!(nested.get("size").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn fs_list_reports_symlink_without_following_target() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("cos-tools-symlink-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("target.txt"), "hello").unwrap();
+    symlink("target.txt", dir.join("link.txt")).unwrap();
+
+    let result = impl_fs_list(&json!({"path": dir})).unwrap();
+    let link = result["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["name"] == "link.txt")
+        .unwrap();
+    assert_eq!(link["kind"], "symlink");
+    assert!(link.get("size").is_none());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn sanitize_key_replaces_special_chars() {
     // sanitize_key now anchors the on-disk name with a 16-hex
     // SHA-256 prefix so visually-similar keys ("a/b" vs "a:b")

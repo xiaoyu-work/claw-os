@@ -352,7 +352,9 @@ fn derive_scope(tool: &ToolDef, args: &Value) -> Result<Scope, String> {
                 .get("path")
                 .and_then(Value::as_str)
                 .ok_or_else(|| "missing required arg `path`".to_string())?;
-            Ok(Scope::path(p))
+            Ok(Scope::path(
+                resolve_fs_path(p)?.to_string_lossy().into_owned(),
+            ))
         }
         "kv.get" => {
             let k = args
@@ -371,6 +373,7 @@ fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing `path`".to_string())?;
+    let resolved_path = resolve_fs_path(path)?;
     let max_bytes = args
         .get("max_bytes")
         .and_then(Value::as_u64)
@@ -379,7 +382,8 @@ fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
     // Stream up to `max_bytes + 1` from the file so a multi-gigabyte
     // file can't first balloon the process heap. We read one byte
     // past the cap and use that as the "truncated" signal.
-    let f = std::fs::File::open(path).map_err(|e| format!("read {path}: {e}"))?;
+    let f = std::fs::File::open(&resolved_path)
+        .map_err(|e| format!("read {}: {e}", resolved_path.display()))?;
     let take_cap = max_bytes.saturating_add(1);
     let mut body = Vec::with_capacity(max_bytes.min(64 * 1024));
     f.take(take_cap as u64)
@@ -403,12 +407,14 @@ fn impl_fs_list(args: &Value) -> Result<Value, String> {
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing `path`".to_string())?;
+    let resolved_path = resolve_fs_path(path)?;
     let max_entries = args
         .get("max_entries")
         .and_then(Value::as_u64)
         .unwrap_or(256) as usize;
 
-    let rd = std::fs::read_dir(path).map_err(|e| format!("read_dir {path}: {e}"))?;
+    let rd = std::fs::read_dir(&resolved_path)
+        .map_err(|e| format!("read_dir {}: {e}", resolved_path.display()))?;
     let mut entries = Vec::new();
     let mut truncated = false;
     for (i, entry) in rd.enumerate() {
@@ -417,19 +423,23 @@ fn impl_fs_list(args: &Value) -> Result<Value, String> {
             break;
         }
         let entry = entry.map_err(|e| e.to_string())?;
-        let meta = entry.metadata().ok();
-        let kind = match meta.as_ref().map(|m| m.file_type()) {
+        let file_type = entry.file_type().ok();
+        let kind = match file_type {
             Some(ft) if ft.is_file() => "file",
             Some(ft) if ft.is_dir() => "dir",
             Some(ft) if ft.is_symlink() => "symlink",
             _ => "other",
         };
-        let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
-        entries.push(json!({
+        let mut value = json!({
             "name": entry.file_name().to_string_lossy(),
             "kind": kind,
-            "size": size,
-        }));
+        });
+        if kind == "file" {
+            if let Ok(metadata) = entry.metadata() {
+                value["size"] = json!(metadata.len());
+            }
+        }
+        entries.push(value);
     }
 
     Ok(json!({
@@ -437,6 +447,22 @@ fn impl_fs_list(args: &Value) -> Result<Value, String> {
         "entries": entries,
         "truncated": truncated,
     }))
+}
+
+fn resolve_fs_path(raw: &str) -> Result<std::path::PathBuf, String> {
+    let Some(rest) = raw.strip_prefix("~/") else {
+        if raw == "~" {
+            return effective_tool_home();
+        }
+        return Ok(raw.into());
+    };
+    Ok(effective_tool_home()?.join(rest))
+}
+
+fn effective_tool_home() -> Result<std::path::PathBuf, String> {
+    crate::paths::current_home_override()
+        .or_else(|| std::env::var_os("HOME").map(Into::into))
+        .ok_or_else(|| "cannot resolve `~`: HOME is not set".to_string())
 }
 
 fn impl_kv_get(app_id: &str, args: &Value) -> Result<Value, String> {
