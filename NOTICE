@@ -12,9 +12,9 @@ Version 2.0. The Obscura source has been vendored into the following crates:
   crates/obscura-cdp
   crates/cos-browser   (originally crates/obscura-cli upstream)
 
-A copy of the Apache License, Version 2.0 is included as LICENSE-APACHE at the
-repository root and inside each vendored crate. Modifications made by Claw OS
-contributors are tracked via the git history of this repository.
+A copy of the Apache License, Version 2.0 is included as LICENSE at the
+repository root. Modifications made by Claw OS contributors are tracked via the
+git history of this repository.
 
 Original Claw OS components are licensed under the Apache License, Version 2.0;
 see LICENSE. Vendored components retain their upstream licenses.
