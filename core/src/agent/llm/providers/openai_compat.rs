@@ -392,6 +392,22 @@ fn request_has_image(request: &ChatRequest) -> bool {
     })
 }
 
+fn build_wire_request_body(
+    request: &ChatRequest,
+    model: &str,
+    stream: bool,
+    wire_api: super::copilot_auth::CopilotWireApi,
+) -> Result<serde_json::Value> {
+    match wire_api {
+        super::copilot_auth::CopilotWireApi::ChatCompletions => {
+            wire::build_request_body(request, model, stream)
+        }
+        super::copilot_auth::CopilotWireApi::Responses => {
+            Ok(responses_wire::build_request_body(request, model, stream))
+        }
+    }
+}
+
 fn copilot_initiator(request: &ChatRequest) -> &'static str {
     if request
         .extra
@@ -504,12 +520,14 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match target.wire_api {
-            super::copilot_auth::CopilotWireApi::ChatCompletions => {
-                wire::build_request_body(&request, &self.cfg.model, false)
-            }
-            super::copilot_auth::CopilotWireApi::Responses => {
-                responses_wire::build_request_body(&request, &self.cfg.model, false)
+        let body = match build_wire_request_body(&request, &self.cfg.model, false, target.wire_api)
+        {
+            Ok(body) => body,
+            Err(error) => {
+                if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(lease, pool_failure_class(&error));
+                }
+                return Err(error);
             }
         };
 
@@ -638,12 +656,13 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match target.wire_api {
-            super::copilot_auth::CopilotWireApi::ChatCompletions => {
-                wire::build_request_body(&request, &self.cfg.model, true)
-            }
-            super::copilot_auth::CopilotWireApi::Responses => {
-                responses_wire::build_request_body(&request, &self.cfg.model, true)
+        let body = match build_wire_request_body(&request, &self.cfg.model, true, target.wire_api) {
+            Ok(body) => body,
+            Err(error) => {
+                if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
+                    pool.report_failure(lease, pool_failure_class(&error));
+                }
+                return Err(error);
             }
         };
 

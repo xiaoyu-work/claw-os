@@ -20,6 +20,19 @@ fn req_text(text: &str) -> ChatRequest {
     }
 }
 
+fn req_image(role: Role, media_type: &str, data: &str) -> ChatRequest {
+    let mut request = req_text("unused");
+    request.system = None;
+    request.messages = vec![Message {
+        role,
+        content: vec![ContentBlock::Image {
+            media_type: media_type.into(),
+            data: data.into(),
+        }],
+    }];
+    request
+}
+
 // ---- alias / base URL resolution -------------------------------------
 
 #[test]
@@ -212,7 +225,8 @@ fn copilot_initiator_distinguishes_user_and_tool_follow_up() {
     let mut automatic_request = req_text("summarise");
     automatic_request.extra =
         serde_json::json!({"_cos_initiator": "agent", "seed": 7});
-    let body = wire::build_request_body(&automatic_request, "gpt-4o-mini", false);
+    let body =
+        wire::build_request_body(&automatic_request, "gpt-4o-mini", false).unwrap();
     assert!(body.get("_cos_initiator").is_none());
     assert_eq!(body["seed"], 7);
     assert_eq!(
@@ -289,7 +303,7 @@ fn is_configured_true_for_ollama_without_key() {
 #[test]
 fn builds_minimal_chat_body() {
     let r = req_text("hello");
-    let body = wire::build_request_body(&r, "gpt-4o-mini", false);
+    let body = wire::build_request_body(&r, "gpt-4o-mini", false).unwrap();
     assert_eq!(body["model"], "gpt-4o-mini");
     assert_eq!(body["messages"][0]["role"], "system");
     assert_eq!(body["messages"][0]["content"], "you are helpful");
@@ -298,6 +312,143 @@ fn builds_minimal_chat_body() {
     assert_eq!(body["max_tokens"], 64);
     assert!(body.get("tools").is_none(), "no tools means no tools field");
     assert!(body.get("stream").is_none());
+}
+
+#[test]
+fn chat_completions_serializes_mixed_images_and_preserves_tool_history() {
+    let mut request = req_text("unused");
+    request.messages = vec![
+        Message {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Text {
+                    text: "before".into(),
+                },
+                ContentBlock::Image {
+                    media_type: "image/jpeg".into(),
+                    data: "/9j/2Q==".into(),
+                },
+                ContentBlock::Text {
+                    text: "between".into(),
+                },
+                ContentBlock::Image {
+                    media_type: "image/png".into(),
+                    data: "iVBORw0KGgo=".into(),
+                },
+                ContentBlock::Text {
+                    text: "after".into(),
+                },
+            ],
+        },
+        Message {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::Text {
+                    text: "checking".into(),
+                },
+                ContentBlock::ToolUse {
+                    id: "call_vision".into(),
+                    name: "inspect".into(),
+                    input: serde_json::json!({"mode": "detailed"}),
+                },
+            ],
+        },
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_vision".into(),
+                is_error: false,
+                content: "done".into(),
+            }],
+        },
+    ];
+
+    // OpenAI-compatible and Azure requests always take this branch.
+    // Copilot catalogue entries advertising /chat/completions do too.
+    let body = build_wire_request_body(
+        &request,
+        "gpt-4o",
+        false,
+        crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+    )
+    .unwrap();
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(
+        messages[1]["content"],
+        serde_json::json!([
+            {"type": "text", "text": "before"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/jpeg;base64,/9j/2Q==",
+                    "detail": "auto"
+                }
+            },
+            {"type": "text", "text": "between"},
+            {
+                "type": "image_url",
+                "image_url": {
+                    "url": "data:image/png;base64,iVBORw0KGgo=",
+                    "detail": "auto"
+                }
+            },
+            {"type": "text", "text": "after"}
+        ])
+    );
+    assert_eq!(messages[2]["content"], "checking");
+    assert_eq!(messages[2]["tool_calls"][0]["id"], "call_vision");
+    assert_eq!(messages[3]["role"], "tool");
+    assert_eq!(messages[3]["tool_call_id"], "call_vision");
+    assert_eq!(messages[3]["content"], "done");
+}
+
+#[test]
+fn chat_completions_rejects_malformed_or_unsupported_images() {
+    for (media_type, data, expected) in [
+        ("image/png", "", "must not be empty"),
+        ("image/jpeg", "not base64!", "not valid base64"),
+        ("image/bmp", "Qk0=", "does not support image media type"),
+    ] {
+        let error = wire::build_request_body(
+            &req_image(Role::User, media_type, data),
+            "gpt-4o",
+            false,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(error, LlmError::InvalidRequest(ref message) if message.contains(expected)),
+            "unexpected error for {media_type}: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn chat_completions_rejects_images_in_non_user_messages() {
+    let error = wire::build_request_body(
+        &req_image(Role::Assistant, "image/png", "iVBORw0KGgo="),
+        "gpt-4o",
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, LlmError::InvalidRequest(ref message) if message.contains("user messages")),
+        "unexpected error: {error:?}"
+    );
+}
+
+#[test]
+fn chat_completions_rejects_known_non_vision_models() {
+    let error = wire::build_request_body(
+        &req_image(Role::User, "image/png", "iVBORw0KGgo="),
+        "deepseek-chat",
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(error, LlmError::InvalidRequest(ref message) if message.contains("does not support image input")),
+        "unexpected error: {error:?}"
+    );
 }
 
 #[test]
@@ -450,7 +601,7 @@ fn modern_models_use_max_completion_tokens() {
 #[test]
 fn body_uses_max_completion_tokens_for_gpt5() {
     let r = req_text("hi");
-    let body = wire::build_request_body(&r, "gpt-5.4-mini", false);
+    let body = wire::build_request_body(&r, "gpt-5.4-mini", false).unwrap();
     assert_eq!(body["max_completion_tokens"], 64);
     assert!(
         body.get("max_tokens").is_none(),
@@ -468,7 +619,7 @@ fn body_includes_tools_when_provided() {
         description: "echo it".into(),
         input_schema: serde_json::json!({"type":"object","properties":{}}),
     }];
-    let body = wire::build_request_body(&r, "gpt-4o-mini", false);
+    let body = wire::build_request_body(&r, "gpt-4o-mini", false).unwrap();
     assert_eq!(body["tools"][0]["function"]["name"], "echo");
     assert_eq!(body["tool_choice"], "auto");
 }
@@ -476,7 +627,7 @@ fn body_includes_tools_when_provided() {
 #[test]
 fn body_marks_stream_when_requested() {
     let r = req_text("hi");
-    let body = wire::build_request_body(&r, "m", true);
+    let body = wire::build_request_body(&r, "m", true).unwrap();
     assert_eq!(body["stream"], true);
 }
 
@@ -491,7 +642,7 @@ fn body_renders_assistant_tool_use() {
             input: serde_json::json!({"text":"hi"}),
         }],
     });
-    let body = wire::build_request_body(&r, "m", false);
+    let body = wire::build_request_body(&r, "m", false).unwrap();
     let asst = &body["messages"][2];
     assert_eq!(asst["role"], "assistant");
     assert_eq!(asst["tool_calls"][0]["id"], "call_1");
@@ -513,7 +664,7 @@ fn body_renders_tool_result_as_tool_role() {
             content: "{\"ok\":true}".into(),
         }],
     });
-    let body = wire::build_request_body(&r, "m", false);
+    let body = wire::build_request_body(&r, "m", false).unwrap();
     let tool_msg = &body["messages"][2];
     assert_eq!(tool_msg["role"], "tool");
     assert_eq!(tool_msg["tool_call_id"], "call_1");
@@ -561,7 +712,7 @@ fn body_fans_out_multiple_tool_results_into_separate_tool_messages() {
             },
         ],
     });
-    let body = wire::build_request_body(&r, "m", false);
+    let body = wire::build_request_body(&r, "m", false).unwrap();
     let msgs = body["messages"].as_array().expect("messages array");
     // system + user "inventory" + assistant with two tool_calls
     // + two role=tool messages = 5 total.
@@ -587,7 +738,7 @@ fn body_filters_reserved_extras_and_preserves_provider_extras() {
         "__cache_tools": true,
         "__private": true
     });
-    let body = wire::build_request_body(&r, "m", false);
+    let body = wire::build_request_body(&r, "m", false).unwrap();
     assert_eq!(body["seed"], 42);
     assert_eq!(body["response_format"]["type"], "json_object");
     for key in [

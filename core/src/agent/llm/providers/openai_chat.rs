@@ -1,5 +1,6 @@
 //! Owns Chat Completions request serialization, response parsing, and SSE normalization.
 
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use futures_util::stream::{BoxStream, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -72,13 +73,28 @@ pub(crate) fn build_request_body(
     request: &ChatRequest,
     model: &str,
     stream: bool,
-) -> serde_json::Value {
+) -> Result<serde_json::Value> {
+    let has_image = request.messages.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|block| matches!(block, ContentBlock::Image { .. }))
+    });
+    if has_image
+        && crate::agent::llm::metadata::lookup(model)
+            .is_some_and(|metadata| !metadata.supports_vision)
+    {
+        return Err(LlmError::InvalidRequest(format!(
+            "model `{model}` does not support image input"
+        )));
+    }
+
     let mut messages: Vec<serde_json::Value> = Vec::with_capacity(request.messages.len() + 1);
     if let Some(sys) = &request.system {
         messages.push(serde_json::json!({ "role": "system", "content": sys }));
     }
     for m in &request.messages {
-        for v in message_to_json_many(m) {
+        for v in message_to_json_many(m)? {
             messages.push(v);
         }
     }
@@ -132,7 +148,7 @@ pub(crate) fn build_request_body(
             obj.insert(key.to_owned(), value.clone());
         }
     }
-    body
+    Ok(body)
 }
 
 fn role_to_str(role: Role) -> &'static str {
@@ -141,19 +157,6 @@ fn role_to_str(role: Role) -> &'static str {
         Role::User => "user",
         Role::Assistant => "assistant",
         Role::Tool => "tool",
-    }
-}
-
-fn message_to_json(m: &crate::agent::llm::Message) -> serde_json::Value {
-    // Back-compat single-output wrapper for tests that pre-date
-    // the multi-tool-result fan-out. Returns the first emitted
-    // wire message; the request path uses `message_to_json_many`
-    // directly so multi-result messages are handled correctly.
-    let mut all = message_to_json_many(m);
-    if all.is_empty() {
-        serde_json::json!({"role": role_to_str(m.role), "content": ""})
-    } else {
-        all.remove(0)
     }
 }
 
@@ -172,7 +175,7 @@ fn message_to_json(m: &crate::agent::llm::Message) -> serde_json::Value {
 /// We fan out: a User message that consists *only* of
 /// ToolResult blocks becomes N separate `role=tool` messages
 /// preserving their order. All other messages map 1:1.
-fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value> {
+fn message_to_json_many(m: &crate::agent::llm::Message) -> Result<Vec<serde_json::Value>> {
     let role = role_to_str(m.role);
 
     // Multi-tool-result fan-out: any message whose blocks are
@@ -182,7 +185,7 @@ fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value
             .iter()
             .all(|b| matches!(b, ContentBlock::ToolResult { .. }))
     {
-        return m
+        return Ok(m
             .content
             .iter()
             .filter_map(|b| match b {
@@ -197,14 +200,46 @@ fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value
                 })),
                 _ => None,
             })
-            .collect();
+            .collect());
+    }
+
+    let has_image = m
+        .content
+        .iter()
+        .any(|block| matches!(block, ContentBlock::Image { .. }));
+    if has_image && m.role != Role::User {
+        return Err(LlmError::InvalidRequest(format!(
+            "OpenAI Chat Completions only supports image input in user messages, not {role} messages"
+        )));
+    }
+    if has_image
+        && m.content.iter().any(|block| {
+            !matches!(
+                block,
+                ContentBlock::Text { .. } | ContentBlock::Image { .. }
+            )
+        })
+    {
+        return Err(LlmError::InvalidRequest(
+            "OpenAI Chat Completions image messages may contain only text and image blocks".into(),
+        ));
     }
 
     let mut text_parts: Vec<String> = Vec::new();
+    let mut content_parts: Vec<serde_json::Value> = Vec::new();
     let mut tool_calls: Vec<serde_json::Value> = Vec::new();
     for block in &m.content {
         match block {
-            ContentBlock::Text { text } => text_parts.push(text.clone()),
+            ContentBlock::Text { text } => {
+                if has_image {
+                    content_parts.push(serde_json::json!({
+                        "type": "text",
+                        "text": text,
+                    }));
+                } else {
+                    text_parts.push(text.clone());
+                }
+            }
             ContentBlock::ToolUse { id, name, input } => {
                 tool_calls.push(serde_json::json!({
                     "id": id,
@@ -232,15 +267,23 @@ fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value
                 // on the Responses wire format.
             }
             ContentBlock::Image { media_type, data } => {
-                text_parts.push(format!("[image {} base64 attached]", media_type));
-                let _ = data;
+                let image_url = image_data_url(media_type, data)?;
+                content_parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_url,
+                        "detail": "auto",
+                    },
+                }));
             }
         }
     }
 
     let mut obj = serde_json::Map::new();
     obj.insert("role".into(), serde_json::json!(role));
-    if !text_parts.is_empty() {
+    if has_image {
+        obj.insert("content".into(), serde_json::Value::Array(content_parts));
+    } else if !text_parts.is_empty() {
         obj.insert("content".into(), serde_json::json!(text_parts.join("\n")));
     } else if tool_calls.is_empty() {
         obj.insert("content".into(), serde_json::json!(""));
@@ -248,7 +291,30 @@ fn message_to_json_many(m: &crate::agent::llm::Message) -> Vec<serde_json::Value
     if !tool_calls.is_empty() {
         obj.insert("tool_calls".into(), serde_json::Value::Array(tool_calls));
     }
-    vec![serde_json::Value::Object(obj)]
+    Ok(vec![serde_json::Value::Object(obj)])
+}
+
+fn image_data_url(media_type: &str, data: &str) -> Result<String> {
+    const SUPPORTED_MEDIA_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
+
+    if !SUPPORTED_MEDIA_TYPES.contains(&media_type) {
+        return Err(LlmError::InvalidRequest(format!(
+            "OpenAI Chat Completions does not support image media type `{media_type}`; \
+             expected image/png, image/jpeg, image/webp, or image/gif"
+        )));
+    }
+    if data.is_empty() {
+        return Err(LlmError::InvalidRequest(format!(
+            "OpenAI Chat Completions image data for `{media_type}` must not be empty"
+        )));
+    }
+    BASE64.decode(data).map_err(|error| {
+        LlmError::InvalidRequest(format!(
+            "OpenAI Chat Completions image data for `{media_type}` is not valid base64: {error}"
+        ))
+    })?;
+
+    Ok(format!("data:{media_type};base64,{data}"))
 }
 
 fn tool_to_json(t: &Tool) -> serde_json::Value {
