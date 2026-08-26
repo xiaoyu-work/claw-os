@@ -740,6 +740,18 @@ pub fn looks_secret(text: &str) -> bool {
     false
 }
 
+/// Check every model-controlled fact field and the body selected for
+/// persistence. Structured fields must be checked independently because
+/// [`ExtractedFact::body`] can replace `text` with `entity.attribute = value`.
+fn fact_looks_secret(fact: &ExtractedFact) -> bool {
+    looks_secret(fact.category.as_str())
+        || looks_secret(&fact.text)
+        || fact.entity.as_deref().is_some_and(looks_secret)
+        || fact.attribute.as_deref().is_some_and(looks_secret)
+        || fact.value.as_deref().is_some_and(looks_secret)
+        || looks_secret(&fact.body())
+}
+
 /// Existing curated entries in MEMORY.md, used to dedupe at write time.
 ///
 /// Returns the rendered body of each curated line, e.g.
@@ -804,6 +816,16 @@ pub fn render_fact_line(fact: &ExtractedFact, today: &str) -> String {
         fact.body(),
         fact.confidence
     )
+}
+
+/// Render a fact only when both its source fields and its final on-disk
+/// representation are free of secret-like content.
+fn render_persistable_fact_line(fact: &ExtractedFact, today: &str) -> Option<String> {
+    if fact_looks_secret(fact) {
+        return None;
+    }
+    let line = render_fact_line(fact, today);
+    (!looks_secret(&line)).then_some(line)
 }
 
 const SECTION_HEADER: &str = "## Curated facts (auto)";
@@ -1009,11 +1031,12 @@ impl MemoryCurator {
         let mut proposed = parse_facts(&raw);
         proposed.truncate(self.config.max_facts_per_run);
 
-        // Confidence + secret filter.
+        // Confidence + secret filter. Filter before dedupe so a rejected
+        // structured fact cannot displace a safe fact for the same key.
         let mut survivors: Vec<ExtractedFact> = proposed
             .iter()
             .filter(|f| f.confidence >= self.config.min_confidence)
-            .filter(|f| !looks_secret(&f.text))
+            .filter(|f| !fact_looks_secret(f))
             .cloned()
             .collect();
 
@@ -1061,17 +1084,25 @@ impl MemoryCurator {
             Vec::new()
         } else {
             let today = today_yyyymmdd();
-            let lines: Vec<String> = survivors
-                .iter()
-                .map(|f| render_fact_line(f, &today))
-                .collect();
-            let next = append_lines_to_section(&existing, &lines);
-            if let Err(e) = self.notes.write(MEMORY_FILE, &next) {
-                let err = CurationError::Notes(e);
-                record_failure(&err);
-                return Err(err);
+            let mut added = Vec::with_capacity(survivors.len());
+            let mut lines = Vec::with_capacity(survivors.len());
+            for fact in survivors {
+                if let Some(line) = render_persistable_fact_line(&fact, &today) {
+                    added.push(fact);
+                    lines.push(line);
+                }
             }
-            survivors.clone()
+            if lines.is_empty() {
+                added
+            } else {
+                let next = append_lines_to_section(&existing, &lines);
+                if let Err(e) = self.notes.write(MEMORY_FILE, &next) {
+                    let err = CurationError::Notes(e);
+                    record_failure(&err);
+                    return Err(err);
+                }
+                added
+            }
         };
 
         // ---- Close the bracket (issue #2, point 2) ---------------------

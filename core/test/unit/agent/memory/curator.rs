@@ -123,6 +123,41 @@
         assert!(!looks_secret(""));
     }
 
+    #[test]
+    fn fact_secret_filter_checks_every_model_controlled_field() {
+        let safe = ExtractedFact {
+            category: FactCategory::Preference,
+            text: "User prefers helix".to_string(),
+            confidence: 0.95,
+            entity: Some("editor".to_string()),
+            attribute: Some("name".to_string()),
+            value: Some("helix".to_string()),
+        };
+        assert!(!fact_looks_secret(&safe));
+        assert!(render_persistable_fact_line(&safe, "2026-01-15").is_some());
+        assert!(render_persistable_fact_line(&safe, "secret-date").is_none());
+
+        let mut secret_text = safe.clone();
+        secret_text.text = "The API key must not be stored".to_string();
+        assert!(fact_looks_secret(&secret_text));
+
+        let mut secret_entity = safe.clone();
+        secret_entity.entity = Some("secret-store".to_string());
+        assert!(fact_looks_secret(&secret_entity));
+
+        let mut secret_attribute = safe.clone();
+        secret_attribute.attribute = Some("access_token".to_string());
+        assert!(fact_looks_secret(&secret_attribute));
+
+        let mut secret_value = safe.clone();
+        secret_value.value = Some("Bearer demo-credential".to_string());
+        assert!(fact_looks_secret(&secret_value));
+
+        let mut secret_category = safe;
+        secret_category.category = FactCategory::Other("password".to_string());
+        assert!(render_persistable_fact_line(&secret_category, "2026-01-15").is_none());
+    }
+
     // ---- existing_curated_lines / dedupe ------------------------------
 
     #[test]
@@ -439,6 +474,67 @@ other content
         let again = curator.curate_session(&db, "sess-1", false).await.unwrap();
         assert!(again.skipped_no_new_messages);
         assert!(again.facts_added.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_filters_secrets_from_structured_fields_before_persistence() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let cfg = AgentConfig::default();
+        let provider = MockProvider::new("mock-aux", &cfg);
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.95">User prefers helix</fact>
+<fact category="environment" entity="secret-store" attribute="owner" value="local" confidence="0.95">Entity field should be filtered</fact>
+<fact category="environment" entity="service" attribute="access_token" value="configured" confidence="0.95">Attribute field should be filtered</fact>
+<fact category="environment" entity="editor" attribute="name" value="Bearer demo-credential" confidence="0.95">Value field should be filtered</fact>
+<fact category="password" entity="shell" attribute="name" value="fish" confidence="0.95">Rendered line should be filtered</fact>"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        db.record_message("sess-1", "user", "Remember my editor preference")
+            .unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-secret-fields-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+
+        let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
+
+        assert_eq!(outcome.facts_proposed.len(), 5);
+        assert_eq!(outcome.facts_added.len(), 1);
+        assert_eq!(outcome.facts_added[0].body(), "editor.name = helix");
+
+        let memory = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(memory.contains("editor.name = helix"));
+        for rejected in [
+            "secret-store",
+            "access_token",
+            "demo-credential",
+            "[password]",
+        ] {
+            assert!(
+                !memory.contains(rejected),
+                "rejected field reached MEMORY.md: {rejected}"
+            );
+        }
 
         let _ = std::fs::remove_dir_all(&dir);
     }
