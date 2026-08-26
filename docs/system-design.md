@@ -1,9 +1,5 @@
 # Claw OS System Design
 
-This document captures the high-level product architecture. See
-[`../ARCHITECTURE.md`](../ARCHITECTURE.md) for the source-level component map,
-entry points, dependency rules, and runtime data flows.
-
 ## High-Level Architecture
 
 ```text
