@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -18,6 +19,10 @@ DEFAULT_TIMEOUT = int(os.environ.get("COS_NET_TIMEOUT", "30"))
 MAX_RESPONSE_BYTES = 5_000_000  # 5 MB response body limit for fetch
 MAX_DOWNLOAD_BYTES = int(os.environ.get("COS_NET_DOWNLOAD_MAX", str(512 * 1024 * 1024)))
 _READ_CHUNK = 64 * 1024
+
+
+class _DownloadLimitExceeded(Exception):
+    pass
 
 
 def _read_bounded(resp, limit):
@@ -146,33 +151,44 @@ def cmd_download(args):
     headers = {"User-Agent": USER_AGENT}
     req = urllib.request.Request(opts.url, headers=headers)
 
+    temp_fd = None
+    temp_path = None
     try:
         with open_url(req, timeout=DEFAULT_TIMEOUT)[0] as resp:
             parent = os.path.dirname(output_path)
             if parent:
                 os.makedirs(parent, exist_ok=True)
-            # Bounded streaming copy so an unbounded-length response
-            # can't fill the disk. ``COS_NET_DOWNLOAD_MAX`` overrides
-            # the default 512 MiB limit.
+            temp_parent = parent or "."
+            # mkstemp creates the file with mode 0o600. Keeping it beside the
+            # destination also guarantees that os.replace stays on one filesystem.
+            temp_fd, temp_path = tempfile.mkstemp(
+                dir=temp_parent,
+                prefix=f".{os.path.basename(output_path)}.",
+                suffix=".tmp",
+            )
+            temp_file = os.fdopen(temp_fd, "wb", closefd=True)
+            temp_fd = None
             total = 0
-            truncated = False
-            with open(output_path, "wb") as f:
+            with temp_file as f:
                 while True:
-                    chunk = resp.read(_READ_CHUNK)
+                    remaining = MAX_DOWNLOAD_BYTES - total
+                    chunk = resp.read(min(_READ_CHUNK, remaining + 1))
                     if not chunk:
                         break
-                    if total + len(chunk) > MAX_DOWNLOAD_BYTES:
-                        f.write(chunk[: MAX_DOWNLOAD_BYTES - total])
-                        total = MAX_DOWNLOAD_BYTES
-                        truncated = True
-                        break
+                    if len(chunk) > remaining:
+                        raise _DownloadLimitExceeded
                     f.write(chunk)
                     total += len(chunk)
-            result = {"url": opts.url, "path": output_path, "bytes": total}
-            if truncated:
-                result["truncated"] = True
-                result["limit"] = MAX_DOWNLOAD_BYTES
-            return result
+                f.flush()
+                os.fsync(f.fileno())
+        os.replace(temp_path, output_path)
+        temp_path = None
+        return {"url": opts.url, "path": output_path, "bytes": total}
+    except _DownloadLimitExceeded:
+        return {
+            "error": f"download exceeds size limit of {MAX_DOWNLOAD_BYTES} bytes",
+            "limit": MAX_DOWNLOAD_BYTES,
+        }
     except urllib.error.HTTPError as e:
         return {"error": str(e), "status": e.code}
     except urllib.error.URLError as e:
@@ -181,6 +197,17 @@ def cmd_download(args):
         raise
     except Exception as e:
         return {"error": str(e)}
+    finally:
+        if temp_fd is not None:
+            try:
+                os.close(temp_fd)
+            except OSError:
+                pass
+        if temp_path is not None:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 def _schema():
