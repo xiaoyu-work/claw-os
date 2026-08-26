@@ -113,12 +113,14 @@ Read a UTF-8 text file. Returns the file body.
 * **Verb** `fs.read`
 * **Scope binding** `from-arg path` — the `path` argument is the
   scope the gate enforces. Listing this tool does not let the model
-  read files outside the App's granted `fs.read` scope.
+  read files outside the App's granted `fs.read` scope. The kernel opens
+  the file without following a final symlink, authorizes the opened
+  descriptor's resolved target, and reads from that same descriptor.
 * **Args**
 
   | Field        | Type    | Required | Default     | Notes                                                               |
   |--------------|---------|----------|-------------|---------------------------------------------------------------------|
-  | `path`       | string  | yes      | —           | Absolute path or `~`-relative.                                      |
+  | `path`       | string  | yes      | —           | Absolute path or `~`-relative. A final symlink is rejected.          |
   | `max_bytes`  | integer | no       | `1_048_576` | Hard cap on how much of the file to return. The result is truncated rather than rejected when the file is larger. |
 
 * **Returns**
@@ -133,6 +135,8 @@ Read a UTF-8 text file. Returns the file body.
 * **Failure modes**
   * Path falls outside granted `fs.read` scope → caps denial
     (`denial_reason="caps_denied"`).
+  * Path is a final symlink or changes before the no-follow open →
+    tool-impl error.
   * Path doesn't exist or isn't a regular file → tool-impl error.
   * File isn't valid UTF-8 → tool-impl error.
 
@@ -144,12 +148,13 @@ List entries in one directory level. Returns name + kind + size.
 
 * **Verb** `fs.meta`
 * **Scope binding** `from-arg path` — the directory must lie within
-  the App's granted `fs.meta` scope.
+  the App's granted `fs.meta` scope. Authorization and enumeration are
+  bound to one opened directory descriptor.
 * **Args**
 
   | Field         | Type    | Required | Default | Notes                                  |
   |---------------|---------|----------|---------|----------------------------------------|
-  | `path`        | string  | yes      | —       | Directory to list.                     |
+  | `path`        | string  | yes      | —       | Directory to list; final symlinks are rejected. |
   | `max_entries` | integer | no       | `256`   | Maximum entries to include.            |
 
 * **Returns**

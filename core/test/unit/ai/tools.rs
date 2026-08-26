@@ -75,7 +75,10 @@ fn fs_read_text_expands_tilde_before_io() {
 
     let previous_home = std::env::var_os("HOME");
     std::env::set_var("HOME", &dir);
-    let result = impl_fs_read_text(&json!({"path": "~/note.txt"}));
+    let args = json!({"path": "~/note.txt"});
+    let target =
+        open_and_authorize_fs_target("~/note.txt", FsTargetKind::RegularFile, |_| Ok(())).unwrap();
+    let result = impl_fs_read_text(&args, target);
     let scope = derive_scope(
         lookup("fs.read_text").unwrap(),
         &json!({"path": "~/note.txt"}),
@@ -102,7 +105,14 @@ fn fs_list_only_reports_size_for_files() {
     std::fs::create_dir_all(dir.join("nested")).unwrap();
     std::fs::write(dir.join("file.txt"), "hello").unwrap();
 
-    let result = impl_fs_list(&json!({"path": dir})).unwrap();
+    let args = json!({"path": dir});
+    let target = open_and_authorize_fs_target(
+        args["path"].as_str().unwrap(),
+        FsTargetKind::Directory,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let result = impl_fs_list(&args, target).unwrap();
     let entries = result["entries"].as_array().unwrap();
     let file = entries
         .iter()
@@ -131,7 +141,14 @@ fn fs_list_reports_symlink_without_following_target() {
     std::fs::write(dir.join("target.txt"), "hello").unwrap();
     symlink("target.txt", dir.join("link.txt")).unwrap();
 
-    let result = impl_fs_list(&json!({"path": dir})).unwrap();
+    let args = json!({"path": dir});
+    let target = open_and_authorize_fs_target(
+        args["path"].as_str().unwrap(),
+        FsTargetKind::Directory,
+        |_| Ok(()),
+    )
+    .unwrap();
+    let result = impl_fs_list(&args, target).unwrap();
     let link = result["entries"]
         .as_array()
         .unwrap()
@@ -141,6 +158,157 @@ fn fs_list_reports_symlink_without_following_target() {
     assert_eq!(link["kind"], "symlink");
     assert!(link.get("size").is_none());
 
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fs_read_text_keeps_authorized_descriptor_after_symlink_swap() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("cos-tools-read-swap-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let requested = dir.join("note.txt");
+    let secret = dir.join("secret.txt");
+    std::fs::write(&requested, "authorized content").unwrap();
+    std::fs::write(&secret, "secret content").unwrap();
+    let requested_text = requested.to_string_lossy().into_owned();
+    let args = json!({"path": requested_text});
+
+    let target = open_and_authorize_fs_target(
+        args["path"].as_str().unwrap(),
+        FsTargetKind::RegularFile,
+        |opened_scope| {
+            let grant = Scope::path(requested.to_string_lossy().into_owned());
+            assert!(
+                grant.covers(&opened_scope),
+                "opened descriptor must be authorized as the requested file"
+            );
+            std::fs::remove_file(&requested).unwrap();
+            symlink(&secret, &requested).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
+    let result = impl_fs_read_text(&args, target).unwrap();
+
+    assert_eq!(result["content"], "authorized content");
+    assert_eq!(
+        std::fs::read_to_string(&requested).unwrap(),
+        "secret content"
+    );
+    let _ = std::fs::remove_file(&requested);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fs_read_text_rejects_final_symlink_without_authorizing_it() {
+    use std::cell::Cell;
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("cos-tools-read-nofollow-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let secret = dir.join("secret.txt");
+    let link = dir.join("link.txt");
+    std::fs::write(&secret, "secret content").unwrap();
+    symlink(&secret, &link).unwrap();
+    let authorized = Cell::new(false);
+
+    let result = open_and_authorize_fs_target(
+        link.to_string_lossy().as_ref(),
+        FsTargetKind::RegularFile,
+        |_| {
+            authorized.set(true);
+            Ok(())
+        },
+    );
+
+    assert!(result.is_err(), "a final symlink must not be opened");
+    assert!(
+        !authorized.get(),
+        "a rejected symlink must not reach capability authorization"
+    );
+    let _ = std::fs::remove_file(&link);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fs_list_keeps_authorized_directory_after_path_swap() {
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("cos-tools-list-swap-{}", std::process::id()));
+    let requested = dir.join("requested");
+    let moved = dir.join("opened");
+    let secret = dir.join("secret");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&requested).unwrap();
+    std::fs::create_dir_all(&secret).unwrap();
+    std::fs::write(requested.join("authorized.txt"), "allowed").unwrap();
+    std::fs::write(secret.join("secret.txt"), "secret").unwrap();
+    let args = json!({"path": requested});
+
+    let target = open_and_authorize_fs_target(
+        args["path"].as_str().unwrap(),
+        FsTargetKind::Directory,
+        |opened_scope| {
+            let grant = Scope::path(requested.to_string_lossy().into_owned());
+            assert!(
+                grant.covers(&opened_scope),
+                "opened descriptor must be authorized as the requested directory"
+            );
+            std::fs::rename(&requested, &moved).unwrap();
+            symlink(&secret, &requested).unwrap();
+            Ok(())
+        },
+    )
+    .unwrap();
+    let result = impl_fs_list(&args, target).unwrap();
+    let entries = result["entries"].as_array().unwrap();
+
+    assert!(entries
+        .iter()
+        .any(|entry| entry["name"] == "authorized.txt"));
+    assert!(!entries.iter().any(|entry| entry["name"] == "secret.txt"));
+    let _ = std::fs::remove_file(&requested);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fs_list_rejects_final_symlink_without_authorizing_it() {
+    use std::cell::Cell;
+    use std::os::unix::fs::symlink;
+
+    let dir = std::env::temp_dir().join(format!("cos-tools-list-nofollow-{}", std::process::id()));
+    let target = dir.join("target");
+    let link = dir.join("link");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&target).unwrap();
+    symlink(&target, &link).unwrap();
+    let authorized = Cell::new(false);
+
+    let result = open_and_authorize_fs_target(
+        link.to_string_lossy().as_ref(),
+        FsTargetKind::Directory,
+        |_| {
+            authorized.set(true);
+            Ok(())
+        },
+    );
+
+    assert!(
+        result.is_err(),
+        "a final directory symlink must not be opened"
+    );
+    assert!(
+        !authorized.get(),
+        "a rejected directory symlink must not reach capability authorization"
+    );
+    let _ = std::fs::remove_file(&link);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

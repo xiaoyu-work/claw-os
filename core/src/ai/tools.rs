@@ -198,8 +198,14 @@ pub struct ToolResult {
 
 /// Execute one Tool call. Performs:
 ///   1. Catalog lookup (`unknown_tool` if missing).
-///   2. Capability check via `caps::require(verb, scope-derived-from-args)`.
-///   3. Tool-specific impl.
+///   2. Manifest allowlist check.
+///   3. Capability check via `caps::require(verb, scope-derived-from-args)`.
+///   4. Tool-specific impl.
+///
+/// Filesystem tools bind steps 3 and 4 to one no-follow file descriptor:
+/// the descriptor's resolved target is authorized and that same descriptor
+/// is then consumed. This prevents a mutable pathname from being swapped
+/// between the capability decision and the operation.
 ///
 /// Identity enforcement is the caller's responsibility — `cos ai tool`
 /// validates the env claim, registered App session, and process ancestry
@@ -326,12 +332,31 @@ fn execute_inner(
 
     require_tool_in_app_policy(app_id, tool.name)?;
 
-    require(tool.verb, scope).map_err(|d| format!("denied: {}", d.to_json()))?;
-
     let result = match tool.name {
-        "fs.read_text" => impl_fs_read_text(args)?,
-        "fs.list" => impl_fs_list(args)?,
-        "kv.get" => impl_kv_get(app_id, args)?,
+        "fs.read_text" => {
+            let target = open_and_authorize_fs_target(
+                args["path"].as_str().expect("derive_scope validated path"),
+                FsTargetKind::RegularFile,
+                |opened_scope| {
+                    require(tool.verb, opened_scope).map_err(|d| format!("denied: {}", d.to_json()))
+                },
+            )?;
+            impl_fs_read_text(args, target)?
+        }
+        "fs.list" => {
+            let target = open_and_authorize_fs_target(
+                args["path"].as_str().expect("derive_scope validated path"),
+                FsTargetKind::Directory,
+                |opened_scope| {
+                    require(tool.verb, opened_scope).map_err(|d| format!("denied: {}", d.to_json()))
+                },
+            )?;
+            impl_fs_list(args, target)?
+        }
+        "kv.get" => {
+            require(tool.verb, scope).map_err(|d| format!("denied: {}", d.to_json()))?;
+            impl_kv_get(app_id, args)?
+        }
         other => return Err(format!("tool {other} has no impl wired up")),
     };
 
@@ -367,13 +392,112 @@ fn derive_scope(tool: &ToolDef, args: &Value) -> Result<Scope, String> {
     }
 }
 
-fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
+#[derive(Clone, Copy)]
+enum FsTargetKind {
+    RegularFile,
+    Directory,
+}
+
+impl FsTargetKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::RegularFile => "regular file",
+            Self::Directory => "directory",
+        }
+    }
+}
+
+struct OpenedFsTarget {
+    file: std::fs::File,
+    canonical_path: std::path::PathBuf,
+}
+
+impl OpenedFsTarget {
+    fn open(path: &std::path::Path, kind: FsTargetKind) -> Result<Self, String> {
+        #[cfg(target_os = "linux")]
+        {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            use std::os::unix::io::AsRawFd;
+
+            let mut flags = libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK;
+            if matches!(kind, FsTargetKind::Directory) {
+                flags |= libc::O_DIRECTORY;
+            }
+            let file = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(flags)
+                .open(path)
+                .map_err(|e| format!("open {} without following symlinks: {e}", path.display()))?;
+            let metadata = file
+                .metadata()
+                .map_err(|e| format!("inspect opened {}: {e}", path.display()))?;
+            let matches_kind = match kind {
+                FsTargetKind::RegularFile => metadata.is_file(),
+                FsTargetKind::Directory => metadata.is_dir(),
+            };
+            if !matches_kind {
+                return Err(format!("{} is not a {}", path.display(), kind.label()));
+            }
+            if metadata.nlink() == 0 {
+                return Err(format!(
+                    "opened target was unlinked before authorization: {}",
+                    path.display()
+                ));
+            }
+
+            let descriptor_path =
+                std::path::PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
+            let canonical_path = std::fs::canonicalize(&descriptor_path).map_err(|e| {
+                format!(
+                    "resolve opened target {} through {}: {e}",
+                    path.display(),
+                    descriptor_path.display()
+                )
+            })?;
+            Ok(Self {
+                file,
+                canonical_path,
+            })
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            let _ = (path, kind);
+            Err("descriptor-safe filesystem tools require Linux".to_string())
+        }
+    }
+
+    fn scope(&self) -> Result<Scope, String> {
+        let path = self.canonical_path.to_str().ok_or_else(|| {
+            format!(
+                "opened target path is not valid UTF-8: {}",
+                self.canonical_path.display()
+            )
+        })?;
+        Ok(Scope::path(path))
+    }
+}
+
+fn open_and_authorize_fs_target<F>(
+    raw_path: &str,
+    kind: FsTargetKind,
+    authorize: F,
+) -> Result<OpenedFsTarget, String>
+where
+    F: FnOnce(Scope) -> Result<(), String>,
+{
+    let path = resolve_fs_path(raw_path)?;
+    let target = OpenedFsTarget::open(&path, kind)?;
+    authorize(target.scope()?)?;
+    Ok(target)
+}
+
+fn impl_fs_read_text(args: &Value, target: OpenedFsTarget) -> Result<Value, String> {
     use std::io::Read;
     let path = args
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing `path`".to_string())?;
-    let resolved_path = resolve_fs_path(path)?;
     let max_bytes = args
         .get("max_bytes")
         .and_then(Value::as_u64)
@@ -382,17 +506,21 @@ fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
     // Stream up to `max_bytes + 1` from the file so a multi-gigabyte
     // file can't first balloon the process heap. We read one byte
     // past the cap and use that as the "truncated" signal.
-    let f = std::fs::File::open(&resolved_path)
-        .map_err(|e| format!("read {}: {e}", resolved_path.display()))?;
     let take_cap = max_bytes.saturating_add(1);
     let mut body = Vec::with_capacity(max_bytes.min(64 * 1024));
-    f.take(take_cap as u64)
+    target
+        .file
+        .take(take_cap as u64)
         .read_to_end(&mut body)
         .map_err(|e| format!("read {path}: {e}"))?;
     let truncated = body.len() > max_bytes;
-    let slice = if truncated { &body[..max_bytes] } else { &body[..] };
-    let content = String::from_utf8(slice.to_vec())
-        .map_err(|e| format!("file not valid utf-8: {e}"))?;
+    let slice = if truncated {
+        &body[..max_bytes]
+    } else {
+        &body[..]
+    };
+    let content =
+        String::from_utf8(slice.to_vec()).map_err(|e| format!("file not valid utf-8: {e}"))?;
 
     Ok(json!({
         "path": path,
@@ -402,51 +530,129 @@ fn impl_fs_read_text(args: &Value) -> Result<Value, String> {
     }))
 }
 
-fn impl_fs_list(args: &Value) -> Result<Value, String> {
+fn impl_fs_list(args: &Value, target: OpenedFsTarget) -> Result<Value, String> {
     let path = args
         .get("path")
         .and_then(Value::as_str)
         .ok_or_else(|| "missing `path`".to_string())?;
-    let resolved_path = resolve_fs_path(path)?;
     let max_entries = args
         .get("max_entries")
         .and_then(Value::as_u64)
         .unwrap_or(256) as usize;
 
-    let rd = std::fs::read_dir(&resolved_path)
-        .map_err(|e| format!("read_dir {}: {e}", resolved_path.display()))?;
-    let mut entries = Vec::new();
-    let mut truncated = false;
-    for (i, entry) in rd.enumerate() {
-        if i >= max_entries {
-            truncated = true;
-            break;
-        }
-        let entry = entry.map_err(|e| e.to_string())?;
-        let file_type = entry.file_type().ok();
-        let kind = match file_type {
-            Some(ft) if ft.is_file() => "file",
-            Some(ft) if ft.is_dir() => "dir",
-            Some(ft) if ft.is_symlink() => "symlink",
-            _ => "other",
-        };
-        let mut value = json!({
-            "name": entry.file_name().to_string_lossy(),
-            "kind": kind,
-        });
-        if kind == "file" {
-            if let Ok(metadata) = entry.metadata() {
-                value["size"] = json!(metadata.len());
-            }
-        }
-        entries.push(value);
-    }
+    let (entries, truncated) = list_opened_directory(&target, max_entries)?;
 
     Ok(json!({
         "path": path,
         "entries": entries,
         "truncated": truncated,
     }))
+}
+
+fn list_opened_directory(
+    target: &OpenedFsTarget,
+    max_entries: usize,
+) -> Result<(Vec<Value>, bool), String> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::CStr;
+        use std::os::unix::ffi::OsStringExt;
+        use std::os::unix::io::AsRawFd;
+
+        struct OpenDir(*mut libc::DIR);
+
+        impl Drop for OpenDir {
+            fn drop(&mut self) {
+                unsafe {
+                    libc::closedir(self.0);
+                }
+            }
+        }
+
+        let duplicate = unsafe { libc::fcntl(target.file.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 0) };
+        if duplicate < 0 {
+            return Err(format!(
+                "duplicate opened directory descriptor: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let directory = unsafe { libc::fdopendir(duplicate) };
+        if directory.is_null() {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                libc::close(duplicate);
+            }
+            return Err(format!("open directory descriptor stream: {error}"));
+        }
+        let directory = OpenDir(directory);
+        let directory_fd = unsafe { libc::dirfd(directory.0) };
+        let mut entries = Vec::new();
+        let mut truncated = false;
+
+        loop {
+            unsafe {
+                *libc::__errno_location() = 0;
+            }
+            let raw_entry = unsafe { libc::readdir(directory.0) };
+            if raw_entry.is_null() {
+                let error = std::io::Error::last_os_error();
+                if error.raw_os_error() != Some(0) {
+                    return Err(format!("read opened directory: {error}"));
+                }
+                break;
+            }
+            let name = unsafe { CStr::from_ptr((*raw_entry).d_name.as_ptr()) };
+            let name_bytes = name.to_bytes();
+            if name_bytes == b"." || name_bytes == b".." {
+                continue;
+            }
+            if entries.len() >= max_entries {
+                truncated = true;
+                break;
+            }
+
+            let mut metadata = std::mem::MaybeUninit::<libc::stat>::uninit();
+            let stat_result = unsafe {
+                libc::fstatat(
+                    directory_fd,
+                    name.as_ptr(),
+                    metadata.as_mut_ptr(),
+                    libc::AT_SYMLINK_NOFOLLOW,
+                )
+            };
+            let (kind, size) = if stat_result == 0 {
+                let metadata = unsafe { metadata.assume_init() };
+                let file_kind = metadata.st_mode & libc::S_IFMT;
+                if file_kind == libc::S_IFREG {
+                    ("file", Some(metadata.st_size as u64))
+                } else if file_kind == libc::S_IFDIR {
+                    ("dir", None)
+                } else if file_kind == libc::S_IFLNK {
+                    ("symlink", None)
+                } else {
+                    ("other", None)
+                }
+            } else {
+                ("other", None)
+            };
+            let mut value = json!({
+                "name": std::ffi::OsString::from_vec(name_bytes.to_vec()).to_string_lossy(),
+                "kind": kind,
+            });
+            if let Some(size) = size {
+                value["size"] = json!(size);
+            }
+            entries.push(value);
+        }
+
+        Ok((entries, truncated))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (target, max_entries);
+        Err("descriptor-safe filesystem tools require Linux".to_string())
+    }
 }
 
 fn resolve_fs_path(raw: &str) -> Result<std::path::PathBuf, String> {
