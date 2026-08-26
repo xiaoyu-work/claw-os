@@ -28,6 +28,7 @@ library API exported by `core/src/lib.rs`.
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |
+| `service.rs`, `service/tests.rs` | Managed service lifecycle and regressions |
 
 ## Dependencies
 
