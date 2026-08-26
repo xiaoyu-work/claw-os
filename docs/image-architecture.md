@@ -36,8 +36,9 @@ Examples:
 - `vm` configures generic virtual-machine console and power behavior.
 - `local-user` creates the `cos` account needed by an unmanaged local VM.
 - `cloud-init` adds provider-neutral first-boot provisioning.
-- `azure` adds only the Azure datasource policy, Azure Linux Agent, and
-  Hyper-V integration.
+- `azure` requires `cloud-init`, restricts it to the Azure datasource, configures
+  Azure Linux Agent integration, forces Hyper-V storage/network modules into
+  initramfs, and enables Azure serial-console boot diagnostics.
 - `desktop` adds the COSMIC desktop independently of the platform.
 
 In particular, `vm` does not create a user and `azure` does not contain the
