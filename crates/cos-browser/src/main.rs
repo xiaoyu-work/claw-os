@@ -109,8 +109,9 @@ enum Command {
     /// Capture a page screenshot.
     ///
     /// cos-browser has no rendering engine of its own, so this shells out to
-    /// `chromium --headless`. Override the chromium binary with the
-    /// $COS_CHROMIUM_BIN environment variable (defaults to `chromium`).
+    /// `chromium --headless`. Override the Chromium binary with
+    /// $COS_CHROMIUM_BIN; otherwise `chromium` and `chromium-browser`
+    /// are discovered in that order.
     Screenshot {
         url: String,
 
@@ -980,17 +981,7 @@ async fn run_screenshot(
         height
     };
 
-    let chromium_bin = std::env::var("COS_CHROMIUM_BIN")
-        .unwrap_or_else(|_| "chromium".to_string());
-
-    if which::which(&chromium_bin).is_err()
-        && !std::path::Path::new(&chromium_bin).exists()
-    {
-        anyhow::bail!(
-            "chromium binary '{}' not found on PATH. Set $COS_CHROMIUM_BIN or install chromium.",
-            chromium_bin
-        );
-    }
+    let chromium_bin = resolve_chromium_bin()?;
 
     let abs_output = std::path::absolute(output).unwrap_or_else(|_| output.to_path_buf());
     if let Some(parent) = abs_output.parent() {
@@ -1097,6 +1088,78 @@ async fn run_screenshot(
             "chromium screenshot timed out after {}s",
             timeout_secs
         ),
+    }
+}
+
+fn resolve_chromium_bin() -> anyhow::Result<String> {
+    select_chromium_bin(std::env::var("COS_CHROMIUM_BIN").ok(), |candidate| {
+        which::which(candidate).is_ok() || std::path::Path::new(candidate).exists()
+    })
+}
+
+fn select_chromium_bin(
+    override_bin: Option<String>,
+    mut is_available: impl FnMut(&str) -> bool,
+) -> anyhow::Result<String> {
+    if let Some(candidate) = override_bin {
+        if is_available(&candidate) {
+            return Ok(candidate);
+        }
+        anyhow::bail!(
+            "Chromium binary '{}' from $COS_CHROMIUM_BIN was not found",
+            candidate
+        );
+    }
+
+    for candidate in [
+        "chromium",
+        "chromium-browser",
+        "google-chrome-stable",
+        "google-chrome",
+    ] {
+        if is_available(candidate) {
+            return Ok(candidate.to_string());
+        }
+    }
+
+    anyhow::bail!(
+        "no Chromium binary found on PATH; install Chromium/Chrome or set \
+         $COS_CHROMIUM_BIN"
+    )
+}
+
+#[cfg(test)]
+mod chromium_bin_tests {
+    use super::select_chromium_bin;
+
+    #[test]
+    fn prefers_standard_chromium_name() {
+        let selected =
+            select_chromium_bin(None, |candidate| matches!(candidate, "chromium")).unwrap();
+        assert_eq!(selected, "chromium");
+    }
+
+    #[test]
+    fn falls_back_to_ubuntu_chromium_name() {
+        let selected =
+            select_chromium_bin(None, |candidate| matches!(candidate, "chromium-browser")).unwrap();
+        assert_eq!(selected, "chromium-browser");
+    }
+
+    #[test]
+    fn supports_google_chrome_installations() {
+        let selected =
+            select_chromium_bin(None, |candidate| matches!(candidate, "google-chrome-stable"))
+                .unwrap();
+        assert_eq!(selected, "google-chrome-stable");
+    }
+
+    #[test]
+    fn explicit_override_does_not_silently_fall_back() {
+        let error = select_chromium_bin(Some("/missing/chrome".to_string()), |_| false)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("COS_CHROMIUM_BIN"));
     }
 }
 

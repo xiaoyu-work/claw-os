@@ -1,35 +1,17 @@
 #!/usr/bin/env bash
-# rootfs/features/systemd/install.sh — install claw-os-systemd.deb into ROOTFS.
-#
-# The .deb's postinst calls `deb-systemd-helper enable` for the boot-required
-# Claw OS units, including clawd.service. That creates the
-# multi-user.target.wants symlinks without needing a running systemd, so it
-# works inside a chroot.
+# rootfs/features/systemd/install.sh -- verify and finish wiring the units
+# owned by claw-os-agent and claw-os-base.
 #
 # Inherited from environment: ROOTFS, PROJECT_DIR, SCRIPT_DIR.
 
 set -euo pipefail
 
-DEBS_DIR="$PROJECT_DIR/build/debs"
-
-SYSTEMD_DEB="$DEBS_DIR/claw-os-systemd_${COS_VERSION}_all.deb"
-if [ ! -f "$SYSTEMD_DEB" ]; then
-    echo "  :: claw-os-systemd.deb not found — building it"
-    "$PROJECT_DIR/packaging/deb/build-debs.sh"
-fi
-
-if [ ! -f "$SYSTEMD_DEB" ]; then
-    echo "error: expected package missing after build: $SYSTEMD_DEB" >&2
-    exit 1
-fi
-echo "  :: installing $(basename "$SYSTEMD_DEB")"
-
-mkdir -p "$ROOTFS/var/cache/cos-debs"
-cp "$SYSTEMD_DEB" "$ROOTFS/var/cache/cos-debs/"
-chroot "$ROOTFS" apt-get install -y --no-install-recommends \
-    "/var/cache/cos-debs/$(basename "$SYSTEMD_DEB")"
-chroot "$ROOTFS" apt-get clean
-rm -rf "$ROOTFS/var/lib/apt/lists"/*
+for unit in clawd.service cos-browser.service cos-home-setup.service; do
+    if [ ! -f "$ROOTFS/usr/lib/systemd/system/$unit" ]; then
+        echo "error: expected packaged system unit missing: $unit" >&2
+        exit 1
+    fi
+done
 
 # Verify the wants symlink (postinst should have created it).
 if [ -L "$ROOTFS/etc/systemd/system/multi-user.target.wants/cos-home-setup.service" ]; then

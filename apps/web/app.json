@@ -101,7 +101,10 @@
       "cos-browser"
     ],
     "optional_binaries": [
-      "chromium"
+      "chromium",
+      "chromium-browser",
+      "google-chrome-stable",
+      "google-chrome"
     ]
   }
 }

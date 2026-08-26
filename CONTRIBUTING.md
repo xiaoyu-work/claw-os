@@ -126,12 +126,15 @@ installed targets.
 
 ### `apt` repository
 
-The `claw-os-base`, `claw-os-browser`, and `claw-os-systemd` `.deb`
+The reusable `claw-os-agent` and Claw OS integration `claw-os-base` `.deb`
 packages are assembled from compiled binaries and source-tree files; building
-the APT channel does not require a rootfs. The manually dispatched
+those APT artifacts does not require a rootfs. The optional desktop package is
+staged by the desktop rootfs feature. The manually dispatched
 **Build APT repo (.deb packages)** workflow builds both architectures, signs the
 repository, and publishes it to GitHub Pages. The umbrella **Release
 everything (test + Docker + WSL + APT)** workflow includes the same channel.
+Desktop `.deb` updates are built by the separately dispatched **Build Desktop
+packages** workflow; pass that run ID to either publication workflow.
 The repository is consumable as:
 
 ```bash
@@ -140,7 +143,7 @@ curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
 echo "deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] https://xiaoyu-work.github.io/claw-os trixie main" \
   | sudo tee /etc/apt/sources.list.d/claw-os.list
 sudo apt update
-sudo apt install claw-os-base
+sudo apt install claw-os-agent
 ```
 
 For details see `packaging/README.md`.

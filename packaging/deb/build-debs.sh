@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# packaging/deb/build-debs.sh — assemble claw-os-{base,browser,systemd}.deb
-# from already-built binaries + source-tree files.
+# packaging/deb/build-debs.sh -- assemble claw-os-agent and claw-os-base
+# from already-built binaries and source-tree files.
 #
 # Output: $PROJECT_DIR/build/debs/
 #
@@ -26,7 +26,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$PROJECT_DIR/scripts/lib/arch.sh"
 
 OUT_DIR="$PROJECT_DIR/build/debs"
-STAGE_DIR="$PROJECT_DIR/build/deb-staging"
+STAGE_DIR="${COS_DEB_STAGE_DIR:-$PROJECT_DIR/build/deb-staging}"
 
 source "$PROJECT_DIR/scripts/lib/package-version.sh"
 VERSION="$(package_version "$PROJECT_DIR")"
@@ -54,6 +54,13 @@ echo ":: claw-os deb build — version $VERSION arch $DEB_ARCH"
 
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR" "$OUT_DIR"
+# The package contract has exactly three names. Never let obsolete local
+# artifacts leak into a newly generated repository.
+find "$OUT_DIR" -maxdepth 1 -type f -name 'claw-os-*.deb' \
+    ! -name 'claw-os-agent_*.deb' \
+    ! -name 'claw-os-base_*.deb' \
+    ! -name 'claw-os-desktop_*.deb' \
+    -delete
 
 ###############################################################################
 # Helper: verify and locate a built binary across known target dirs.
@@ -223,228 +230,176 @@ render_control() {
 }
 
 ###############################################################################
-# 1. claw-os-base
+# 1. claw-os-agent
+###############################################################################
+echo "===> staging claw-os-agent"
+AGENT_STAGE="$STAGE_DIR/claw-os-agent"
+mkdir -p \
+    "$AGENT_STAGE/DEBIAN" \
+    "$AGENT_STAGE/etc/cos" \
+    "$AGENT_STAGE/usr/lib/cos/apps" \
+    "$AGENT_STAGE/usr/lib/cos/python" \
+    "$AGENT_STAGE/usr/lib/cos/skills" \
+    "$AGENT_STAGE/usr/lib/systemd/system" \
+    "$AGENT_STAGE/usr/lib/systemd/user" \
+    "$AGENT_STAGE/usr/local/bin" \
+    "$AGENT_STAGE/usr/share/polkit-1/actions"
+chmod 0755 "$AGENT_STAGE/DEBIAN"
+
+render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
+install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"
+install -m 755 "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst"
+install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
+install -m 755 "$SCRIPT_DIR/claw-os-agent/postrm" "$AGENT_STAGE/DEBIAN/postrm"
+
+COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
+CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
+APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
+    echo "error: claw-approval-helper binary not built" >&2; exit 1; }
+APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
+    echo "error: claw-app-runner binary not built" >&2; exit 1; }
+MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
+    echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
+
+echo "  :: cos                    <- $COS_BIN"
+echo "  :: clawd                  <- $CLAWD_BIN"
+echo "  :: claw-approval-helper   <- $APPROVAL_HELPER_BIN"
+echo "  :: claw-app-runner        <- $APP_RUNNER_BIN"
+echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
+install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
+install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
+install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
+install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
+install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"
+install -m 644 \
+    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
+    "$AGENT_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
+
+# V8 only publishes prebuilt libraries for glibc targets, so the browser
+# binaries intentionally live beside the musl-built core in the same package.
+COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser "${RUST_TARGET/-musl/-gnu}")" || {
+    echo "error: cos-browser binary not built" >&2; exit 1; }
+COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
+if [ ! -f "$COS_BROWSER_WORKER" ] || ! binary_matches_arch "$COS_BROWSER_WORKER"; then
+    echo "error: cos-browser-worker binary not built for $DEB_ARCH" >&2
+    exit 1
+fi
+echo "  :: cos-browser            <- $COS_BROWSER_BIN"
+echo "  :: cos-browser-worker     <- $COS_BROWSER_WORKER"
+install -m 755 "$COS_BROWSER_BIN" "$AGENT_STAGE/usr/local/bin/cos-browser"
+install -m 755 "$COS_BROWSER_WORKER" "$AGENT_STAGE/usr/local/bin/cos-browser-worker"
+
+CLAW_SEMANTIC_DAEMON_BIN="$(
+    ensure_bin claw-semantic-daemon claw-semantic "${RUST_TARGET/-musl/-gnu}"
+)" || { echo "error: claw-semantic-daemon binary not built" >&2; exit 1; }
+CLAW_SEMANTIC_CLI_BIN="$(
+    ensure_bin claw-semantic claw-semantic "${RUST_TARGET/-musl/-gnu}"
+)" || { echo "error: claw-semantic binary not built" >&2; exit 1; }
+echo "  :: claw-semantic-daemon  <- $CLAW_SEMANTIC_DAEMON_BIN"
+echo "  :: claw-semantic         <- $CLAW_SEMANTIC_CLI_BIN"
+install -m 755 "$CLAW_SEMANTIC_DAEMON_BIN" \
+    "$AGENT_STAGE/usr/local/bin/claw-semantic-daemon"
+install -m 755 "$CLAW_SEMANTIC_CLI_BIN" "$AGENT_STAGE/usr/local/bin/claw-semantic"
+
+install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
+    "$AGENT_STAGE/etc/cos/profile.sh"
+sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
+    "$AGENT_STAGE/etc/cos/profile.sh"
+
+# All non-graphical apps belong to the reusable agent. The manifests in
+# apps.list are Agent UI/COSMIC/panel integrations owned by claw-os-desktop.
+DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
+while IFS= read -r app_id; do
+    [ -n "$app_id" ] || continue
+    if [ ! -f "$PROJECT_DIR/apps/$app_id/app.json" ]; then
+        echo "error: desktop app listed but missing: $app_id" >&2
+        exit 1
+    fi
+done < "$DESKTOP_APPS_FILE"
+for app_dir in "$PROJECT_DIR/apps"/*; do
+    [ -d "$app_dir" ] || continue
+    app_id="$(basename "$app_dir")"
+    [ "$app_id" = "__pycache__" ] && continue
+    if grep -Fxq "$app_id" "$DESKTOP_APPS_FILE"; then
+        continue
+    fi
+    cp -a "$app_dir" "$AGENT_STAGE/usr/lib/cos/apps/$app_id"
+done
+find "$AGENT_STAGE/usr/lib/cos/apps" -name '__pycache__' -type d \
+    -exec rm -rf {} + 2>/dev/null || true
+
+source_app_count="$(find "$PROJECT_DIR/apps" -mindepth 2 -maxdepth 2 \
+    -name app.json -type f | wc -l)"
+agent_app_count="$(find "$AGENT_STAGE/usr/lib/cos/apps" -mindepth 2 -maxdepth 2 \
+    -name app.json -type f | wc -l)"
+desktop_app_count="$(grep -cve '^[[:space:]]*$' "$DESKTOP_APPS_FILE")"
+if [ $((agent_app_count + desktop_app_count)) -ne "$source_app_count" ]; then
+    echo "error: app package partition is incomplete" >&2
+    echo "       source=$source_app_count agent=$agent_app_count desktop=$desktop_app_count" >&2
+    exit 1
+fi
+
+if [ -d "$PROJECT_DIR/skills" ]; then
+    cp -a "$PROJECT_DIR/skills/." "$AGENT_STAGE/usr/lib/cos/skills/"
+fi
+
+SDK_PY_SRC="$PROJECT_DIR/claw-os-sdk/python/src/claw_os_sdk"
+RUNTIME_PY_SRC="$PROJECT_DIR/cos-runtime/python/src/cos_runtime"
+if [ ! -d "$SDK_PY_SRC" ] || [ ! -d "$RUNTIME_PY_SRC" ]; then
+    echo "error: Python SDK/runtime source trees are required" >&2
+    exit 1
+fi
+cp -a "$SDK_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/claw_os_sdk"
+cp -a "$RUNTIME_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/cos_runtime"
+find "$AGENT_STAGE/usr/lib/cos/python" -name '__pycache__' -type d \
+    -exec rm -rf {} + 2>/dev/null || true
+
+SYSTEM_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
+USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
+install -m 644 "$SYSTEM_UNITS_SRC/clawd.service" \
+    "$AGENT_STAGE/usr/lib/systemd/system/clawd.service"
+install -m 644 "$SYSTEM_UNITS_SRC/cos-browser.service" \
+    "$AGENT_STAGE/usr/lib/systemd/system/cos-browser.service"
+install -m 644 "$USER_UNITS_SRC/claw-recoll-index.service" \
+    "$AGENT_STAGE/usr/lib/systemd/user/claw-recoll-index.service"
+install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
+    "$AGENT_STAGE/usr/lib/systemd/user/claw-semantic.service"
+
+echo "  :: dpkg-deb --build claw-os-agent"
+$FAKEROOT $DPKG_DEB --root-owner-group --build "$AGENT_STAGE" \
+    "$OUT_DIR/claw-os-agent_${VERSION}_${DEB_ARCH}.deb" >/dev/null
+
+###############################################################################
+# 2. claw-os-base (architecture-independent Claw OS integration)
 ###############################################################################
 echo "===> staging claw-os-base"
 BASE_STAGE="$STAGE_DIR/claw-os-base"
-mkdir -p "$BASE_STAGE/DEBIAN"
-mkdir -p "$BASE_STAGE/usr/local/bin"
-mkdir -p "$BASE_STAGE/usr/lib/cos/apps"
-mkdir -p "$BASE_STAGE/usr/lib/cos/skills"
-mkdir -p "$BASE_STAGE/usr/lib/cos/init"
-mkdir -p "$BASE_STAGE/usr/lib/cos/python"
-mkdir -p "$BASE_STAGE/usr/share/applications"
-mkdir -p "$BASE_STAGE/usr/share/polkit-1/actions"
-mkdir -p "$BASE_STAGE/etc/cos"
+mkdir -p \
+    "$BASE_STAGE/DEBIAN" \
+    "$BASE_STAGE/etc/default" \
+    "$BASE_STAGE/usr/lib/cos/init" \
+    "$BASE_STAGE/usr/lib/systemd/system" \
+    "$BASE_STAGE/usr/local/bin"
+chmod 0755 "$BASE_STAGE/DEBIAN"
 
-# Control + maintainer scripts.
 render_control "$SCRIPT_DIR/claw-os-base/control" "$BASE_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-base/conffiles" "$BASE_STAGE/DEBIAN/conffiles"
 install -m 755 "$SCRIPT_DIR/claw-os-base/postinst" "$BASE_STAGE/DEBIAN/postinst"
+install -m 755 "$SCRIPT_DIR/claw-os-base/prerm" "$BASE_STAGE/DEBIAN/prerm"
+install -m 755 "$SCRIPT_DIR/claw-os-base/postrm" "$BASE_STAGE/DEBIAN/postrm"
 
-# Binary: cos.
-COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
-echo "  :: cos          <- $COS_BIN"
-install -m 755 "$COS_BIN" "$BASE_STAGE/usr/local/bin/cos"
-
-# Binary: clawd (system agent daemon). Same crate as cos (`-p cos` builds
-# both bins), so building cos above already produced it.
-CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
-echo "  :: clawd        <- $CLAWD_BIN"
-install -m 755 "$CLAWD_BIN" "$BASE_STAGE/usr/local/bin/clawd"
-
-# Narrow pkexec target used by the desktop approval applet. It can only
-# submit one approval decision to clawd and never exposes the general cos CLI
-# as root.
-APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
-    echo "error: claw-approval-helper binary not built" >&2; exit 1; }
-echo "  :: claw-approval-helper <- $APPROVAL_HELPER_BIN"
-install -m 755 "$APPROVAL_HELPER_BIN" \
-    "$BASE_STAGE/usr/local/bin/claw-approval-helper"
-install -m 644 \
-    "$PROJECT_DIR/rootfs/overlay/usr/share/polkit-1/actions/org.clawos.approval.policy" \
-    "$BASE_STAGE/usr/share/polkit-1/actions/org.clawos.approval.policy"
-
-APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
-    echo "error: claw-app-runner binary not built" >&2; exit 1; }
-echo "  :: claw-app-runner     <- $APP_RUNNER_BIN"
-install -m 755 "$APP_RUNNER_BIN" "$BASE_STAGE/usr/local/bin/claw-app-runner"
-
-MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
-    echo "error: claw-mail-ai-host binary not built" >&2; exit 1; }
-echo "  :: claw-mail-ai-host   <- $MAIL_AI_HOST_BIN"
-install -m 755 "$MAIL_AI_HOST_BIN" "$BASE_STAGE/usr/lib/cos/claw-mail-ai-host"
-
-# Binaries: claw-semantic-daemon + claw-semantic CLI.
-# Both are optional — the OS still works without them (Recoll covers
-# the keyword layer); a missing binary just disables the semantic
-# search layer and apps/docs.search falls back to recoll-only.
-CLAW_SEMANTIC_DAEMON_BIN="$(find_bin claw-semantic-daemon || true)"
-if [ -n "$CLAW_SEMANTIC_DAEMON_BIN" ] && [ -f "$CLAW_SEMANTIC_DAEMON_BIN" ]; then
-    echo "  :: claw-semantic-daemon  <- $CLAW_SEMANTIC_DAEMON_BIN"
-    install -m 755 "$CLAW_SEMANTIC_DAEMON_BIN" "$BASE_STAGE/usr/local/bin/claw-semantic-daemon"
-else
-    echo "  :: WARNING — claw-semantic-daemon binary not built; semantic search disabled" >&2
-fi
-
-CLAW_SEMANTIC_CLI_BIN="$(find_bin claw-semantic || true)"
-if [ -n "$CLAW_SEMANTIC_CLI_BIN" ] && [ -f "$CLAW_SEMANTIC_CLI_BIN" ]; then
-    echo "  :: claw-semantic         <- $CLAW_SEMANTIC_CLI_BIN"
-    install -m 755 "$CLAW_SEMANTIC_CLI_BIN" "$BASE_STAGE/usr/local/bin/claw-semantic"
-fi
-
-# Shell scripts shared with all targets.
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/local/bin/cos-init" \
     "$BASE_STAGE/usr/local/bin/cos-init"
 install -m 755 "$PROJECT_DIR/rootfs/overlay/usr/lib/cos/init/setup-home.sh" \
     "$BASE_STAGE/usr/lib/cos/init/setup-home.sh"
+install -m 644 "$SYSTEM_UNITS_SRC/cos-home-setup.service" \
+    "$BASE_STAGE/usr/lib/systemd/system/cos-home-setup.service"
+install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-home" \
+    "$BASE_STAGE/etc/default/cos-home"
 
-# Config files (declared as conffiles above). Agent config is per-user
-# (~/.config/cos/config.json, written by `cos agent setup`); only the
-# profile shim is shipped system-wide here.
-install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
-    "$BASE_STAGE/etc/cos/profile.sh"
-
-# Inject the version into profile.sh so the binaries and scripts
-# agree on the same string at runtime.
-sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" "$BASE_STAGE/etc/cos/profile.sh"
-
-# Apps, skills.
-if [ -d "$PROJECT_DIR/apps" ]; then
-    cp -a "$PROJECT_DIR/apps/." "$BASE_STAGE/usr/lib/cos/apps/"
-fi
-if [ -d "$PROJECT_DIR/skills" ]; then
-    cp -a "$PROJECT_DIR/skills/." "$BASE_STAGE/usr/lib/cos/skills/"
-fi
-
-# Python packages shipped system-wide so every bundled app can
-# `from claw_os_sdk import ai` (public AI surface) and
-# `from cos_runtime import policy` (internal capability gate). The
-# `cos` kernel's app-spawn wrapper (core/src/bridge.rs) and its
-# MCP-session helper (core/src/agent/tools/cos_apps_session.rs) both
-# seed sys.path / PYTHONPATH from /usr/lib/cos/python first, so a
-# deb-only install needs the packages to live exactly here.
-SDK_PY_SRC="$PROJECT_DIR/claw-os-sdk/python/src/claw_os_sdk"
-RUNTIME_PY_SRC="$PROJECT_DIR/cos-runtime/python/src/cos_runtime"
-if [ -d "$SDK_PY_SRC" ]; then
-    echo "  :: claw_os_sdk python  <- $SDK_PY_SRC"
-    cp -a "$SDK_PY_SRC" "$BASE_STAGE/usr/lib/cos/python/claw_os_sdk"
-    find "$BASE_STAGE/usr/lib/cos/python/claw_os_sdk" -name '__pycache__' -type d \
-        -exec rm -rf {} + 2>/dev/null || true
-else
-    echo "  :: WARNING — claw-os-sdk python tree missing at $SDK_PY_SRC" >&2
-fi
-if [ -d "$RUNTIME_PY_SRC" ]; then
-    echo "  :: cos_runtime python  <- $RUNTIME_PY_SRC"
-    cp -a "$RUNTIME_PY_SRC" "$BASE_STAGE/usr/lib/cos/python/cos_runtime"
-    find "$BASE_STAGE/usr/lib/cos/python/cos_runtime" -name '__pycache__' -type d \
-        -exec rm -rf {} + 2>/dev/null || true
-else
-    echo "  :: WARNING — cos-runtime python tree missing at $RUNTIME_PY_SRC" >&2
-fi
-
-# Desktop launchers for ClawOS-specific apps (e.g. com.clawos.Agent).
-# These live in the rootfs overlay so they ship even on overlay-only
-# rootfs builds; here we mirror them into the deb so apt-based
-# installs (WSL, Docker upgrades) also get them.
-DESKTOP_OVERLAY="$PROJECT_DIR/rootfs/overlay/usr/share/applications"
-if [ -d "$DESKTOP_OVERLAY" ]; then
-    for desktop_file in "$DESKTOP_OVERLAY"/*.desktop; do
-        [ -e "$desktop_file" ] || continue
-        echo "  :: $(basename "$desktop_file")"
-        install -m 644 "$desktop_file" \
-            "$BASE_STAGE/usr/share/applications/$(basename "$desktop_file")"
-    done
-fi
-
-# Hicolor icons for ClawOS-specific apps.
-# Shipped here in the base deb so the .desktop launchers above resolve
-# even without the full claw-os-desktop install.
-ICON_OVERLAY="$PROJECT_DIR/rootfs/features/desktop/overlay/usr/share/icons"
-if [ -d "$ICON_OVERLAY" ]; then
-    for icon_path in "$ICON_OVERLAY"/hicolor/*/apps/clawos-agent.*; do
-        [ -e "$icon_path" ] || continue
-        rel="${icon_path#$ICON_OVERLAY/}"
-        mkdir -p "$BASE_STAGE/usr/share/icons/$(dirname "$rel")"
-        install -m 644 "$icon_path" "$BASE_STAGE/usr/share/icons/$rel"
-    done
-fi
-
-# Build the .deb.
 echo "  :: dpkg-deb --build claw-os-base"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BASE_STAGE" \
-    "$OUT_DIR/claw-os-base_${VERSION}_${DEB_ARCH}.deb" >/dev/null
-
-###############################################################################
-# 2. claw-os-browser
-###############################################################################
-echo "===> staging claw-os-browser"
-BROWSER_STAGE="$STAGE_DIR/claw-os-browser"
-mkdir -p "$BROWSER_STAGE/DEBIAN"
-mkdir -p "$BROWSER_STAGE/usr/local/bin"
-
-render_control "$SCRIPT_DIR/claw-os-browser/control" "$BROWSER_STAGE/DEBIAN/control"
-
-# cos-browser embeds V8 (rusty_v8), which only publishes prebuilt static
-# libs for glibc targets — a musl build 404s on the download. Build it for
-# the gnu triple instead; this mirrors what CI does in its own build steps.
-COS_BROWSER_BIN="$(ensure_bin cos-browser cos-browser "${RUST_TARGET/-musl/-gnu}")" || {
-    echo "error: cos-browser binary not built" >&2; exit 1; }
-echo "  :: cos-browser  <- $COS_BROWSER_BIN"
-install -m 755 "$COS_BROWSER_BIN" "$BROWSER_STAGE/usr/local/bin/cos-browser"
-
-COS_BROWSER_WORKER="$(dirname "$COS_BROWSER_BIN")/cos-browser-worker"
-if [ -f "$COS_BROWSER_WORKER" ] && binary_matches_arch "$COS_BROWSER_WORKER"; then
-    echo "  :: cos-browser-worker  <- $COS_BROWSER_WORKER"
-    install -m 755 "$COS_BROWSER_WORKER" "$BROWSER_STAGE/usr/local/bin/cos-browser-worker"
-fi
-
-echo "  :: dpkg-deb --build claw-os-browser"
-$FAKEROOT $DPKG_DEB --root-owner-group --build "$BROWSER_STAGE" \
-    "$OUT_DIR/claw-os-browser_${VERSION}_${DEB_ARCH}.deb" >/dev/null
-
-###############################################################################
-# 3. claw-os-systemd (arch all)
-###############################################################################
-echo "===> staging claw-os-systemd"
-SYSTEMD_STAGE="$STAGE_DIR/claw-os-systemd"
-mkdir -p "$SYSTEMD_STAGE/DEBIAN"
-mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/system"
-mkdir -p "$SYSTEMD_STAGE/usr/lib/systemd/user"
-
-render_control "$SCRIPT_DIR/claw-os-systemd/control" "$SYSTEMD_STAGE/DEBIAN/control"
-install -m 644 "$SCRIPT_DIR/claw-os-systemd/conffiles" "$SYSTEMD_STAGE/DEBIAN/conffiles"
-install -m 755 "$SCRIPT_DIR/claw-os-systemd/postinst" "$SYSTEMD_STAGE/DEBIAN/postinst"
-install -m 755 "$SCRIPT_DIR/claw-os-systemd/prerm"    "$SYSTEMD_STAGE/DEBIAN/prerm"
-install -m 755 "$SCRIPT_DIR/claw-os-systemd/postrm"   "$SYSTEMD_STAGE/DEBIAN/postrm"
-
-UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
-install -m 644 "$UNITS_SRC/cos-home-setup.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-home-setup.service"
-install -m 644 "$UNITS_SRC/cos-browser.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/system/cos-browser.service"
-install -m 644 "$UNITS_SRC/clawd.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/system/clawd.service"
-
-# Admin-editable default for cos-home-setup.service.
-DEFAULTS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default"
-mkdir -p "$SYSTEMD_STAGE/etc/default"
-install -m 644 "$DEFAULTS_SRC/cos-home" \
-    "$SYSTEMD_STAGE/etc/default/cos-home"
-
-# User-scoped units: cos-agent-bridge starts in graphical sessions and
-# connects to the system clawd socket. Enabled globally by the postinst.
-USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
-install -m 644 "$USER_UNITS_SRC/cos-agent-bridge.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/user/cos-agent-bridge.service"
-install -m 644 "$USER_UNITS_SRC/claw-recoll-index.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-recoll-index.service"
-install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
-    "$SYSTEMD_STAGE/usr/lib/systemd/user/claw-semantic.service"
-
-echo "  :: dpkg-deb --build claw-os-systemd"
-$FAKEROOT $DPKG_DEB --root-owner-group --build "$SYSTEMD_STAGE" \
-    "$OUT_DIR/claw-os-systemd_${VERSION}_all.deb" >/dev/null
+    "$OUT_DIR/claw-os-base_${VERSION}_all.deb" >/dev/null
 
 ###############################################################################
 # Done.

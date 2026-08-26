@@ -36,9 +36,9 @@ lowercase letter, then lowercase letters, digits, `_`, or `-`.
 
 ## 2. The SDK is already there
 
-On a Claw OS install (Docker, WSL, VM, or ISO target) the
-`claw-os-base.deb` package puts both Python helper packages on the
-system at `/usr/lib/cos/python/`:
+On either a Debian/Ubuntu Agent install or a complete Claw OS target, the
+`claw-os-agent.deb` package puts both Python helper packages on the system at
+`/usr/lib/cos/python/`:
 
 * `claw_os_sdk` — public SDK for AI calls
   ([`claw-os-sdk/python/src/claw_os_sdk/`](../claw-os-sdk/python/src/claw_os_sdk/))

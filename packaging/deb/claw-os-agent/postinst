@@ -1,0 +1,51 @@
+#!/bin/sh
+# claw-os-agent postinst -- initialize and start the reusable system agent.
+
+set -e
+
+case "$1" in
+    configure)
+        install -d -m 0700 /var/lib/cos /var/log/cos
+        rmdir /var/log/aos 2>/dev/null || true
+
+        if [ -f /etc/bash.bashrc ] && \
+           ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then
+            echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' \
+                >> /etc/bash.bashrc
+        fi
+
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper unmask clawd.service >/dev/null || true
+            deb-systemd-helper --quiet was-enabled clawd.service \
+                || deb-systemd-helper enable clawd.service >/dev/null || true
+            deb-systemd-helper unmask cos-browser.service >/dev/null || true
+        fi
+
+        mkdir -p /etc/systemd/user/default.target.wants
+        for unit in claw-recoll-index.service claw-semantic.service; do
+            ln -sf "/usr/lib/systemd/user/$unit" \
+                "/etc/systemd/user/default.target.wants/$unit"
+        done
+
+        rm -f /etc/systemd/user/default.target.wants/clawd.service
+
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            systemctl --global daemon-reload >/dev/null 2>&1 || true
+            if [ -n "$2" ]; then
+                deb-systemd-invoke try-restart clawd.service >/dev/null || true
+                deb-systemd-invoke try-restart cos-browser.service >/dev/null || true
+            else
+                deb-systemd-invoke start clawd.service >/dev/null || true
+            fi
+        fi
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

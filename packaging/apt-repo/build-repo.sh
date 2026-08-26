@@ -13,9 +13,8 @@
 #   │       ├── binary-amd64/Packages{,.gz}    (if amd64 .debs present)
 #   │       ├── binary-arm64/Packages{,.gz}    (if arm64 .debs present)
 #   │       └── binary-all/Packages{,.gz}      (always — Architecture: all)
-#   └── pool/main/c/claw-os-base/claw-os-base_<v>_<arch>.deb
-#       pool/main/c/claw-os-browser/claw-os-browser_<v>_<arch>.deb
-#       pool/main/c/claw-os-systemd/claw-os-systemd_<v>_all.deb
+#   └── pool/main/c/claw-os-agent/claw-os-agent_<v>_<arch>.deb
+#       pool/main/c/claw-os-base/claw-os-base_<v>_all.deb
 #       pool/main/c/claw-os-desktop/claw-os-desktop_<v>_<arch>.deb
 #
 # Dual-arch: the script auto-discovers every Architecture: in build/debs/
@@ -67,7 +66,7 @@ declare -a binary_arches=()
 arch_seen=""
 for deb in "$DEBS_DIR"/*.deb; do
     name="$(basename "$deb")"
-    # claw-os-base_0.1.0_amd64.deb -> amd64
+    # claw-os-agent_0.1.0_amd64.deb -> amd64
     deb_arch="${name##*_}"
     deb_arch="${deb_arch%.deb}"
     # Architecture: all packages are surfaced under every binary-<arch>
@@ -103,7 +102,7 @@ fi
 # Move each .deb into pool/main/c/<package-name>/.
 for deb in "$DEBS_DIR"/*.deb; do
     name="$(basename "$deb")"
-    # claw-os-base_0.1.0_amd64.deb -> claw-os-base
+    # claw-os-agent_0.1.0_amd64.deb -> claw-os-agent
     pkg="${name%%_*}"
     pool_dir="$REPO_DIR/pool/$COMPONENT/c/$pkg"
     mkdir -p "$pool_dir"

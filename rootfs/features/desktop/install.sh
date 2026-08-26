@@ -47,10 +47,6 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
     # The desktop package merges cursor defaults into it from postinst instead
     # of trying to own the file directly.
     rm -f "$DESKTOP_PACKAGE_ROOT/etc/environment"
-    # These icons are shipped by claw-os-base with the agent .desktop launcher.
-    # Keep desktop from owning them too.
-    find "$DESKTOP_PACKAGE_ROOT/usr/share/icons/hicolor" \
-        -path '*/apps/clawos-agent.*' -type f -delete 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------
@@ -313,16 +309,18 @@ chroot "$ROOTFS" env \
     # produced here or the desktop agent app fails to launch with
     #   {"error":"cos-agent-ui is not installed"}.
     # ----------------------------------------------------------------------
-    if [ -f /build/desktop-src/agent/Cargo.toml ]; then
-        echo "  :: building cos-agent-ui + cos-agent-bridge"
-        cd /build/desktop-src/agent
-        cargo build --release --workspace
-        # Honour CARGO_TARGET_DIR (exported above) — cargo writes there, so
-        # the binaries are not under ./target when it is set.
-        agent_target="${CARGO_TARGET_DIR:-target}"
-        install -Dm0755 "$agent_target/release/cos-agent-ui"     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
-        install -Dm0755 "$agent_target/release/cos-agent-bridge" "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
+    if [ ! -f /build/desktop-src/agent/Cargo.toml ]; then
+        echo "error: required desktop Agent workspace is missing" >&2
+        exit 1
     fi
+    echo "  :: building cos-agent-ui + cos-agent-bridge"
+    cd /build/desktop-src/agent
+    cargo build --release --workspace
+    # Honour CARGO_TARGET_DIR (exported above) — cargo writes there, so
+    # the binaries are not under ./target when it is set.
+    agent_target="${CARGO_TARGET_DIR:-target}"
+    install -Dm0755 "$agent_target/release/cos-agent-ui"     "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-ui"
+    install -Dm0755 "$agent_target/release/cos-agent-bridge" "$DESKTOP_PACKAGE_ROOT/usr/local/bin/cos-agent-bridge"
 '
 
 # ---------------------------------------------------------------------------
@@ -483,14 +481,14 @@ for unit in pipewire.service wireplumber.service; do
             "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/default.target.wants/$unit"
 done
 
-# cos-agent-bridge.service is shipped by rootfs/features/systemd/overlay/
-# at /usr/lib/systemd/user/. It declares WantedBy=graphical-session.target
+# cos-agent-bridge.service is shipped in the desktop package overlay. It
+# declares WantedBy=graphical-session.target
 # but `systemctl --user enable` only runs in the user's session, which
 # means a fresh user (no prior login) never gets the symlink. Wire it
 # globally so the bridge starts as soon as cosmic-session reaches
 # graphical-session.target.
 mkdir -p "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/graphical-session.target.wants"
-[ -e "$ROOTFS/usr/lib/systemd/user/cos-agent-bridge.service" ] && \
+[ -e "$DESKTOP_PACKAGE_ROOT/usr/lib/systemd/user/cos-agent-bridge.service" ] && \
     ln -sf "/usr/lib/systemd/user/cos-agent-bridge.service" \
         "$DESKTOP_PACKAGE_ROOT/etc/systemd/user/graphical-session.target.wants/cos-agent-bridge.service"
 
@@ -548,6 +546,10 @@ installed_required_files=(
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.Launcher.svg"
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/com.clawos.AppLibrary.svg"
     "$ROOTFS/usr/share/icons/hicolor/scalable/apps/clawos-agent.svg"
+    "$ROOTFS/usr/share/applications/com.clawos.Agent.desktop"
+    "$ROOTFS/usr/lib/systemd/user/cos-agent-bridge.service"
+    "$ROOTFS/usr/local/bin/cos-agent-ui"
+    "$ROOTFS/usr/local/bin/cos-agent-bridge"
     "$ROOTFS/usr/share/icons/Tela-black-light/index.theme"
     "$ROOTFS/etc/greetd/cosmic-greeter.toml"
     "$ROOTFS/lib/systemd/system/cosmic-greeter.service"
@@ -563,6 +565,14 @@ if [ "$install_missing" = "1" ]; then
     echo "  error: claw-os-desktop installed with missing desktop files" >&2
     exit 1
 fi
+
+while IFS= read -r app_id; do
+    [ -n "$app_id" ] || continue
+    if [ ! -f "$ROOTFS/usr/lib/cos/apps/$app_id/app.json" ]; then
+        echo "  error: desktop app missing after package install: $app_id" >&2
+        exit 1
+    fi
+done < "$PROJECT_DIR/packaging/deb/claw-os-desktop/apps.list"
 
 locale_missing=0
 for want in en_US.utf8 zh_CN.utf8 zh_TW.utf8 ja_JP.utf8; do

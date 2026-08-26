@@ -16,8 +16,8 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | Feature | What it adds |
 |---|---|
 | `base` | Core CLI tools, Node.js 24 (+ pnpm/typescript/tsx), Python apt packages, runtime dirs, `/etc/cos/profile.sh` sourcing, version injection |
-| `cos-core` | The `cos` binary, `apps/`, `skills/` |
-| `browser` | Chromium runtime libs, the `cos-browser` and (optional) `cos-browser-worker` binaries |
+| `cos-core` | `claw-os-agent` plus `claw-os-base`: Agent/browser binaries, headless apps, skills, SDKs, and Claw OS integration |
+| `browser` | Chromium executable and target runtime integration for the browser binaries already shipped by `claw-os-agent` |
 | `qwen3-embedding` | Downloads the public Hugging Face `johnucm/Qwen-Qwen3-Embedding-0.6B-onnx` ONNX GenAI bundle into `/var/lib/cos/models/qwen3-embedding-0.6b/v1` and installs the pinned `ort-genai` runtime where upstream provides a Linux asset |
 | `desktop` | Builds the vendored desktop workspace into `claw-os-desktop.deb`, then installs it. Includes compositor, greeter, panel, launcher, settings, apps, desktop defaults, and graphical boot wiring. Set `DESKTOP_SKIP=1` to install runtime deps + overlay only. |
 | `claw-mail-ai` | Packs the `extensions/claw-mail-ai` MailExtension as an `.xpi`, force-installs it into Thunderbird, deploys the Python Native Messaging host (`apps/mail-ai`) under `/usr/lib/cos/mail-ai`, and drops the NM manifest + policies. Requires Thunderbird (already pulled in by `desktop`). |
@@ -54,7 +54,7 @@ artifact formats and finalization.
 # Default — same as the legacy invocation
 sudo ./rootfs/build.sh
 
-# Headless rootfs, no browser engine
+# Headless rootfs without a Chromium renderer
 sudo ./rootfs/build.sh --features base,cos-core
 
 # Headless rootfs, no cos at all (just Debian + Node)

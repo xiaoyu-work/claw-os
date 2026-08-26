@@ -133,7 +133,7 @@ def _exec_native(extra_args):
     if not native:
         return {
             "error": "cos-agent-ui is not installed",
-            "hint": "apt-get install --reinstall claw-os-base",
+            "hint": "apt-get install --reinstall claw-os-desktop",
         }
     if _ensure_endpoint() is None:
         return {

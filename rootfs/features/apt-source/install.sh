@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # rootfs/features/apt-source/install.sh — configure the Claw OS apt repo on
-# the installed system. After this runs, `apt update` will see claw-os-base,
-# claw-os-browser and claw-os-systemd as upgradeable packages.
+# the installed system. After this runs, `apt update` will see
+# claw-os-agent, claw-os-base, and claw-os-desktop as upgradeable packages.
 #
 # Inherited from environment: ROOTFS.
 #

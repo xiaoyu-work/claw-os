@@ -46,7 +46,7 @@ if [ -d "$FEATURE_DIR/overlay" ] && [ -n "$(ls -A "$FEATURE_DIR/overlay" 2>/dev/
     cp -a --no-preserve=ownership "$FEATURE_DIR/overlay/." "$ROOTFS/"
 fi
 if [ ! -x "$ROOTFS/usr/lib/cos/claw-mail-ai-host" ]; then
-    echo "  error: trusted claw-mail-ai-host binary is missing from claw-os-base" >&2
+    echo "  error: trusted claw-mail-ai-host binary is missing from claw-os-agent" >&2
     exit 1
 fi
 

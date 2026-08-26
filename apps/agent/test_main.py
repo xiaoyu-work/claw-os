@@ -12,6 +12,12 @@ import main
 
 
 class AgentLauncherTests(unittest.TestCase):
+    def test_missing_native_ui_points_to_desktop_package(self):
+        with mock.patch.object(main, "_find_native_ui", return_value=None):
+            result = main._exec_native([])
+        self.assertEqual(result["error"], "cos-agent-ui is not installed")
+        self.assertIn("claw-os-desktop", result["hint"])
+
     def test_overlay_forwards_all_supported_arguments(self):
         with mock.patch.object(main, "_exec_native", return_value={"ok": True}) as execute:
             result = main._cmd_overlay(

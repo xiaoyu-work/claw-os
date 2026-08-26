@@ -1,19 +1,41 @@
 #!/bin/sh
-# claw-os-base postinst — create runtime directories that the package can't
-# ship as empty dirs (dpkg doesn't preserve them) and ensure the cos profile
-# is sourced by interactive logins.
+# claw-os-base postinst -- enable Claw OS distribution-level services.
 
 set -e
 
 case "$1" in
     configure)
-        install -d -m 0700 /var/lib/cos /var/log/cos
-        rmdir /var/log/aos 2>/dev/null || true
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper unmask cos-home-setup.service >/dev/null || true
+            deb-systemd-helper --quiet was-enabled cos-home-setup.service \
+                || deb-systemd-helper enable cos-home-setup.service >/dev/null || true
 
-        if [ -f /etc/bash.bashrc ] && \
-           ! grep -q 'cos/profile.sh' /etc/bash.bashrc; then
-            echo '[ -f /etc/cos/profile.sh ] && . /etc/cos/profile.sh' \
-                >> /etc/bash.bashrc
+            # These policies belong to the Claw OS distribution, not to a
+            # reusable agent installed on an existing Debian/Ubuntu host.
+            if [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
+                deb-systemd-helper unmask systemd-timesyncd.service >/dev/null || true
+                deb-systemd-helper --quiet was-enabled systemd-timesyncd.service \
+                    || deb-systemd-helper enable systemd-timesyncd.service >/dev/null || true
+            fi
+            if [ -f /lib/systemd/system/ydotoold.service ]; then
+                deb-systemd-helper unmask ydotoold.service >/dev/null || true
+                deb-systemd-helper --quiet was-enabled ydotoold.service \
+                    || deb-systemd-helper enable ydotoold.service >/dev/null || true
+            fi
+            if [ -f /lib/systemd/system/fwupd-refresh.timer ]; then
+                deb-systemd-helper unmask fwupd-refresh.timer >/dev/null || true
+                deb-systemd-helper --quiet was-enabled fwupd-refresh.timer \
+                    || deb-systemd-helper enable fwupd-refresh.timer >/dev/null || true
+            fi
+        fi
+
+        if [ -d /run/systemd/system ]; then
+            systemctl --system daemon-reload >/dev/null || true
+            if [ -n "$2" ]; then
+                deb-systemd-invoke try-restart cos-home-setup.service >/dev/null || true
+            else
+                deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+            fi
         fi
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)

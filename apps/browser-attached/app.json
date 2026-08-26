@@ -164,6 +164,12 @@
     }
   },
   "dependencies": {
-    "binaries": ["chromium"]
+    "binaries": [],
+    "optional_binaries": [
+      "chromium",
+      "chromium-browser",
+      "google-chrome-stable",
+      "google-chrome"
+    ]
   }
 }

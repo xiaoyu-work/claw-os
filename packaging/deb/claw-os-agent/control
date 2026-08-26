@@ -1,0 +1,24 @@
+Package: claw-os-agent
+Version: __VERSION__
+Section: admin
+Priority: optional
+Architecture: __ARCH__
+Maintainer: Claw OS <noreply@github.com>
+Homepage: https://github.com/xiaoyu-work/claw-os
+Depends: bash, coreutils, ca-certificates, bubblewrap, python3, sudo, systemd,
+ systemd-coredump, init-system-helpers (>= 1.52),
+ libnss3, libxss1, libasound2, libatk1.0-0, libatk-bridge2.0-0,
+ libcups2, libdrm2, libdbus-1-3, libxcomposite1, libxdamage1,
+ libxfixes3, libxrandr2, libgbm1, libpango-1.0-0, libcairo2,
+ fonts-liberation, xdg-utils
+Recommends: chromium | chromium-browser | google-chrome-stable,
+ nodejs, python3-pip, git, ripgrep, curl, jq, sqlite3
+Description: reusable Claw OS system agent for Debian and Ubuntu
+ Installs the complete headless Claw OS agent stack: `cos`, `clawd`,
+ browser and semantic runtimes, capability and approval enforcement,
+ audit/session persistence, skills, SDKs, and bundled headless apps.
+ .
+ The package also installs and enables the privileged `clawd` system
+ service. Browser and user indexing services are installed but remain
+ opt-in or condition-gated. It does not alter the host's home layout,
+ boot identity, desktop environment, PAM policy, or firmware policy.

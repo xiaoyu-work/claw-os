@@ -26,6 +26,12 @@ if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
     exit 1
 fi
+for binary in cos-agent-ui cos-agent-bridge; do
+    if [ ! -x "$STAGE_ROOT/usr/local/bin/$binary" ]; then
+        echo "error: required desktop Agent binary missing: $binary" >&2
+        exit 1
+    fi
+done
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
@@ -44,6 +50,25 @@ else
 fi
 
 mkdir -p "$STAGE_ROOT/DEBIAN" "$OUT_DIR"
+chmod 0755 "$STAGE_ROOT/DEBIAN"
+
+# The desktop package owns only the explicitly listed COSMIC/panel app
+# manifests. Every other app is shipped by claw-os-agent.
+DESKTOP_APPS_FILE="$SCRIPT_DIR/claw-os-desktop/apps.list"
+mkdir -p "$STAGE_ROOT/usr/lib/cos/apps"
+while IFS= read -r app_id; do
+    [ -n "$app_id" ] || continue
+    app_src="$PROJECT_DIR/apps/$app_id"
+    if [ ! -f "$app_src/app.json" ]; then
+        echo "error: desktop app listed but missing: $app_id" >&2
+        exit 1
+    fi
+    rm -rf "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
+    cp -a "$app_src" "$STAGE_ROOT/usr/lib/cos/apps/$app_id"
+done < "$DESKTOP_APPS_FILE"
+find "$STAGE_ROOT/usr/lib/cos/apps" -name '__pycache__' -type d \
+    -exec rm -rf {} + 2>/dev/null || true
+
 THERMALD_DEP="${THERMALD_PKG:+$THERMALD_PKG, }"
 VAAPI_INTEL_NONFREE_DEP="${VAAPI_INTEL_NONFREE_PKG:+$VAAPI_INTEL_NONFREE_PKG, }"
 sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" \

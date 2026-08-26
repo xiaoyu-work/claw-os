@@ -2,19 +2,16 @@ Package: claw-os-base
 Version: __VERSION__
 Section: admin
 Priority: optional
-Architecture: __ARCH__
+Architecture: all
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Depends: bash, coreutils, ca-certificates, bubblewrap, systemd
-Recommends: nodejs (>= 24), python3, python3-pip, git, ripgrep, curl, jq, sqlite3
-Description: Claw OS — agent-native operating system core
- Claw OS is a Debian-based Linux distribution designed for AI agents.
- This package installs the `cos` supervisor binary, the `clawd`
- system agent daemon, the recovery helper `cos-init`, the shared
- OverlayFS helper for the agent home, the per-user agent configuration
- under `~/.config/cos/`, and the bundled apps, skills, and Python helper packages
- (`claw_os_sdk`, `cos_runtime`) under `/usr/lib/cos/`.
+Depends: claw-os-agent (= __VERSION__), systemd,
+ init-system-helpers (>= 1.52)
+Description: Claw OS distribution integration layer
+ Extends `claw-os-agent` with the recovery helper, managed OverlayFS
+ agent home, and boot/service policies used by Claw OS WSL, Docker,
+ VM, ISO, Azure, and installed-system images.
  .
- On its own, this package provides a complete agent runtime usable
- from any shell. Install `claw-os-systemd` to add boot-time services,
- or `claw-os-browser` to add the cos-browser engine.
+ This package is not required on Debian or Ubuntu hosts that only want
+ the reusable system agent. It deliberately owns no agent runtime,
+ headless app, browser, branding, launcher, or desktop files.

@@ -1,0 +1,23 @@
+#!/bin/sh
+# claw-os-base prerm -- stop distribution integration on removal.
+
+set -e
+
+case "$1" in
+    remove)
+        if [ -d /run/systemd/system ]; then
+            deb-systemd-invoke stop cos-home-setup.service >/dev/null || true
+        fi
+        if [ -x /usr/bin/deb-systemd-helper ]; then
+            deb-systemd-helper disable cos-home-setup.service >/dev/null || true
+        fi
+        ;;
+    upgrade|deconfigure|failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0
