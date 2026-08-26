@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { LayoutGrid, Wifi, Volume2, Battery, Bell, Search } from 'lucide-react';
+import { LayoutGrid, Wifi, Volume2, Battery, Bell } from 'lucide-react';
 import { useSystemStore } from '@/stores/useSystemStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
@@ -69,9 +69,9 @@ export default function TopPanel({ onOpenAppMenu }: TopPanelProps) {
       </div>
 
       {/* Center */}
-      <div className="absolute left-1/2 -translate-x-1/2">
+      <div className="absolute left-1/2 hidden -translate-x-1/2 sm:block">
         <span className="text-[13px] font-medium text-white truncate max-w-[400px] block">
-          {focusedWindow ? focusedWindow.title : 'WebOS Desktop'}
+          {focusedWindow ? focusedWindow.title : 'Claw OS Demo'}
         </span>
       </div>
 

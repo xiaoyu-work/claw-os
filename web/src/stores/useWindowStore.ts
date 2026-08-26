@@ -59,23 +59,28 @@ export const useWindowStore = create<WindowStore>((set, get) => ({
     const defaultHeight = config.height || 600;
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
     const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
-    const x = config.x ?? Math.max(40, (vw - defaultWidth) / 2 + (state.windows.length * 20) % 120);
-    const y = config.y ?? Math.max(40, (vh - defaultHeight) / 2 + (state.windows.length * 20) % 120);
+    const width = Math.min(defaultWidth, Math.max(240, vw - 16));
+    const height = Math.min(defaultHeight, Math.max(240, vh - 100));
+    const cascade = (state.windows.length * 20) % 120;
+    const maxX = Math.max(8, vw - width - 8);
+    const maxY = Math.max(40, vh - 48 - height - 8);
+    const x = config.x ?? Math.max(8, Math.min(maxX, (vw - width) / 2 + cascade));
+    const y = config.y ?? Math.max(40, Math.min(maxY, (vh - height) / 2 + cascade));
 
     const newWindow: WindowInstance = {
+      ...config,
       id: windowId,
       appId,
       title,
       x,
       y,
-      width: Math.min(defaultWidth, vw - 80),
-      height: Math.min(defaultHeight, vh - 100),
-      isMinimized: false,
-      isMaximized: false,
-      isFocused: true,
+      width,
+      height,
+      isMinimized: config.isMinimized ?? false,
+      isMaximized: config.isMaximized ?? false,
+      isFocused: config.isFocused ?? true,
       zIndex: state.nextZIndex,
       workspace: config.workspace ?? activeWorkspace,
-      ...config,
     };
 
     set({

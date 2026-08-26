@@ -3,16 +3,14 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Search, X } from 'lucide-react';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
 import { useWindowStore } from '@/stores/useWindowStore';
-import * as Icons from 'lucide-react';
+import AppIcon from '@/components/AppIcon';
 
 interface ApplicationMenuProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const categoryOrder = ['Favorites', 'Accessories', 'Development', 'Internet', 'Office', 'Multimedia', 'Graphics', 'Games', 'System'];
-
-const favorites = ['terminal', 'filemanager', 'browser', 'texteditor', 'settings', 'calculator', 'calendar', 'taskmanager'];
+const categoryOrder = ['System', 'Utilities', 'Internet', 'Multimedia'];
 
 export default function ApplicationMenu({ isOpen, onClose }: ApplicationMenuProps) {
   const apps = useAppRegistryStore((s) => s.apps);
@@ -39,7 +37,7 @@ export default function ApplicationMenu({ isOpen, onClose }: ApplicationMenuProp
 
   const filteredApps = allApps.filter((app) => {
     const matchesSearch = !search || app.name.toLowerCase().includes(search.toLowerCase()) || app.description.toLowerCase().includes(search.toLowerCase());
-    const matchesCategory = activeCategory === 'All' || app.category === activeCategory || (activeCategory === 'Favorites' && favorites.includes(app.id));
+    const matchesCategory = activeCategory === 'All' || app.category === activeCategory;
     return matchesSearch && matchesCategory;
   });
 
@@ -49,10 +47,6 @@ export default function ApplicationMenu({ isOpen, onClose }: ApplicationMenuProp
     openWindow(appId, app.name, { width: app.defaultWidth, height: app.defaultHeight });
     onClose();
   };
-
-  const displayedCategories = activeCategory === 'All' && !search
-    ? (['Favorites'] as string[]).concat(sortedCategories.filter((c) => c !== 'Favorites'))
-    : [activeCategory];
 
   return (
     <AnimatePresence>
@@ -103,38 +97,31 @@ export default function ApplicationMenu({ isOpen, onClose }: ApplicationMenuProp
 
           {/* App grid */}
           <div className="w-full max-w-5xl">
-            {displayedCategories.map((category) => {
-              const catApps = category === 'Favorites'
-                ? allApps.filter((a) => favorites.includes(a.id))
-                : filteredApps.filter((a) => a.category === category);
-              if (catApps.length === 0) return null;
-
-              return (
-                <div key={category} className="mb-6">
-                  <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-3 px-2">{category}</h3>
-                  <div className="grid grid-cols-6 md:grid-cols-8 lg:grid-cols-10 gap-2">
-                    {catApps.map((app, i) => {
-                      const IconComp = (Icons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[app.icon];
-                      return (
-                        <motion.button
-                          key={app.id}
-                          initial={{ opacity: 0, scale: 0.9 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          transition={{ delay: i * 0.015 }}
-                          onClick={() => handleOpenApp(app.id)}
-                          className="flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-white/10 hover:scale-105 transition-all group"
-                        >
-                          <div className="w-14 h-14 flex items-center justify-center rounded-xl" style={{ background: 'rgba(255,255,255,0.08)' }}>
-                            {IconComp ? <IconComp size={32} className="text-[var(--accent-silver)]" /> : <span className="text-2xl">?</span>}
-                          </div>
-                          <span className="text-[11px] text-white text-center leading-tight max-w-full truncate">{app.name}</span>
-                        </motion.button>
-                      );
-                    })}
-                  </div>
-                </div>
-              );
-            })}
+            <div className="mb-6">
+              <h3 className="text-xs font-bold uppercase tracking-widest text-white/50 mb-3 px-2">
+                {activeCategory === 'All' ? 'Applications' : activeCategory}
+              </h3>
+              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                {filteredApps.map((app, index) => (
+                  <motion.button
+                    key={app.id}
+                    initial={{ opacity: 0, scale: 0.9 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: index * 0.025 }}
+                    onClick={() => handleOpenApp(app.id)}
+                    className="flex flex-col items-center gap-1.5 p-3 rounded-xl hover:bg-white/10 hover:scale-105 transition-all group"
+                  >
+                    <div className="w-14 h-14 flex items-center justify-center">
+                      <AppIcon icon={app.icon} label={app.name} size={48} />
+                    </div>
+                    <span className="text-[11px] text-white text-center leading-tight max-w-full truncate">{app.name}</span>
+                  </motion.button>
+                ))}
+              </div>
+              {filteredApps.length === 0 && (
+                <p className="py-12 text-center text-sm text-white/40">No applications found.</p>
+              )}
+            </div>
           </div>
         </motion.div>
       )}

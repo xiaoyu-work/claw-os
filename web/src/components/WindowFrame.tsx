@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import * as Icons from 'lucide-react';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
+import AppIcon from '@/components/AppIcon';
 
 interface WindowFrameProps {
   windowId: string;
@@ -26,7 +27,6 @@ export default function WindowFrame({ windowId, children }: WindowFrameProps) {
   if (!win || win.isMinimized) return null;
 
   const appDef = useAppRegistryStore.getState().getApp(win.appId);
-  const IconComponent = appDef?.icon ? (Icons as unknown as Record<string, React.ComponentType<{ size?: number; className?: string }>>)[appDef.icon] : null;
 
   const handleMouseDown = () => {
     focusWindow(windowId);
@@ -137,7 +137,14 @@ export default function WindowFrame({ windowId, children }: WindowFrameProps) {
         onDoubleClick={() => maximizeWindow(windowId)}
       >
         <div className="flex items-center gap-2 overflow-hidden">
-          {IconComponent && <IconComponent size={16} className="text-[var(--text-secondary)] shrink-0" />}
+          {appDef && (
+            <AppIcon
+              icon={appDef.icon}
+              label={appDef.name}
+              size={17}
+              className="shrink-0"
+            />
+          )}
           <span className="text-sm font-semibold text-[var(--text-primary)] truncate" style={{ fontSize: 14, letterSpacing: '0.01em' }}>
             {win.title}
           </span>

@@ -1,46 +1,37 @@
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { useState, useRef, useCallback } from 'react';
 import { FilePlus, FolderOpen, Save, SaveAll, Scissors, Copy, ClipboardPaste, Search, WrapText } from 'lucide-react';
-import { useFileSystemStore, type FSNode } from '@/stores/useFileSystemStore';
+import { useFileSystemStore } from '@/stores/useFileSystemStore';
+import { takeFileOpen } from '@/lib/pendingFileOpen';
 
-interface TextEditorProps {
-  windowId: string;
-}
-
-export default function TextEditor({ windowId: _windowId }: TextEditorProps) {
-  const [content, setContent] = useState('');
-  const [fileName, setFileName] = useState('Untitled.txt');
+export default function TextEditor() {
+  const [initialFile] = useState(() => {
+    const pending = takeFileOpen('texteditor');
+    if (!pending) return null;
+    const fileSystem = useFileSystemStore.getState();
+    const node = fileSystem.getNode(pending.fileId);
+    if (!node || node.type !== 'file') return null;
+    return {
+      id: node.id,
+      name: pending.fileName || node.name,
+      content: fileSystem.readFile(node.id) || '',
+    };
+  });
+  const [content, setContent] = useState(initialFile?.content || '');
+  const [fileName, setFileName] = useState(initialFile?.name || 'Untitled.txt');
   const [wordWrap, setWordWrap] = useState(true);
   const [findOpen, setFindOpen] = useState(false);
   const [findText, setFindText] = useState('');
   const [replaceText, setReplaceText] = useState('');
   const [fontSize, setFontSize] = useState(14);
-  const [currentFileId, setCurrentFileId] = useState<string | null>(null);
+  const [currentFileId, setCurrentFileId] = useState<string | null>(initialFile?.id || null);
   const [showOpenDialog, setShowOpenDialog] = useState(false);
   const [showSaveDialog, setShowSaveDialog] = useState(false);
   const [saveName, setSaveName] = useState('');
-  const [openFiles, setOpenFiles] = useState<FSNode[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const nodes = useFileSystemStore((s) => s.nodes);
   const getChildren = useFileSystemStore((s) => s.getChildren);
   const currentDirectory = useFileSystemStore((s) => s.currentDirectory);
   const readFile = useFileSystemStore((s) => s.readFile);
   const writeFile = useFileSystemStore((s) => s.writeFile);
-  const createFile = useFileSystemStore((s) => s.createFile);
-
-  // Check for pending file open from FileManager double-click
-  useEffect(() => {
-    const pending = (window as any).__pendingFileOpen;
-    if (pending && pending.appId === 'texteditor') {
-      const node = nodes.find((n) => n.id === pending.fileId);
-      if (node && node.type === 'file') {
-        const data = readFile(pending.fileId);
-        setContent(data || '');
-        setFileName(pending.fileName || node.name);
-        setCurrentFileId(pending.fileId);
-      }
-      (window as any).__pendingFileOpen = null;
-    }
-  }, [nodes, readFile]);
 
   const lines = content.split('\n').length;
   const chars = content.length;

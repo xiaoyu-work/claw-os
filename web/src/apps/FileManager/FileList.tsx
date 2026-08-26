@@ -72,21 +72,23 @@ export default function FileList({
 
   return (
     <div className="w-full">
-      <div className="grid px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] border-b" style={{ gridTemplateColumns: '24px 1fr 80px 100px 120px 80px', borderColor: 'rgba(0,0,0,0.06)', background: 'var(--bg-window)' }}>
+      <div
+        className="grid grid-cols-[24px_minmax(0,1fr)] px-3 py-1.5 text-xs font-medium text-[var(--text-muted)] border-b sm:grid-cols-[24px_minmax(0,1fr)_80px_100px_120px_80px]"
+        style={{ borderColor: 'rgba(0,0,0,0.06)', background: 'var(--bg-window)' }}
+      >
         <span></span>
         <span>Name</span>
-        <span>Size</span>
-        <span>Type</span>
-        <span>Modified</span>
-        <span>Owner</span>
+        <span className="hidden sm:block">Size</span>
+        <span className="hidden sm:block">Type</span>
+        <span className="hidden sm:block">Modified</span>
+        <span className="hidden sm:block">Owner</span>
       </div>
       {nodes.map((node) => (
         <div
           key={node.id}
-          className={`grid px-3 py-1.5 text-sm items-center cursor-pointer transition-colors ${
+          className={`grid grid-cols-[24px_minmax(0,1fr)] px-3 py-1.5 text-sm items-center cursor-pointer transition-colors sm:grid-cols-[24px_minmax(0,1fr)_80px_100px_120px_80px] ${
             selectedNode === node.id ? 'bg-[rgba(125,139,150,0.15)]' : 'hover:bg-[var(--bg-hover)]'
           }`}
-          style={{ gridTemplateColumns: '24px 1fr 80px 100px 120px 80px' }}
           onClick={() => onSelect(node.id)}
           onDoubleClick={() => onDoubleClick(node)}
           onContextMenu={(e) => onContextMenu(e, node)}
@@ -105,10 +107,10 @@ export default function FileList({
               />
             ) : node.name}
           </span>
-          <span className="text-[var(--text-muted)] text-xs">{node.type === 'directory' ? '--' : formatSize(node.size || 0)}</span>
-          <span className="text-[var(--text-muted)] text-xs">{node.type === 'directory' ? 'Folder' : (node.mimeType?.split('/')[1] || 'File')}</span>
-          <span className="text-[var(--text-muted)] text-xs">{node.modifiedAt.toLocaleDateString()}</span>
-          <span className="text-[var(--text-muted)] text-xs">{node.owner}</span>
+          <span className="hidden text-[var(--text-muted)] text-xs sm:block">{node.type === 'directory' ? '--' : formatSize(node.size || 0)}</span>
+          <span className="hidden text-[var(--text-muted)] text-xs sm:block">{node.type === 'directory' ? 'Folder' : (node.mimeType?.split('/')[1] || 'File')}</span>
+          <span className="hidden text-[var(--text-muted)] text-xs sm:block">{node.modifiedAt.toLocaleDateString()}</span>
+          <span className="hidden text-[var(--text-muted)] text-xs sm:block">{node.owner}</span>
         </div>
       ))}
     </div>

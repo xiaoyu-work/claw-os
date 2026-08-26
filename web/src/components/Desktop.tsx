@@ -1,30 +1,31 @@
-import { useState, useCallback, useEffect } from 'react';
-import { Trash2, Globe, Terminal, Settings, HelpCircle, Home, LayoutGrid, Gamepad2 } from 'lucide-react';
+import { useState, useCallback, useEffect, type ComponentType } from 'react';
+import { Trash2, LayoutGrid } from 'lucide-react';
 import { useSystemStore } from '@/stores/useSystemStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
 import { useFileSystemStore } from '@/stores/useFileSystemStore';
 import { useSettingsStore } from '@/stores/useSettingsStore';
 import { publicAsset } from '@/lib/publicAsset';
+import AppIcon from '@/components/AppIcon';
 
 interface DesktopIcon {
   id: string;
   label: string;
-  icon: React.ComponentType<{ size?: number; className?: string }>;
   appId: string;
-  x: number;
-  y: number;
+  icon?: ComponentType<{ size?: number; className?: string }>;
 }
 
 const defaultIcons: DesktopIcon[] = [
-  { id: 'd-activities', label: 'Activities', icon: LayoutGrid, appId: '__activities__', x: 24, y: 40 },
-  { id: 'd-home', label: 'Home', icon: Home, appId: 'filemanager', x: 24, y: 140 },
-  { id: 'd-trash', label: 'Trash', icon: Trash2, appId: 'filemanager', x: 24, y: 240 },
-  { id: 'd-browser', label: 'Claw OS Website', icon: Globe, appId: 'browser', x: 24, y: 340 },
-  { id: 'd-terminal', label: 'Terminal', icon: Terminal, appId: 'terminal', x: 24, y: 440 },
-  { id: 'd-games', label: 'Games', icon: Gamepad2, appId: 'gamelauncher', x: 24, y: 540 },
-  { id: 'd-settings', label: 'Settings', icon: Settings, appId: 'settings', x: 24, y: 640 },
-  { id: 'd-help', label: 'Help', icon: HelpCircle, appId: 'help', x: 24, y: 740 },
+  { id: 'd-activities', label: 'Activities', appId: '__activities__', icon: LayoutGrid },
+  { id: 'd-agent', label: 'Claw OS Agent', appId: 'agent' },
+  { id: 'd-browser', label: 'Claw OS Website', appId: 'browser' },
+  { id: 'd-files', label: 'Files', appId: 'filemanager' },
+  { id: 'd-editor', label: 'Text Editor', appId: 'texteditor' },
+  { id: 'd-store', label: 'App Store', appId: 'store' },
+  { id: 'd-player', label: 'Media Player', appId: 'player' },
+  { id: 'd-screenshot', label: 'Screenshot', appId: 'screenshot' },
+  { id: 'd-settings', label: 'Settings', appId: 'settings' },
+  { id: 'd-trash', label: 'Trash', appId: 'filemanager', icon: Trash2 },
 ];
 
 interface DesktopProps {
@@ -87,9 +88,11 @@ export default function Desktop({ onOpenAppMenu }: DesktopProps) {
       <div className="relative p-6 flex flex-col flex-wrap gap-4 content-start h-full" style={{ gap: '8px' }}>
         {icons.map((icon) => {
           const IconComp = icon.icon;
+          const app = getApp(icon.appId);
           return (
             <button
               key={icon.id}
+              data-guide-target={icon.id === 'd-agent' ? 'agent-desktop-icon' : undefined}
               className={`flex flex-col items-center w-20 py-2 rounded-lg transition-all group ${
                 selectedIcon === icon.id ? 'bg-[rgba(125,139,150,0.2)]' : 'hover:bg-[rgba(255,255,255,0.08)] hover:-translate-y-0.5'
               }`}
@@ -108,7 +111,11 @@ export default function Desktop({ onOpenAppMenu }: DesktopProps) {
                 }
               }}
             >
-              <IconComp size={48} className="text-[var(--text-primary)] mb-1" />
+              {IconComp ? (
+                <IconComp size={48} className="mb-1 text-[var(--text-primary)]" />
+              ) : app ? (
+                <AppIcon icon={app.icon} label={app.name} size={48} className="mb-1" />
+              ) : null}
               <span className="text-[11px] text-[var(--text-primary)] text-center leading-tight max-w-full break-words">
                 {icon.label}
               </span>
@@ -137,11 +144,6 @@ export default function Desktop({ onOpenAppMenu }: DesktopProps) {
           <button onClick={() => { createFile('New Document.txt', 'fs-user-desktop'); setContextMenu(null); }}
             className="w-full text-left px-3 py-1.5 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors">
             Text Document
-          </button>
-          <div className="my-1 h-px" style={{ background: 'rgba(0,0,0,0.06)' }} />
-          <button onClick={() => { handleOpenApp('terminal'); setContextMenu(null); }}
-            className="w-full text-left px-3 py-1.5 text-sm text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors">
-            Open Terminal Here
           </button>
           <div className="my-1 h-px" style={{ background: 'rgba(0,0,0,0.06)' }} />
           <button onClick={() => { setWallpaper(publicAsset('wallpaper-concrete.jpg')); setContextMenu(null); }}

@@ -94,14 +94,14 @@ export const useSettingsStore = create<SettingsState>((set, get) => ({
 
   wifiEnabled: true,
   wifiNetworks: [
-    { ssid: 'WebOS-Home-5G', strength: 90, secured: true, connected: true },
-    { ssid: 'WebOS-Home-2.4G', strength: 85, secured: true, connected: false },
+    { ssid: 'ClawOS-Demo-5G', strength: 90, secured: true, connected: true },
+    { ssid: 'ClawOS-Demo-2.4G', strength: 85, secured: true, connected: false },
     { ssid: 'CoffeeShop_Free', strength: 60, secured: false, connected: false },
     { ssid: 'Neighbor_WiFi', strength: 40, secured: true, connected: false },
     { ssid: 'Starbucks_Guest', strength: 55, secured: true, connected: false },
     { ssid: 'Library_Public', strength: 70, secured: false, connected: false },
   ],
-  connectedWifi: 'WebOS-Home-5G',
+  connectedWifi: 'ClawOS-Demo-5G',
   ipAddress: '192.168.1.42',
 
   username: 'user',

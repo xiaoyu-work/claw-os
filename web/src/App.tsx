@@ -7,12 +7,10 @@ import TopPanel from '@/components/TopPanel';
 import BottomTaskbar from '@/components/BottomTaskbar';
 import ApplicationMenu from '@/components/ApplicationMenu';
 import Desktop from '@/components/Desktop';
-import BootSequence from '@/components/BootSequence';
-import LoginScreen from '@/components/LoginScreen';
+import GuideOverlay from '@/components/GuideOverlay';
 import { renderApp } from '@/components/AppRegistry';
 
 export default function App() {
-  const bootPhase = useSystemStore((s) => s.bootPhase);
   const windows = useWindowStore((s) => s.windows);
   const activeWorkspace = useSystemStore((s) => s.activeWorkspace);
   const [appMenuOpen, setAppMenuOpen] = useState(false);
@@ -24,13 +22,6 @@ export default function App() {
     }, 1000);
     return () => clearInterval(interval);
   }, []);
-
-  // Start boot sequence on mount
-  useEffect(() => {
-    if (bootPhase === 'grub') {
-      useSystemStore.getState().bootSequence();
-    }
-  }, [bootPhase]);
 
   // Keyboard shortcut: Super key opens app menu
   useEffect(() => {
@@ -62,20 +53,8 @@ export default function App() {
     }
   }, [theme]);
 
-  if (bootPhase === 'grub' || bootPhase === 'booting') {
-    return <BootSequence />;
-  }
-
-  // Desktop phase
   return (
     <div className="fixed inset-0 overflow-hidden" style={{ background: 'var(--bg-base)' }}>
-      {/* Login Screen - simple conditional render, no AnimatePresence */}
-      {bootPhase === 'login' && (
-        <div className="fixed inset-0 z-[9998]">
-          <LoginScreen />
-        </div>
-      )}
-
       {/* Desktop */}
       <Desktop onOpenAppMenu={() => setAppMenuOpen(true)} />
 
@@ -96,10 +75,13 @@ export default function App() {
       <TopPanel onOpenAppMenu={() => setAppMenuOpen(!appMenuOpen)} />
 
       {/* Bottom Taskbar */}
-      <BottomTaskbar onOpenAppMenu={() => setAppMenuOpen(!appMenuOpen)} />
+      <BottomTaskbar />
 
       {/* Application Menu */}
       <ApplicationMenu isOpen={appMenuOpen} onClose={() => setAppMenuOpen(false)} />
+
+      {/* Forced first-run demo path */}
+      <GuideOverlay />
     </div>
   );
 }

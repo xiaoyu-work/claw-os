@@ -1,18 +1,13 @@
 import { useState } from 'react';
-import { Folder, File, ArrowLeft, ArrowUp, RefreshCw, Plus, Trash2, Edit, Copy, Scissors, Info, Grid, List as ListIcon, Search } from 'lucide-react';
+import { ArrowLeft, ArrowUp, RefreshCw, Plus, Trash2, Grid, List as ListIcon, Search } from 'lucide-react';
 import { useFileSystemStore, type FSNode } from '@/stores/useFileSystemStore';
 import { useWindowStore } from '@/stores/useWindowStore';
 import { useAppRegistryStore } from '@/stores/useAppRegistryStore';
-import FileToolbar from './FileToolbar';
+import { queueFileOpen } from '@/lib/pendingFileOpen';
 import PathBar from './PathBar';
 import FileList from './FileList';
 
-interface FileManagerProps {
-  windowId: string;
-}
-
-export default function FileManager({ windowId }: FileManagerProps) {
-  const nodes = useFileSystemStore((s) => s.nodes);
+export default function FileManager() {
   const currentDirectory = useFileSystemStore((s) => s.currentDirectory);
   const setCurrentDirectory = useFileSystemStore((s) => s.setCurrentDirectory);
   const getChildren = useFileSystemStore((s) => s.getChildren);
@@ -24,7 +19,6 @@ export default function FileManager({ windowId }: FileManagerProps) {
   const createFile = useFileSystemStore((s) => s.createFile);
   const copyToClipboard = useFileSystemStore((s) => s.copyToClipboard);
   const pasteFromClipboard = useFileSystemStore((s) => s.pasteFromClipboard);
-  const clipboard = useFileSystemStore((s) => s.clipboard);
 
   const [viewMode, setViewMode] = useState<'list' | 'grid'>('list');
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -78,26 +72,23 @@ export default function FileManager({ windowId }: FileManagerProps) {
       if (['txt', 'md', 'js', 'ts', 'tsx', 'jsx', 'json', 'html', 'css', 'py', 'c', 'cpp', 'h', 'java', 'sh', 'log'].includes(ext)) {
         const app = registry.getApp('texteditor');
         if (app) {
+          queueFileOpen({ appId: 'texteditor', fileId: node.id, fileName: node.name });
           winStore.openWindow('texteditor', node.name, {
             width: app.defaultWidth,
             height: app.defaultHeight,
           });
-          // Pass file content to editor via a global pending-open mechanism
-          setTimeout(() => {
-            const pending = (window as any).__pendingFileOpen;
-            if (pending && pending.fileId === node.id) return; // already handled
-            (window as any).__pendingFileOpen = { appId: 'texteditor', fileId: node.id, fileName: node.name };
-          }, 100);
         }
       }
-      // Archives → Archive Manager
-      else if (['zip', 'tar', 'gz', 'rar', '7z'].includes(ext)) {
-        const app = registry.getApp('archiver');
+      // Audio and video files → Media Player
+      else if (['mp3', 'wav', 'flac', 'ogg', 'm4a', 'mp4', 'webm', 'mkv', 'avi', 'mov'].includes(ext)) {
+        const app = registry.getApp('player');
         if (app) {
-          winStore.openWindow('archiver', node.name, {
+          winStore.openWindow('player', node.name, {
             width: app.defaultWidth,
             height: app.defaultHeight,
           });
+        } else {
+          alert('Media Player is unavailable in this demo.');
         }
       }
       // Other files: show info toast via window alert
@@ -192,10 +183,10 @@ export default function FileManager({ windowId }: FileManagerProps) {
         <button onClick={() => { if (selectedNode) handleDelete(); }} className={`p-1.5 rounded transition-colors ${selectedNode ? 'hover:bg-[var(--bg-hover)]' : 'opacity-30'}`} title="Delete">
           <Trash2 size={16} className="text-[var(--text-secondary)]" />
         </button>
-        <div className="flex-1 mx-2">
+        <div className="mx-2 min-w-0 flex-1">
           <PathBar path={getPath(currentDirectory)} onNavigate={(id) => id && navigateTo(id)} />
         </div>
-        <div className="relative">
+        <div className="relative hidden sm:block">
           <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-[var(--text-muted)]" />
           <input
             value={searchQuery}
