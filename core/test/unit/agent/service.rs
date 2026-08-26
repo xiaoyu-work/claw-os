@@ -540,9 +540,14 @@ fn prune_drops_aged_files_beyond_keep_last() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
     // Create 3 done jobs by submitting + claiming + finishing.
+    let mut ids = Vec::new();
     for _ in 0..3 {
         let _ = store.submit("p".into(), None, None, None, None).unwrap();
         let claimed = store.claim_one().unwrap().unwrap();
+        store
+            .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
+            .unwrap();
+        ids.push(claimed.id.clone());
         let _ = store
             .finish(
                 claimed,
@@ -562,6 +567,80 @@ fn prune_drops_aged_files_beyond_keep_last() {
     assert_eq!(removed, 2);
     let (_, _, d) = store.counts().unwrap();
     assert_eq!(d, 1);
+
+    let mut retained = 0;
+    for id in ids {
+        let done_exists = store.path_for(JobStatus::Ok, &id).exists();
+        let stream_path = store.stream_path(&id);
+        let stream_lock_path = crate::filelock::lock_sentinel_path(&stream_path);
+        if done_exists {
+            retained += 1;
+            assert!(stream_path.exists());
+            assert!(stream_lock_path.exists());
+            assert!(store.job_lock_path(&id).exists());
+        } else {
+            assert!(!stream_path.exists());
+            assert!(!stream_lock_path.exists());
+            assert!(!store.job_lock_path(&id).exists());
+        }
+    }
+    assert_eq!(retained, 1);
+}
+
+#[test]
+fn prune_does_not_touch_stream_for_active_duplicate() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let _ = store.submit("p".into(), None, None, None, None).unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
+        .unwrap();
+
+    let running_path = store.path_for(JobStatus::Running, &claimed.id);
+    let done_path = store.path_for(JobStatus::Ok, &claimed.id);
+    fs::copy(&running_path, &done_path).unwrap();
+
+    let removed = store.prune(Duration::ZERO, 0).unwrap();
+    assert_eq!(removed, 0);
+    assert!(running_path.exists());
+    assert!(done_path.exists());
+    assert!(store.stream_path(&claimed.id).exists());
+    assert!(store.job_lock_path(&claimed.id).exists());
+    assert!(crate::filelock::lock_sentinel_path(&store.stream_path(&claimed.id)).exists());
+}
+
+#[test]
+fn prune_keeps_record_when_stream_cleanup_fails() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let _ = store.submit("p".into(), None, None, None, None).unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
+        .unwrap();
+    let finished = store
+        .finish(
+            claimed,
+            FinishOutcome::Ok {
+                response: "x".into(),
+                turns_used: 1,
+                provider: "m".into(),
+                model: "m".into(),
+                evidence: Box::new(None),
+                fallback: Box::new(None),
+            },
+        )
+        .unwrap();
+    let stream_path = store.stream_path(&finished.id);
+    fs::remove_file(&stream_path).unwrap();
+    fs::create_dir(&stream_path).unwrap();
+
+    let removed = store.prune(Duration::ZERO, 0).unwrap();
+    assert_eq!(removed, 0);
+    assert!(store.path_for(JobStatus::Ok, &finished.id).exists());
+    assert!(stream_path.is_dir());
+    assert!(store.job_lock_path(&finished.id).exists());
 }
 
 #[test]

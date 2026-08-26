@@ -312,7 +312,7 @@ where
 /// `.lock` rather than swapping the extension keeps the sentinel
 /// alongside the data file even when `path` already has multiple
 /// dots (e.g. `state.json` -> `state.json.lock`).
-fn lock_sentinel_path(path: &Path) -> std::path::PathBuf {
+pub(crate) fn lock_sentinel_path(path: &Path) -> std::path::PathBuf {
     let mut s: std::ffi::OsString = path.as_os_str().to_os_string();
     s.push(".lock");
     std::path::PathBuf::from(s)

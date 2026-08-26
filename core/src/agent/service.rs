@@ -255,6 +255,10 @@ impl Store {
         self.root.join("streams").join(format!("{id}.jsonl"))
     }
 
+    fn job_lock_path(&self, id: &str) -> PathBuf {
+        self.root.join("locks").join(format!("{id}.lock"))
+    }
+
     pub fn append_stream_event(
         &self,
         id: &str,
@@ -839,9 +843,9 @@ impl Store {
         }
     }
 
-    /// Delete done/ entries older than `older_than` (mtime-based) OR
-    /// beyond the most recent `keep_last`. Returns the number of files
-    /// removed.
+    /// Delete terminal jobs older than `older_than` (mtime-based) and
+    /// beyond the most recent `keep_last`, including their stream payloads.
+    /// Returns the number of complete job records removed.
     pub fn prune(&self, older_than: Duration, keep_last: usize) -> io::Result<usize> {
         let dir = self.bucket_dir(JobStatus::Ok);
         let mut entries: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
@@ -866,7 +870,71 @@ impl Store {
                 continue;
             }
             let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
-            if age >= older_than && fs::remove_file(&p).is_ok() {
+            if age < older_than {
+                continue;
+            }
+            let Some(id) = p.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let job_lock = match self.lock_for_id(id) {
+                Ok(lock) => lock,
+                Err(_) => continue,
+            };
+
+            // A stale/duplicated done entry must never cause the payload for
+            // a live job with the same id to be removed.
+            let active_job_exists = [
+                self.path_for(JobStatus::Pending, id),
+                self.path_for(JobStatus::Running, id),
+            ]
+            .iter()
+            .try_fold(false, |active, path| {
+                path_exists(path).map(|exists| active || exists)
+            });
+            if !matches!(active_job_exists, Ok(false)) {
+                continue;
+            }
+
+            let stream_path = self.stream_path(id);
+            let stream_lock_path = crate::filelock::lock_sentinel_path(&stream_path);
+            let cleanup = crate::filelock::with_exclusive_path_lock(&stream_path, || {
+                match remove_file_if_exists(&stream_path) {
+                    Ok(true) => sync_directory_best_effort(&self.root.join("streams")),
+                    Ok(false) => {}
+                    Err(error) => {
+                        return Err(format!("remove {}: {error}", stream_path.display()));
+                    }
+                }
+
+                // Remove the record last. If stream cleanup fails, the
+                // terminal record remains available for a later prune retry.
+                match remove_file_if_exists(&p) {
+                    Ok(true) => {
+                        sync_directory_best_effort(&dir);
+                        Ok(true)
+                    }
+                    Ok(false) => Ok(false),
+                    Err(error) => Err(format!("remove {}: {error}", p.display())),
+                }
+            });
+
+            let Ok(record_removed) = cleanup else {
+                continue;
+            };
+
+            // The stream sentinel is only obsolete after its payload and
+            // terminal record are gone and its exclusive lock is released.
+            if remove_file_if_exists(&stream_lock_path).unwrap_or(false) {
+                sync_directory_best_effort(&self.root.join("streams"));
+            }
+
+            let job_lock_path = self.job_lock_path(id);
+            drop(job_lock);
+            if remove_file_if_exists(&job_lock_path).unwrap_or(false) {
+                sync_directory_best_effort(&self.root.join("locks"));
+            }
+
+            if record_removed {
                 removed += 1;
             }
         }
@@ -891,7 +959,7 @@ impl Store {
         validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
         crate::storage::ensure_private_dir(&lock_dir)?;
-        let lock_path = lock_dir.join(format!("{id}.lock"));
+        let lock_path = self.job_lock_path(id);
         let mut options = fs::OpenOptions::new();
         options.create(true).write(true).truncate(false);
         #[cfg(unix)]
@@ -1009,6 +1077,31 @@ fn count_json(dir: &Path) -> io::Result<usize> {
         }
     }
     Ok(n)
+}
+
+fn remove_file_if_exists(path: &Path) -> io::Result<bool> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn path_exists(path: &Path) -> io::Result<bool> {
+    match fs::metadata(path) {
+        Ok(_) => Ok(true),
+        Err(error) if error.kind() == ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn sync_directory_best_effort(path: &Path) {
+    #[cfg(unix)]
+    if let Ok(directory) = fs::File::open(path) {
+        let _ = directory.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = path;
 }
 
 fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
