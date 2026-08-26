@@ -284,14 +284,31 @@ fn tool_choice_specific_tool_emits_allowed_function_names() {
 }
 
 #[test]
-fn body_merges_extras() {
+fn body_filters_reserved_extras_and_preserves_provider_extras() {
     let mut r = req_text("hi");
-    r.extra = serde_json::json!({"safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"}]});
+    r.extra = serde_json::json!({
+        "safetySettings": [{
+            "category": "HARM_CATEGORY_HARASSMENT",
+            "threshold": "BLOCK_NONE"
+        }],
+        "_cos_initiator": "agent",
+        "_cos_trace": "internal",
+        "__cache_system": true,
+        "__private": true
+    });
     let body = wire::build_request_body(&r, false);
     assert_eq!(
         body["safetySettings"][0]["category"],
         "HARM_CATEGORY_HARASSMENT"
     );
+    for key in [
+        "_cos_initiator",
+        "_cos_trace",
+        "__cache_system",
+        "__private",
+    ] {
+        assert!(body.get(key).is_none(), "reserved extra leaked: {key}");
+    }
 }
 
 // ---- response parsing ------------------------------------------------

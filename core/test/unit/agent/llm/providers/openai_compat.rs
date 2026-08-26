@@ -210,7 +210,11 @@ fn copilot_initiator_distinguishes_user_and_tool_follow_up() {
     );
 
     let mut automatic_request = req_text("summarise");
-    automatic_request.extra = serde_json::json!({"_cos_initiator": "agent"});
+    automatic_request.extra =
+        serde_json::json!({"_cos_initiator": "agent", "seed": 7});
+    let body = wire::build_request_body(&automatic_request, "gpt-4o-mini", false);
+    assert!(body.get("_cos_initiator").is_none());
+    assert_eq!(body["seed"], 7);
     assert_eq!(
         copilot_initiator(&automatic_request),
         crate::agent::llm::providers::copilot_auth::COPILOT_INITIATOR_AGENT
@@ -347,7 +351,10 @@ fn builds_responses_body_with_tool_history() {
         "store": true,
         "include": ["not.allowed"],
         "seed": 42,
-        "_cos_initiator": "agent"
+        "_cos_initiator": "agent",
+        "_cos_trace": "internal",
+        "__cache_system": true,
+        "__private": true
     });
 
     let body = responses_wire::build_request_body(&request, "gpt-5.6-sol", true);
@@ -356,7 +363,14 @@ fn builds_responses_body_with_tool_history() {
     assert_eq!(body["store"], false);
     assert_eq!(body["include"][0], "reasoning.encrypted_content");
     assert_eq!(body["seed"], 42);
-    assert!(body.get("_cos_initiator").is_none());
+    for key in [
+        "_cos_initiator",
+        "_cos_trace",
+        "__cache_system",
+        "__private",
+    ] {
+        assert!(body.get(key).is_none(), "reserved extra leaked: {key}");
+    }
     assert_eq!(body["max_output_tokens"], 64);
     assert!(body.get("temperature").is_none());
     assert_eq!(body["input"][0]["type"], "message");
@@ -563,12 +577,27 @@ fn body_fans_out_multiple_tool_results_into_separate_tool_messages() {
 }
 
 #[test]
-fn body_merges_extras() {
+fn body_filters_reserved_extras_and_preserves_provider_extras() {
     let mut r = req_text("hi");
-    r.extra = serde_json::json!({"seed": 42, "response_format": {"type":"json_object"}});
+    r.extra = serde_json::json!({
+        "seed": 42,
+        "response_format": {"type":"json_object"},
+        "_cos_initiator": "agent",
+        "_cos_trace": "internal",
+        "__cache_tools": true,
+        "__private": true
+    });
     let body = wire::build_request_body(&r, "m", false);
     assert_eq!(body["seed"], 42);
     assert_eq!(body["response_format"]["type"], "json_object");
+    for key in [
+        "_cos_initiator",
+        "_cos_trace",
+        "__cache_tools",
+        "__private",
+    ] {
+        assert!(body.get(key).is_none(), "reserved extra leaked: {key}");
+    }
 }
 
 // ---- response parsing ------------------------------------------------

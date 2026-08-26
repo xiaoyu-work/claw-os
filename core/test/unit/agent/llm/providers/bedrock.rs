@@ -216,6 +216,33 @@ fn body_keeps_anthropic_messages_shape() {
     assert!(v.get("messages").and_then(|m| m.as_array()).is_some());
 }
 
+#[test]
+fn body_filters_reserved_extras_and_preserves_provider_cache_fields() {
+    use crate::agent::prompt::caching;
+
+    let mut request = req_text("hello");
+    request.extra = serde_json::json!({
+        "top_k": 32,
+        "_cos_initiator": "agent",
+        "_cos_trace": "internal",
+        "__private": true
+    });
+    caching::mark_system_cached(&mut request);
+
+    let body_bytes = build_bedrock_body_bytes(&request).unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+    assert_eq!(body["top_k"], 32);
+    assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    for key in [
+        "_cos_initiator",
+        "_cos_trace",
+        "__private",
+        caching::KEY_SYSTEM,
+    ] {
+        assert!(body.get(key).is_none(), "reserved extra leaked: {key}");
+    }
+}
+
 // ---- Error classification --------------------------------------------
 
 #[test]

@@ -128,13 +128,8 @@ pub(crate) fn build_request_body(
             obj.insert("stream".into(), serde_json::json!(true));
         }
         // Merge provider-specific extras (e.g. `seed`, `response_format`).
-        if let serde_json::Value::Object(extra) = &request.extra {
-            for (k, v) in extra {
-                if k.starts_with("_cos_") {
-                    continue;
-                }
-                obj.insert(k.clone(), v.clone());
-            }
+        for (key, value) in request.provider_extra_fields() {
+            obj.insert(key.to_owned(), value.clone());
         }
     }
     body

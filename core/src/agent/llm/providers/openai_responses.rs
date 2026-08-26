@@ -81,19 +81,14 @@ pub(crate) fn build_request_body(
                 object.insert("top_p".into(), serde_json::json!(top_p));
             }
         }
-        if let serde_json::Value::Object(extra) = &request.extra {
-            for (key, value) in extra {
-                if key.starts_with("_cos_") {
-                    continue;
-                }
-                if matches!(
-                    key.as_str(),
-                    "model" | "input" | "stream" | "store" | "include"
-                ) {
-                    continue;
-                }
-                object.insert(key.clone(), value.clone());
+        for (key, value) in request.provider_extra_fields() {
+            if matches!(
+                key,
+                "model" | "input" | "stream" | "store" | "include"
+            ) {
+                continue;
             }
+            object.insert(key.to_owned(), value.clone());
         }
     }
     body

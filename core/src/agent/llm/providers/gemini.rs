@@ -407,10 +407,8 @@ pub(crate) mod wire {
                 obj.insert("stream".into(), serde_json::json!(true));
             }
 
-            if let serde_json::Value::Object(extra) = &request.extra {
-                for (k, v) in extra {
-                    obj.insert(k.clone(), v.clone());
-                }
+            for (key, value) in request.provider_extra_fields() {
+                obj.insert(key.to_owned(), value.clone());
             }
         }
 

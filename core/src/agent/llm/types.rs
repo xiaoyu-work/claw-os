@@ -133,9 +133,31 @@ pub struct ChatRequest {
     pub stop_sequences: Vec<String>,
 
     /// Provider-specific extras (Anthropic `metadata`, OpenAI `seed`, etc.)
-    /// — pass-through, opaque to the trait.
+    /// — pass-through, opaque to the trait. Keys beginning with `_cos_` or
+    /// `__` are reserved for internal metadata and never sent to providers.
     #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
     pub extra: serde_json::Value,
+}
+
+impl ChatRequest {
+    /// Provider-owned extras that are safe to merge into an external wire body.
+    ///
+    /// Serializers must use this iterator instead of reading [`Self::extra`]
+    /// directly so internal routing and prompt-cache metadata cannot leak.
+    pub(crate) fn provider_extra_fields(
+        &self,
+    ) -> impl Iterator<Item = (&str, &serde_json::Value)> + '_ {
+        self.extra
+            .as_object()
+            .into_iter()
+            .flat_map(|extra| extra.iter())
+            .filter(|(key, _)| !is_reserved_extra_key(key))
+            .map(|(key, value)| (key.as_str(), value))
+    }
+}
+
+fn is_reserved_extra_key(key: &str) -> bool {
+    key.starts_with("_cos_") || key.starts_with("__")
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

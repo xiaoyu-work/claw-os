@@ -225,6 +225,32 @@ fn body_merges_extras() {
 }
 
 #[test]
+fn body_filters_reserved_extras_and_preserves_cache_markers() {
+    use crate::agent::prompt::caching;
+
+    let mut r = req_text("hi");
+    r.extra = serde_json::json!({
+        "metadata": {"user_id": "u-1"},
+        "_cos_initiator": "agent",
+        "_cos_trace": "internal",
+        "__private": true
+    });
+    caching::mark_system_cached(&mut r);
+
+    let body = wire::build_request_body(&r, "claude-3-5-haiku-20241022", false);
+    assert_eq!(body["metadata"]["user_id"], "u-1");
+    assert_eq!(body["system"][0]["cache_control"]["type"], "ephemeral");
+    for key in [
+        "_cos_initiator",
+        "_cos_trace",
+        "__private",
+        caching::KEY_SYSTEM,
+    ] {
+        assert!(body.get(key).is_none(), "reserved extra leaked: {key}");
+    }
+}
+
+#[test]
 fn body_renders_image_content_block() {
     let mut r = req_text("ignored");
     r.messages.push(crate::agent::llm::Message {
