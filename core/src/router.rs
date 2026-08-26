@@ -1185,7 +1185,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         return Ok(Some(value.to_string()));
     }
 
-    // "app" namespace → route to Python apps
+    // "app" namespace → route to declared app runtimes
     if name == "app" {
         return dispatch_app(&args[1..]);
     }
@@ -1243,7 +1243,7 @@ fn run_app_command(
         }
     }
 
-    let result = bridge::run_python_app(&app.dir, command, args, &data, &apps);
+    let result = bridge::run_app(&app.dir, command, args, &data, &apps);
 
     match result {
         Ok(output) => {

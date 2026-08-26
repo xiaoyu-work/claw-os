@@ -46,7 +46,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
-| Apps and adapters | Declarative operation manifests plus Python runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs` |
+| Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries | `desktop/` |
@@ -201,7 +201,7 @@ apps/<id>/app.json
   -> core app discovery and manifest validation
   -> operation schema / capability derivation
   -> app session registration
-  -> Python main.py run(command, args)
+  -> declared Python / Node / shell / binary entrypoint
   -> policy-enforced SDK/runtime calls
   -> structured result
 ```

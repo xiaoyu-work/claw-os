@@ -21,7 +21,7 @@ fn applications_dir() -> PathBuf {
     )
 }
 
-/// Dispatch to Python apps under the "cos app" namespace.
+/// Dispatch to apps under the "cos app" namespace.
 pub(super) fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
     let discovered = apps::discover(&apps_dir);

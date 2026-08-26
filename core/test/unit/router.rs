@@ -1330,3 +1330,306 @@ fn install_rejects_symlink_in_source_tree() {
     let _ = std::fs::remove_dir_all(&dst);
     let _ = std::fs::remove_file(&outside);
 }
+
+#[cfg(unix)]
+fn write_runtime_test_executable(path: &std::path::Path, body: &str) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::write(path, body).unwrap();
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+#[cfg(unix)]
+fn with_runtime_app_test_env(
+    test: impl FnOnce(&std::path::Path, &std::path::Path, &std::path::Path),
+) {
+    let _lock = crate::test_env::lock_env();
+    let root = tempfile::tempdir().unwrap();
+    let apps = root.path().join("apps");
+    let data = root.path().join("data");
+    let proc_data = root.path().join("proc");
+    let bin = root.path().join("bin");
+    std::fs::create_dir_all(&apps).unwrap();
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(&proc_data).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+
+    let runner = root.path().join("claw-app-runner");
+    write_runtime_test_executable(
+        &runner,
+        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexport TEST_LAUNCH_PROGRAM=\"$1\"\nexec \"$@\"\n",
+    );
+    write_runtime_test_executable(&bin.join("node"), "#!/bin/sh\nexec /bin/sh \"$@\"\n");
+
+    let mut paths = vec![bin];
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
+    let path = std::env::join_paths(paths).unwrap();
+
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &apps);
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", &data);
+    let _runner = crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", &runner);
+    let _local_sessions = crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _path = crate::test_env::TestEnvVarGuard::set("PATH", path);
+    let _session = crate::test_env::TestSessionGuard::admin(&proc_data);
+
+    test(&apps, &data, &proc_data);
+}
+
+#[cfg(unix)]
+fn write_runtime_app_manifest(
+    apps: &std::path::Path,
+    id: &str,
+    runtime: &str,
+    entry: Option<&str>,
+    desktop: bool,
+) -> std::path::PathBuf {
+    let app_dir = apps.join(id);
+    std::fs::create_dir_all(&app_dir).unwrap();
+    let mut manifest = json!({
+        "id": id,
+        "version": "1.0.0",
+        "name": id,
+        "runtime": runtime,
+        "operations": {
+            "echo": {
+                "label": "Echo",
+                "args": [
+                    {"name": "first", "kind": "text"},
+                    {"name": "second", "kind": "text"}
+                ]
+            },
+            "fail": {"label": "Fail"}
+        }
+    });
+    if let Some(entry) = entry {
+        manifest["entry"] = json!(entry);
+    }
+    if desktop {
+        manifest["desktop"] = json!({});
+    }
+    std::fs::write(
+        app_dir.join("app.json"),
+        serde_json::to_vec_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    app_dir
+}
+
+#[cfg(unix)]
+fn runtime_test_entry_source(runtime: &str) -> String {
+    if runtime == "python" {
+        return r#"import json
+import os
+from pathlib import Path
+
+Path(os.environ["COS_DATA_DIR"], f"{os.environ['COS_APP_ID']}.ran").touch()
+
+def run(command, args):
+    if command == "fail":
+        return {"error": "python failed"}
+    return {
+        "runtime": "python",
+        "command": command,
+        "args": args,
+        "app_id": os.environ["COS_APP_ID"],
+        "session": os.environ["COS_SESSION"],
+        "proc_data_dir": os.environ["COS_PROC_DATA_DIR"],
+        "launch_program": os.environ["TEST_LAUNCH_PROGRAM"],
+        "uid": os.geteuid(),
+    }
+"#
+        .to_string();
+    }
+
+    r#"#!/bin/sh
+touch "$COS_DATA_DIR/$COS_APP_ID.ran"
+if [ "${COS_APP_GUI:-}" = "1" ]; then
+  printf '{"runtime":"__RUNTIME__","command":"%s","args":%s,"app_id":"%s","session":"%s","gui":"%s"}\n' \
+    "$COS_COMMAND" "$COS_ARGS_JSON" "$COS_APP_ID" "$COS_SESSION" "$COS_APP_GUI" \
+    > "$COS_DATA_DIR/gui.json"
+  exit 0
+fi
+if [ "$COS_COMMAND" = "fail" ]; then
+  printf '{"error":"__RUNTIME__ failed"}\n'
+  exit 9
+fi
+printf '{"runtime":"__RUNTIME__","command":"%s","args":%s,"app_id":"%s","session":"%s","proc_data_dir":"%s","launch_program":"%s","uid":%s}\n' \
+  "$COS_COMMAND" "$COS_ARGS_JSON" "$COS_APP_ID" "$COS_SESSION" "$COS_PROC_DATA_DIR" \
+  "$TEST_LAUNCH_PROGRAM" "$(id -u)"
+"#
+    .replace("__RUNTIME__", runtime)
+}
+
+#[cfg(unix)]
+fn runtime_test_audit(data: &std::path::Path) -> Vec<Value> {
+    std::fs::read_to_string(data.join("logs").join("audit.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn polyglot_app_operations_dispatch_through_declared_runtime() {
+    with_runtime_app_test_env(|apps, data, proc_data| {
+        let cases = [
+            ("python-op", "python", None, "main.py"),
+            ("node-op", "node", Some("handler.js"), "handler.js"),
+            ("shell-op", "shell", Some("handler.sh"), "handler.sh"),
+            ("binary-op", "binary", Some("handler"), "handler"),
+        ];
+
+        for (id, runtime, declared_entry, entry_file) in cases {
+            let app_dir = write_runtime_app_manifest(apps, id, runtime, declared_entry, false);
+            write_runtime_test_executable(
+                &app_dir.join(entry_file),
+                &runtime_test_entry_source(runtime),
+            );
+
+            let schema = dispatch(&["app".to_string(), id.to_string(), "--schema".to_string()])
+                .unwrap()
+                .unwrap();
+            assert!(schema.contains("\"echo\""));
+            assert!(
+                !data.join(format!("{id}.ran")).exists(),
+                "schema inspection executed the {runtime} entrypoint"
+            );
+
+            let output = dispatch(&[
+                "app".to_string(),
+                id.to_string(),
+                "echo".to_string(),
+                "alpha".to_string(),
+                "beta".to_string(),
+            ])
+            .unwrap()
+            .unwrap();
+            let value: Value = serde_json::from_str(&output).unwrap();
+            assert_eq!(value["runtime"], runtime);
+            assert_eq!(value["command"], "echo");
+            assert_eq!(value["args"], json!(["alpha", "beta"]));
+            assert_eq!(value["app_id"], id);
+            assert!(value["session"]
+                .as_str()
+                .is_some_and(|session| session.starts_with("app-")));
+            assert_eq!(value["proc_data_dir"], proc_data.to_string_lossy().as_ref());
+            let expected_program = match runtime {
+                "python" => "python3".to_string(),
+                "node" => "node".to_string(),
+                "shell" => "bash".to_string(),
+                "binary" => app_dir.join(entry_file).to_string_lossy().into_owned(),
+                _ => unreachable!(),
+            };
+            assert_eq!(value["launch_program"], expected_program);
+            assert_eq!(
+                value["uid"].as_u64(),
+                Some(unsafe { libc::geteuid() } as u64)
+            );
+            assert!(data.join(format!("{id}.ran")).is_file());
+
+            let error_output = dispatch(&["app".to_string(), id.to_string(), "fail".to_string()])
+                .unwrap()
+                .unwrap();
+            let error: Value = serde_json::from_str(&error_output).unwrap();
+            assert_eq!(error["error"], format!("{runtime} failed"));
+        }
+
+        let audit = runtime_test_audit(data);
+        assert_eq!(audit.len(), cases.len() * 2);
+        for (id, runtime, _, _) in cases {
+            let success = audit
+                .iter()
+                .find(|entry| entry["app"] == id && entry["command"] == "echo")
+                .unwrap();
+            assert_eq!(success["args"], json!(["alpha", "beta"]));
+            assert_eq!(success["status"], "ok");
+
+            let failure = audit
+                .iter()
+                .find(|entry| entry["app"] == id && entry["command"] == "fail")
+                .unwrap();
+            assert_eq!(failure["status"], "error");
+            assert_eq!(failure["error"], format!("{runtime} failed"));
+        }
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn polyglot_app_operations_report_missing_and_invalid_entries() {
+    with_runtime_app_test_env(|apps, data, _| {
+        write_runtime_app_manifest(apps, "missing-node", "node", Some("missing.js"), false);
+        let missing = dispatch(&[
+            "app".to_string(),
+            "missing-node".to_string(),
+            "echo".to_string(),
+        ])
+        .unwrap_err();
+        let envelope: Value = serde_json::from_str(&missing).unwrap();
+        assert!(envelope["error"].as_str().is_some_and(|error| error
+            .contains("app entry not found")
+            && error.contains("missing.js")));
+        assert_eq!(envelope["code"], crate::errors::IO_FILE_NOT_FOUND);
+        assert!(envelope["recovery"].is_object());
+
+        let invalid =
+            write_runtime_app_manifest(apps, "invalid-python", "python", Some("alt.py"), false);
+        write_runtime_test_executable(
+            &invalid.join("alt.py"),
+            &runtime_test_entry_source("python"),
+        );
+        let invalid = dispatch(&[
+            "app".to_string(),
+            "invalid-python".to_string(),
+            "echo".to_string(),
+        ])
+        .unwrap_err();
+        assert!(
+            invalid.contains("python runtime currently requires entry='main.py'"),
+            "unexpected invalid-entry error: {invalid}"
+        );
+        assert!(!data.join("invalid-python.ran").exists());
+
+        let audit = runtime_test_audit(data);
+        assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|entry| entry["status"] == "error"));
+    });
+}
+
+#[cfg(unix)]
+#[test]
+fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
+    with_runtime_app_test_env(|apps, data, _| {
+        let app_dir =
+            write_runtime_app_manifest(apps, "desktop-shell", "shell", Some("gui.sh"), true);
+        write_runtime_test_executable(&app_dir.join("gui.sh"), &runtime_test_entry_source("shell"));
+
+        let output = dispatch(&[
+            "app".to_string(),
+            "desktop-shell".to_string(),
+            "--gui".to_string(),
+            "document.txt".to_string(),
+        ])
+        .unwrap();
+        assert!(output.is_none());
+
+        let gui: Value =
+            serde_json::from_slice(&std::fs::read(data.join("gui.json")).unwrap()).unwrap();
+        assert_eq!(gui["runtime"], "shell");
+        assert_eq!(gui["command"], "--gui");
+        assert_eq!(gui["args"], json!(["document.txt"]));
+        assert_eq!(gui["app_id"], "desktop-shell");
+        assert_eq!(gui["gui"], "1");
+        assert!(gui["session"]
+            .as_str()
+            .is_some_and(|session| session.starts_with("app-")));
+
+        let audit = runtime_test_audit(data);
+        assert_eq!(audit.len(), 1);
+        assert_eq!(audit[0]["command"], "--gui");
+        assert_eq!(audit[0]["status"], "ok");
+    });
+}
