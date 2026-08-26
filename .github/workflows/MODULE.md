@@ -2,8 +2,8 @@
 
 ## Purpose
 
-`.github/workflows/` defines manually dispatched and reusable test/publication
-pipelines.
+`.github/workflows/` defines the pull-request test pipeline plus manually
+dispatched and reusable test/publication pipelines.
 
 ## Responsibilities
 
@@ -17,7 +17,7 @@ pipelines.
 
 | Path | Role |
 | --- | --- |
-| `test.yml` | Reusable test/clippy workflow |
+| `test.yml` | Pull-request, manual, and reusable test/clippy workflow |
 | `build-docker-and-wsl.yml` | Shared rootfs, GHCR image, WSL artifacts/releases |
 | `publish-agent-package.yml` | Independent Agent build, Ubuntu smoke test, and publication |
 | `publish-base-package.yml` | Independent Claw OS Base build and publication |

@@ -48,7 +48,7 @@ editing additional surfaces.
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
-| CI workflow | `.github/workflows/` | scripts invoked by the workflow; workflows are manually dispatched |
+| CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
 
 ## Development
 

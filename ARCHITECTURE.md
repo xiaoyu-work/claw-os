@@ -203,8 +203,9 @@ signed APT repository artifact + web artifact
   -> GitHub Pages
 ```
 
-Workflows are manually dispatched. `release.yml` runs tests and fans out to the
-combined Docker/WSL channel and the independent APT channel.
+`test.yml` runs on pull requests and remains manually dispatchable/reusable.
+Publication workflows are manually dispatched; `release.yml` runs tests and
+fans out to the combined Docker/WSL channel and the independent APT channel.
 
 ## Entry Points
 
@@ -224,7 +225,7 @@ combined Docker/WSL channel and the independent APT channel.
 | APT repository build | `packaging/apt-repo/build-repo.sh` | Signed repository assembly |
 | Web desktop | `web/src/App.tsx` | Browser-based Linux desktop composition |
 | Website publication | `.github/workflows/publish-website.yml` | Independent web build and Pages composition |
-| CI test workflow | `.github/workflows/test.yml` | Manual/reusable test workflow |
+| CI test workflow | `.github/workflows/test.yml` | Pull-request/manual/reusable test workflow |
 | Full release workflow | `.github/workflows/release.yml` | Manual umbrella publication |
 
 ## Cross-Cutting Constraints
