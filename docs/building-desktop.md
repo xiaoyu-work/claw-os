@@ -89,9 +89,10 @@ sudo FEATURES=base,cos-core,systemd,kernel,desktop,vmware,copilot-cli,grub-disk,
 
 </details>
 
-A from-scratch build takes roughly **1–2 hours** and is mostly silent while it
-compiles (V8 for `cos-browser`, then the COSMIC desktop crates) — long quiet
-periods are normal, not a hang.
+A from-scratch build typically takes roughly **30–60 minutes** on a prepared
+host and is mostly silent while it compiles the desktop crates. Initial
+dependency downloads or slower hardware can take longer; quiet periods are
+normal, not a hang.
 
 > On a **Windows-on-ARM** PC, WSL is `arm64`, so you can only build the `arm64`
 > image — and VMware has no Windows-on-ARM build. Use Hyper-V (`FORMATS=vhdx`)
@@ -103,10 +104,12 @@ periods are normal, not a hang.
 
 ## 2. Load it in VMware
 
-1. Open **VMware Workstation / Player** (Windows/Linux) or **VMware Fusion** (macOS, Intel).
+1. Open **VMware Workstation / Player** (Windows/Linux) or **VMware Fusion**
+   (macOS, Intel or Apple Silicon).
 2. **Create a New Virtual Machine** → *Custom* → *I will install the operating
    system later*.
-3. Guest OS: **Linux** → *Debian 11.x 64-bit* (or *ARM 64-bit* for an `arm64` image).
+3. Guest OS: **Linux** → *Debian 13.x 64-bit* (or a generic *ARM 64-bit*
+   Linux guest for an `arm64` image).
 4. When prompted for a disk, choose **Use an existing virtual disk** and select
    the built `build/claw-os-vm-<arch>.vmdk`. Keep the existing format if asked.
 5. (arm64 only) In *VM Settings → Options → Advanced*, set firmware to **UEFI**.
