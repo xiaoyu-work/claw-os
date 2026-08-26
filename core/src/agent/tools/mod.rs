@@ -15,6 +15,7 @@ pub mod guardrails;
 pub mod mcp;
 pub mod media;
 pub mod registry;
+pub mod skills;
 pub mod todo;
 
 use async_trait::async_trait;

@@ -71,7 +71,14 @@ jobs:
           grep -q './usr/local/bin/claw-semantic$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-semantic-daemon$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/lib/cos/apps/web/app.json$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/skills/claw-os/SKILL.md$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/skills/claw-os/diagnostics.md$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/lib/systemd/system/clawd.service$' "$RUNNER_TEMP/claw-os-agent.files"
+          skill_extract="$RUNNER_TEMP/claw-os-agent-skill-permissions"
+          mkdir -p "$skill_extract"
+          dpkg-deb -x "$agent_deb" "$skill_extract"
+          test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os")" = "755"
+          test "$(stat -c '%a' "$skill_extract/usr/lib/cos/skills/claw-os/SKILL.md")" = "644"
           ! grep -q './etc/cos/oauth.conf$' "$RUNNER_TEMP/claw-os-agent.files"
           ! grep -q '/apps/agent/' "$RUNNER_TEMP/claw-os-agent.files"
           ! grep -q '/apps/panel-calendar/' "$RUNNER_TEMP/claw-os-agent.files"
@@ -95,6 +102,12 @@ jobs:
             exit 1
           fi
           /usr/local/bin/cos-browser --help >/dev/null
+          COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
+            /usr/local/bin/cos agent skills list \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert "claw-os" in data["names"]'
+          COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
+            /usr/local/bin/cos agent skills info claw-os \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["source"] == "builtin"'
           sudo python3 - <<'PY'
           import json
           import socket

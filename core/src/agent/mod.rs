@@ -1792,12 +1792,16 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
     match sub {
         "root" => Ok(json!({
             "root": crate::paths::agent_skills_dir().display().to_string(),
+            "user_root": crate::paths::agent_skills_dir().display().to_string(),
+            "system_root": crate::paths::system_skills_dir().display().to_string(),
         })),
         "list" | "" => {
             let res = skills::loader::load_default();
             let names: Vec<&String> = res.skills.keys().collect();
             Ok(json!({
                 "root": crate::paths::agent_skills_dir().display().to_string(),
+                "user_root": crate::paths::agent_skills_dir().display().to_string(),
+                "system_root": crate::paths::system_skills_dir().display().to_string(),
                 "loaded": res.loaded_count(),
                 "disabled": res.disabled.len(),
                 "errors": res.errors.len(),
@@ -1817,13 +1821,15 @@ fn skills_cmd(args: &[String]) -> Result<Value, String> {
                     "manifest_path": s.manifest_path.display().to_string(),
                     "name": s.manifest.name,
                     "description": s.manifest.description,
+                    "source": s.origin.as_str(),
                     "version": s.manifest.version,
                     "license": s.manifest.license,
                     "author": s.manifest.author,
                     "homepage": s.manifest.homepage,
                     "allowed_tools": s.manifest.allowed_tools,
                     "triggers": s.manifest.triggers,
-                    "body_bytes": s.body.len(),
+                    "body_bytes": s.body_bytes,
+                    "disclosable": skills::disclosure::instruction_disclosable(s),
                 }))
             } else if let Some(reason) = res.disabled.get(&id) {
                 Ok(json!({
@@ -2118,6 +2124,7 @@ fn skills_usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value,
                 success,
                 duration_ms,
                 invoked_by: invoked_by.clone(),
+                resource_path: None,
             };
             store
                 .record(&rec)
@@ -2514,11 +2521,12 @@ fn redact_cmd(args: &[String]) -> Result<Value, String> {
 /// [`crate::agent::prompt::build_system_prompt`] and includes:
 ///
 ///   1. Built-in scaffold (immutable in this binary).
-///   2. `MEMORY.md` and `USER.md` from the system notes store
+///   2. Metadata-only installed Skill catalogue.
+///   3. `MEMORY.md` and `USER.md` from the system notes store
 ///      (auto-loaded; capped per-file via
 ///      [`crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT`]).
-///   3. Due nudges from the nudge store.
-///   4. Optional override file content from `--extra <path>`.
+///   4. Due nudges from the nudge store.
+///   5. Optional override file content from `--extra <path>`.
 ///
 /// Useful for: debugging "why did the model behave this way?",
 /// previewing a new MEMORY.md entry before committing, computing a

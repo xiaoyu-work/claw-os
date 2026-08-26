@@ -39,7 +39,9 @@ fn write_skill(dir: &Path, id: &str, body: &str, tools: &[&str]) -> LoadedSkill 
         dir: sd,
         manifest_path: mp,
         manifest: doc.manifest,
+        body_bytes: doc.body.len(),
         body: doc.body,
+        origin: super::super::loader::SkillOrigin::Local,
     }
 }
 
@@ -72,6 +74,7 @@ fn usage_store_records_and_aggregates() {
             success: true,
             duration_ms: 100,
             invoked_by: Some("agent".to_string()),
+            resource_path: None,
         })
         .unwrap();
     store
@@ -81,6 +84,7 @@ fn usage_store_records_and_aggregates() {
             success: false,
             duration_ms: 200,
             invoked_by: None,
+            resource_path: None,
         })
         .unwrap();
     store
@@ -90,6 +94,7 @@ fn usage_store_records_and_aggregates() {
             success: true,
             duration_ms: 50,
             invoked_by: None,
+            resource_path: None,
         })
         .unwrap();
 

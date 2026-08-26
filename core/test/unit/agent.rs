@@ -210,6 +210,8 @@ fn notes_list_returns_dir_and_names() {
 fn skills_root_returns_path() {
     let v = skills_cmd(&["root".into()]).expect("skills root ok");
     assert!(v.get("root").and_then(|x| x.as_str()).is_some());
+    assert!(v.get("user_root").and_then(|x| x.as_str()).is_some());
+    assert!(v.get("system_root").and_then(|x| x.as_str()).is_some());
 }
 
 #[test]
@@ -219,6 +221,8 @@ fn skills_list_shape_correct() {
     assert!(v.get("disabled").is_some());
     assert!(v.get("errors").is_some());
     assert!(v.get("names").and_then(|x| x.as_array()).is_some());
+    assert!(v.get("user_root").and_then(|x| x.as_str()).is_some());
+    assert!(v.get("system_root").and_then(|x| x.as_str()).is_some());
 }
 
 #[test]
@@ -2611,7 +2615,9 @@ fn write_test_skill(
         dir: sd,
         manifest_path: mp,
         manifest: doc.manifest,
+        body_bytes: doc.body.len(),
         body: doc.body,
+        origin: crate::agent::skills::loader::SkillOrigin::Local,
     }
 }
 

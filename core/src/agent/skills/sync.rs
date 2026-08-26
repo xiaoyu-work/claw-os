@@ -80,6 +80,8 @@ pub enum SyncError {
     UnsafeSkillName(String),
     #[error("destination already exists: {0} (use --force to overwrite, or remove it first)")]
     DestinationExists(PathBuf),
+    #[error("skill id `{id}` is reserved by the built-in skill at {path}")]
+    BuiltInConflict { id: String, path: PathBuf },
     #[error("zip slip detected — entry path escapes destination: {0}")]
     PathTraversal(String),
     #[error("archive rejected: too many entries ({count}); cap {cap}")]
@@ -100,7 +102,14 @@ pub enum SyncError {
 
 /// Install a skill bundle into the default agent skills directory.
 pub fn install_from_archive(archive: &Path, force: bool) -> Result<SyncResult, SyncError> {
-    install_into(archive, &crate::paths::agent_skills_dir(), force)
+    install_into_with_policy_reserved(
+        archive,
+        &crate::paths::agent_skills_dir(),
+        force,
+        None,
+        &SignatureVerifyConfig::from_env(),
+        Some(&crate::paths::system_skills_dir()),
+    )
 }
 
 /// Install with an optional SHA-256 integrity check. The expected
@@ -112,11 +121,13 @@ pub fn install_from_archive_verified(
     force: bool,
     expected_sha256: Option<&str>,
 ) -> Result<SyncResult, SyncError> {
-    install_into_verified(
+    install_into_with_policy_reserved(
         archive,
         &crate::paths::agent_skills_dir(),
         force,
         expected_sha256,
+        &SignatureVerifyConfig::from_env(),
+        Some(&crate::paths::system_skills_dir()),
     )
 }
 
@@ -162,6 +173,24 @@ pub fn install_into_with_policy(
     force: bool,
     expected_sha256: Option<&str>,
     signature_config: &SignatureVerifyConfig,
+) -> Result<SyncResult, SyncError> {
+    install_into_with_policy_reserved(
+        archive,
+        skills_root,
+        force,
+        expected_sha256,
+        signature_config,
+        None,
+    )
+}
+
+fn install_into_with_policy_reserved(
+    archive: &Path,
+    skills_root: &Path,
+    force: bool,
+    expected_sha256: Option<&str>,
+    signature_config: &SignatureVerifyConfig,
+    reserved_root: Option<&Path>,
 ) -> Result<SyncResult, SyncError> {
     if !archive.exists() {
         return Err(SyncError::ArchiveMissing(archive.to_path_buf()));
@@ -253,6 +282,16 @@ pub fn install_into_with_policy(
 
         let safe_id = sanitize_skill_id(&doc.manifest.name)
             .ok_or_else(|| SyncError::UnsafeSkillName(doc.manifest.name.clone()))?;
+
+        if let Some(root) = reserved_root {
+            let reserved = root.join(&safe_id);
+            if fs::symlink_metadata(&reserved).is_ok() {
+                return Err(SyncError::BuiltInConflict {
+                    id: safe_id,
+                    path: reserved,
+                });
+            }
+        }
 
         let dest = skills_root.join(&safe_id);
         let mut replaced = false;

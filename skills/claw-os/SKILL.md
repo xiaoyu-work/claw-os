@@ -1,11 +1,18 @@
 ---
 name: claw-os
-description: "Claw OS — agent-native operating system. Run cos for OS primitives, cos app for apps. Read child docs in skills/claw-os/ for detailed usage."
+description: "Operate the Claw system-agent layer: inspect and manage OS primitives, apps, diagnostics, permissions, and sessions. Read referenced resources only when needed."
 ---
 
-# Claw OS
+# Claw System Agent
 
-You are running on Claw OS. All commands return structured JSON.
+You are operating through the Claw system-agent layer. The host may be a full
+Claw OS image or another Linux distribution with `claw-os-agent` installed.
+Use `cos_sysinfo` before naming the host distribution. Commands return
+structured JSON.
+
+This `SKILL.md` is the instruction layer. Read a linked child document through
+`cos_skill` with `command=resource` only when the current task needs that
+specific detail; do not preload every resource.
 
 ## Quick Reference
 

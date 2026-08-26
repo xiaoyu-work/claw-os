@@ -82,11 +82,12 @@ fn home_override_redirects_user_data_dir_and_credentials() {
         .build()
         .expect("build current-thread runtime");
 
-    let (data, creds, snapshot) = rt.block_on(async {
+    let (data, creds, skills, snapshot) = rt.block_on(async {
         with_home_override(PathBuf::from("/tmp/cos-test-creds-home"), async {
             (
                 user_data_dir(),
                 user_credentials_dir(),
+                agent_skills_dir(),
                 current_home_override(),
             )
         })
@@ -99,6 +100,10 @@ fn home_override_redirects_user_data_dir_and_credentials() {
     assert_eq!(
         creds,
         PathBuf::from("/tmp/cos-test-creds-home/.local/share/cos/credentials")
+    );
+    assert_eq!(
+        skills,
+        PathBuf::from("/tmp/cos-test-creds-home/.local/share/cos/agent/skills")
     );
     assert_eq!(snapshot.as_deref(), Some(Path::new("/tmp/cos-test-creds-home")));
 

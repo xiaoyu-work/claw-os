@@ -8,6 +8,7 @@ fn default_registry_has_builtins_and_cos_proxy() {
     assert!(r.get("cos_delegate").is_some());
     assert!(r.get("cos_todo").is_some());
     assert!(r.get("cos_clarify").is_some());
+    assert!(r.get("cos_skill").is_some());
     assert!(r.get("cos_sandbox").is_some());
     assert!(r.get("cos_sysinfo").is_some());
     assert!(r.get("cos_memory").is_some());
@@ -22,10 +23,11 @@ fn default_registry_has_builtins_and_cos_proxy() {
     assert!(r.get("cos_app_run").is_some());
 
     // Lower bound: 2 builtins + cos_delegate + cos_todo + cos_clarify
+    // + cos_skill
     // + every cos_proxy tool (primitives + cos_memory) + cos_app_catalog
     // + cos_app_run + 3 media tools, plus optionally cos_recall and any
     // dynamic cos_app_<id> proxies discovered on disk.
-    let expected_min = 5 + super::super::cos_proxy::total_count() + 2 + 3;
+    let expected_min = 6 + super::super::cos_proxy::total_count() + 2 + 3;
     assert!(
         r.len() >= expected_min,
         "expected at least {} tools, got {}",

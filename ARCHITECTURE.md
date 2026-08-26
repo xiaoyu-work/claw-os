@@ -134,7 +134,7 @@ Hidden router bridges such as `__policy`, `__memory`, `__package`, and
 CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> runtime::loop_
-  -> traced system prompt + persisted conversation
+  -> traced system prompt + metadata-only Skill catalogue + persisted conversation
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
@@ -151,6 +151,27 @@ authorization, execution ordering, hooks, and conversation history meet.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier.
+
+### Progressive Agent Skill disclosure
+
+```text
+/usr/lib/cos/skills (read-only trusted vendor Skills)
+  + per-user data/agent/skills (user-installed Skills)
+  -> layered loader; built-in ids cannot be silently shadowed
+  -> metadata-only catalogue injected into and recorded with the system prompt
+  -> cos_skill read: disclose one matching SKILL.md instruction body
+  -> cos_skill resource: disclose one explicitly requested child resource
+  -> normal tool trajectory, session logging, and Skill usage record
+```
+
+Built-in Skills from the package-owned default root do not require third-party
+provenance approval. A `COS_SYSTEM_SKILLS_DIR` override is treated as local
+content rather than promoted to built-in trust. User-installed Skills continue
+through the existing non-vendor disclosure guard; signature policy remains
+enforced when bundles are installed. Metadata pages, instruction bodies, and
+child resources are size-bounded. Child resource reads accept only visible,
+regular UTF-8 files beneath the selected Skill directory; absolute paths,
+parent traversal, symlinks, hidden files, and oversized resources are rejected.
 
 ### App invocation
 

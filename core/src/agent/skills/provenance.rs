@@ -75,6 +75,9 @@ pub struct UsageRecord {
     /// Optional caller hint (model name, user/agent/delegate, etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invoked_by: Option<String>,
+    /// Child resource path for progressive disclosure records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resource_path: Option<String>,
 }
 
 /// Aggregated counters for a single skill.
@@ -136,8 +139,9 @@ impl UsageStore {
             opts.custom_flags(libc::O_NOFOLLOW);
         }
         let mut f = opts.open(&self.path)?;
-        f.write_all(line.as_bytes())?;
-        f.write_all(b"\n")?;
+        let mut record = line.into_bytes();
+        record.push(b'\n');
+        f.write_all(&record)?;
         f.flush()
     }
 

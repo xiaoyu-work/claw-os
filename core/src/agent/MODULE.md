@@ -32,6 +32,7 @@ surfaces.
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
 | `tools/registry.rs` | Tool exposure and dispatch lookup |
+| `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable message/session memory and FTS |
 | `prompt/` | System prompt composition, tracing, caching |

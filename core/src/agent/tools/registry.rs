@@ -147,6 +147,7 @@ pub fn default_registry() -> ToolRegistry {
     r.register(Arc::new(super::delegate::Delegate));
     r.register(Arc::new(super::todo::Todo::default_tool()));
     r.register(Arc::new(super::clarify::Clarify::new()));
+    r.register(Arc::new(super::skills::SkillDisclosure::new()));
     super::cos_proxy::register_all(&mut r);
     super::cos_apps::register_all(&mut r);
     super::cos_apps_session::register_all(&mut r);

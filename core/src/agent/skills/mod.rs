@@ -1,7 +1,11 @@
-//! Skill registry and execution. All 25 skill categories vendored as data
-//! under clawos/skills/ (Q11). Red-teaming and yuanbao-specific skills disabled
-//! by default in the registry.
+//! Layered Agent Skill registry and progressive disclosure.
+//!
+//! Read-only vendor skills are loaded from `/usr/lib/cos/skills`; user skills
+//! are loaded from the per-user Agent state directory. The prompt sees only
+//! manifest metadata. Full instructions and child resources are exposed
+//! through `cos_skill` one layer at a time.
 
+pub mod disclosure;
 pub mod hub;
 pub mod loader;
 pub mod manifest;

@@ -1,8 +1,9 @@
 //! Filesystem-backed skills loader.
 //!
-//! Scans a root directory for `<skill-name>/SKILL.md` files, parses
-//! each via [`super::manifest::parse`], and returns a registry the
-//! runtime can consult.
+//! Scans `<skill-name>/SKILL.md` directories and returns a registry the
+//! runtime can consult. [`load_default`] merges the read-only vendor root with
+//! the current user's writable root; [`load_dir`] remains available for an
+//! explicit local root.
 //!
 //! ## Layout
 //!
@@ -48,6 +49,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use super::manifest::{self, SkillManifest};
 
@@ -59,6 +61,29 @@ pub struct LoadedSkill {
     pub manifest_path: PathBuf,
     pub manifest: SkillManifest,
     pub body: String,
+    pub body_bytes: usize,
+    pub origin: SkillOrigin,
+}
+
+/// Trust/source layer from which a skill was discovered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SkillOrigin {
+    /// Read-only content shipped with the Claw Agent package.
+    BuiltIn,
+    /// Content installed into the current user's skill directory.
+    User,
+    /// An explicitly supplied directory, primarily for development/tests.
+    Local,
+}
+
+impl SkillOrigin {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::BuiltIn => "builtin",
+            Self::User => "user",
+            Self::Local => "local",
+        }
+    }
 }
 
 /// Outcome of loading a skills root directory.
@@ -94,6 +119,9 @@ pub struct LoadOptions {
     /// rejected with a load error (defends against pathological
     /// inputs; default 1 MiB).
     pub max_manifest_bytes: u64,
+    /// Retain the instruction body after parsing. Metadata-only prompt
+    /// assembly disables this and hydrates only the selected skill later.
+    pub include_body: bool,
 }
 
 impl Default for LoadOptions {
@@ -101,6 +129,7 @@ impl Default for LoadOptions {
         Self {
             deny_list: default_deny_list(),
             max_manifest_bytes: 1024 * 1024,
+            include_body: true,
         }
     }
 }
@@ -141,9 +170,37 @@ pub fn default_deny_list() -> Vec<DenyRule> {
 }
 
 /// Load all skills from the system-default
-/// [`crate::paths::agent_skills_dir`].
+/// read-only and user-writable roots.
 pub fn load_default() -> LoadResult {
-    load_dir(&crate::paths::agent_skills_dir(), &LoadOptions::default())
+    load_default_with_options(&LoadOptions::default())
+}
+
+/// Metadata-only variant used by prompt assembly and `cos_skill list`.
+pub fn load_catalog_default() -> LoadResult {
+    load_default_with_options(&LoadOptions {
+        include_body: false,
+        ..LoadOptions::default()
+    })
+}
+
+fn load_default_with_options(opts: &LoadOptions) -> LoadResult {
+    let system_origin = if std::env::var_os("COS_SYSTEM_SKILLS_DIR").is_some() {
+        static WARNED: OnceLock<()> = OnceLock::new();
+        if WARNED.set(()).is_ok() {
+            tracing::warn!(
+                "COS_SYSTEM_SKILLS_DIR overrides the package-owned Skill root; treating it as local content"
+            );
+        }
+        SkillOrigin::Local
+    } else {
+        SkillOrigin::BuiltIn
+    };
+    load_layered_with_origin(
+        &crate::paths::system_skills_dir(),
+        &crate::paths::agent_skills_dir(),
+        opts,
+        system_origin,
+    )
 }
 
 /// Load all skills from the given root with the given options.
@@ -152,6 +209,73 @@ pub fn load_default() -> LoadResult {
 /// other IO error on the root → captured in `errors` under id
 /// `<root>` and an empty result returned.
 pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
+    load_dir_with_origin(root, opts, SkillOrigin::Local)
+}
+
+/// Load read-only built-in skills and user-installed skills into one
+/// registry. Built-ins win on duplicate ids so user content cannot silently
+/// replace instructions shipped by the Agent package.
+pub fn load_layered(system_root: &Path, user_root: &Path, opts: &LoadOptions) -> LoadResult {
+    load_layered_with_origin(system_root, user_root, opts, SkillOrigin::BuiltIn)
+}
+
+fn load_layered_with_origin(
+    system_root: &Path,
+    user_root: &Path,
+    opts: &LoadOptions,
+    system_origin: SkillOrigin,
+) -> LoadResult {
+    let mut out = load_dir_with_origin(system_root, opts, system_origin);
+    let user = load_dir_with_origin(user_root, opts, SkillOrigin::User);
+
+    for (id, skill) in user.skills {
+        if contains_id(&out, &id) {
+            out.errors.insert(
+                format!("{id} (user shadow)"),
+                format!("user skill `{id}` cannot shadow a built-in skill with the same id"),
+            );
+        } else {
+            out.skills.insert(id, skill);
+        }
+    }
+    merge_diagnostics(&mut out.disabled, user.disabled, "user");
+    merge_diagnostics(&mut out.errors, user.errors, "user");
+    out
+}
+
+/// Re-read one catalogued skill with its full instruction body retained.
+pub fn hydrate(skill: &LoadedSkill, opts: &LoadOptions) -> Result<LoadedSkill, String> {
+    let mut hydrated = load_one(&skill.id, &skill.dir, opts)?;
+    hydrated.origin = skill.origin;
+    Ok(hydrated)
+}
+
+fn contains_id(result: &LoadResult, id: &str) -> bool {
+    result.skills.contains_key(id)
+        || result.disabled.contains_key(id)
+        || result.errors.contains_key(id)
+}
+
+fn merge_diagnostics(
+    target: &mut BTreeMap<String, String>,
+    source: BTreeMap<String, String>,
+    layer: &str,
+) {
+    for (id, message) in source {
+        let key = if target.contains_key(&id) {
+            format!("{id} ({layer})")
+        } else {
+            id
+        };
+        target.insert(key, message);
+    }
+}
+
+fn load_dir_with_origin(
+    root: &Path,
+    opts: &LoadOptions,
+    origin: SkillOrigin,
+) -> LoadResult {
     let mut out = LoadResult::default();
 
     let entries = match fs::read_dir(root) {
@@ -201,7 +325,8 @@ pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
         }
 
         match load_one(&id, &dir, opts) {
-            Ok(skill) => {
+            Ok(mut skill) => {
+                skill.origin = origin;
                 out.skills.insert(id, skill);
             }
             Err(err) => {
@@ -216,7 +341,7 @@ pub fn load_dir(root: &Path, opts: &LoadOptions) -> LoadResult {
 fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, String> {
     let manifest_path = dir.join("SKILL.md");
     let metadata =
-        fs::metadata(&manifest_path).map_err(|e| format!("SKILL.md not readable: {e}"))?;
+        fs::symlink_metadata(&manifest_path).map_err(|e| format!("SKILL.md not readable: {e}"))?;
     if !metadata.is_file() {
         return Err("SKILL.md is not a regular file".to_string());
     }
@@ -232,12 +357,19 @@ fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, Str
         fs::read_to_string(&manifest_path).map_err(|e| format!("failed to read SKILL.md: {e}"))?;
     let doc = manifest::parse(&raw).map_err(|e| format!("manifest parse error: {e}"))?;
 
+    let body_bytes = doc.body.len();
     Ok(LoadedSkill {
         id: id.to_string(),
         dir: dir.to_path_buf(),
         manifest_path,
         manifest: doc.manifest,
-        body: doc.body,
+        body: if opts.include_body {
+            doc.body
+        } else {
+            String::new()
+        },
+        body_bytes,
+        origin: SkillOrigin::Local,
     })
 }
 

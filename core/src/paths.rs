@@ -523,12 +523,21 @@ pub fn agent_todos_dir() -> PathBuf {
 }
 
 /// Directory tree for installed skills. Lives under
-/// `data_dir/agent/skills/`. Each subdirectory `<skill-name>/`
+/// the current user's `data/agent/skills/`. Each subdirectory `<skill-name>/`
 /// contains a `SKILL.md` (agentskills.io frontmatter + body) plus
 /// any helper scripts the skill may invoke. Phase 3 ships the
 /// loader; Phase 6 ships the GitHub-based hub + sync.
 pub fn agent_skills_dir() -> PathBuf {
-    agent_state_dir().join("skills")
+    user_data_dir().join("agent").join("skills")
+}
+
+/// Read-only skills bundled with the installed Agent package.
+///
+/// Debian packages place these under `/usr/lib/cos/skills`. The
+/// environment override supports development checkouts and tests without
+/// changing the writable user skill root returned by [`agent_skills_dir`].
+pub fn system_skills_dir() -> PathBuf {
+    from_env_or_default("COS_SYSTEM_SKILLS_DIR", "/usr/lib/cos/skills", "skills")
 }
 
 /// Output sink for media-tool-generated artifacts (TTS audio,

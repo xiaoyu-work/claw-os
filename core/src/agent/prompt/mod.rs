@@ -2,15 +2,17 @@
 //!
 //! Composition (in order):
 //!   1. Built-in scaffold — defines the agent's role and tool conventions.
-//!   2. Auto-injected `MEMORY.md` and `USER.md` from
+//!   2. Metadata-only catalogue of installed Agent Skills. Full skill
+//!      instructions and resources remain behind the `cos_skill` tool.
+//!   3. Auto-injected `MEMORY.md` and `USER.md` from
 //!      [`crate::agent::memory::notes::NotesStore::system_default`]. Both
 //!      files are read every time so updates by the model (via
 //!      `cos_memory`) take effect on the next turn.
-//!   3. Auto-injected due reminders from the periodic-nudge store at
+//!   4. Auto-injected due reminders from the periodic-nudge store at
 //!      [`crate::paths::agent_nudges_path`]. Surfaces as a
 //!      `<DUE_NUDGES>` block when at least one nudge is due (epoch
 //!      seconds <= now). Empty-store / missing-file is silent.
-//!   4. Optional explicit file from `extra_path` (overrides via
+//!   5. Optional explicit file from `extra_path` (overrides via
 //!      `AgentConfig::system_prompt_path`).
 //!
 //! All injection is best-effort: missing or unreadable files are silently
@@ -46,6 +48,7 @@ pub struct InjectedSegment {
 pub const INJECTED_SOURCE_MEMORY_NOTES: &str = "memory_notes";
 pub const INJECTED_SOURCE_DUE_NUDGES: &str = "due_nudges";
 pub const INJECTED_SOURCE_PROMPT_EXTRA: &str = "prompt_extra";
+pub const INJECTED_SOURCE_SKILLS_CATALOG: &str = "skills_catalog";
 
 const SYSTEM_SCAFFOLD: &str = "You are Claw, the system-level agent distributed by the Claw OS project. You may run either inside a full ClawOS installation or as the `claw-os-agent` package installed on another Linux distribution such as Ubuntu. You are not an ordinary app; you operate through native `cos` system primitives.
 
@@ -101,6 +104,9 @@ pub fn build_system_prompt_traced(
     let mut segments: Vec<InjectedSegment> = Vec::new();
     let mut out = String::from(SYSTEM_SCAFFOLD);
 
+    let skills = crate::agent::skills::loader::load_catalog_default();
+    append_skill_catalog(&mut out, &mut segments, &skills);
+
     if let Some(notes) = NotesStore::system_default().assemble_for_prompt_relevant(
         query,
         crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT,
@@ -153,6 +159,21 @@ pub fn build_system_prompt_traced(
     }
 
     (out, segments)
+}
+
+fn append_skill_catalog(
+    prompt: &mut String,
+    segments: &mut Vec<InjectedSegment>,
+    skills: &crate::agent::skills::loader::LoadResult,
+) {
+    if let Some(catalog) = crate::agent::skills::disclosure::render_prompt_catalog(skills) {
+        prompt.push_str("\n\n---\n\n");
+        prompt.push_str(&catalog);
+        segments.push(InjectedSegment {
+            source: INJECTED_SOURCE_SKILLS_CATALOG,
+            content: catalog,
+        });
+    }
 }
 
 /// Assert (in debug builds) that every recorded injected segment

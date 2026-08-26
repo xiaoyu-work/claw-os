@@ -37,7 +37,9 @@ fn loads_single_skill() {
     assert_eq!(s.id, "pdf");
     assert_eq!(s.manifest.name, "pdf");
     assert_eq!(s.body, "body for pdf\n");
+    assert_eq!(s.body_bytes, "body for pdf\n".len());
     assert_eq!(s.manifest_path.file_name().unwrap(), "SKILL.md");
+    assert_eq!(s.origin, SkillOrigin::Local);
 }
 
 #[test]
@@ -186,6 +188,23 @@ fn skill_md_as_directory_errors_out() {
     assert!(msg.contains("not a regular file"), "got: {msg}");
 }
 
+#[cfg(unix)]
+#[test]
+fn symlinked_skill_md_is_rejected() {
+    use std::os::unix::fs::symlink;
+
+    let tmp = tempdir().unwrap();
+    let outside = tmp.path().join("outside.md");
+    fs::write(&outside, minimal("linked")).unwrap();
+    let dir = tmp.path().join("linked");
+    fs::create_dir_all(&dir).unwrap();
+    symlink(&outside, dir.join("SKILL.md")).unwrap();
+
+    let result = load_dir(tmp.path(), &LoadOptions::default());
+
+    assert!(result.errors["linked"].contains("not a regular file"));
+}
+
 #[test]
 fn missing_name_field_recorded_in_errors() {
     let tmp = tempdir().unwrap();
@@ -215,4 +234,55 @@ fn load_default_does_not_panic_on_missing_dir() {
     // absent. If the system happens to have skills, we still
     // get a valid LoadResult.
     let _ = load_default();
+}
+
+#[test]
+fn layered_load_includes_builtin_and_user_skills() {
+    let system = tempdir().unwrap();
+    let user = tempdir().unwrap();
+    write_skill(system.path(), "claw-os", &minimal("claw-os"));
+    write_skill(user.path(), "my-skill", &minimal("my-skill"));
+
+    let result = load_layered(system.path(), user.path(), &LoadOptions::default());
+
+    assert_eq!(result.loaded_count(), 2);
+    assert_eq!(result.skills["claw-os"].origin, SkillOrigin::BuiltIn);
+    assert_eq!(result.skills["my-skill"].origin, SkillOrigin::User);
+}
+
+#[test]
+fn layered_load_prevents_user_shadowing_builtin_skill() {
+    let system = tempdir().unwrap();
+    let user = tempdir().unwrap();
+    write_skill(system.path(), "claw-os", &minimal("vendor-claw-os"));
+    write_skill(user.path(), "claw-os", &minimal("user-claw-os"));
+
+    let result = load_layered(system.path(), user.path(), &LoadOptions::default());
+
+    assert_eq!(result.loaded_count(), 1);
+    assert_eq!(result.skills["claw-os"].manifest.name, "vendor-claw-os");
+    assert_eq!(result.skills["claw-os"].origin, SkillOrigin::BuiltIn);
+    assert!(result.errors.contains_key("claw-os (user shadow)"));
+}
+
+#[test]
+fn metadata_only_load_drops_instruction_bodies() {
+    let system = tempdir().unwrap();
+    let user = tempdir().unwrap();
+    write_skill(system.path(), "claw-os", &minimal("claw-os"));
+    let options = LoadOptions {
+        include_body: false,
+        ..LoadOptions::default()
+    };
+
+    let result = load_layered(system.path(), user.path(), &options);
+
+    assert_eq!(result.skills["claw-os"].manifest.name, "claw-os");
+    assert!(result.skills["claw-os"].body.is_empty());
+    assert_eq!(
+        result.skills["claw-os"].body_bytes,
+        "body for claw-os\n".len()
+    );
+    let hydrated = hydrate(&result.skills["claw-os"], &LoadOptions::default()).unwrap();
+    assert_eq!(hydrated.body, "body for claw-os\n");
 }

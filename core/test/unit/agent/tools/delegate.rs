@@ -67,6 +67,27 @@ fn build_child_registry_empty_allowed_yields_empty_child() {
 }
 
 #[test]
+fn build_child_registry_keeps_progressive_skill_disclosure() {
+    let mut source = ToolRegistry::new();
+    source.register(Arc::new(super::super::skills::SkillDisclosure::new()));
+
+    let child = build_child_registry(None, None, source, &[]);
+
+    assert!(child.get("cos_skill").is_some());
+}
+
+#[test]
+fn build_child_registry_respects_parent_skill_denial() {
+    let mut source = ToolRegistry::new();
+    source.register(Arc::new(super::super::skills::SkillDisclosure::new()));
+    let guardrails = Guardrails::default().deny_tool("cos_skill");
+
+    let child = build_child_registry(Some(&guardrails), None, source, &[]);
+
+    assert!(child.get_unfiltered("cos_skill").is_none());
+}
+
+#[test]
 fn build_child_registry_respects_parent_deny_list() {
     // Parent denies `echo`; even though the delegate caller listed
     // it under `allowed_tools`, the child must not see it. This is

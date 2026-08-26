@@ -141,6 +141,30 @@ fn install_rejects_existing_destination_without_force() {
 }
 
 #[test]
+fn default_install_rejects_builtin_id_collision() {
+    let tmp = TempDir::new().unwrap();
+    let archive = tmp.path().join("claw-os.zip");
+    make_zip(&archive, &[("SKILL.md", &good_skill_md("claw-os"))]);
+    let user_root = tmp.path().join("user-skills");
+    let system_root = tmp.path().join("system-skills");
+    fs::create_dir_all(system_root.join("claw-os")).unwrap();
+    fs::write(system_root.join("claw-os").join("SKILL.md"), "built in").unwrap();
+
+    let error = install_into_with_policy_reserved(
+        &archive,
+        &user_root,
+        false,
+        None,
+        &SignatureVerifyConfig::default(),
+        Some(&system_root),
+    )
+    .expect_err("built-in id must be reserved");
+
+    assert!(matches!(error, SyncError::BuiltInConflict { .. }));
+    assert!(!user_root.join("claw-os").exists());
+}
+
+#[test]
 fn install_force_overwrites_existing() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("a.zip");

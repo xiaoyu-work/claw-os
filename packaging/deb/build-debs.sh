@@ -367,6 +367,19 @@ fi
 
 if [ -d "$PROJECT_DIR/skills" ]; then
     cp -a "$PROJECT_DIR/skills/." "$AGENT_STAGE/usr/lib/cos/skills/"
+    find "$AGENT_STAGE/usr/lib/cos/skills" -type d -exec chmod 0755 {} +
+    while IFS= read -r -d '' skill_file; do
+        relative_path="${skill_file#"$AGENT_STAGE/usr/lib/cos/skills/"}"
+        git_mode="$(
+            git -C "$PROJECT_DIR" ls-files --stage -- "skills/$relative_path" \
+                | awk 'NR == 1 { print $1 }'
+        )"
+        if [ "$git_mode" = "100755" ]; then
+            chmod 0755 "$skill_file"
+        else
+            chmod 0644 "$skill_file"
+        fi
+    done < <(find "$AGENT_STAGE/usr/lib/cos/skills" -type f -print0)
 fi
 
 SDK_PY_SRC="$PROJECT_DIR/claw-os-sdk/python/src/claw_os_sdk"
