@@ -14,13 +14,14 @@
 //! - `ToolUseStart` opens a new `ToolUse` block; `ToolInputDelta`
 //!   accumulates partial JSON into that block; the final `ToolUse`
 //!   event seals the input as parsed JSON.
-//! - A `Message` event short-circuits — providers that don't truly
-//!   stream emit a single `Message` followed by `Done`; we adopt the
-//!   message verbatim and ignore further block-level events.
+//! - A `Message` event is adopted verbatim, but the stream must still
+//!   provide a following `Done` event.
 //! - `Done` records `finish` + `usage` and terminates accumulation.
 //! - The first `Err(LlmError::...)` from the stream propagates and
 //!   aborts. Sinks still receive any successful events that arrived
 //!   before the error.
+//! - EOF before `Done` is an upstream-malformed error; partial text and
+//!   tool calls are never returned as a successful response.
 //! - `Warning` events are forwarded to the sink but do not appear in
 //!   the assembled `ChatResponse`.
 
@@ -81,12 +82,13 @@ pub async fn accumulate_stream(
         }
         sink.on_event(&event);
         if accumulator.feed(event) {
-            // `feed` returns true on terminal events. Stop draining.
-            break;
+            return Ok(accumulator.finish());
         }
     }
 
-    Ok(accumulator.finish())
+    Err(LlmError::UpstreamMalformed(
+        "stream ended before terminal Done event".into(),
+    ))
 }
 
 /// State machine for assembling streamed events into a single
@@ -133,8 +135,8 @@ impl Accumulator {
         }
     }
 
-    /// Feed one event. Returns true on terminal events (`Done` /
-    /// `Message`-without-following-Done) so callers can stop pulling.
+    /// Feed one event. Returns true on the terminal `Done` event so
+    /// callers can stop pulling.
     pub(crate) fn feed(&mut self, event: StreamEvent) -> bool {
         match event {
             StreamEvent::TextDelta { text } => {

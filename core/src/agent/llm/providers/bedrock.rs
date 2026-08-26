@@ -885,20 +885,24 @@ pub(crate) mod stream_wire {
                     // Bytes source is finished; check the parser for
                     // truncation, then terminate.
                     let p = std::mem::take(&mut self.parser);
-                    if let Err(e) = p.finish() {
-                        match e {
-                            FrameError::Truncated(n) => {
-                                self.pending.push_back(Err(LlmError::Stream(format!(
-                                    "bedrock event stream truncated: {n} \
-                                         byte(s) of partial frame at EOF"
-                                ))));
-                            }
-                            other => {
-                                self.pending.push_back(Err(LlmError::Stream(format!(
-                                    "bedrock event stream framing: {other}"
-                                ))));
-                            }
+                    match p.finish() {
+                        Err(FrameError::Truncated(n)) => {
+                            self.pending.push_back(Err(LlmError::Stream(format!(
+                                "bedrock event stream truncated: {n} \
+                                     byte(s) of partial frame at EOF"
+                            ))));
                         }
+                        Err(other) => {
+                            self.pending.push_back(Err(LlmError::Stream(format!(
+                                "bedrock event stream framing: {other}"
+                            ))));
+                        }
+                        Ok(()) if !self.converter.is_finished() => {
+                            self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                                "bedrock stream ended before message_stop".into(),
+                            )));
+                        }
+                        Ok(()) => {}
                     }
                     self.done = true;
                     continue;

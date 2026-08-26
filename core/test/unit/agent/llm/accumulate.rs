@@ -232,20 +232,60 @@ fn done_with_tool_use_finish_reason_propagates() {
 }
 
 #[test]
-fn missing_done_with_tool_use_blocks_upgrades_finish_reason() {
-    // Provider streamed a tool_use start but never issued Done
-    // — accumulator's default `Stop` should be upgraded so the
-    // outer loop continues to dispatch tools.
+fn rejects_completed_tool_use_when_stream_ends_without_done() {
     let sink = Arc::new(NullSink);
-    let stream = s(vec![Ok(StreamEvent::ToolUseStart {
-        id: "t1".into(),
-        name: "echo".into(),
+    let stream = s(vec![
+        Ok(StreamEvent::ToolUseStart {
+            id: "t1".into(),
+            name: "echo".into(),
+        }),
+        Ok(StreamEvent::ToolInputDelta {
+            id: "t1".into(),
+            partial_json: "{\"text\":\"hi\"}".into(),
+        }),
+        Ok(StreamEvent::ToolUse(ToolCall {
+            id: "t1".into(),
+            name: "echo".into(),
+            input: serde_json::json!({"text": "hi"}),
+        })),
+    ]);
+    let result = rt().block_on(accumulate_stream(stream, sink, "test-model"));
+    assert!(matches!(
+        result,
+        Err(LlmError::UpstreamMalformed(message))
+            if message.contains("terminal Done")
+    ));
+}
+
+#[test]
+fn rejects_truncated_text_when_stream_ends_without_done() {
+    let sink: Arc<CountingSink> = Arc::default();
+    let stream = s(vec![Ok(StreamEvent::TextDelta {
+        text: "partial".into(),
     })]);
-    let resp = rt()
-        .block_on(accumulate_stream(stream, sink, "test-model"))
-        .unwrap();
-    assert!(matches!(resp.finish_reason, FinishReason::ToolUse));
-    assert_eq!(resp.tool_calls.len(), 1);
+    let result = rt().block_on(accumulate_stream(stream, sink.clone(), "test-model"));
+
+    assert!(matches!(
+        result,
+        Err(LlmError::UpstreamMalformed(message))
+            if message.contains("terminal Done")
+    ));
+    assert_eq!(sink.events.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn rejects_clean_eof_without_done() {
+    let result = rt().block_on(accumulate_stream(
+        s(Vec::new()),
+        Arc::new(NullSink),
+        "test-model",
+    ));
+
+    assert!(matches!(
+        result,
+        Err(LlmError::UpstreamMalformed(message))
+            if message.contains("terminal Done")
+    ));
 }
 
 #[test]

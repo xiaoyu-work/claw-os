@@ -1199,6 +1199,14 @@ pub(crate) mod wire {
                             continue;
                         }
                         self.drain_parser();
+                        if !self.converter.is_finished() {
+                            self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                                "anthropic stream ended before message_stop".into(),
+                            )));
+                            self.report_failure_once(
+                                crate::agent::llm::credential_pool::FailureClass::Transient,
+                            );
+                        }
                         self.bytes_done = true;
                         continue;
                     }

@@ -1593,3 +1593,120 @@ fn streaming_malformed_chunk_errors() {
     );
     assert!(conv.is_finished());
 }
+
+async fn collect_openai_chat_stream(chunks: Vec<bytes::Bytes>) -> Vec<Result<StreamEvent>> {
+    use futures_util::StreamExt;
+
+    let bytes = futures_util::stream::iter(chunks.into_iter().map(Ok::<_, reqwest::Error>));
+    wire::OpenAiStream::new(bytes, "gpt-4o-mini".into(), None, None)
+        .collect()
+        .await
+}
+
+fn openai_stream_test_pool(name: &str) -> std::sync::Arc<crate::agent::llm::credential_pool::Pool> {
+    use crate::agent::llm::credential_pool::{Pool, PoolEntry, SelectionStrategy};
+
+    std::sync::Arc::new(
+        Pool::from_entries(
+            name,
+            vec![PoolEntry::inline("test-key")],
+            SelectionStrategy::Sticky,
+        )
+        .unwrap(),
+    )
+}
+
+#[tokio::test]
+async fn openai_chat_stream_rejects_truncated_text_before_done() {
+    use futures_util::StreamExt;
+
+    let pool = openai_stream_test_pool("openai-truncated-text");
+    let lease = pool.acquire().unwrap();
+    let body = bytes::Bytes::from_static(
+        b"data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":\"stop\"}]}\n\n",
+    );
+    let bytes = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(body)]);
+    let events: Vec<_> =
+        wire::OpenAiStream::new(bytes, "gpt-4o-mini".into(), Some(pool.clone()), Some(lease))
+            .collect()
+            .await;
+
+    assert!(matches!(
+        events.first(),
+        Some(Ok(StreamEvent::TextDelta { text })) if text == "partial"
+    ));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+    assert!(matches!(
+        events.last(),
+        Some(Err(LlmError::UpstreamMalformed(message)))
+            if message.contains("[DONE]")
+    ));
+    let stats = pool.stats();
+    assert_eq!(stats[0].successes, 0);
+    assert_eq!(stats[0].failures, 1);
+}
+
+#[tokio::test]
+async fn openai_chat_stream_rejects_completed_tool_before_done() {
+    let body = bytes::Bytes::from_static(
+        b"data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"echo\",\"arguments\":\"{\\\"text\\\":\\\"hi\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\n\n",
+    );
+    let events = collect_openai_chat_stream(vec![body]).await;
+
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::ToolUseStart { .. }))));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::ToolInputDelta { .. }))));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::ToolUse(_)))));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+    assert!(matches!(
+        events.last(),
+        Some(Err(LlmError::UpstreamMalformed(message)))
+            if message.contains("[DONE]")
+    ));
+}
+
+#[tokio::test]
+async fn openai_chat_stream_rejects_clean_eof_before_done() {
+    let events = collect_openai_chat_stream(Vec::new()).await;
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events.first(),
+        Some(Err(LlmError::UpstreamMalformed(message)))
+            if message.contains("[DONE]")
+    ));
+}
+
+#[tokio::test]
+async fn openai_chat_stream_preserves_terminal_usage_and_pool_success() {
+    use futures_util::StreamExt;
+
+    let pool = openai_stream_test_pool("openai-valid-terminal");
+    let lease = pool.acquire().unwrap();
+    let body = bytes::Bytes::from_static(
+        b"data: {\"model\":\"gpt-valid\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n",
+    );
+    let bytes = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(body)]);
+    let events: Vec<_> =
+        wire::OpenAiStream::new(bytes, "gpt-4o-mini".into(), Some(pool.clone()), Some(lease))
+            .collect()
+            .await;
+
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done { usage, .. }))
+            if usage.input_tokens == 11 && usage.output_tokens == 2
+    ));
+    let stats = pool.stats();
+    assert_eq!(stats[0].successes, 1);
+    assert_eq!(stats[0].failures, 0);
+}

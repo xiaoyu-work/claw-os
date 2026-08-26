@@ -1126,13 +1126,34 @@ mod anthropic_stream {
     }
 
     async fn collect(chunks: Vec<Bytes>) -> Vec<Result<StreamEvent>> {
+        collect_with_pool(chunks, None).await
+    }
+
+    async fn collect_with_pool(
+        chunks: Vec<Bytes>,
+        pool: Option<std::sync::Arc<crate::agent::llm::credential_pool::Pool>>,
+    ) -> Vec<Result<StreamEvent>> {
         let bytes_stream = stream::iter(chunks.into_iter().map(Ok::<_, reqwest::Error>));
-        let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x", None, None);
+        let lease = pool.as_ref().map(|pool| pool.acquire().unwrap());
+        let mut s = wire::AnthropicStream::new(bytes_stream, "claude-x", pool, lease);
         let mut out = Vec::new();
         while let Some(ev) = s.next().await {
             out.push(ev);
         }
         out
+    }
+
+    fn stream_test_pool(name: &str) -> std::sync::Arc<crate::agent::llm::credential_pool::Pool> {
+        use crate::agent::llm::credential_pool::{Pool, PoolEntry, SelectionStrategy};
+
+        std::sync::Arc::new(
+            Pool::from_entries(
+                name,
+                vec![PoolEntry::inline("test-key")],
+                SelectionStrategy::Sticky,
+            )
+            .unwrap(),
+        )
     }
 
     #[tokio::test]
@@ -1160,8 +1181,9 @@ mod anthropic_stream {
             ),
             ("message_stop", r#"{"type":"message_stop"}"#),
         ]);
+        let pool = stream_test_pool("anthropic-valid-terminal");
         let chunks = vec![Bytes::from(body)];
-        let out: Vec<StreamEvent> = collect(chunks)
+        let out: Vec<StreamEvent> = collect_with_pool(chunks, Some(pool.clone()))
             .await
             .into_iter()
             .map(|r| r.expect("ok"))
@@ -1169,7 +1191,14 @@ mod anthropic_stream {
 
         assert_eq!(out.len(), 2, "got: {out:?}");
         assert!(matches!(out[0], StreamEvent::TextDelta { ref text } if text == "OK"));
-        assert!(matches!(out[1], StreamEvent::Done { .. }));
+        assert!(matches!(
+            out[1],
+            StreamEvent::Done { ref usage, .. }
+                if usage.input_tokens == 4 && usage.output_tokens == 1
+        ));
+        let stats = pool.stats();
+        assert_eq!(stats[0].successes, 1);
+        assert_eq!(stats[0].failures, 0);
     }
 
     #[tokio::test]
@@ -1214,11 +1243,15 @@ mod anthropic_stream {
     }
 
     #[tokio::test]
-    async fn ping_chunks_yield_no_events() {
+    async fn ping_only_stream_rejects_eof_before_message_stop() {
         let body = sse_body(&[("ping", r#"{"type":"ping"}"#)]);
         let chunks = vec![Bytes::from(body)];
         let out = collect(chunks).await;
-        assert!(out.is_empty(), "got: {out:?}");
+        assert!(matches!(
+            out.as_slice(),
+            [Err(LlmError::UpstreamMalformed(message))]
+                if message.contains("message_stop")
+        ));
     }
 
     #[tokio::test]
@@ -1239,5 +1272,83 @@ mod anthropic_stream {
             .collect();
         assert_eq!(out.len(), 1);
         assert!(matches!(out[0], StreamEvent::Done { .. }));
+    }
+
+    #[tokio::test]
+    async fn rejects_truncated_text_before_message_stop() {
+        let body = sse_body(&[
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}"#,
+            ),
+        ]);
+        let pool = stream_test_pool("anthropic-truncated-text");
+        let out = collect_with_pool(vec![Bytes::from(body)], Some(pool.clone())).await;
+
+        assert!(matches!(
+            out.first(),
+            Some(Ok(StreamEvent::TextDelta { text })) if text == "partial"
+        ));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+        assert!(matches!(
+            out.last(),
+            Some(Err(LlmError::UpstreamMalformed(message)))
+                if message.contains("message_stop")
+        ));
+        let stats = pool.stats();
+        assert_eq!(stats[0].successes, 0);
+        assert_eq!(stats[0].failures, 1);
+    }
+
+    #[tokio::test]
+    async fn rejects_completed_tool_before_message_stop() {
+        let body = sse_body(&[
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"text\":\"hi\"}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#,
+            ),
+        ]);
+        let out = collect(vec![Bytes::from(body)]).await;
+
+        assert!(out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::ToolUse(_)))));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+        assert!(matches!(
+            out.last(),
+            Some(Err(LlmError::UpstreamMalformed(message)))
+                if message.contains("message_stop")
+        ));
+    }
+
+    #[tokio::test]
+    async fn rejects_clean_eof_before_message_stop() {
+        let out = collect(Vec::new()).await;
+
+        assert!(matches!(
+            out.as_slice(),
+            [Err(LlmError::UpstreamMalformed(message))]
+                if message.contains("message_stop")
+        ));
     }
 }

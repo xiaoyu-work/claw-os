@@ -638,3 +638,201 @@ async fn mixed_batch_preserves_declaration_order() {
         .collect();
     assert_eq!(ids, vec!["id-w1", "id-r1", "id-w2"]);
 }
+
+struct FixedStreamProvider {
+    events:
+        std::sync::Mutex<Option<Vec<crate::agent::llm::Result<crate::agent::llm::StreamEvent>>>>,
+}
+
+impl FixedStreamProvider {
+    fn new(events: Vec<crate::agent::llm::Result<crate::agent::llm::StreamEvent>>) -> Self {
+        Self {
+            events: std::sync::Mutex::new(Some(events)),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agent::llm::Provider for FixedStreamProvider {
+    fn name(&self) -> &str {
+        "fixed-stream"
+    }
+
+    fn supported_models(&self) -> Vec<String> {
+        vec!["fixed-stream-model".into()]
+    }
+
+    fn is_configured(&self) -> bool {
+        true
+    }
+
+    async fn chat(&self, _request: ChatRequest) -> crate::agent::llm::Result<ChatResponse> {
+        Err(crate::agent::llm::LlmError::Internal(
+            "buffered chat is not used by this test provider".into(),
+        ))
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: ChatRequest,
+    ) -> crate::agent::llm::Result<
+        futures_util::stream::BoxStream<
+            'static,
+            crate::agent::llm::Result<crate::agent::llm::StreamEvent>,
+        >,
+    > {
+        use futures_util::StreamExt;
+
+        let events = self
+            .events
+            .lock()
+            .unwrap()
+            .take()
+            .expect("chat_stream called once");
+        Ok(futures_util::stream::iter(events).boxed())
+    }
+}
+
+struct CountingSideEffectTool {
+    calls: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl Tool for CountingSideEffectTool {
+    fn name(&self) -> &'static str {
+        "side_effect"
+    }
+
+    fn description(&self) -> &'static str {
+        "count executions"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> TR {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        TR::ok("executed")
+    }
+}
+
+#[tokio::test]
+async fn unterminated_stream_never_appends_or_dispatches_completed_tool() {
+    use crate::agent::llm::StreamEvent;
+
+    let provider: Arc<dyn crate::agent::llm::Provider> = Arc::new(FixedStreamProvider::new(vec![
+        Ok(StreamEvent::ToolUseStart {
+            id: "call_1".into(),
+            name: "side_effect".into(),
+        }),
+        Ok(StreamEvent::ToolInputDelta {
+            id: "call_1".into(),
+            partial_json: "{\"value\":1}".into(),
+        }),
+        Ok(StreamEvent::ToolUse(ToolCall {
+            id: "call_1".into(),
+            name: "side_effect".into(),
+            input: serde_json::json!({"value": 1}),
+        })),
+    ]));
+    let calls = Arc::new(AtomicU32::new(0));
+    let tools = registry_with(vec![Arc::new(CountingSideEffectTool {
+        calls: calls.clone(),
+    })]);
+    let llm_tools = tools.as_llm_tools();
+    let mut messages = vec![Message::user_text("run it")];
+
+    let result = run_turn_streaming(
+        provider,
+        "fixed-stream-model",
+        "sys",
+        &mut messages,
+        &tools,
+        &llm_tools,
+        64,
+        0.0,
+        None,
+        crate::agent::llm::accumulate::null_sink(),
+        None,
+        progress::null_progress(),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(super::super::loop_::AgentError::Llm(
+            crate::agent::llm::LlmError::UpstreamMalformed(message)
+        )) if message.contains("terminal Done")
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(messages.len(), 1, "partial assistant output was persisted");
+}
+
+#[tokio::test]
+async fn unterminated_text_stream_never_appends_partial_answer() {
+    use crate::agent::llm::StreamEvent;
+
+    let provider: Arc<dyn crate::agent::llm::Provider> =
+        Arc::new(FixedStreamProvider::new(vec![Ok(StreamEvent::TextDelta {
+            text: "partial".into(),
+        })]));
+    let tools = ToolRegistry::new();
+    let mut messages = vec![Message::user_text("answer")];
+
+    let result = run_turn_streaming(
+        provider,
+        "fixed-stream-model",
+        "sys",
+        &mut messages,
+        &tools,
+        &[],
+        64,
+        0.0,
+        None,
+        crate::agent::llm::accumulate::null_sink(),
+        None,
+        progress::null_progress(),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(super::super::loop_::AgentError::Llm(
+            crate::agent::llm::LlmError::UpstreamMalformed(_)
+        ))
+    ));
+    assert_eq!(messages.len(), 1, "partial assistant output was persisted");
+}
+
+#[tokio::test]
+async fn clean_stream_eof_is_a_typed_runtime_failure() {
+    let provider: Arc<dyn crate::agent::llm::Provider> =
+        Arc::new(FixedStreamProvider::new(Vec::new()));
+    let tools = ToolRegistry::new();
+    let mut messages = vec![Message::user_text("answer")];
+
+    let result = run_turn_streaming(
+        provider,
+        "fixed-stream-model",
+        "sys",
+        &mut messages,
+        &tools,
+        &[],
+        64,
+        0.0,
+        None,
+        crate::agent::llm::accumulate::null_sink(),
+        None,
+        progress::null_progress(),
+    )
+    .await;
+
+    assert!(matches!(
+        result,
+        Err(super::super::loop_::AgentError::Llm(
+            crate::agent::llm::LlmError::UpstreamMalformed(_)
+        ))
+    ));
+    assert_eq!(messages.len(), 1);
+}

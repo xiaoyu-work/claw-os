@@ -675,11 +675,13 @@ fn stream_handles_full_text_lifecycle_with_message_stop() {
         })
         .collect();
     assert_eq!(text, "Hello world");
-    let done = oks
-        .iter()
-        .rev()
-        .find(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. }));
-    assert!(done.is_some(), "expected Done event; got {oks:?}");
+    let usage = oks.iter().find_map(|event| match event {
+        crate::agent::llm::StreamEvent::Done { usage, .. } => Some(usage),
+        _ => None,
+    });
+    let usage = usage.unwrap_or_else(|| panic!("expected Done event; got {oks:?}"));
+    assert_eq!(usage.input_tokens, 12);
+    assert_eq!(usage.output_tokens, 7);
 }
 
 #[test]
@@ -858,6 +860,104 @@ fn stream_unknown_message_type_is_silently_ignored_for_forward_compat() {
             .any(|e| matches!(e, crate::agent::llm::StreamEvent::Done { .. })),
         "stream should still complete normally; got {oks:?}"
     );
+}
+
+#[test]
+fn stream_rejects_truncated_text_before_message_stop() {
+    let frames = vec![
+        event_frame_json(&anthropic_event_json(
+            "content_block_delta",
+            serde_json::json!({
+                "index": 0,
+                "delta": { "type": "text_delta", "text": "partial" }
+            }),
+        )),
+        event_frame_json(&anthropic_event_json(
+            "message_delta",
+            serde_json::json!({
+                "delta": { "stop_reason": "end_turn" },
+                "usage": { "output_tokens": 3 }
+            }),
+        )),
+    ];
+    let events = collect(frames);
+
+    assert!(matches!(
+        events.first(),
+        Some(Ok(crate::agent::llm::StreamEvent::TextDelta { text }))
+            if text == "partial"
+    ));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(crate::agent::llm::StreamEvent::Done { .. }))));
+    assert!(matches!(
+        events.last(),
+        Some(Err(LlmError::UpstreamMalformed(message)))
+            if message.contains("message_stop")
+    ));
+}
+
+#[test]
+fn stream_rejects_completed_tool_before_message_stop() {
+    let frames = vec![
+        event_frame_json(&anthropic_event_json(
+            "content_block_start",
+            serde_json::json!({
+                "index": 0,
+                "content_block": {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "echo",
+                    "input": {}
+                }
+            }),
+        )),
+        event_frame_json(&anthropic_event_json(
+            "content_block_delta",
+            serde_json::json!({
+                "index": 0,
+                "delta": {
+                    "type": "input_json_delta",
+                    "partial_json": "{\"text\":\"hi\"}"
+                }
+            }),
+        )),
+        event_frame_json(&anthropic_event_json(
+            "content_block_stop",
+            serde_json::json!({ "index": 0 }),
+        )),
+        event_frame_json(&anthropic_event_json(
+            "message_delta",
+            serde_json::json!({
+                "delta": { "stop_reason": "tool_use" },
+                "usage": { "output_tokens": 4 }
+            }),
+        )),
+    ];
+    let events = collect(frames);
+
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Ok(crate::agent::llm::StreamEvent::ToolUse(_)))));
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Ok(crate::agent::llm::StreamEvent::Done { .. }))));
+    assert!(matches!(
+        events.last(),
+        Some(Err(LlmError::UpstreamMalformed(message)))
+            if message.contains("message_stop")
+    ));
+}
+
+#[test]
+fn stream_rejects_clean_eof_before_message_stop() {
+    let events = collect(Vec::new());
+
+    assert!(matches!(
+        events.as_slice(),
+        [Err(LlmError::UpstreamMalformed(message))]
+            if message.contains("message_stop")
+    ));
 }
 
 #[test]

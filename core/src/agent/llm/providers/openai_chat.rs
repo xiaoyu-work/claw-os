@@ -526,8 +526,8 @@ fn extract_retry_after_ms(body: &str) -> Option<u64> {
 //   data: [DONE]
 //
 // Tool-call args arrive incrementally; we buffer them per index
-// and emit a single `ToolUse` event with the parsed JSON when
-// the stream finishes (or, on `[DONE]`, attempt a final parse).
+// and emit a single `ToolUse` event with the parsed JSON only
+// after `[DONE]`. EOF before that marker is an error.
 
 #[derive(Debug, Deserialize)]
 struct StreamChunk {
@@ -873,13 +873,13 @@ impl futures_util::Stream for OpenAiStream {
                         continue;
                     }
                     self.drain_parser();
-                    // Stream ended without an explicit [DONE].
-                    // Synthesise a Done event so callers can
-                    // close out cleanly.
                     if !self.converter.is_finished() {
-                        for ev in self.converter.finish_stream() {
-                            self.pending.push_back(ev);
-                        }
+                        self.pending.push_back(Err(LlmError::UpstreamMalformed(
+                            "openai chat stream ended before [DONE]".into(),
+                        )));
+                        self.report_failure_once(
+                            crate::agent::llm::credential_pool::FailureClass::Transient,
+                        );
                     }
                     self.bytes_done = true;
                     continue;
