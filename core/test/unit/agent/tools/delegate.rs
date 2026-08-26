@@ -51,6 +51,19 @@ fn build_child_registry_strips_cos_delegate() {
 }
 
 #[test]
+fn build_child_registry_strips_attended_oauth_tool() {
+    let mut source = ToolRegistry::new();
+    source.register(Arc::new(
+        super::super::cos_proxy::oauth_login::CosOauthLoginTool::new(),
+    ));
+    let allowed = vec!["cos_oauth_login".to_string()];
+
+    let child = build_child_registry(None, None, source, &allowed);
+
+    assert!(child.get("cos_oauth_login").is_none());
+}
+
+#[test]
 fn build_child_registry_silently_drops_unknown_tool_names() {
     let parent = test_registry();
     let allowed = vec!["echo".to_string(), "ghost_tool".to_string()];

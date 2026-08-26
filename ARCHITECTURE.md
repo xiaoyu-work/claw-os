@@ -152,6 +152,27 @@ The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier.
 
+### Agent-initiated account authorization
+
+```text
+bundled App returns auth_required + constrained setup.agent_action
+  -> system Agent calls dedicated cos_oauth_login tool
+  -> exact secret.write scopes are checked before provider interaction
+  -> trusted system browser handles user login and consent
+  -> access/refresh tokens go directly to the encrypted credential store
+  -> model receives authorization status and scopes, never token values
+  -> system Agent retries the original App operation once
+```
+
+The public CLI route accepts interactive OAuth only from a same-process Admin
+session running the direct credential command. The model route is a separate,
+strictly shaped built-in tool available only to attended local `agent ask`,
+`agent live`, and `agent chat` sessions; its token destination is fixed to the
+default credential namespace and exact credential capability checks still
+apply. Delegate children and inbound MCP servers exclude the tool. OAuth client
+registration remains runtime system configuration and is never embedded in
+packages or entered through model chat.
+
 ### Progressive Agent Skill disclosure
 
 ```text

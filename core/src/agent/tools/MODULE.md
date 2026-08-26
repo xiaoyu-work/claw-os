@@ -8,6 +8,8 @@ which tool calls are exposed and executed.
 ## Responsibilities
 
 - Register built-in, `cos` proxy, app, memory, browser, and MCP tools.
+- Let an attended local system Agent initiate trusted account authorization
+  without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
 - Apply guardrails and session/capability context.
 - Keep untrusted tool output inside explicit model-data boundaries.
@@ -19,6 +21,7 @@ which tool calls are exposed and executed.
 | `registry.rs` | Tool registration, filtering, lookup |
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_proxy/` | Structured `cos` primitive tools |
+| `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps.rs`, `cos_apps_session.rs` | App tool discovery/session calls |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |

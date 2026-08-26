@@ -912,13 +912,19 @@ fn usage_app_flag_combines_with_provider_scope() {
 }
 
 #[test]
-fn merge_mcp_overrides_no_flags_is_clone() {
+fn merge_mcp_overrides_preserves_base_and_denies_attended_tools() {
     let mut base = crate::config::AgentConfig::default();
     base.tool_allow = Some(vec!["echo".into()]);
     base.tool_deny = vec!["cos_sandbox".into()];
     let merged = merge_mcp_overrides(&base, None, Vec::new());
     assert_eq!(merged.tool_allow, base.tool_allow);
-    assert_eq!(merged.tool_deny, base.tool_deny);
+    assert_eq!(
+        merged.tool_deny,
+        vec![
+            "cos_sandbox".to_string(),
+            "cos_oauth_login".to_string()
+        ]
+    );
 }
 
 #[test]
@@ -936,8 +942,31 @@ fn merge_mcp_overrides_deny_appends_to_base() {
     let merged = merge_mcp_overrides(&base, None, vec!["cos_proc".into()]);
     assert_eq!(
         merged.tool_deny,
-        vec!["cos_sandbox".to_string(), "cos_proc".to_string()]
+        vec![
+            "cos_sandbox".to_string(),
+            "cos_proc".to_string(),
+            "cos_oauth_login".to_string()
+        ]
     );
+}
+
+#[test]
+fn merge_mcp_overrides_cannot_allow_attended_oauth_tool() {
+    let base = crate::config::AgentConfig::default();
+    let merged = merge_mcp_overrides(
+        &base,
+        Some(vec!["cos_oauth_login".into()]),
+        Vec::new(),
+    );
+
+    assert_eq!(
+        merged.tool_allow,
+        Some(vec!["cos_oauth_login".to_string()])
+    );
+    assert!(merged
+        .tool_deny
+        .iter()
+        .any(|name| name == "cos_oauth_login"));
 }
 
 #[test]

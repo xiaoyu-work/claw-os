@@ -33,6 +33,23 @@ pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
             "interactive OAuth login must be run directly in the user's terminal".to_string(),
         );
     }
+    run_oauth_login(args)
+}
+
+pub(super) fn cmd_agent_oauth_login(args: &[String]) -> Result<Value, String> {
+    let attended_agent = crate::proc::current_session_info_for_caps()
+        .is_some_and(|session| is_attended_agent_oauth_session(&session));
+    if !attended_agent {
+        return Err(
+            "Agent-initiated OAuth requires an attended local `cos agent ask`, \
+             `cos agent live`, or `cos agent chat` session"
+                .to_string(),
+        );
+    }
+    run_oauth_login(args)
+}
+
+fn run_oauth_login(args: &[String]) -> Result<Value, String> {
     let (namespace, provider, no_open, timeout_secs) = parse_args(args)?;
     match provider.as_str() {
         "google" => google_login(&namespace, no_open, timeout_secs),
@@ -55,6 +72,13 @@ fn is_direct_oauth_login_session(session: &crate::proc::SessionInfo) -> bool {
             .command
             .windows(2)
             .any(|args| args == ["credential", "oauth-login"])
+}
+
+fn is_attended_agent_oauth_session(session: &crate::proc::SessionInfo) -> bool {
+    is_same_pid_admin_cli_session(session)
+        && session.command.windows(2).any(|args| {
+            args[0] == "agent" && matches!(args[1].as_str(), "ask" | "live" | "chat")
+        })
 }
 
 fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
@@ -103,6 +127,7 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
 
 fn google_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Value, String> {
     let (client_id, client_secret) = google_client_config(namespace)?;
+    preflight_token_storage(namespace, &["GOOGLE_ACCESS_TOKEN", "GOOGLE_REFRESH_TOKEN"])?;
 
     let listener =
         TcpListener::bind(("127.0.0.1", 0)).map_err(|e| format!("bind OAuth callback: {e}"))?;
@@ -230,6 +255,10 @@ fn google_granted_scopes(token: &Value) -> Result<Vec<String>, String> {
 fn microsoft_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<Value, String> {
     let (client_id, tenant_id) = microsoft_client_config(namespace)?;
     super::validate_credential_component("Microsoft tenant", &tenant_id)?;
+    preflight_token_storage(
+        namespace,
+        &["MICROSOFT_ACCESS_TOKEN", "MICROSOFT_REFRESH_TOKEN"],
+    )?;
     let device_url =
         format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/devicecode");
     let token_url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
@@ -367,6 +396,16 @@ fn microsoft_login(namespace: &str, no_open: bool, timeout_secs: u64) -> Result<
     }))
 }
 
+fn preflight_token_storage(namespace: &str, names: &[&str]) -> Result<(), String> {
+    for name in names {
+        super::require_secret(
+            Verb::SECRET_WRITE,
+            super::credential_scope(namespace, name)?,
+        )?;
+    }
+    Ok(())
+}
+
 pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), String> {
     let client_id = client_setting(
         "COS_GOOGLE_OAUTH_CLIENT_ID",
@@ -377,7 +416,8 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
         format!(
             "Google OAuth client is not configured. Store GOOGLE_CLIENT_ID in \
              credential namespace `{namespace}` or set COS_GOOGLE_OAUTH_CLIENT_ID, \
-             then rerun `cos credential oauth-login google`."
+             then retry Google authorization. Configure OAuth client values through \
+             trusted system settings, not model chat."
         )
     })?;
     let client_secret = client_setting(
@@ -389,8 +429,9 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
         format!(
             "Google OAuth client secret is not configured. Store \
              GOOGLE_CLIENT_SECRET in credential namespace `{namespace}` or set \
-             COS_GOOGLE_OAUTH_CLIENT_SECRET, then rerun \
-             `cos credential oauth-login google`."
+             COS_GOOGLE_OAUTH_CLIENT_SECRET, then retry Google authorization. \
+             Configure OAuth client values through trusted system settings, not \
+             model chat."
         )
     })?;
     Ok((client_id, client_secret))
@@ -424,8 +465,9 @@ pub(super) fn microsoft_client_config(namespace: &str) -> Result<(String, String
         format!(
             "Microsoft OAuth client is not configured. Store MICROSOFT_CLIENT_ID \
              in credential namespace `{namespace}` or set \
-             COS_MICROSOFT_OAUTH_CLIENT_ID, then rerun \
-             `cos credential oauth-login microsoft`."
+             COS_MICROSOFT_OAUTH_CLIENT_ID, then retry Microsoft authorization. \
+             Configure OAuth client values through trusted system settings, not \
+             model chat."
         )
     })?;
     let tenant_id = client_setting(
@@ -532,8 +574,8 @@ fn open_browser(url: &str) -> bool {
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .spawn();
-        if result.is_ok() {
+            .status();
+        if result.is_ok_and(|status| status.success()) {
             return true;
         }
     }

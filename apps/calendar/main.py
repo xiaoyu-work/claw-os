@@ -171,6 +171,7 @@ def _outlook_token():
 
 def _provider_auth_error(provider, detail):
     title = "Google Calendar" if provider == "google" else "Outlook Calendar"
+    oauth_provider = "google" if provider == "google" else "microsoft"
     login_command = (
         "cos credential oauth-login google"
         if provider == "google"
@@ -184,9 +185,14 @@ def _provider_auth_error(provider, detail):
         "detail": detail,
         "setup": {
             "interactive_oauth_available": True,
+            "agent_action": {
+                "tool": "cos_oauth_login",
+                "input": {"provider": oauth_provider},
+            },
             "login_command": login_command,
             "message": (
-                f"Run exactly `{login_command}` directly in the user's terminal."
+                "The system Agent should start the trusted browser authorization "
+                "with setup.agent_action. The login command is a terminal fallback."
             ),
         },
     }

@@ -60,10 +60,14 @@ def _gmail_auth_error(detail, status=None):
         "detail": detail,
         "setup": {
             "interactive_oauth_available": True,
+            "agent_action": {
+                "tool": "cos_oauth_login",
+                "input": {"provider": "google"},
+            },
             "login_command": "cos credential oauth-login google",
             "message": (
-                "Run exactly `cos credential oauth-login google` directly "
-                "in the user's terminal."
+                "The system Agent should start the trusted browser authorization "
+                "with setup.agent_action. The login command is a terminal fallback."
             ),
         },
     }
@@ -82,10 +86,14 @@ def _outlook_auth_error(detail, status=None):
         "detail": detail,
         "setup": {
             "interactive_oauth_available": True,
+            "agent_action": {
+                "tool": "cos_oauth_login",
+                "input": {"provider": "microsoft"},
+            },
             "login_command": "cos credential oauth-login microsoft",
             "message": (
-                "Run exactly `cos credential oauth-login microsoft` directly "
-                "in the user's terminal."
+                "The system Agent should start the trusted browser authorization "
+                "with setup.agent_action. The login command is a terminal fallback."
             ),
         },
     }

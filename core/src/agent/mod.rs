@@ -7000,6 +7000,13 @@ fn merge_mcp_overrides(
         out.tool_allow = Some(a);
     }
     out.tool_deny.extend(deny);
+    if !out
+        .tool_deny
+        .iter()
+        .any(|name| name == "cos_oauth_login")
+    {
+        out.tool_deny.push("cos_oauth_login".to_string());
+    }
     out
 }
 

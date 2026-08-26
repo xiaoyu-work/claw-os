@@ -662,6 +662,7 @@ pub fn default_dangerous_tools() -> std::collections::HashSet<String> {
         "cos_sandbox",
         "cos_proc",
         "cos_credential",
+        "cos_oauth_login",
         "cos_cron",
         "cos_netfilter",
     ]

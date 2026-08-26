@@ -66,10 +66,12 @@ fn scaffold_requires_runtime_evidence_citations() {
 }
 
 #[test]
-fn scaffold_stops_on_non_retryable_auth_errors() {
+fn scaffold_orchestrates_supported_oauth_setup() {
     let prompt = build_system_prompt(None);
     assert!(prompt.contains("`auth_required: true`"));
-    assert!(prompt.contains("stop retrying credential/catalog/filesystem tools"));
+    assert!(prompt.contains("`setup.agent_action`"));
+    assert!(prompt.contains("`cos_oauth_login`"));
+    assert!(prompt.contains("retry the original App operation once"));
     assert!(prompt.contains("Never ask the user to paste"));
 }
 

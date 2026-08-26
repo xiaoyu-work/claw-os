@@ -33,17 +33,17 @@ cos service start my-agent   # OPENAI_KEY and DB_URL injected as env vars
 
 ## OAuth Token Auto-Refresh
 
-Use the normal installed-app browser flow for initial Google login. The OAuth
-client id/secret identify the Claw OS application; users never handle a refresh
-token themselves:
+OAuth client registration is runtime system configuration supplied by the
+user or administrator; it is never embedded in Claw OS packages. Users never
+handle access or refresh tokens themselves:
 
 ```bash
-# One-time application configuration (omit when the package provides these):
+# One-time trusted system configuration:
 cos credential store GOOGLE_CLIENT_ID "..." --tier 0
 cos credential store GOOGLE_CLIENT_SECRET "..." --tier 0
 
-# Normal user login: opens Google in the system browser, receives the
-# loopback callback, and stores access + refresh tokens automatically.
+# CLI fallback: opens Google in the system browser, receives the loopback
+# callback, and stores access + refresh tokens automatically.
 cos credential oauth-login google
 
 # From now on, this always returns a valid token:
@@ -56,6 +56,13 @@ Interactive login and token refresh support `google` and `microsoft`:
 ```bash
 cos credential oauth-login microsoft
 ```
+
+When the system Agent receives an App result containing
+`auth_required: true` and a matching `setup.agent_action`, it calls
+`cos_oauth_login` itself from an attended local Agent session. The browser and
+trusted terminal handle user consent, tokens go directly to the default
+encrypted namespace, and the Agent retries the App operation without asking
+the user to run a terminal command or paste secrets into chat.
 
 For custom OAuth providers, use `--refresh-cmd` directly:
 

@@ -40,6 +40,7 @@ fn register_all_adds_all_primitives() {
     assert!(r.get("cos_proc").is_some());
     assert!(r.get("cos_sysinfo").is_some());
     assert!(r.get("cos_memory").is_some());
+    assert!(r.get("cos_oauth_login").is_some());
 }
 
 #[test]

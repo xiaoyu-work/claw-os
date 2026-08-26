@@ -1492,6 +1492,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
+pub(crate) fn run_agent_oauth_login(args: &[String]) -> Result<Value, String> {
+    oauth_login::cmd_agent_oauth_login(args)
+}
+
 // ===========================================================================
 // Commands
 // ===========================================================================

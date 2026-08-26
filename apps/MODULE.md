@@ -11,6 +11,8 @@ invoked.
 - Declare operations, args, dependencies, AI use, and capability needs.
 - Validate untrusted input before requesting policy/capability authority.
 - Return structured JSON-compatible results.
+- Return constrained `setup.agent_action` metadata for Agent-resumable
+  authorization failures; never place credentials or tokens in that metadata.
 - Use the public SDK for OS/agent access and `cos_runtime` only for bundled-app
   policy/runtime helpers.
 

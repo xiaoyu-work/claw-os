@@ -202,6 +202,33 @@ Pass exactly one scope keyword (or `wild=True` for unscoped verbs).
 Use `policy.check(...)` (same signature, returns the raw decision
 envelope) when you want to surface "would-be-denied" without aborting.
 
+### Agent-resumable authorization
+
+A bundled App that needs Google or Microsoft user authorization should return
+an `auth_required` error with a constrained Agent action:
+
+```python
+{
+    "error": "Gmail authorization is required",
+    "auth_required": True,
+    "retryable": False,
+    "setup": {
+        "interactive_oauth_available": True,
+        "agent_action": {
+            "tool": "cos_oauth_login",
+            "input": {"provider": "google"},
+        },
+        "login_command": "cos credential oauth-login google",
+    },
+}
+```
+
+Only `google` and `microsoft` are supported. In an attended local Agent session,
+the system Agent starts the trusted browser flow in the default credential
+namespace and retries the original operation after authorization. Keep the CLI
+command as a human fallback, and never include client secrets, access tokens,
+refresh tokens, authorization codes, or browser state in App output.
+
 ## 6. Manifest-derived schema and help
 
 `cos app <id> --schema` and `cos app <id> <op> --schema` generate their

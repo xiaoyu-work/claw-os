@@ -52,6 +52,21 @@ fn accepts_only_same_pid_admin_cli_session() {
 }
 
 #[test]
+fn agent_entry_accepts_only_attended_local_agent_sessions() {
+    let mut agent_chat = session(crate::caps::Role::Admin, None, std::process::id());
+    agent_chat.command = vec!["cos".into(), "agent".into(), "chat".into()];
+    assert!(is_attended_agent_oauth_session(&agent_chat));
+
+    let mut mcp_server = session(crate::caps::Role::Admin, None, std::process::id());
+    mcp_server.command = vec!["cos".into(), "agent".into(), "mcp".into(), "serve".into()];
+    assert!(!is_attended_agent_oauth_session(&mcp_server));
+
+    let mut app_session = session(crate::caps::Role::Worker, Some("email"), std::process::id());
+    app_session.command = vec!["cos".into(), "agent".into(), "chat".into()];
+    assert!(!is_attended_agent_oauth_session(&app_session));
+}
+
+#[test]
 fn oauth_token_tiers_separate_app_access_from_refresh_authority() {
     assert_eq!(APP_ACCESS_TOKEN_TIER, 2);
     assert_eq!(REFRESH_TOKEN_TIER, 0);

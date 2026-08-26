@@ -188,10 +188,14 @@ class TestCredentialStoreIntegration(unittest.TestCase):
             result["setup"]["login_command"],
             "cos credential oauth-login google",
         )
-        self.assertIn(
-            "`cos credential oauth-login google`",
-            result["setup"]["message"],
+        self.assertEqual(
+            result["setup"]["agent_action"],
+            {
+                "tool": "cos_oauth_login",
+                "input": {"provider": "google"},
+            },
         )
+        self.assertIn("system Agent should start", result["setup"]["message"])
 
     @patch(
         "claw_test_email_main.load_credential",
@@ -207,9 +211,30 @@ class TestCredentialStoreIntegration(unittest.TestCase):
             result["setup"]["login_command"],
             "cos credential oauth-login google",
         )
-        self.assertIn(
-            "`cos credential oauth-login google`",
-            result["setup"]["message"],
+        self.assertEqual(
+            result["setup"]["agent_action"],
+            {
+                "tool": "cos_oauth_login",
+                "input": {"provider": "google"},
+            },
+        )
+        self.assertIn("system Agent should start", result["setup"]["message"])
+
+    def test_missing_outlook_login_returns_agent_action(self):
+        result = email_main._outlook_auth_error("credential not found")
+
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+        self.assertEqual(
+            result["setup"]["login_command"],
+            "cos credential oauth-login microsoft",
+        )
+        self.assertEqual(
+            result["setup"]["agent_action"],
+            {
+                "tool": "cos_oauth_login",
+                "input": {"provider": "microsoft"},
+            },
         )
 
 

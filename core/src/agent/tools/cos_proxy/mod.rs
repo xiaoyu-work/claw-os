@@ -28,6 +28,7 @@
 
 pub mod app_memory;
 pub mod memory;
+pub mod oauth_login;
 pub mod recall;
 pub mod recall_semantic;
 
@@ -265,12 +266,10 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         name: "cos_credential",
         description: "Manage the encrypted local cos credential store on any \
                       Linux host, including Ubuntu. Commands store/load/revoke/list \
-                      manage secrets; interactive oauth-login is intentionally \
-                      CLI-only and not exposed as a model tool; \
-                      oauth-refresh refreshes an existing Google/Microsoft login. \
-                      Run interactive login directly in the user's terminal. Never \
-                      repeatedly probe missing OAuth credentials or ask users to \
-                      paste secrets into chat.",
+                      manage secrets; oauth-refresh refreshes an existing Google or \
+                      Microsoft login. Initial interactive authorization uses the \
+                      dedicated cos_oauth_login tool so tokens stay outside model \
+                      context. Never ask users to paste secrets or tokens into chat.",
         primitive: crate::credential::run,
         commands: &[
             "store",
@@ -419,9 +418,9 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 ];
 
 /// Register every cos primitive proxy on the supplied registry, plus the
-/// `cos_memory` notes tool. Does NOT register `cos_recall` — the caller must
-/// supply a `MemoryDb` via [`register_recall`]. Keeps the proxy registration
-/// pure (no IO during test setup).
+/// dedicated OAuth-login and `cos_memory` tools. Does NOT register
+/// `cos_recall` — the caller must supply a `MemoryDb` via [`register_recall`].
+/// Keeps the proxy registration pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
         let tool = if spec.parallel_safe {
@@ -436,6 +435,7 @@ pub fn register_all(registry: &mut ToolRegistry) {
         };
         registry.register(Arc::new(tool));
     }
+    registry.register(Arc::new(oauth_login::CosOauthLoginTool::new()));
     registry.register(Arc::new(memory::CosMemoryTool::new()));
 }
 
@@ -478,9 +478,10 @@ pub const fn count() -> usize {
 }
 
 /// Total number of cos_proxy tools registered by `register_all` (primitives
-/// + cos_memory). cos_recall is registered separately by `register_recall`.
+/// + OAuth login + cos_memory). cos_recall is registered separately by
+/// `register_recall`.
 pub const fn total_count() -> usize {
-    PRIMITIVES.len() + 1 // +1 for cos_memory
+    PRIMITIVES.len() + 2
 }
 
 #[cfg(test)]

@@ -347,7 +347,10 @@ fn build_child_registry(
     }
 
     for name in allowed {
-        if matches!(name.as_str(), "cos_delegate" | "cos_skill") {
+        if matches!(
+            name.as_str(),
+            "cos_delegate" | "cos_skill" | "cos_oauth_login"
+        ) {
             continue;
         }
         // Honour the parent's deny list — even if the caller asked

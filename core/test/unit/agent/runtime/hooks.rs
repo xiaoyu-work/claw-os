@@ -611,6 +611,7 @@ fn default_dangerous_tools_includes_expected_set() {
     assert!(s.contains("cos_sandbox"));
     assert!(s.contains("cos_proc"));
     assert!(s.contains("cos_credential"));
+    assert!(s.contains("cos_oauth_login"));
     assert!(s.contains("cos_cron"));
     assert!(s.contains("cos_netfilter"));
 }
