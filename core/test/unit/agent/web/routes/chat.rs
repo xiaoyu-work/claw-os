@@ -2,6 +2,64 @@ use super::*;
 use crate::agent::llm::ToolCall;
 
 #[test]
+fn generated_sessions_get_independent_turn_leases() {
+    let state = AppState::new(crate::config::AgentConfig::default(), 1000);
+    let (first_id, _first_lease) =
+        begin_turn(&state, None).unwrap_or_else(|_| panic!("first generated turn was rejected"));
+    let (second_id, _second_lease) =
+        begin_turn(&state, None).unwrap_or_else(|_| panic!("second generated turn was rejected"));
+
+    assert_ne!(first_id, second_id);
+}
+
+#[tokio::test]
+async fn active_session_post_returns_conflict_until_turn_finishes() {
+    let state = AppState::new(crate::config::AgentConfig::default(), 1000);
+    let session_id = format!("parallel-post-{}", uuid::Uuid::new_v4().simple());
+
+    let first_response = handler(
+        State(state.clone()),
+        Json(ChatRequest {
+            prompt: "first request".into(),
+            session_id: Some(session_id.clone()),
+            use_memory: true,
+        }),
+    )
+    .await;
+    assert_eq!(first_response.status(), StatusCode::OK);
+
+    let second_response = handler(
+        State(state.clone()),
+        Json(ChatRequest {
+            prompt: "parallel request".into(),
+            session_id: Some(session_id.clone()),
+            use_memory: true,
+        }),
+    )
+    .await;
+    assert_eq!(second_response.status(), StatusCode::CONFLICT);
+    let conflict_body = axum::body::to_bytes(second_response.into_body(), 4096)
+        .await
+        .unwrap();
+    let conflict: serde_json::Value = serde_json::from_slice(&conflict_body).unwrap();
+    assert_eq!(conflict["code"], "session_busy");
+    assert_eq!(conflict["session_id"], session_id);
+
+    drop(first_response);
+    let retry_lease = tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        loop {
+            if let Ok(lease) = state.try_acquire_turn(session_id.clone()) {
+                break lease;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("cancelled request did not release its turn lease");
+    drop(retry_lease);
+}
+
+#[test]
 fn user_facing_tool_events_omit_inputs_and_results() {
     let (tx, mut rx) = mpsc::channel(16);
     let sink = SseSink::new(tx, "redaction-test".into());
@@ -109,9 +167,12 @@ async fn response_drop_signals_interrupt_and_aborts_drive_task() {
 
     let session_id = format!("disconnect-{}", uuid::Uuid::new_v4().simple());
     let interrupt = runtime::interrupt::register(&session_id);
+    let state = AppState::new(crate::config::AgentConfig::default(), 1000);
+    let lease = state.try_acquire_turn(session_id.clone()).unwrap();
     let (started_tx, started_rx) = tokio::sync::oneshot::channel();
     let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel();
     let drive = tokio::spawn(async move {
+        let _lease = lease;
         let _drop_signal = DropSignal(Some(dropped_tx));
         let _ = started_tx.send(());
         std::future::pending::<()>().await;
@@ -119,7 +180,7 @@ async fn response_drop_signals_interrupt_and_aborts_drive_task() {
     started_rx.await.unwrap();
 
     let (_tx, rx) = mpsc::channel(1);
-    let stream = ReceiverStream::new(rx, CancelOnDrop::new(session_id, drive));
+    let stream = ReceiverStream::new(rx, CancelOnDrop::new(session_id.clone(), drive));
     drop(stream);
 
     tokio::time::timeout(std::time::Duration::from_secs(1), dropped_rx)
@@ -129,5 +190,9 @@ async fn response_drop_signals_interrupt_and_aborts_drive_task() {
     assert!(
         interrupt.check(),
         "dropping the response body must signal runtime cancellation"
+    );
+    assert!(
+        state.try_acquire_turn(session_id).is_ok(),
+        "disconnect cancellation must release the session turn lease"
     );
 }

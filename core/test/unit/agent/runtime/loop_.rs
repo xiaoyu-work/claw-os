@@ -223,6 +223,105 @@ async fn streaming_continuation_excludes_injected_memory_notes_and_replays_conte
 }
 
 #[tokio::test]
+async fn turn_lease_orders_continuation_history_and_persistence() {
+    use crate::agent::memory::sqlite_fts::MemoryDb;
+    use crate::agent::runtime::turn_lease::{TurnAlreadyActive, TurnLeaseRegistry};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let session_id = "leased-continuation-order";
+    let leases = TurnLeaseRegistry::default();
+    let first_lease = leases.try_acquire(session_id).unwrap();
+    assert_eq!(
+        leases.try_acquire(session_id).err(),
+        Some(TurnAlreadyActive),
+        "a parallel turn must be rejected before it can load stale history"
+    );
+
+    let cfg = cfg();
+    let first_mock = MockProvider::new(&cfg.model, &cfg);
+    first_mock.push_response(MockResponse::Text("first answer".into()));
+    ask_with_stream_continuation(
+        Arc::new(first_mock),
+        &cfg,
+        "first prompt",
+        &builtin_only_registry(),
+        &db,
+        session_id,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+
+    let first_rows = db.recent_replayable(session_id, 100).unwrap();
+    let first_contents: Vec<(&str, &str)> = first_rows
+        .iter()
+        .map(|row| (row.role.as_str(), row.content.as_str()))
+        .collect();
+    assert_eq!(
+        first_contents,
+        vec![("user", "first prompt"), ("assistant", "first answer")]
+    );
+
+    drop(first_lease);
+    let _second_lease = leases.try_acquire(session_id).unwrap();
+    let second_mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    second_mock.push_response(MockResponse::Text("second answer".into()));
+    ask_with_stream_continuation(
+        second_mock.clone(),
+        &cfg,
+        "second prompt",
+        &builtin_only_registry(),
+        &db,
+        session_id,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+
+    let request = second_mock.last_request().expect("second provider request");
+    let replayed: Vec<(crate::agent::llm::Role, String)> = request
+        .messages
+        .iter()
+        .filter_map(|message| {
+            message.content.iter().find_map(|block| match block {
+                crate::agent::llm::ContentBlock::Text { text } => {
+                    Some((message.role.clone(), text.clone()))
+                }
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(
+        replayed,
+        vec![
+            (crate::agent::llm::Role::User, "first prompt".into()),
+            (crate::agent::llm::Role::Assistant, "first answer".into()),
+            (crate::agent::llm::Role::User, "second prompt".into()),
+        ],
+        "the next accepted turn must load the fully persisted prior turn"
+    );
+
+    let all_rows = db.recent_replayable(session_id, 100).unwrap();
+    let all_contents: Vec<(&str, &str)> = all_rows
+        .iter()
+        .map(|row| (row.role.as_str(), row.content.as_str()))
+        .collect();
+    assert_eq!(
+        all_contents,
+        vec![
+            ("user", "first prompt"),
+            ("assistant", "first answer"),
+            ("user", "second prompt"),
+            ("assistant", "second answer"),
+        ]
+    );
+}
+
+#[tokio::test]
 async fn non_streaming_continuation_excludes_injected_skills_and_replays_context() {
     use crate::agent::memory::sqlite_fts::MemoryDb;
 

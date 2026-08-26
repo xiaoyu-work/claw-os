@@ -32,6 +32,7 @@ use crate::agent::llm::accumulate::{SinkReady, StreamSink};
 use crate::agent::llm::types::StreamEvent;
 use crate::agent::runtime;
 use crate::agent::runtime::progress::{ProgressReady, ProgressSink};
+use crate::agent::runtime::turn_lease::TurnLease;
 use crate::agent::web::sse;
 use crate::agent::web::state::AppState;
 
@@ -66,12 +67,20 @@ pub async fn handler(
             .into_response();
     }
 
-    let session_id = req
-        .session_id
-        .as_deref()
-        .filter(|s| !s.trim().is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let (session_id, turn_lease) = match begin_turn(&state, req.session_id.as_deref()) {
+        Ok(turn) => turn,
+        Err(conflict) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(json!({
+                    "error": "session already has an active turn",
+                    "code": "session_busy",
+                    "session_id": conflict.session_id,
+                })),
+            )
+                .into_response();
+        }
+    };
     let interrupt_scope = format!("web-{}", uuid::Uuid::new_v4().simple());
 
     let (tx, rx) = mpsc::channel::<SseFrame>(SSE_CHANNEL_CAPACITY);
@@ -94,6 +103,7 @@ pub async fn handler(
             scope_for_task.clone(),
             use_memory,
             tx.clone(),
+            turn_lease,
         )
         .await
         {
@@ -124,6 +134,24 @@ pub async fn handler(
         })
 }
 
+fn begin_turn(
+    state: &AppState,
+    requested_session_id: Option<&str>,
+) -> Result<(String, TurnLease), TurnConflict> {
+    let session_id = requested_session_id
+        .filter(|session_id| !session_id.trim().is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    match state.try_acquire_turn(session_id.clone()) {
+        Ok(lease) => Ok((session_id, lease)),
+        Err(_) => Err(TurnConflict { session_id }),
+    }
+}
+
+struct TurnConflict {
+    session_id: String,
+}
+
 // ---------------------------------------------------------------------------
 // Drive task: builds provider + tools + memory, runs ask_with_stream,
 // and pipes events through SseSink (which writes SSE frames into the
@@ -137,6 +165,7 @@ async fn drive_chat(
     interrupt_scope: String,
     use_memory: bool,
     tx: mpsc::Sender<SseFrame>,
+    _turn_lease: TurnLease,
 ) -> Result<(), String> {
     use crate::agent::{memory, setup};
 

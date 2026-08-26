@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::agent::runtime::turn_lease::{TurnAlreadyActive, TurnLease, TurnLeaseRegistry};
 use crate::config::AgentConfig;
 
 #[derive(Clone)]
@@ -13,6 +14,7 @@ pub struct AppStateInner {
     pub cfg: AgentConfig,
     pub owner_uid: u32,
     pub started_at_unix: u64,
+    turn_leases: TurnLeaseRegistry,
 }
 
 impl AppState {
@@ -26,10 +28,17 @@ impl AppState {
                 cfg,
                 owner_uid,
                 started_at_unix,
+                turn_leases: TurnLeaseRegistry::default(),
             }),
         }
     }
 
+    pub fn try_acquire_turn(
+        &self,
+        session_id: impl Into<String>,
+    ) -> Result<TurnLease, TurnAlreadyActive> {
+        self.inner.turn_leases.try_acquire(session_id)
+    }
 }
 
 pub fn current_owner_uid() -> Result<u32, String> {
