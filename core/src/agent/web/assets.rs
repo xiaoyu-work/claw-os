@@ -13,11 +13,28 @@
 //! you need to refresh `dist/` after changing the UI sources.
 
 use axum::extract::Path;
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use include_dir::{include_dir, Dir};
 
 static UI_DIR: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/agent/web/ui/dist");
+
+const CONTENT_SECURITY_POLICY: &str = concat!(
+    "default-src 'self'; ",
+    "base-uri 'none'; ",
+    "connect-src 'self'; ",
+    "font-src 'self'; ",
+    "form-action 'none'; ",
+    "frame-ancestors 'none'; ",
+    "frame-src 'none'; ",
+    "img-src 'self' data: https:; ",
+    "manifest-src 'self'; ",
+    "object-src 'none'; ",
+    "script-src 'self' 'sha256-yGQ7P8d0Uq6HLg7pYkJSwY4l8l84Xini2kPVHLZLFG8='; ",
+    "script-src-attr 'none'; ",
+    "style-src 'self' 'unsafe-inline'; ",
+    "worker-src 'none'"
+);
 
 fn mime_for(path: &str) -> &'static str {
     let ext = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
@@ -51,7 +68,9 @@ fn cache_control_for(path: &str) -> &'static str {
 
 fn serve_file(path: &str) -> Response {
     let Some(file) = UI_DIR.get_file(path) else {
-        return (StatusCode::NOT_FOUND, "not found").into_response();
+        let mut resp = (StatusCode::NOT_FOUND, "not found").into_response();
+        apply_security_headers(&mut resp);
+        return resp;
     };
     let mut resp = (StatusCode::OK, file.contents().to_vec()).into_response();
     resp.headers_mut().insert(
@@ -62,7 +81,28 @@ fn serve_file(path: &str) -> Response {
         header::CACHE_CONTROL,
         HeaderValue::from_static(cache_control_for(path)),
     );
+    apply_security_headers(&mut resp);
     resp
+}
+
+fn apply_security_headers(resp: &mut Response) {
+    let headers = resp.headers_mut();
+    headers.insert(
+        HeaderName::from_static("content-security-policy"),
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
+    headers.insert(
+        HeaderName::from_static("referrer-policy"),
+        HeaderValue::from_static("no-referrer"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-content-type-options"),
+        HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        HeaderName::from_static("x-frame-options"),
+        HeaderValue::from_static("DENY"),
+    );
 }
 
 pub async fn index() -> Response {
@@ -92,6 +132,7 @@ pub async fn favicon() -> Response {
         header::CACHE_CONTROL,
         HeaderValue::from_static("public, max-age=86400"),
     );
+    apply_security_headers(&mut resp);
     resp
 }
 
@@ -115,4 +156,12 @@ pub async fn asset(Path(file): Path<String>) -> Response {
     }
     let key = format!("assets/{}", file);
     serve_file(&key)
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/web/assets.rs"
+    ));
 }

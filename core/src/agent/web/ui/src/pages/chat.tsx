@@ -16,9 +16,9 @@
 
 import { ArrowUp, Loader2, Square, Wrench, AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { marked } from "marked";
 
 import { api, streamSse } from "@/lib/api";
+import { renderSafeMarkdown } from "@/lib/safe-markdown";
 import { useRoute, navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -361,7 +361,7 @@ function Message({ m }: { m: Msg }) {
       {m.text && (
         <div
           className="max-w-none text-sm leading-relaxed [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-muted [&_pre]:p-3 [&_code]:rounded [&_code]:bg-muted [&_code]:px-1 [&_code]:py-0.5 [&_code]:text-xs [&_pre>code]:bg-transparent [&_pre>code]:p-0 [&_a]:text-primary [&_a]:underline [&_h1]:my-2 [&_h1]:text-base [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-sm [&_h2]:font-semibold [&_p]:my-2 [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5"
-          dangerouslySetInnerHTML={{ __html: marked.parse(m.text) as string }}
+          dangerouslySetInnerHTML={{ __html: renderSafeMarkdown(m.text) }}
         />
       )}
       {m.status === "streaming" && (
