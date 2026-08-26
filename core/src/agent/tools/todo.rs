@@ -302,11 +302,11 @@ fn default_session() -> String {
 
 #[async_trait]
 impl Tool for Todo {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_todo"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Per-session task list. Use to plan and track multi-step work. \
          Commands: read | write (replace entire list) | set_status (update one item by id) | clear."
     }

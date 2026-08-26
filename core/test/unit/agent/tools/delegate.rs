@@ -288,10 +288,10 @@ async fn run_delegate_increments_depth_for_child() {
     struct DepthInspector;
     #[async_trait]
     impl Tool for DepthInspector {
-        fn name(&self) -> &'static str {
+        fn name(&self) -> &str {
             "depth_inspector"
         }
-        fn description(&self) -> &'static str {
+        fn description(&self) -> &str {
             "report current delegate depth"
         }
         fn input_schema(&self) -> serde_json::Value {

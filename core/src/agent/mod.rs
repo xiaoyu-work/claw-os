@@ -4363,7 +4363,7 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
                     }
                 }
             }
-            let names: Vec<&'static str> = if unfiltered {
+            let names: Vec<&str> = if unfiltered {
                 registry.names_unfiltered()
             } else {
                 registry.names()

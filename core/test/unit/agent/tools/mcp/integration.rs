@@ -226,14 +226,13 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
     let mut registry = ToolRegistry::new();
     let descriptor = list.tools.into_iter().next().unwrap();
     let tool = McpRemoteTool::new("svc", descriptor, client.clone(), Duration::from_secs(5));
-    let registered_name = tool.name();
-    assert_eq!(registered_name, "mcp_svc_say");
+    assert_eq!(tool.name(), "mcp_svc_say");
     registry.register(Arc::new(tool));
 
     // Pull it back out of the registry and call it as the agent
     // loop would — `get` honours guardrails (we set none, so
     // permissive default permits everything).
-    let dyn_tool = registry.get(registered_name).expect("tool registered");
+    let dyn_tool = registry.get("mcp_svc_say").expect("tool registered");
     let result = dyn_tool.exec(json!({})).await;
     assert!(!result.is_error, "tool call should succeed: {:?}", result);
     // The remote result is wrapped in the untrusted-tool-result

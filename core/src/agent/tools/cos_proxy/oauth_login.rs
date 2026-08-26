@@ -15,11 +15,11 @@ impl CosOauthLoginTool {
 
 #[async_trait]
 impl Tool for CosOauthLoginTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_oauth_login"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Start a trusted Google or Microsoft OAuth authorization from an \
          attended local system-Agent session. Use this when a bundled App \
          returns auth_required with a matching setup.agent_action. The system \

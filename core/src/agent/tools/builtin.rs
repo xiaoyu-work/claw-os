@@ -14,11 +14,11 @@ pub struct Echo;
 
 #[async_trait]
 impl Tool for Echo {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "echo"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Return the provided text unchanged. Useful for testing the tool loop."
     }
 
@@ -54,11 +54,11 @@ pub struct Now;
 
 #[async_trait]
 impl Tool for Now {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "now"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Return the current UTC time in RFC 3339 format."
     }
 

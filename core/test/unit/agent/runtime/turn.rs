@@ -426,10 +426,10 @@ struct SlowReader {
 }
 #[async_trait::async_trait]
 impl Tool for SlowReader {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.name
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "slow read"
     }
     fn input_schema(&self) -> serde_json::Value {
@@ -451,10 +451,10 @@ struct SerialWriter {
 }
 #[async_trait::async_trait]
 impl Tool for SerialWriter {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.name
     }
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "serial write"
     }
     fn input_schema(&self) -> serde_json::Value {

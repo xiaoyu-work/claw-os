@@ -1656,11 +1656,11 @@ struct CountingTool {
 
 #[async_trait::async_trait]
 impl crate::agent::tools::Tool for CountingTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cancellation_counting_tool"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "counts executions"
     }
 
@@ -1733,11 +1733,11 @@ struct BlockingTool {
 
 #[async_trait::async_trait]
 impl crate::agent::tools::Tool for BlockingTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cancellation_blocking_tool"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "blocks until cancelled"
     }
 

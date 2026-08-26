@@ -35,54 +35,39 @@ use crate::caps::manifest::Manifest;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
-/// One LLM-visible proxy bound to a single cos app. All fields are
-/// `&'static str` to satisfy the [`Tool`] trait; for manifest-built
-/// instances, the strings are allocated with `Box::leak` once at
-/// registration time and live for the agent process lifetime (a
-/// bounded one-shot leak per app).
+/// One LLM-visible proxy bound to a single cos app. Manifest-derived
+/// metadata is owned by the tool and released with its registry.
 pub struct CosAppTool {
-    name: &'static str,
-    app: &'static str,
-    description: &'static str,
-    commands: &'static [&'static str],
+    name: String,
+    app: String,
+    description: String,
+    commands: Vec<String>,
 }
 
 impl CosAppTool {
-    pub const fn new(
-        name: &'static str,
-        app: &'static str,
-        description: &'static str,
-        commands: &'static [&'static str],
+    pub fn new(
+        name: impl Into<String>,
+        app: impl Into<String>,
+        description: impl Into<String>,
+        commands: &[&str],
     ) -> Self {
         Self {
-            name,
-            app,
-            description,
-            commands,
+            name: name.into(),
+            app: app.into(),
+            description: description.into(),
+            commands: commands
+                .iter()
+                .map(|command| (*command).to_owned())
+                .collect(),
         }
     }
 
-    /// Build a proxy from a discovered manifest. The strings the
-    /// [`Tool`] trait exposes outlive the manifest, so we leak them
-    /// — see the type doc for why this is safe.
     fn from_manifest(manifest: &Manifest) -> Self {
-        let name: &'static str =
-            Box::leak(format!("cos_app_{}", manifest.id).into_boxed_str());
-        let app: &'static str = Box::leak(manifest.id.clone().into_boxed_str());
-        let description: &'static str = Box::leak(build_description(manifest).into_boxed_str());
-
-        let cmds: Vec<&'static str> = manifest
-            .operations
-            .keys()
-            .map(|k| -> &'static str { Box::leak(k.clone().into_boxed_str()) })
-            .collect();
-        let commands: &'static [&'static str] = Box::leak(cmds.into_boxed_slice());
-
         Self {
-            name,
-            app,
-            description,
-            commands,
+            name: format!("cos_app_{}", manifest.id),
+            app: manifest.id.clone(),
+            description: build_description(manifest),
+            commands: manifest.operations.keys().cloned().collect(),
         }
     }
 }
@@ -173,12 +158,12 @@ fn manifest_schema_at(app_dir: &Path) -> Result<String, String> {
 
 #[async_trait]
 impl Tool for CosAppTool {
-    fn name(&self) -> &'static str {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    fn description(&self) -> &'static str {
-        self.description
+    fn description(&self) -> &str {
+        &self.description
     }
 
     fn input_schema(&self) -> Value {
@@ -241,7 +226,7 @@ impl Tool for CosAppTool {
         if command != "__schema__" {
             if let Err(denial) = crate::caps::require(
                 crate::caps::Verb::AGENT_INVOKE,
-                crate::caps::Scope::name(self.app),
+                crate::caps::Scope::name(&self.app),
             ) {
                 return ToolResult::err(denial.to_string());
             }
@@ -315,11 +300,11 @@ pub struct CosAppCatalog;
 
 #[async_trait]
 impl Tool for CosAppCatalog {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_app_catalog"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Live catalogue of installed Claw OS apps. Re-reads every app's \
          app.json on each call, so apps installed after the agent \
          started are immediately discoverable without restart. \
@@ -557,11 +542,11 @@ pub struct CosAppRun;
 
 #[async_trait]
 impl Tool for CosAppRun {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_app_run"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Invoke any verb on any installed Claw OS app. Generic counterpart \
          to the hand-rolled `cos_app_<name>` proxies — use this when the \
          target app does not have a dedicated proxy, or when you want to \

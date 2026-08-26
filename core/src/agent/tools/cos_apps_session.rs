@@ -727,10 +727,10 @@ fn pathsep() -> &'static str {
 /// installed app's manifest. The session itself is opened lazily on
 /// first call (or explicitly via [`CosAppSessionOpen`]).
 pub struct AppSessionTool {
-    /// Leaked at registration time; format: `app_<id>__<tool_name_dots_to_underscores>`.
-    name: &'static str,
-    /// Leaked description built from the tool's summary.
-    description: &'static str,
+    /// Format: `app_<id>__<tool_name_dots_to_underscores>`.
+    name: String,
+    /// Description built from the tool's summary.
+    description: String,
     /// JSON Schema derived from `manifest.session.tools[i].args`.
     schema: Value,
     /// The app's manifest id.
@@ -753,14 +753,10 @@ impl AppSessionTool {
         let tool = &session.tools[tool_idx];
         let app_id = manifest.id.clone();
         let manifest_tool_name = tool.name.clone();
-        let registry_name = registry_name_for(&app_id, &manifest_tool_name);
-        let name: &'static str = Box::leak(registry_name.into_boxed_str());
-        let description: &'static str = Box::leak(
-            format!(
-                "App `{app_id}` session tool `{manifest_tool_name}`. {}",
-                tool.summary.en_str()
-            )
-            .into_boxed_str(),
+        let name = registry_name_for(&app_id, &manifest_tool_name);
+        let description = format!(
+            "App `{app_id}` session tool `{manifest_tool_name}`. {}",
+            tool.summary.en_str()
         );
         let schema = build_schema(&tool.args);
         Self {
@@ -824,12 +820,12 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
 
 #[async_trait]
 impl Tool for AppSessionTool {
-    fn name(&self) -> &'static str {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    fn description(&self) -> &'static str {
-        self.description
+    fn description(&self) -> &str {
+        &self.description
     }
 
     fn input_schema(&self) -> Value {
@@ -1054,11 +1050,11 @@ pub struct CosAppSessionOpen;
 
 #[async_trait]
 impl Tool for CosAppSessionOpen {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_app_session_open"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Bring up an installed app's MCP session server and return the \
          list of its registered tools. Subsequent calls to those tools \
          reuse the same long-lived process so the app can hold \
@@ -1117,11 +1113,11 @@ pub struct CosAppSessionClose;
 
 #[async_trait]
 impl Tool for CosAppSessionClose {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_app_session_close"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Terminate an app's MCP session server. In-memory session \
          state is dropped; persistent state (files, databases) is \
          untouched. A subsequent call to any of the app's tools will \

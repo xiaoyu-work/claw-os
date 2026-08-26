@@ -130,11 +130,11 @@ impl Clarify {
 
 #[async_trait]
 impl Tool for Clarify {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_clarify"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Ask the user a clarifying question when intent is ambiguous or required information is missing. \
          Returns the user's answer, or a `pending` marker in headless mode."
     }

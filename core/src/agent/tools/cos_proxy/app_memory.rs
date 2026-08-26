@@ -52,11 +52,11 @@ impl CosAppMemoryTool {
 
 #[async_trait]
 impl Tool for CosAppMemoryTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_app_memory"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Recall structured facts that apps have stored about the user's activity. \
          Calendar app stores events the user created or updated; the email app \
          stores messages the user sent; mail-ai stores triage decisions and \

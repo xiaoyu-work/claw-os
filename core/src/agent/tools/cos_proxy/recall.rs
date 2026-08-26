@@ -31,11 +31,11 @@ impl CosRecallTool {
 
 #[async_trait]
 impl Tool for CosRecallTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_recall"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Search the agent's full conversation history (every prior turn, every \
          session) using SQLite FTS5. Use this to recall what the user told you \
          earlier, what tools you ran, or what you concluded in a past session. \

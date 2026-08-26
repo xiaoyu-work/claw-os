@@ -96,11 +96,11 @@ impl CosPrimitiveTool {
 
 #[async_trait]
 impl Tool for CosPrimitiveTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         self.name
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         self.description
     }
 

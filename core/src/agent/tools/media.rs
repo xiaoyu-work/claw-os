@@ -65,11 +65,11 @@ impl TtsTool {
 
 #[async_trait]
 impl Tool for TtsTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_tts"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Synthesize speech audio from text. Returns the path to the audio file written under the agent media outputs directory."
     }
 
@@ -148,11 +148,11 @@ impl SttTool {
 
 #[async_trait]
 impl Tool for SttTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_stt"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Transcribe an audio file at the given path. Format is inferred from the extension or supplied via the 'format' field."
     }
 
@@ -267,11 +267,11 @@ impl ImageGenTool {
 
 #[async_trait]
 impl Tool for ImageGenTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_imagegen"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Generate images from a text prompt. Returns paths to the rendered images written under the agent media outputs directory."
     }
 

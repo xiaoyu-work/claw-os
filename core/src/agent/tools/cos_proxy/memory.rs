@@ -47,11 +47,11 @@ const DEFAULT_NOTE: &str = "MEMORY.md";
 
 #[async_trait]
 impl Tool for CosMemoryTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_memory"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Read/write the agent's persistent notes (MEMORY.md, USER.md, and any \
          user-named .md note). MEMORY.md is your own working memory across \
          conversations; USER.md captures persistent preferences about the user. \

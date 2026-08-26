@@ -38,11 +38,11 @@ impl CosRecallSemanticTool {
 
 #[async_trait]
 impl Tool for CosRecallSemanticTool {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_recall_semantic"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Vector-similarity search over the agent's persistent memory. \
          Returns past messages and app-pushed facts whose MEANING is close \
          to the query, even when no exact keyword matches. With `session_id` \

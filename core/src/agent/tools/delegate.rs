@@ -139,11 +139,11 @@ struct DelegateInput {
 
 #[async_trait]
 impl Tool for Delegate {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_delegate"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Spawn a child sub-agent with a scoped subset of tools and an \
          optional model override. Returns the child's final answer. Use \
          this for focused sub-tasks (research, extraction, summarisation) \

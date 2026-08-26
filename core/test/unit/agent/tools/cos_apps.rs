@@ -76,6 +76,49 @@ fn register_all_picks_up_every_manifest_on_disk() {
 }
 
 #[test]
+fn rebuilt_registry_uses_fresh_owned_manifest_metadata() {
+    let _g = env_lock();
+    let tmp = write_two_demo_apps();
+    with_apps_dir(&tmp, || {
+        let mut first = ToolRegistry::new();
+        register_all(&mut first);
+        let first_tool = first.get("cos_app_fs").expect("first fs tool");
+        assert!(first_tool
+            .description()
+            .contains("Agent-native file system"));
+
+        let manifest_path = tmp.path().join("fs").join("app.json");
+        let mut manifest: Value =
+            serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+        manifest["summary"]["en"] = Value::String("Reloaded file system.".into());
+        manifest["operations"]["stat"] = serde_json::json!({
+            "label": {"en": "Inspect a file"},
+            "args": [],
+            "needs": []
+        });
+        std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+
+        let mut reloaded = ToolRegistry::new();
+        register_all(&mut reloaded);
+        let reloaded_tool = reloaded.get("cos_app_fs").expect("reloaded fs tool");
+        assert!(reloaded_tool
+            .description()
+            .contains("Reloaded file system"));
+        assert!(reloaded_tool
+            .input_schema()
+            .pointer("/properties/command/enum")
+            .and_then(Value::as_array)
+            .expect("command enum")
+            .iter()
+            .any(|command| command.as_str() == Some("stat")));
+
+        assert!(first_tool
+            .description()
+            .contains("Agent-native file system"));
+    });
+}
+
+#[test]
 fn register_all_yields_no_typed_proxies_when_apps_dir_empty() {
     let _g = env_lock();
     let tmp = tempfile::tempdir().unwrap();

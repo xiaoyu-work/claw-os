@@ -51,10 +51,10 @@ impl ToolResult {
 #[async_trait]
 pub trait Tool: Send + Sync {
     /// Stable, snake_case identifier exposed to the model.
-    fn name(&self) -> &'static str;
+    fn name(&self) -> &str;
 
     /// One-line human description shown in the tool list.
-    fn description(&self) -> &'static str;
+    fn description(&self) -> &str;
 
     /// JSON Schema describing the input shape. The schema is consumed by the
     /// LLM to decide how to call this tool.

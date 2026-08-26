@@ -19,7 +19,7 @@ use crate::agent::runtime::approval::ApprovalGate;
 
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<&'static str, Arc<dyn Tool>>,
+    tools: HashMap<String, Arc<dyn Tool>>,
     guardrails: Guardrails,
     approval: ApprovalGate,
 }
@@ -31,7 +31,7 @@ impl ToolRegistry {
 
     /// Register a tool. Last write wins for duplicate names.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name(), tool);
+        self.tools.insert(tool.name().to_owned(), tool);
     }
 
     /// Replace the active guardrails. Call once at construction time.
@@ -85,11 +85,11 @@ impl ToolRegistry {
     }
 
     /// Names of every permitted tool, sorted.
-    pub fn names(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self
+    pub fn names(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self
             .tools
             .keys()
-            .copied()
+            .map(String::as_str)
             .filter(|n| self.guardrails.permits(n))
             .collect();
         names.sort_unstable();
@@ -97,8 +97,8 @@ impl ToolRegistry {
     }
 
     /// Names of every registered tool ignoring guardrails. For diagnostics.
-    pub fn names_unfiltered(&self) -> Vec<&'static str> {
-        let mut names: Vec<&'static str> = self.tools.keys().copied().collect();
+    pub fn names_unfiltered(&self) -> Vec<&str> {
+        let mut names: Vec<&str> = self.tools.keys().map(String::as_str).collect();
         names.sort_unstable();
         names
     }

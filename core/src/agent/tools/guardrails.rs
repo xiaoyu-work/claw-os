@@ -176,8 +176,11 @@ pub fn get_filtered(
 
 /// Return the sorted names of every permitted tool currently registered.
 /// Useful for prompts that enumerate available capabilities.
-pub fn permitted_names(registry: &ToolRegistry, guardrails: &Guardrails) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = registry
+pub fn permitted_names<'a>(
+    registry: &'a ToolRegistry,
+    guardrails: &Guardrails,
+) -> Vec<&'a str> {
+    let mut out: Vec<&str> = registry
         .names()
         .into_iter()
         .filter(|n| guardrails.permits(n))

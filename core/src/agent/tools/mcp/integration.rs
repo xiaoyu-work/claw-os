@@ -144,18 +144,12 @@ impl Drop for McpServerHandle {
 }
 
 /// Tool wrapper that proxies `exec` to a remote MCP `tools/call`.
-///
-/// Holds a leaked `&'static str` for `name` / `description` because
-/// the [`Tool`] trait's signatures require that lifetime. Leaks are
-/// bounded by the number of MCP tools the user configures (a few
-/// hundred bytes per tool, lasting until process exit) and never
-/// happen on hot paths.
 pub struct McpRemoteTool {
-    /// `mcp_<server>_<remote>`, leaked.
-    name: &'static str,
-    /// Description from the server, leaked. Falls back to a generated
+    /// `mcp_<server>_<remote>`.
+    name: String,
+    /// Description from the server. Falls back to a generated
     /// string when the server omits one.
-    description: &'static str,
+    description: String,
     /// Cached on construction; cloned per `input_schema()` call (the
     /// trait returns by value).
     schema: Value,
@@ -172,15 +166,13 @@ impl McpRemoteTool {
         client: Arc<McpClient>,
         timeout: Duration,
     ) -> Self {
-        let prefixed = format!("mcp_{prefix}_{}", descriptor.name);
-        let name: &'static str = Box::leak(prefixed.into_boxed_str());
-        let raw_desc = descriptor.description.unwrap_or_else(|| {
+        let name = format!("mcp_{prefix}_{}", descriptor.name);
+        let description = descriptor.description.unwrap_or_else(|| {
             format!(
                 "Remote MCP tool `{}` from server `{prefix}`.",
                 descriptor.name
             )
         });
-        let description: &'static str = Box::leak(raw_desc.into_boxed_str());
         // Some MCP servers report Null / missing `inputSchema`. The
         // LLM trait expects an object schema; coerce minimally so the
         // model doesn't see a `null` schema.
@@ -202,12 +194,12 @@ impl McpRemoteTool {
 
 #[async_trait]
 impl Tool for McpRemoteTool {
-    fn name(&self) -> &'static str {
-        self.name
+    fn name(&self) -> &str {
+        &self.name
     }
 
-    fn description(&self) -> &'static str {
-        self.description
+    fn description(&self) -> &str {
+        &self.description
     }
 
     fn input_schema(&self) -> Value {
@@ -235,7 +227,7 @@ impl Tool for McpRemoteTool {
             }
         };
         match res {
-            Ok(call_result) => render_call_result(self.name, call_result),
+            Ok(call_result) => render_call_result(&self.name, call_result),
             Err(e) => ToolResult::err(format!(
                 "MCP `{}` failed: {}",
                 self.name,

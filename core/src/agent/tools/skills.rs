@@ -110,11 +110,11 @@ impl SkillDisclosure {
 
 #[async_trait]
 impl Tool for SkillDisclosure {
-    fn name(&self) -> &'static str {
+    fn name(&self) -> &str {
         "cos_skill"
     }
 
-    fn description(&self) -> &'static str {
+    fn description(&self) -> &str {
         "Progressively disclose Agent Skills: list metadata, read one matching SKILL.md, then read individual referenced resources only as needed."
     }
 

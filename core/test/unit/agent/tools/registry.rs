@@ -1,4 +1,39 @@
 use super::*;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+
+struct OwnedDescriptorTool {
+    name: String,
+    description: String,
+    drops: Arc<AtomicUsize>,
+}
+
+impl Drop for OwnedDescriptorTool {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::agent::tools::Tool for OwnedDescriptorTool {
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn description(&self) -> &str {
+        &self.description
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+        crate::agent::tools::ToolResult::ok("ok")
+    }
+}
 
 #[test]
 fn default_registry_has_builtins_and_cos_proxy() {
@@ -57,4 +92,33 @@ fn as_llm_tools_round_trips_schema() {
     let r = default_registry();
     let tools = r.as_llm_tools();
     assert!(tools.iter().any(|t| t.name == "echo"));
+}
+
+#[test]
+fn repeated_registries_release_owned_dynamic_descriptors() {
+    const BUILDS: usize = 64;
+    let drops = Arc::new(AtomicUsize::new(0));
+
+    for build in 0..BUILDS {
+        let name = format!("dynamic_{build}");
+        let description = format!("descriptor for build {build}");
+        {
+            let mut registry = ToolRegistry::new();
+            registry.register(Arc::new(OwnedDescriptorTool {
+                name: name.clone(),
+                description: description.clone(),
+                drops: drops.clone(),
+            }));
+
+            assert_eq!(registry.names_unfiltered(), vec![name.as_str()]);
+            assert_eq!(
+                registry
+                    .get_unfiltered(&name)
+                    .expect("dynamic tool registered")
+                    .description(),
+                description
+            );
+        }
+        assert_eq!(drops.load(Ordering::SeqCst), build + 1);
+    }
 }
