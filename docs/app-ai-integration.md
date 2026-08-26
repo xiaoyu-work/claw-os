@@ -39,7 +39,8 @@ exactly two entry points:
 | `cos ai chat`  | A single model invocation. Optionally injects a list of Tool schemas so the model can emit `tool_calls`. **Never executes them.** |
 | `cos ai tool`  | Execute one Tool by name with explicit JSON arguments. Capability-checked, App-scoped, fully audited. |
 
-Both are audited. Everything inside the AI subsystem is on the record.
+Both are audited. Every invocation and policy decision inside the AI subsystem
+emits operational audit metadata.
 
 > **Current stable scope:** `ai.chat` and `ai.chat.untrusted` only.
 > Embed, image, vision, audio, and video selectors are experimental and
@@ -51,9 +52,9 @@ Both are audited. Everything inside the AI subsystem is on the record.
 Claw OS exists to give the user a single, complete account of **what
 their AI did on their computer**:
 
-- Which models were called, with what prompts, returning what responses.
-- Which computer operations were invoked because a model asked for them,
-  with what arguments and what results.
+- Which models were called, by which App, with what usage and policy result.
+- Which kernel Tools were invoked because a model asked for them, under which
+  capability decision, and whether they succeeded.
 - Which App initiated each of the above.
 
 To deliver that guarantee, the OS only needs to interpose on **AI** —
@@ -89,7 +90,7 @@ it.
                                       │  cos app install <dir>
                                       ▼
    ┌──────────────────────────────────────────────────────┐
-   │  Registered under /var/lib/cos/apps/<id>/            │
+   │  Registered under /usr/lib/cos/apps/<id>/            │
    │  Consent UI runs for ai.tools[] entries              │
    └──────────────────────────────────┬───────────────────┘
                                       │  cos app <id> <op>
@@ -108,9 +109,10 @@ it.
 
 ### 3.2 Three invariants
 
-1. **Install is mandatory.** `cos app install <dir>` is the only way to
-   register an App. Until installation, a directory has no identity and
-   no Tools.
+1. **Discovery is mandatory.** The App must live below the active
+   `$COS_APPS_DIR` and have a valid manifest. `cos app install <dir>` is the
+   normal system-install path; development trees can instead point
+   `COS_APPS_DIR` at a user-owned directory.
 2. **Kernel-spawn is mandatory.** An App process can only be started by
    `cos app <id> <op>`. The kernel sets `COS_APP_ID` on the child
    (`core/src/bridge.rs`); any `cos ai chat` / `cos ai tool` call inside
@@ -122,15 +124,15 @@ it.
 
 ### 3.3 Runtimes
 
-The kernel forks Apps through `core/src/bridge.rs`. Today only Python
-is supported. As third-party Apps land, the bridge will dispatch on
-the manifest's `runtime` field:
+The kernel launches Apps through `core/src/bridge.rs` according to the
+manifest's `runtime` field:
 
 | `runtime`          | How the kernel starts it                     |
 |--------------------|----------------------------------------------|
-| `python` (default) | `python3 -c <wrapper>` — current behaviour   |
+| `python` (default) | Python wrapper + the configured entry file   |
 | `node`             | `node <wrapper.js>`                          |
-| `binary`           | `exec /var/lib/cos/apps/<id>/bin/main`       |
+| `shell`            | Shell + the configured entry script         |
+| `binary`           | Execute the configured binary entry directly |
 
 In every case, `COS_APP_ID` is set before `exec`. The choice of runtime
 is purely about *how* the kernel spawns the App; it has no effect on
@@ -172,23 +174,19 @@ A **Tool** is "an operation a model is allowed to invoke on this
 computer". The catalog (`core/src/ai/tools.rs::CATALOG`) is the
 authoritative list. Each Tool has:
 
-- A stable, dotted name (`fs.read`, `web.fetch`, `sandbox.exec`, …)
+- A stable, dotted name
 - A JSON Schema for arguments
 - A required capability verb + scope policy
 - A localized `why` template used in user-consent UI
-- A stability tier (`stable` / `experimental` / `internal`)
+- A stability tier (`stable` / `experimental`)
 
-Initial catalog (subject to change before 1.0):
+Current catalog:
 
 | Tool | Purpose |
 |---|---|
-| `fs.read` `fs.write` `fs.search` `fs.stat` | File operations |
-| `web.fetch` `web.search` | Web access |
-| `sandbox.exec` | Run untrusted code inside namespace+seccomp |
-| `doc.parse` | Parse PDF / DOCX / XLSX / PPTX / CSV |
-| `mail.send` `cal.create` `cal.list` | Communications |
-| `cred.load` | Load a secret from the App's own credential namespace |
-| `ai.chat` | Recursive / sub-agent text model calls |
+| `fs.read_text` | Read a bounded UTF-8 text file |
+| `fs.list` | List one directory level |
+| `kv.get` | Read from the calling App's key-value namespace |
 
 What is **not** in the Tool catalog — by design:
 
@@ -271,19 +269,16 @@ App's namespace, runs the operation, and emits an audit row.
 cos ai tool <name> --app <id> --args <json>
 ```
 
-Returns:
+On success:
 
 ```json
 { "tool": "fs.read_text", "app_id": "research-assistant",
   "status": "ok", "result": { "text": "..." } }
 ```
 
-or on failure:
-
-```json
-{ "ok": false, "error": "permission_denied", "tool": "fs.write",
-  "reason": "scope $APP_DATA does not include /etc/passwd" }
-```
+On failure, the command exits non-zero through the normal `cos` CLI error
+path; SDK callers receive the corresponding exception/error payload. A failed
+call does not return the success envelope above.
 
 ## 7. In-Process SDK
 
@@ -330,43 +325,22 @@ around the same two CLI calls; `cos ai tools` dumps the live catalog.
 
 ## 8. Audit Surface
 
-Every call to `cos ai chat` writes one row:
+`cos ai chat` and `cos ai tool` append `LlmRunRecord` rows to the same
+`ai.jsonl` stream. The current schema records operational metadata such as:
 
-```json
-{
-  "ts":            "2026-05-13T22:00:00Z",
-  "kind":          "ai.chat",
-  "app":           "third.party.research",
-  "model":         "claude-3-5-sonnet",
-  "prompt_hash":   "sha256:…",
-  "response_hash": "sha256:…",
-  "tools_offered": ["fs.read", "web.fetch"],
-  "tool_calls":    [{ "name": "web.fetch", "args_hash": "sha256:…" }],
-  "usage":         { "input": 1234, "output": 567 },
-  "origin":        "user-input",
-  "session":       "…"
-}
-```
+- timestamp plus trace/span/session identifiers,
+- provider, model, and local engine identity,
+- duration, input/output token usage, cache usage, and finish reason,
+- status/error plus allow/deny decision and denial reason,
+- calling App id and the derived capability verb.
 
-Every call to `cos ai tool` writes one row:
+Tool executions use `provider="kernel"` and `model="tool:<name>"`, so they
+remain distinguishable from model calls while sharing one query surface.
 
-```json
-{
-  "ts":          "2026-05-13T22:00:01Z",
-  "kind":        "ai.tool",
-  "app":         "third.party.research",
-  "tool":        "web.fetch",
-  "verb":        "net.dial",
-  "scope":       { "kind": "wild" },
-  "args_hash":   "sha256:…",
-  "result_hash": "sha256:…",
-  "ok":          true,
-  "session":     "…"
-}
-```
-
-Together these two streams fully describe every action AI took on the
-computer through Claw OS, scoped to whichever App initiated it.
+The run log intentionally does **not** currently include prompt/response text,
+prompt/response hashes, origin, or the complete offered-tool list. It records
+AI-gate activity and kernel Tool execution, not every action performed by
+ordinary App code.
 
 ## 9. What This Design Does **Not** Audit
 
@@ -376,14 +350,15 @@ By stated design:
   Python without any audit row. That is intentional: this is not a
   syscall-level sandbox; it is an AI-accountability layer.
 
-- **Data the App passes to a model.** `ai.chat` records a *hash* of the
-  prompt, not the literal text. (Full text storage is an opt-in
-  policy, not the default, for PII reasons.)
+- **Prompt and response content.** The `ai.jsonl` run log stores neither the
+  literal content nor content hashes. Other session or App-owned stores may
+  persist conversation data independently.
 
 - **Down-stream effects of AI output.** If a model says "you should
   write file X" and the App's normal code obeys via `open()`, that
   write is App behavior, not AI behavior — and so is not in the AI
-  audit log. The model output that *suggested* it is.
+  audit log. The model invocation has an operational run-log row, but
+  the output text that suggested the write is not stored there.
 
 If a deployment wants stricter coverage — e.g. "the App must not be
 able to do anything we cannot audit" — that is a separate isolation
@@ -402,10 +377,14 @@ That Agent:
 - Is the user's "default AI" — the assistant the desktop chrome talks
   to.
 
-The kernel Agent and third-party App AIs share **the same Tool registry
-implementation** (`core/src/ai/tools.rs`) but with **different views**:
-the kernel Agent sees the full superset; an App AI sees only the Tools
-declared in its own manifest, scope-narrowed to its own namespace.
+The kernel Agent and third-party App AIs share the same capability model but
+use **separate registries**:
+
+- the kernel Agent uses `core/src/agent/tools/registry.rs`,
+- App-facing AI uses the bounded catalog in `core/src/ai/tools.rs`.
+
+An App AI sees only names declared in its manifest and allowed by the
+App-facing catalog; the kernel Agent has its own broader tool surface.
 
 A third-party App does not, and cannot, invoke `cos agent chat`. That
 namespace is for the system's own Agent. Apps speak only to `cos ai
@@ -421,7 +400,7 @@ This document is the contract. Concrete work falls into roughly:
    the AI consent prompt. Flags: `--yes` auto-grants consent,
    `--no-consent` defers it, `--force` overwrites an existing install.
 2. **Multi-runtime bridge.** ✅ Done. `core/src/bridge.rs` dispatches
-   on the manifest `runtime` field (`python` / `node` / `binary`) and
+   on the manifest `runtime` field (`python` / `node` / `shell` / `binary`) and
    sets `COS_APP_ID` before `exec`.
 3. **Identity enforcement.** ✅ Done for `cos ai chat`. The CLI rejects any
    call where `COS_APP_ID` is unset (caller not kernel-spawned) or where
@@ -563,7 +542,7 @@ its tools is called — or the agent explicitly invokes
 `cos_app_session_open` — `bring_up_app` spawns the server, runs the
 MCP handshake, and stores the live handle in a process-wide
 `SessionManager`. Subsequent calls reuse it; `cos_app_session_close`
-drops the handle and the child gets SIGTERM. **Hybrid attach.**
+drops the handle and terminates the child. **Hybrid attach.**
 
 Per-call flow inside `AppSessionTool::exec`:
 
@@ -588,7 +567,7 @@ Two extra tools live alongside every registered App tool:
 | Name | Purpose |
 | --- | --- |
 | `cos_app_session_open` | Bring an App's session server up. Idempotent. Returns the list of registered tools so the model knows which names to use next. |
-| `cos_app_session_close` | SIGTERM an App's session server. In-memory state is lost; persistent state on disk is preserved. The next call to any of its tools transparently re-opens the server. |
+| `cos_app_session_close` | Terminate an App's session server. In-memory state is lost; persistent state on disk is preserved. The next call to any of its tools transparently re-opens the server. |
 
 Combined with `cos_app_catalog` (the existing one-shot discovery
 surface), the model can: discover what's installed → open the ones it
