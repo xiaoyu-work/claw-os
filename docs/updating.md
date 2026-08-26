@@ -3,7 +3,9 @@
 Claw OS has one signed APT update path across its installed system targets.
 Most updates do not require reinstalling the operating system, re-importing a
 WSL distribution, or replacing a VM. The package upgrade preserves users, home
-directories, agent configuration, credentials, memory, and application data.
+directories, agent configuration, credentials, disk-backed Agent memory, and
+application data. Services may restart during the upgrade, so in-process state
+is not preserved.
 
 This update path applies to:
 
@@ -127,8 +129,8 @@ Use a replacement image only when the release notes explicitly require it:
 ## Maintainer publication step
 
 Pushing a commit does not immediately make it available to existing
-installations. The repository workflows are manually dispatched. A maintainer
-can publish each package independently:
+installations. Publication workflows are manually dispatched. A maintainer can
+publish each package independently:
 
 - **Publish Agent package** builds, installs, and publishes only
   `claw-os-agent`.
@@ -139,10 +141,10 @@ can publish each package independently:
 - **Release everything (test + Docker + WSL + APT)** invokes all distribution
   channels when a coordinated full release is wanted.
 
-Each package workflow requires the repository Actions secrets
-`CLAW_OS_APT_SIGNING_PRIVATE_KEY` and
-`CLAW_OS_APT_SIGNING_PASSPHRASE`. The shared internal publisher restores the
-other packages from the current signed repository, merges only the package
-built by the caller, signs the new multi-architecture indexes, and deploys
-GitHub Pages. Publications are serialized so independent package workflows
-cannot overwrite each other.
+Each package workflow requires the repository Actions secret
+`CLAW_OS_APT_SIGNING_PRIVATE_KEY`. Set
+`CLAW_OS_APT_SIGNING_PASSPHRASE` only when that private key is encrypted. The
+shared internal publisher restores the other packages from the current signed
+repository, merges only the package built by the caller, signs the new
+multi-architecture indexes, and deploys GitHub Pages. Publications are
+serialized so independent package workflows cannot overwrite each other.
