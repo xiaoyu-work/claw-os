@@ -18,27 +18,40 @@
 
 Claw OS is a Linux-based environment where AI is a **system-level layer**, not
 an assistant added separately to each app. One built-in agent and one shared
-model runtime connect the system and its apps through secure, structured APIs.
+model runtime connect the user, system, and every app through secure,
+structured APIs.
 
 ## Why Claw OS is agent-native
 
-In a conventional OS, each AI assistant is isolated inside one app. In Claw OS,
-the agent, models, apps, and system share one secure runtime:
+Agent-native is the whole idea: AI is not a tab you open or a feature owned by
+one app. It is a shared OS layer that understands the machine, provides
+intelligence to apps, and uses apps as tools.
 
-- **One agent understands the whole system.** With scoped system tools, it can
-  inspect processes, resources, app activity, permissions, accessible data,
-  history, logs, and crash evidence — then answer questions such as *"why did
-  this app crash?"* or *"what is using my network?"* and take action.
-- **One AI layer serves every app.** Apps call local or configured cloud models
-  through the Claw OS SDK instead of embedding a model or rebuilding provider,
-  credential, consent, budget, and logging infrastructure. Any developer can
-  add AI capabilities without owning the model stack.
-- **Every app can open itself to the agent.** Apps publish typed operations and
-  permission requirements through the [`claw-os-sdk`](claw-os-sdk/). The agent
-  can discover, call, and combine them into cross-app workflows.
-- **System-level power remains user-controlled.** Capabilities, approvals,
-  scoped permissions, persistent memory controls, and session/audit history
-  keep privileged access visible, reviewable, and revocable.
+- **The agent is built into the OS.** It runs through the privileged `clawd`
+  service and structured system tools, giving it scoped access to processes,
+  storage, services, logs, networks, devices, and installed apps.
+- **It can explain the whole system.** The agent can connect app activity,
+  permissions, accessible resources, history, logs, crash evidence, and current
+  system state to answer questions such as *"why did this app crash?"*, *"what
+  can it access?"*, or *"what is using my network?"*
+- **One agent works across every app.** Instead of separate assistants trapped
+  in separate sandboxes, the built-in agent carries context and persistent
+  memory across the machine. Users can inspect and forget that memory.
+- **One model runtime serves every app.** Apps call local or configured cloud
+  models through the Claw OS SDK instead of embedding a model or rebuilding
+  provider, credential, consent, budget, and logging infrastructure.
+- **Any developer can build AI apps.** Developers focus on the app and call the
+  system AI API; Claw OS owns model selection, execution, safety, and usage
+  records.
+- **Apps open up to the agent.** Each app can publish typed operations and
+  permission requirements through the [`claw-os-sdk`](claw-os-sdk/), allowing
+  the system agent to discover and call its API.
+- **Cross-app workflows are native.** The agent can combine operations from
+  multiple apps into one workflow — gathering information, transforming it,
+  taking action, and returning a single result.
+- **System-level power remains user-controlled.** Local-first model execution,
+  capabilities, approvals, scoped permissions, memory controls, and
+  session/audit history keep privileged access visible and revocable.
 
 ## Quick Start
 
