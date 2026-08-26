@@ -452,10 +452,7 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
                 dest.display()
             ));
         }
-        manifest =
-            stage_app_install_with_rename(&source, &dest, force, &manifest.id, |from, to| {
-                fs::rename(from, to)
-            })?;
+        manifest = stage_app_install(&source, &dest, force, &manifest.id)?;
         copied = true;
     }
 
@@ -858,23 +855,65 @@ fn validate_install_tree(
 /// Copy, validate, and durably publish an App tree.
 ///
 /// `staging` and any forced-install backup are siblings of `dest`, so
-/// every rename stays on one filesystem. The rename callback keeps the
-/// rollback path deterministic in unit tests while production passes
-/// [`fs::rename`].
+/// every rename stays on one filesystem. Linux uses `RENAME_EXCHANGE`
+/// when the filesystem supports it; the portable fallback recovers any
+/// orphaned backup before starting a later install.
+fn stage_app_install(
+    source: &Path,
+    dest: &Path,
+    force: bool,
+    expected_id: &str,
+) -> Result<apps::AppManifest, String> {
+    stage_app_install_with_ops(
+        source,
+        dest,
+        force,
+        expected_id,
+        |from, to| fs::rename(from, to),
+        atomic_exchange,
+    )
+}
+
+/// The rename-only path keeps rollback failures deterministic in unit
+/// tests and exercises the fallback used where exchange is unavailable.
+#[cfg(test)]
 pub(super) fn stage_app_install_with_rename<R>(
     source: &Path,
     dest: &Path,
     force: bool,
     expected_id: &str,
-    mut rename: R,
+    rename: R,
 ) -> Result<apps::AppManifest, String>
 where
     R: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    stage_app_install_with_ops(
+        source,
+        dest,
+        force,
+        expected_id,
+        rename,
+        |_staging, _dest| Ok(false),
+    )
+}
+
+fn stage_app_install_with_ops<R, E>(
+    source: &Path,
+    dest: &Path,
+    force: bool,
+    expected_id: &str,
+    mut rename: R,
+    mut exchange: E,
+) -> Result<apps::AppManifest, String>
+where
+    R: FnMut(&Path, &Path) -> io::Result<()>,
+    E: FnMut(&Path, &Path) -> io::Result<bool>,
 {
     let parent = dest
         .parent()
         .ok_or_else(|| format!("install destination `{}` has no parent", dest.display()))?;
     fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
+    recover_interrupted_app_install(parent, dest, expected_id, &mut rename)?;
 
     let token = uuid::Uuid::new_v4();
     let staging = parent.join(format!(".{expected_id}.install-staging-{token}"));
@@ -896,11 +935,33 @@ where
         ));
     }
 
+    if destination_exists {
+        match exchange(&staging, dest) {
+            Ok(true) => {
+                sync_directory_best_effort(parent);
+                if let Err(error) = remove_path(&staging) {
+                    tracing::warn!(
+                        path = %staging.display(),
+                        %error,
+                        "app install committed but exchanged old tree cleanup failed"
+                    );
+                }
+                sync_directory_best_effort(parent);
+                return Ok(manifest);
+            }
+            Ok(false) => {}
+            Err(error) => {
+                return Err(format!(
+                    "atomically exchange staged app {} with {}: {error}",
+                    staging.display(),
+                    dest.display()
+                ));
+            }
+        }
+    }
+
     let backup = if destination_exists {
-        let backup = parent.join(format!(
-            ".{expected_id}.install-backup-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let backup = parent.join(format!(".{expected_id}.install-backup-{token}"));
         rename(dest, &backup).map_err(|e| {
             format!(
                 "move existing {} -> {}: {e}",
@@ -952,6 +1013,149 @@ where
         sync_directory_best_effort(parent);
     }
     Ok(manifest)
+}
+
+fn recover_interrupted_app_install<R>(
+    parent: &Path,
+    dest: &Path,
+    expected_id: &str,
+    rename: &mut R,
+) -> Result<(), String>
+where
+    R: FnMut(&Path, &Path) -> io::Result<()>,
+{
+    let mut backups = install_scratch_paths(parent, expected_id, "backup")
+        .map_err(|e| format!("scan interrupted App install backups: {e}"))?;
+    let staging = install_scratch_paths(parent, expected_id, "staging")
+        .map_err(|e| format!("scan interrupted App install staging: {e}"))?;
+    let destination_exists = path_entry_exists(dest)
+        .map_err(|e| format!("inspect destination {}: {e}", dest.display()))?;
+
+    if !destination_exists && backups.len() > 1 {
+        let paths = backups
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "multiple interrupted App install backups found for `{expected_id}`; \
+             refusing ambiguous recovery: {paths}"
+        ));
+    }
+
+    if !destination_exists {
+        if let Some(backup) = backups.pop() {
+            validate_recovery_candidate(&backup, expected_id)?;
+            rename(&backup, dest).map_err(|e| {
+                format!(
+                    "recover interrupted App install {} -> {}: {e}",
+                    backup.display(),
+                    dest.display()
+                )
+            })?;
+            sync_directory_best_effort(parent);
+        }
+    }
+
+    for path in backups.into_iter().chain(staging) {
+        remove_path(&path)
+            .map_err(|e| format!("clean interrupted App install {}: {e}", path.display()))?;
+    }
+    sync_directory_best_effort(parent);
+    Ok(())
+}
+
+fn install_scratch_paths(parent: &Path, expected_id: &str, kind: &str) -> io::Result<Vec<PathBuf>> {
+    let prefix = format!(".{expected_id}.install-{kind}-");
+    let mut paths = Vec::new();
+    for entry in fs::read_dir(parent)? {
+        let entry = entry?;
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with(&prefix))
+        {
+            paths.push(entry.path());
+        }
+    }
+    paths.sort();
+    Ok(paths)
+}
+
+fn validate_recovery_candidate(path: &Path, expected_id: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| format!("inspect interrupted App backup {}: {e}", path.display()))?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(format!(
+            "interrupted App backup `{}` is not a directory",
+            path.display()
+        ));
+    }
+    let manifest_path = path.join("app.json");
+    let body = fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "read interrupted App backup {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    let manifest = apps::AppManifest::from_json(&body).map_err(|e| {
+        format!(
+            "parse interrupted App backup {}: {e}",
+            manifest_path.display()
+        )
+    })?;
+    if manifest.id != expected_id {
+        return Err(format!(
+            "interrupted App backup `{}` declares id `{}`, expected `{expected_id}`",
+            path.display(),
+            manifest.id
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn atomic_exchange(staging: &Path, dest: &Path) -> io::Result<bool> {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let staging = CString::new(staging.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "App install staging path contains a NUL byte",
+        )
+    })?;
+    let dest = CString::new(dest.as_os_str().as_bytes()).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "App install destination path contains a NUL byte",
+        )
+    })?;
+    // Both pointers remain valid NUL-terminated strings for the syscall.
+    let result = unsafe {
+        libc::syscall(
+            libc::SYS_renameat2,
+            libc::AT_FDCWD,
+            staging.as_ptr(),
+            libc::AT_FDCWD,
+            dest.as_ptr(),
+            libc::RENAME_EXCHANGE,
+        )
+    };
+    if result == 0 {
+        return Ok(true);
+    }
+
+    let error = io::Error::last_os_error();
+    match error.raw_os_error() {
+        Some(libc::ENOSYS | libc::EINVAL | libc::EOPNOTSUPP | libc::EPERM) => Ok(false),
+        _ => Err(error),
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn atomic_exchange(_staging: &Path, _dest: &Path) -> io::Result<bool> {
+    Ok(false)
 }
 
 struct InstallStagingGuard(PathBuf);

@@ -1136,6 +1136,60 @@ fn install_force_lint_failure_preserves_existing_install() {
 }
 
 #[test]
+fn install_recovers_backup_left_by_interrupted_forced_install() {
+    let pid = std::process::id();
+    let src = std::env::temp_dir().join(format!("cos-install-recovery-src-{pid}"));
+    let dst = std::env::temp_dir().join(format!("cos-install-recovery-dst-{pid}"));
+    let installed = dst.join("recover");
+    let backup = dst.join(".recover.install-backup-interrupted");
+    let staging = dst.join(".recover.install-staging-interrupted");
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+
+    write_min_app(
+        &backup,
+        "recover",
+        r#"{"id":"recover","version":"0.0.1","name":"Recover"}"#,
+    );
+    std::fs::write(backup.join("old-state"), b"recovered").unwrap();
+    write_min_app(
+        &staging,
+        "recover",
+        r#"{"id":"recover","version":"0.0.2","name":"Recover"}"#,
+    );
+    write_min_app(
+        &src,
+        "recover",
+        r#"{"id":"recover","version":"0.0.3","name":"Recover"}"#,
+    );
+    std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
+
+    let prev_apps = std::env::var_os("COS_APPS_DIR");
+    std::env::set_var("COS_APPS_DIR", &dst);
+    let err = install_cmd(&[src.display().to_string(), "--force".into()]).unwrap_err();
+    match prev_apps {
+        Some(x) => std::env::set_var("COS_APPS_DIR", x),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+
+    assert!(err.contains("staged app lint failed"), "got: {err}");
+    assert_eq!(
+        std::fs::read_to_string(installed.join("old-state")).unwrap(),
+        "recovered"
+    );
+    assert!(std::fs::read_to_string(installed.join("app.json"))
+        .unwrap()
+        .contains(r#""version":"0.0.1""#));
+    assert!(
+        install_scratch_entries(&dst, "recover").is_empty(),
+        "recovery and the failed retry must clean all transaction directories"
+    );
+
+    let _ = std::fs::remove_dir_all(&src);
+    let _ = std::fs::remove_dir_all(&dst);
+}
+
+#[test]
 fn install_force_publish_failure_restores_existing_install() {
     let pid = std::process::id();
     let src = std::env::temp_dir().join(format!("cos-install-atomic-rename-src-{pid}"));
