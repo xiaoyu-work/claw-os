@@ -1,9 +1,13 @@
-# scripts/lib/add-cos-user.sh — Headless local-VM development account helper.
+# scripts/lib/add-cos-user.sh — Headless local-VM account helper.
 # shellcheck shell=bash
 #
 # Usage:
 #   source "$PROJECT_DIR/scripts/lib/add-cos-user.sh"
 #   add_cos_user "$ROOTFS"
+#
+# The account is created locked. The local-user feature owns interactive
+# first-login credential setup; no reusable password or passwordless sudo
+# policy is baked into the image.
 #
 # Idempotent: skips creation if a user named 'cos' already exists in the rootfs.
 #
@@ -25,10 +29,9 @@ add_cos_user() {
         set -e
         if ! id cos >/dev/null 2>&1; then
             useradd -m -u 1000 -s /bin/bash -G sudo cos
-            mkdir -p /etc/sudoers.d
-            echo "cos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/cos
-            chmod 0440 /etc/sudoers.d/cos
+            passwd --lock cos >/dev/null
         fi
+        rm -f /etc/sudoers.d/cos
     '
 }
 

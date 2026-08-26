@@ -1,0 +1,18 @@
+[Unit]
+Description=Claw OS local VM first-login setup
+ConditionPathExists=!/var/lib/cos/local-first-login.complete
+After=systemd-user-sessions.service plymouth-quit-wait.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/cos/init/local-first-login
+StandardInput=tty
+StandardOutput=tty
+StandardError=tty
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+TTYVTDisallocate=no
+TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=1s

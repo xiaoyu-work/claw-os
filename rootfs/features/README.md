@@ -24,7 +24,7 @@ Both are optional. `packages.txt` runs first, then `install.sh`.
 | `copilot-cli` | Installs `@github/copilot` globally via npm so `copilot` is on every user's `$PATH`. Used by cosmic-term's `@`-trigger AI integration (`desktop/term/src/ai/`). |
 | `systemd` | Claw OS system services plus `systemd-coredump`, so the system agent can diagnose process crashes on desktop and headless images. |
 | `vm` | Hypervisor-neutral serial console, GRUB command line, serial getty, and VM power defaults. Does not create a user or install a provider agent. |
-| `local-user` | Adds the local `cos` login account when no metadata service can provision one. Skips graphical images that use the desktop first-boot wizard. |
+| `local-user` | Adds a locked local `cos` account and requires one-time password setup on the VM serial console before normal login. Skips graphical images that use the desktop first-boot wizard. |
 | `cloud-init` | Provider-neutral cloud provisioning, SSH, root filesystem growth, and locked root account. |
 | `azure` | Azure datasource policy, WALinuxAgent, Hyper-V daemons/initramfs modules, and Azure serial-console settings. Requires `cloud-init`. |
 | `vmware` | Optional VMware Tools guest integration (`open-vm-tools`, `open-vm-tools-desktop`) for VMware Fusion / Workstation / ESXi images. Include only for VMware builds, after `systemd`. |
@@ -43,6 +43,12 @@ Target-specific boot/install features (`kernel`, `grub-disk`, `vm`,
 `local-user`, `cloud-init`, `azure`, `vmware`, `live`, `installer`), desktop
 UI, and third-party agent providers
 (`copilot-cli`) are opt-in.
+
+The default headless VM has no known password. On its first serial-console
+boot, `cos-local-first-login.service` blocks the normal getty until the user
+sets a password for the locked `cos` account. Later logins and `sudo` use that
+password. Azure profiles do not include `local-user`; their identity remains
+entirely cloud-init managed.
 
 Supported feature combinations are centralized in
 `scripts/lib/image-profiles.sh`. Features define capabilities; targets define

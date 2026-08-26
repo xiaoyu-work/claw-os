@@ -146,6 +146,24 @@ to match a bind mount.
 </details>
 
 <details>
+<summary><strong>Headless VM — experimental</strong></summary>
+
+Build and boot the default headless QEMU image:
+
+```bash
+sudo ./build.sh vm
+qemu-system-x86_64 -m 2G -nographic \
+  -drive file=build/claw-os-vm-amd64.qcow2,format=qcow2,if=virtio
+```
+
+On first boot, the serial console requires you to set a password for the
+locked `cos` account before it starts the normal login prompt. The image ships
+with no default password. Then log in as `cos` with the password you just set;
+`sudo` uses the same password.
+
+</details>
+
+<details>
 <summary><strong>Desktop / ISO / VM — experimental</strong></summary>
 
 Build a bootable desktop VM disk image and load it in VMware — see

@@ -1,0 +1,66 @@
+#!/bin/sh
+set -eu
+
+ACCOUNT=cos
+STATE_DIR=/var/lib/cos
+COMPLETE="$STATE_DIR/local-first-login.complete"
+
+mark_complete() {
+    install -d -o root -g root -m 0755 "$STATE_DIR"
+    (umask 077; : > "$COMPLETE")
+    chown root:root "$COMPLETE"
+    chmod 0600 "$COMPLETE"
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+    echo "error: first-login setup must run as root" >&2
+    exit 1
+fi
+
+if ! getent passwd "$ACCOUNT" >/dev/null; then
+    echo "error: local account '$ACCOUNT' does not exist" >&2
+    exit 1
+fi
+
+status_line="$(LC_ALL=C passwd --status "$ACCOUNT")"
+password_status="${status_line#* }"
+password_status="${password_status%% *}"
+case "$password_status" in
+    P)
+        mark_complete
+        exit 0
+        ;;
+    L|NP) ;;
+    *)
+        echo "error: could not determine password state for '$ACCOUNT'" >&2
+        exit 1
+        ;;
+esac
+
+if [ ! -t 0 ]; then
+    echo "error: first-login setup requires an interactive console" >&2
+    exit 1
+fi
+
+cat <<EOF
+
+Claw OS first-login setup
+
+This local VM has no default password. Set a password for the pre-created
+'$ACCOUNT' administrator account before normal login is enabled.
+
+EOF
+
+until passwd "$ACCOUNT"; do
+    echo
+    echo "Password was not changed. Try again."
+    echo
+done
+
+mark_complete
+
+cat <<EOF
+
+Password configured. Log in as '$ACCOUNT' with the password you just set.
+
+EOF

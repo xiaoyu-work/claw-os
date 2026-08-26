@@ -27,6 +27,21 @@ IMAGE_FEATURES_AZURE_DESKTOP="base,cos-core,systemd,kernel,desktop,copilot-cli,g
 IMAGE_FEATURES_LIVE="base,cos-core,systemd,kernel,live,gpu-drivers,apt-source"
 IMAGE_FEATURES_INSTALLER="base,cos-core,systemd,kernel,grub-disk,live,installer,gpu-drivers,apt-source"
 
+case ",$IMAGE_FEATURES_VM," in
+    *,local-user,*) ;;
+    *)
+        echo "error: the default headless VM profile must include local-user" >&2
+        return 1
+        ;;
+esac
+
+case ",$IMAGE_FEATURES_VM," in
+    *,cloud-init,*)
+        echo "error: the local VM profile must not include cloud-init" >&2
+        return 1
+        ;;
+esac
+
 case ",$IMAGE_FEATURES_AZURE,$IMAGE_FEATURES_AZURE_DESKTOP," in
     *,local-user,*)
         echo "error: generalized cloud profiles must not include local-user" >&2
