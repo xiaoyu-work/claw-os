@@ -12,7 +12,7 @@ browser (the headless path is handled by `apps/web` + `cos-browser`).
 | Reuse extensions, ad blocker, custom CA       | ✗ | ✓ |
 | Operate the window the user is actually looking at | ✗ | ✓ |
 | Persistent ref tables across calls (per-tab)  | ✓ | ✓ |
-| Cross-browser (Firefox, Edge, Brave)          | ✓ | ✓ (WebExt) |
+| Cross-browser (Firefox, Edge, Brave)          | ✓ | Chromium now; Firefox packaging deferred |
 | Headless throughput, isolated agent runs      | ✓ | use `apps/web` instead |
 
 This design pays for the integration richness with extra moving parts (WebExt
@@ -44,7 +44,7 @@ the right tool for everything headless.
 │  extensions/claw-agent-browser     │
 │    background.js  (service worker) │
 │        ↕  chrome.tabs / scripting  │
-│    content.js     (every frame)    │
+│    content.js     (top frame only) │
 └────────────────────────────────────┘
                         │
                         ▼
@@ -71,14 +71,14 @@ to the right socket connection.
 |-------------------|-------------------------------|--------------------------------|-----------|
 | tabs.list         | `browser.tabs.read`           | connector / automator / admin  | wild      |
 | tabs.activate     | `browser.tabs.read`           | connector / automator / admin  | wild      |
-| nav.go            | `browser.nav`                 | connector / automator / admin  | host      |
+| nav.go            | `browser.nav` + `memory.write` | connector / automator / admin | host + app self-ref |
 | dom.query         | `browser.dom.read`            | connector / automator / admin  | host      |
 | page.snapshot     | `browser.dom.read`            | connector / automator / admin  | host      |
 | page.screenshot   | `browser.dom.read` + `fs.write` | connector / automator / admin | host + path |
 | dom.click         | `browser.dom.write`           | automator / admin              | host      |
 | dom.fill          | `browser.dom.write`           | automator / admin              | host      |
 | dom.fill_secret   | `browser.input.secret`        | admin                          | host      |
-| eval              | `browser.eval`                | admin                          | host      |
+| eval (disabled)   | `browser.eval`                | admin                          | host      |
 
 Read operations never serialize live values from input, textarea, select, or
 contenteditable controls. `dom.query` and accessibility snapshots expose only
@@ -88,9 +88,10 @@ not recognize their purpose.
 
 Secret-field detection runs in `content.js` (`isSecretField`) and additionally
 classifies password/hidden inputs, password/OTP/payment autocomplete tokens,
-explicit private-data attributes, and credential-like field names or labels.
-`dom.fill` rejects those fields; only `dom.fill_secret` (gated on
-`browser.input.secret`, admin-only) accepts them.
+explicit private-data attributes, and credential-like id/name/ARIA/placeholder
+metadata. Labels contribute to later accessible-name redaction but are not an
+`isSecretField` input. `dom.fill` rejects those fields; only
+`dom.fill_secret` (gated on `browser.input.secret`, admin-only) accepts them.
 
 ## File layout
 
@@ -111,7 +112,7 @@ apps/browser-attached/
 extensions/claw-agent-browser/
   manifest.json    # MV3, top-frame content_scripts: <all_urls>
   background.js    # SW, owns native port, dispatches verbs
-  content.js       # per-frame DOM helper, secret-field detection
+  content.js       # top-frame DOM helper, secret-field detection
   popup.html       # tiny status / STOP UI
   popup.js
   README.md
@@ -153,10 +154,17 @@ tools/
    (`browser.nav:host=mail.example.com`), so a grant for one site does not
    unlock another.
 
-6. **Secret floors**: secret-field fills and JS `eval` are pinned to
-   admin-role capabilities and always go through the approval queue.
+6. **Secret floors**: secret-field fills are pinned to admin-role
+   capabilities and always go through the approval queue. The `browser.eval`
+   capability is also admin-only, but the current App request path does not
+   supply the extension's `allow_eval` flag, so `eval` fails closed.
 
 ## Known MVP limitations
+
+- **`eval` is not wired end to end**: `main.py` sends the expression but not
+  the extension's required `allow_eval` flag. The extension therefore rejects
+  every request. Keep the operation disabled until approval state is threaded
+  through the socket/native-messaging request.
 
 - **Session attachment for policy checks**: Chromium spawns the native
   host without `COS_SESSION` set; the Python verb handlers run inside the
@@ -183,10 +191,8 @@ tools/
   Supporting iframe automation requires explicit frame refs plus a separate
   capability check for each frame origin.
 
-- **Firefox**: the manifest is MV3 + `chrome.*`; Firefox 115+ supports MV3
-  but uses `browser.*`.  A `webextension-polyfill` shim covers this with no
-  source changes, but Firefox packaging (XPI signing) is deferred to a
-  follow-up.
+- **Firefox**: the current manifest and implementation are Chromium-specific
+  (`chrome.*`). Firefox adaptation and signed XPI packaging are deferred.
 
 - **Extension ID**: the install script currently leaves
   `allowed_origins` empty.  After loading the extension unpacked once,
