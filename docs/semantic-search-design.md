@@ -1,90 +1,115 @@
-# Semantic search: design
+# Semantic Search Architecture
 
-Claw OS has two complementary local search layers. Both run as
-`systemd --user` daemons enabled by default, and both are meant to back
-the single `apps/docs` AI surface.
+Claw OS currently has three related but distinct local-search surfaces. They
+do not yet form one unified document-search pipeline.
 
-| Layer    | Daemon                      | Storage                      | Strength                          | Weakness                              |
-| -------- | --------------------------- | ---------------------------- | --------------------------------- | ------------------------------------- |
-| Keyword  | `claw-recoll-index.service` | Xapian TF-IDF (`~/.recoll/`) | Exact terms, names, numbers, code | Doesn't understand intent or synonyms |
-| Semantic | `claw-semantic.service`     | Vector store (`~/.local/state/`) | "Find my Sequoia pitch"       | Slower, heavier, fuzzy on exact strings |
+| Surface | Implementation | Storage | Current consumer | Status |
+| --- | --- | --- | --- | --- |
+| Document keyword search | Recoll / Xapian | `~/.recoll/` | `apps/docs` | Shipped |
+| Filesystem semantic prototype | `crates/claw-semantic` | JSON-backed `MemoryStore` | `claw-semantic` CLI only | Experimental |
+| Agent semantic memory | `crates/claw-embed` + core memory adapter | SQLite `SemanticStore` | Agent indexing and `cos_recall_semantic` | Shipped when embedding is configured |
 
-Both are globally enabled systemd user units under `default.target`, not
-`graphical-session.target`, so indexing also runs for SSH/headless user
-sessions. Each unit skips cleanly when its optional binary is absent.
+The Recoll and `claw-semantic` user units are enabled under
+`default.target`, so they can run in headless user sessions. Each unit uses
+`ConditionPathIsExecutable` and skips cleanly when its optional binary is not
+installed.
 
-## Components — semantic side
+## Document Search: Recoll
 
+`apps/docs` currently uses Recoll only:
+
+1. `recollindex` builds the Xapian index over configured top directories.
+2. `recollq` executes keyword queries.
+3. The App converts Recoll results into its structured response.
+
+Recoll is strong for exact terms, names, numbers, and code tokens. Config and
+index data live under `~/.recoll/`.
+
+The current `apps/docs.search` operation does **not** query either semantic
+store and does not perform result fusion.
+
+## Filesystem Semantic Prototype: `claw-semantic`
+
+`crates/claw-semantic` remains a Phase-1 prototype:
+
+```text
+watched files
+  -> TextExtractor
+  -> grapheme-safe overlapping chunks
+  -> StubEmbedder (384 dimensions)
+  -> MemoryStore persisted as JSON
+  -> claw-semantic CLI queries
 ```
-                ┌────────────────────────────────────┐
-                │ claw-semantic daemon (Rust, sysd)  │
-                │                                    │
-  ~/Documents ──┤ Watcher (notify/inotify)           │
-  ~/Desktop ────┤   │                                │
-  ~/Downloads ──┤   ▼                                │
-                │ Extractor: bytes → UTF-8 text      │
-                │   │                                │
-                │   ▼                                │
-                │ Chunker: ~1024-char windows w/ 128 │
-                │   char overlap, grapheme-safe      │
-                │   │                                │
-                │   ▼                                │
-                │ Embedder → Vector store            │
-                └────────────────────────────────────┘
-                              │
-                  /usr/local/bin/claw-semantic (CLI)
+
+The daemon watches configured directories with notify/inotify. Its
+`StubEmbedder` deterministically hashes content, so the pipeline can be
+exercised end to end, but the resulting similarity scores are not meaningful
+semantic embeddings.
+
+This prototype is not connected to `apps/docs`.
+
+## Agent Semantic Memory: `claw-embed`
+
+The production semantic-memory path lives in `crates/claw-embed` and
+`core/src/agent/memory/semantic.rs`:
+
+```text
+agent message or memory item
+  -> configured embedding task
+  -> SemanticStore (SQLite)
+  -> cosine search
+  -> cos_recall_semantic
 ```
 
-The crate (`crates/claw-semantic`) is built around three traits so any
-stage can be swapped independently:
+The default local embedding task uses the bundled Qwen3-Embedding-0.6B model
+through ONNX Runtime GenAI and emits 1024-dimensional vectors. Embedding
+provider `auto` prefers the configured local task and can use an
+OpenAI-compatible provider when configured.
 
-| Trait         | Current             |
-| ------------- | ------------------- |
-| `Extractor`   | `TextExtractor` (txt/md/source code) |
-| `Embedder`    | `StubEmbedder` (deterministic-from-hash, 384-dim) |
-| `VectorStore` | `MemoryStore` (vectors in memory, persisted as JSON) |
+`SemanticStore` records the embedding model identity with stored vectors and
+rejects incompatible model changes instead of silently mixing vector spaces.
+The default database is the Agent semantic store below the Claw OS data
+directory.
 
-The `Embedder` is a placeholder that maps content to a 384-dim vector by
-hashing, so the pipeline (watcher → extract → chunk → embed → store)
-runs end-to-end but vector hits are **not yet semantically meaningful**.
-A real embedding backend and an on-disk vector store are the next steps.
+This path provides real semantic recall for Agent memory, but it does not
+index the user's document directories for `apps/docs`.
 
-## Components — keyword side
+## Why the Paths Are Separate
 
-`apps/docs` shells out to Recoll: `recollindex` builds the Xapian index
-over the configured topdirs and `recollq` answers queries. Recoll
-handles PDF, LibreOffice / MS Office formats, `.eml` mail, and more.
-Config + index live under `~/.recoll/`.
+- Recoll is an external document-indexing system with broad format support.
+- `claw-semantic` is a standalone filesystem-watching prototype.
+- `claw-embed` is a reusable embedding/storage library integrated with Agent
+  memory.
 
-## Why two crates, not one
+Keeping these boundaries explicit prevents the prototype daemon from being
+mistaken for the production Agent semantic store.
 
-* Recoll is a 22-year-old C++ project we don't fork; we just invoke
-  `recollindex` and `recollq` as subprocesses.
-* The semantic side is a single Rust binary because the embedder and
-  vector store are tightly coupled and we want the whole pipeline
-  (watcher → embedder → store) in one process.
-* They live in separate systemd units so a failure on one side doesn't
-  take down the other.
+## Planned Document Fusion
 
-## RRF fusion (planned)
+The intended `apps/docs.search` design is still:
 
-`apps/docs.search` is intended to query both layers in parallel and
-merge with Reciprocal Rank Fusion:
+1. query Recoll for keyword matches,
+2. query a real filesystem semantic index,
+3. merge the ranked lists with Reciprocal Rank Fusion.
 
-```
+```text
 score(doc) = sum over each source S of:
-                1 / (k + rank_S(doc))    with k=60
+                1 / (k + rank_S(doc))
 ```
 
-`k=60` is the value from the original Cormack/Clarke paper and is robust
-across corpora. RRF works directly on ranks, so BM25 and cosine scores
-don't need normalising.
+Before implementing fusion, the project must choose one filesystem semantic
+path:
 
-## Status
+- upgrade `claw-semantic` to use the production embedding task and a durable
+  store, or
+- reuse `claw-embed` and retire the duplicate prototype storage pipeline.
 
-* `apps/docs` currently serves **keyword** results via Recoll.
-* The semantic daemon runs and indexes, but uses a stub embedder, so its
-  results are not yet meaningful and it is not yet fused into
-  `apps/docs.search`.
-* Next: a real embedder, an on-disk vector store, broader extractors
-  (pdf/docx/html/rtf), and RRF fusion in `apps/docs.search`.
+Only after that decision should `apps/docs` gain semantic queries and RRF
+fusion.
+
+## Current Status
+
+- `apps/docs`: Recoll keyword search only.
+- `claw-semantic`: optional filesystem prototype with stub embeddings.
+- Agent semantic recall: real embeddings and SQLite storage when configured.
+- Document semantic fusion: not implemented.
