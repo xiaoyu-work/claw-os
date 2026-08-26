@@ -16,7 +16,7 @@
   <a href="https://github.com/xiaoyu-work/claw-os/releases"><img alt="Release" src="https://img.shields.io/github/v/release/xiaoyu-work/claw-os?include_prereleases&style=flat-square"></a>
 </p>
 
-> **Claw OS is under active development; its architecture, APIs, and behavior may change significantly before the first stable release.**
+> **Claw OS is under active development; its architecture, APIs, and behavior may change significantly.**
 
 Claw OS is a complete Linux-based environment where the AI agent is a
 **system-level layer**, not an application running on top of one. The agent
