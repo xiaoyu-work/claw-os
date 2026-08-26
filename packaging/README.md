@@ -136,21 +136,8 @@ cannot publish without it. Image workflows never fall back to an unsigned
 source: when the key is unavailable they omit the `apt-source` feature while
 continuing to build Docker and WSL artifacts.
 
-`Publish Agent package` additionally requires
-`CLAW_OS_GOOGLE_OAUTH_CLIENT_ID` and
-`CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET` from a Google Cloud **Desktop app** OAuth
-client with Gmail API and Google Calendar API enabled. These values identify a
-public installed application; the workflow embeds them in `/etc/cos/oauth.conf`
-so users can complete PKCE login with:
-
-```bash
-cos credential oauth-login google
-```
-
-For Outlook Mail/Calendar login, configure
-`CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID` from a Microsoft Entra public client.
-`CLAW_OS_MICROSOFT_OAUTH_TENANT_ID` is optional and defaults to `common`:
-
-```bash
-cos credential oauth-login microsoft
-```
+OAuth client registration and end-user authorization are runtime concerns.
+Agent packages and publication workflows never accept or embed Google or
+Microsoft client identities. Apps or users configure provider clients through
+the Claw OS credential store or runtime environment before starting OAuth
+login.

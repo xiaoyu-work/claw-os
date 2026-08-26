@@ -89,12 +89,7 @@ fn bootstrapped_admin_cli_can_store_credentials_and_enter_oauth_login() {
     let _data = redirect_data_dir();
     let credentials = tempfile::tempdir().unwrap();
     let previous_credentials = env::var_os("COS_CREDENTIALS_DIR");
-    let previous_oauth = env::var_os("COS_OAUTH_CONFIG");
     env::set_var("COS_CREDENTIALS_DIR", credentials.path());
-    env::set_var(
-        "COS_OAUTH_CONFIG",
-        credentials.path().join("missing-oauth.conf"),
-    );
     env::remove_var("COS_SESSION");
     env::remove_var("COS_PERMS_MODE");
 
@@ -117,10 +112,6 @@ fn bootstrapped_admin_cli_can_store_credentials_and_enter_oauth_login() {
     match previous_credentials {
         Some(value) => env::set_var("COS_CREDENTIALS_DIR", value),
         None => env::remove_var("COS_CREDENTIALS_DIR"),
-    }
-    match previous_oauth {
-        Some(value) => env::set_var("COS_OAUTH_CONFIG", value),
-        None => env::remove_var("COS_OAUTH_CONFIG"),
     }
 
     assert!(stored.is_ok(), "{stored:?}");

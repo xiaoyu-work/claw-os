@@ -331,37 +331,6 @@ install -m 644 "$PROJECT_DIR/rootfs/overlay/etc/cos/profile.sh" \
     "$AGENT_STAGE/etc/cos/profile.sh"
 sed -i "s/COS_VERSION=\".*\"/COS_VERSION=\"$VERSION\"/" \
     "$AGENT_STAGE/etc/cos/profile.sh"
-if [ -n "${CLAW_OS_GOOGLE_OAUTH_CLIENT_ID:-}" ] \
-        || [ -n "${CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
-    if [ -z "${CLAW_OS_GOOGLE_OAUTH_CLIENT_ID:-}" ] \
-            || [ -z "${CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET:-}" ]; then
-        echo "error: both Google OAuth client values must be configured" >&2
-        exit 1
-    fi
-    if [[ "$CLAW_OS_GOOGLE_OAUTH_CLIENT_ID" == *$'\n'* \
-            || "$CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET" == *$'\n'* ]]; then
-        echo "error: Google OAuth client values must not contain newlines" >&2
-        exit 1
-    fi
-    {
-        printf 'GOOGLE_CLIENT_ID=%s\n' "$CLAW_OS_GOOGLE_OAUTH_CLIENT_ID"
-        printf 'GOOGLE_CLIENT_SECRET=%s\n' "$CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET"
-    } > "$AGENT_STAGE/etc/cos/oauth.conf"
-    chmod 0644 "$AGENT_STAGE/etc/cos/oauth.conf"
-fi
-if [ -n "${CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID:-}" ]; then
-    if [[ "$CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID" == *$'\n'* \
-            || "${CLAW_OS_MICROSOFT_OAUTH_TENANT_ID:-common}" == *$'\n'* ]]; then
-        echo "error: Microsoft OAuth client values must not contain newlines" >&2
-        exit 1
-    fi
-    {
-        printf 'MICROSOFT_CLIENT_ID=%s\n' "$CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID"
-        printf 'MICROSOFT_TENANT_ID=%s\n' \
-            "${CLAW_OS_MICROSOFT_OAUTH_TENANT_ID:-common}"
-    } >> "$AGENT_STAGE/etc/cos/oauth.conf"
-    chmod 0644 "$AGENT_STAGE/etc/cos/oauth.conf"
-fi
 
 # All non-graphical apps belong to the reusable agent. The manifests in
 # apps.list are Agent UI/COSMIC/panel integrations owned by claw-os-desktop.

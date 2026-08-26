@@ -374,10 +374,11 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
         namespace,
     )?
     .ok_or_else(|| {
-        "Google OAuth client is not configured. Configure the official Claw OS \
-         Desktop OAuth client with COS_GOOGLE_OAUTH_CLIENT_ID or store \
-         GOOGLE_CLIENT_ID, then rerun `cos credential oauth-login google`."
-            .to_string()
+        format!(
+            "Google OAuth client is not configured. Store GOOGLE_CLIENT_ID in \
+             credential namespace `{namespace}` or set COS_GOOGLE_OAUTH_CLIENT_ID, \
+             then rerun `cos credential oauth-login google`."
+        )
     })?;
     let client_secret = client_setting(
         "COS_GOOGLE_OAUTH_CLIENT_SECRET",
@@ -385,10 +386,12 @@ pub(super) fn google_client_config(namespace: &str) -> Result<(String, String), 
         namespace,
     )?
     .ok_or_else(|| {
-        "Google OAuth client secret is not configured. Configure \
-         COS_GOOGLE_OAUTH_CLIENT_SECRET or store GOOGLE_CLIENT_SECRET, then \
-         rerun `cos credential oauth-login google`."
-            .to_string()
+        format!(
+            "Google OAuth client secret is not configured. Store \
+             GOOGLE_CLIENT_SECRET in credential namespace `{namespace}` or set \
+             COS_GOOGLE_OAUTH_CLIENT_SECRET, then rerun \
+             `cos credential oauth-login google`."
+        )
     })?;
     Ok((client_id, client_secret))
 }
@@ -418,10 +421,12 @@ pub(super) fn microsoft_client_config(namespace: &str) -> Result<(String, String
         namespace,
     )?
     .ok_or_else(|| {
-        "Microsoft OAuth client is not configured. Configure \
-         COS_MICROSOFT_OAUTH_CLIENT_ID or store MICROSOFT_CLIENT_ID, then \
-         rerun `cos credential oauth-login microsoft`."
-            .to_string()
+        format!(
+            "Microsoft OAuth client is not configured. Store MICROSOFT_CLIENT_ID \
+             in credential namespace `{namespace}` or set \
+             COS_MICROSOFT_OAUTH_CLIENT_ID, then rerun \
+             `cos credential oauth-login microsoft`."
+        )
     })?;
     let tenant_id = client_setting(
         "COS_MICROSOFT_OAUTH_TENANT_ID",
@@ -461,9 +466,6 @@ fn client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    if let Some(value) = packaged_client_setting(credential_name)? {
-        return Ok(Some(value));
-    }
     let path = super::namespace_dir(namespace).join(format!("{credential_name}.json"));
     if !path.is_file() {
         return Ok(None);
@@ -482,43 +484,11 @@ fn daemon_client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    if let Some(value) = packaged_client_setting(credential_name)? {
-        return Ok(Some(value));
-    }
     let path = super::namespace_dir(namespace).join(format!("{credential_name}.json"));
     if !path.is_file() {
         return Ok(None);
     }
     super::read_credential_value(credential_name, namespace, false).map(Some)
-}
-
-fn packaged_client_setting(name: &str) -> Result<Option<String>, String> {
-    let path = std::env::var("COS_OAUTH_CONFIG")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|_| std::path::PathBuf::from("/etc/cos/oauth.conf"));
-    let raw = match std::fs::read_to_string(&path) {
-        Ok(raw) => raw,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(format!("read OAuth client config {}: {error}", path.display())),
-    };
-    Ok(parse_oauth_config(&raw).remove(name))
-}
-
-fn parse_oauth_config(raw: &str) -> std::collections::BTreeMap<String, String> {
-    raw.lines()
-        .filter_map(|line| {
-            let line = line.trim();
-            if line.is_empty() || line.starts_with('#') {
-                return None;
-            }
-            let (key, value) = line.split_once('=')?;
-            let value = value.trim();
-            if value.is_empty() {
-                return None;
-            }
-            Some((key.trim().to_string(), value.to_string()))
-        })
-        .collect()
 }
 
 fn pkce_pair() -> Result<(String, String), String> {

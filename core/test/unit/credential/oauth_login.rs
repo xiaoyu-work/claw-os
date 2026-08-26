@@ -120,29 +120,6 @@ fn callback_requires_matching_state_and_decodes_code() {
 }
 
 #[test]
-fn parses_packaged_oauth_client_config() {
-    let values = parse_oauth_config(
-        "# Claw OS OAuth client\n\
-         GOOGLE_CLIENT_ID=client.apps.googleusercontent.com\n\
-         GOOGLE_CLIENT_SECRET=client-secret\n\
-         MICROSOFT_CLIENT_ID=microsoft-client\n\
-         MICROSOFT_TENANT_ID=common\n",
-    );
-    assert_eq!(
-        values.get("GOOGLE_CLIENT_ID").map(String::as_str),
-        Some("client.apps.googleusercontent.com")
-    );
-    assert_eq!(
-        values.get("GOOGLE_CLIENT_SECRET").map(String::as_str),
-        Some("client-secret")
-    );
-    assert_eq!(
-        values.get("MICROSOFT_CLIENT_ID").map(String::as_str),
-        Some("microsoft-client")
-    );
-}
-
-#[test]
 fn rejects_incomplete_google_granular_consent() {
     let token = serde_json::json!({
         "scope": "openid https://www.googleapis.com/auth/gmail.readonly"
