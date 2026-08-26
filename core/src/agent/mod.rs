@@ -65,6 +65,18 @@ fn mlock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+fn should_render_evidence_warning(
+    stdout_is_tty: bool,
+    status: &crate::agent::runtime::evidence::EvidenceStatus,
+) -> bool {
+    !stdout_is_tty
+        && !matches!(
+            status,
+            crate::agent::runtime::evidence::EvidenceStatus::Verified
+                | crate::agent::runtime::evidence::EvidenceStatus::NotRequired
+        )
+}
+
 #[derive(Debug, Default)]
 struct TerminalOutputState {
     line_open: bool,
@@ -3385,10 +3397,7 @@ async fn chat_cmd_async(
         let decoded = String::from_utf8_lossy(&input);
         let had_invalid_utf8 = matches!(&decoded, std::borrow::Cow::Owned(_));
         if had_invalid_utf8 {
-            let _ = writeln!(
-                stderr.lock(),
-                "[warning: input contained invalid UTF-8; invalid bytes were replaced]"
-            );
+            tracing::debug!("chat input contained invalid UTF-8; invalid bytes were removed");
         }
         let line = decoded.trim();
         let repaired_command = had_invalid_utf8.then(|| line.replace('\u{FFFD}', ""));
@@ -3544,14 +3553,20 @@ async fn chat_cmd_async(
                         prompt_seq, ask_result.turns, ask_result.model, ask_result.session_id
                     );
                 }
-                if !matches!(
+                if should_render_evidence_warning(stdout_is_tty, &ask_result.evidence.status) {
+                    let _ = writeln!(
+                        stderr.lock(),
+                        "[warning: response could not be fully verified]"
+                    );
+                } else if !matches!(
                     ask_result.evidence.status,
                     crate::agent::runtime::evidence::EvidenceStatus::Verified
                         | crate::agent::runtime::evidence::EvidenceStatus::NotRequired
                 ) {
-                    let _ = writeln!(
-                        stderr.lock(),
-                        "[warning: response could not be fully verified]"
+                    tracing::debug!(
+                        status = ?ask_result.evidence.status,
+                        warnings = ?ask_result.evidence.warnings,
+                        "interactive response evidence was incomplete"
                     );
                 }
                 if ask_result

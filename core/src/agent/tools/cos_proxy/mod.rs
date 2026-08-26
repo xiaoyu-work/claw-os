@@ -263,9 +263,14 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_credential",
-        description: "Manage the cos credential store (file-locked JSON, OS \
-                      keychain on supported platforms). Bundle import/export \
-                      and OAuth-token refresh supported.",
+        description: "Manage the encrypted local cos credential store on any \
+                      Linux host, including Ubuntu. Commands store/load/revoke/list \
+                      manage secrets; interactive oauth-login is intentionally \
+                      CLI-only and not exposed as a model tool; \
+                      oauth-refresh refreshes an existing Google/Microsoft login. \
+                      Run interactive login directly in the user's terminal. Never \
+                      repeatedly probe missing OAuth credentials or ask users to \
+                      paste secrets into chat.",
         primitive: crate::credential::run,
         commands: &[
             "store",

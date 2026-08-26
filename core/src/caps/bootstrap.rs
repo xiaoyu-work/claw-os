@@ -118,7 +118,9 @@ fn bootstrap_user_cli_session_impl(
     let info = SessionInfo {
         session_id: session_id.clone(),
         pid,
-        command: env::args().collect(),
+        command: std::iter::once(env::args().next().unwrap_or_else(|| "cos".to_string()))
+            .chain(args.iter().cloned())
+            .collect(),
         started_at: now_rfc3339(),
         stdout_path: String::new(),
         stderr_path: String::new(),
@@ -137,7 +139,7 @@ fn bootstrap_user_cli_session_impl(
         role: Some(Role::Admin.name().to_string()),
         app_id: None,
         pending_bind: false,
-        start_time_ticks: None,
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
     };
 
     match register_session(info) {

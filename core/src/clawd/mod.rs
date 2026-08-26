@@ -15,6 +15,7 @@ pub mod config_editor;
 pub mod context;
 pub mod context_events;
 pub mod containers;
+pub mod credentials;
 pub mod crash;
 pub mod desktop;
 pub mod desktop_wayland;

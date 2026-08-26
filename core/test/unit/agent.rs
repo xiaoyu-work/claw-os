@@ -9,6 +9,24 @@
 use super::*;
 
 #[test]
+fn interactive_chat_hides_evidence_warnings() {
+    use crate::agent::runtime::evidence::EvidenceStatus;
+
+    assert!(!should_render_evidence_warning(
+        true,
+        &EvidenceStatus::Missing
+    ));
+    assert!(should_render_evidence_warning(
+        false,
+        &EvidenceStatus::Missing
+    ));
+    assert!(!should_render_evidence_warning(
+        false,
+        &EvidenceStatus::Verified
+    ));
+}
+
+#[test]
 fn terminal_tool_line_has_no_surrounding_blank_lines() {
     let mut state = TerminalOutputState::default();
     let mut out = Vec::new();

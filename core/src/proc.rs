@@ -41,7 +41,12 @@ pub fn current_session_id() -> Option<String> {
                 .try_with(|value| value.clone())
                 .ok()
         })
-        .or_else(|| std::env::var("COS_SESSION").ok())
+        .or_else(|| {
+            std::env::var("COS_SESSION")
+                .ok()
+                .filter(|value| !value.is_empty())
+        })
+        .or_else(bound_app_session_id)
         .filter(|value| !value.is_empty())
 }
 
@@ -163,8 +168,40 @@ fn bound_app_registry_path() -> Option<PathBuf> {
         }) {
             return Some(path);
         }
+
     }
     None
+}
+
+fn bound_app_session_id() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let uid = unsafe { libc::geteuid() as u32 };
+        let path = PathBuf::from("/run/cos/caps")
+            .join(uid.to_string())
+            .join("proc")
+            .join("registry.json");
+        let data = fs::read_to_string(path).ok()?;
+        let registry: Registry = serde_json::from_str(&data).ok()?;
+        let caller = std::process::id();
+        return registry
+            .sessions
+            .into_iter()
+            .find(|session| {
+                session.app_id.is_some()
+                    && !session.pending_bind
+                    && session.pid != 0
+                    && session.start_time_ticks.is_some_and(|expected| {
+                        read_start_time_ticks(session.pid) == Some(expected)
+                    })
+                    && process_descends_from(caller, session.pid)
+            })
+            .map(|session| session.session_id);
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
 }
 
 #[cfg(target_os = "linux")]

@@ -5,6 +5,7 @@ import pathlib
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(__file__))
 sys.path.insert(
@@ -38,7 +39,7 @@ def _setup_local():
     os.environ["COS_DATA_DIR"] = tmp
     # Clear any provider tokens so we default to local
     for var in (
-        "GOOGLE_CALENDAR_TOKEN", "GOOGLE_OAUTH_TOKEN",
+        "GOOGLE_ACCESS_TOKEN", "GOOGLE_CALENDAR_TOKEN", "GOOGLE_OAUTH_TOKEN",
         "MICROSOFT_ACCESS_TOKEN", "MICROSOFT_OAUTH_TOKEN",
     ):
         os.environ.pop(var, None)
@@ -219,11 +220,12 @@ class TestProviderErrors(unittest.TestCase):
             "--to", "2026-03-26T00:00:00Z",
         ])
         self.assertIn("error", result)
-        error_lower = result.get("error", "").lower()
-        hint_lower = result.get("hint", "").lower()
-        self.assertTrue(
-            "token" in error_lower or "credential" in hint_lower,
-            f"Expected token/credential hint, got: {result}",
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+        self.assertTrue(result["setup"]["interactive_oauth_available"])
+        self.assertEqual(
+            result["setup"]["login_command"],
+            "cos credential oauth-login google",
         )
 
     def test_google_no_token_create(self):
@@ -253,11 +255,12 @@ class TestProviderErrors(unittest.TestCase):
             "--to", "2026-03-26T00:00:00Z",
         ])
         self.assertIn("error", result)
-        error_lower = result.get("error", "").lower()
-        hint_lower = result.get("hint", "").lower()
-        self.assertTrue(
-            "token" in error_lower or "credential" in hint_lower,
-            f"Expected token/credential hint, got: {result}",
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+        self.assertTrue(result["setup"]["interactive_oauth_available"])
+        self.assertEqual(
+            result["setup"]["login_command"],
+            "cos credential oauth-login microsoft",
         )
 
     def test_outlook_no_token_create(self):
@@ -292,12 +295,73 @@ class TestProviderDetection(unittest.TestCase):
         finally:
             del os.environ["GOOGLE_CALENDAR_TOKEN"]
 
+    def test_detects_canonical_google_token(self):
+        os.environ["GOOGLE_ACCESS_TOKEN"] = "fake"
+        try:
+            self.assertEqual(calendar_main._detect_provider(), "google")
+        finally:
+            del os.environ["GOOGLE_ACCESS_TOKEN"]
+
     def test_detects_outlook_token(self):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "fake"
         try:
             self.assertEqual(calendar_main._detect_provider(), "outlook")
         finally:
             del os.environ["MICROSOFT_ACCESS_TOKEN"]
+
+    def test_loads_google_token_from_credential_store(self):
+        with mock.patch.object(
+            calendar_main,
+            "load_credential",
+            return_value=("stored-token", None),
+        ) as load:
+            self.assertEqual(calendar_main._google_token(), "stored-token")
+        load.assert_called_once_with("GOOGLE_ACCESS_TOKEN")
+
+
+class TestProviderAuthorization(unittest.TestCase):
+    def setUp(self):
+        _setup_local()
+
+    def test_google_request_sends_bearer_token(self):
+        response = mock.MagicMock()
+        response.__enter__.return_value.status = 200
+        response.__enter__.return_value.read.return_value = b'{"items":[]}'
+        with mock.patch.object(
+            calendar_main.urllib.request,
+            "urlopen",
+            return_value=response,
+        ) as urlopen:
+            calendar_main._google_request(
+                "GET",
+                "https://www.googleapis.com/calendar/v3/test",
+                token="access-token",
+            )
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer access-token")
+
+    def test_google_401_is_non_retryable_auth_error(self):
+        error = calendar_main.urllib.error.HTTPError(
+            "https://www.googleapis.com/calendar/v3/test",
+            401,
+            "Unauthorized",
+            {},
+            None,
+        )
+        with mock.patch.object(calendar_main, "_list_google", side_effect=error):
+            result = run(
+                "list",
+                [
+                    "--provider",
+                    "google",
+                    "--from",
+                    "2026-03-25T00:00:00Z",
+                    "--to",
+                    "2026-03-26T00:00:00Z",
+                ],
+            )
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
 
 
 if __name__ == "__main__":

@@ -13,9 +13,10 @@ use super::protocol::{encode_response, Request, Response};
 use super::state::DaemonState;
 use super::{
     accessibility, app_sessions, audio, audit, backup, bluetooth, camera, clipboard, config_editor,
-    containers, context, context_events, crash, desktop, display, event_center, firewall, hardware,
-    location, memory, network, packages, permissions, power, printer, scheduler, security, snapshots,
-    storage, system_journal, systemd, tasks, transactions, usb_guard, users,
+    containers, context, context_events, crash, credentials, desktop, display, event_center,
+    firewall, hardware, location, memory, network, packages, permissions, power, printer,
+    scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
+    usb_guard, users,
 };
 
 #[derive(Debug, Clone)]
@@ -218,6 +219,7 @@ async fn dispatch_result(
         "system.operations" => system_journal::query_for_client(request.params, client),
         "memory.history" => memory::history(request.params, client),
         "memory.sessions" => memory::sessions(request.params, client),
+        "credential.oauth-refresh" => credentials::oauth_refresh(request.params, client).await,
         "system.audio.control" => audio::control(request.params, client).await,
         "system.accessibility.control" => accessibility::control(request.params, client).await,
         "system.backup.control" => backup::control(request.params, client).await,
@@ -287,6 +289,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "task.count"
             | "memory.history"
             | "memory.sessions"
+            | "credential.oauth-refresh"
             | "system.audio.control"
             | "system.accessibility.control"
             | "system.backup.control"

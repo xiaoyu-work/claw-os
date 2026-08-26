@@ -12,6 +12,9 @@
   "operations": {
     "list": {
       "label": { "en": "List events in a time range (--from, --to, --provider local|google|outlook)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": false }
+      ],
       "needs": [
         {
           "verb": "data.db.read",
@@ -22,11 +25,26 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "When using Google or Outlook, call the provider's API to list events." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Load only the selected calendar provider's access token." }
         }
       ]
     },
     "create": {
       "label": { "en": "Create an event (--title, --start, --end, --description, --provider)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": false }
+      ],
       "needs": [
         {
           "verb": "data.db.write",
@@ -39,6 +57,18 @@
           "why": { "en": "When using Google or Outlook, call the provider's API to create the event." }
         },
         {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Load only the selected calendar provider's access token." }
+        },
+        {
           "verb": "memory.write",
           "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
           "why": { "en": "Remember the new event so the agent can recall it later." }
@@ -47,6 +77,9 @@
     },
     "update": {
       "label": { "en": "Update an event (--id, --title, --start, --end, --description, --provider)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": false }
+      ],
       "needs": [
         {
           "verb": "data.db.write",
@@ -59,6 +92,18 @@
           "why": { "en": "When using Google or Outlook, call the provider's API to update the event." }
         },
         {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Load only the selected calendar provider's access token." }
+        },
+        {
           "verb": "memory.write",
           "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
           "why": { "en": "Remember the change so the agent can recall what was updated." }
@@ -67,6 +112,9 @@
     },
     "delete": {
       "label": { "en": "Delete an event (--id, --provider)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": false }
+      ],
       "needs": [
         {
           "verb": "data.db.write",
@@ -79,6 +127,18 @@
           "why": { "en": "When using Google or Outlook, call the provider's API to delete the event." }
         },
         {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Load only the selected calendar provider's access token." }
+        },
+        {
           "verb": "memory.write",
           "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "calendar" } },
           "why": { "en": "Remember the deletion so the agent can recall the change later." }
@@ -87,6 +147,9 @@
     },
     "today": {
       "label": { "en": "Show today's events (shortcut for list --from today --to tomorrow)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": false }
+      ],
       "needs": [
         {
           "verb": "data.db.read",
@@ -97,6 +160,18 @@
           "verb": "net.dial",
           "scope": { "kind": "wild" },
           "why": { "en": "When using Google or Outlook, call the provider's API to list today's events." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
+              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+            }
+          },
+          "why": { "en": "Load only the selected calendar provider's access token." }
         }
       ]
     }

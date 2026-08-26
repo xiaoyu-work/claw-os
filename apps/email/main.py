@@ -17,13 +17,16 @@ import base64
 import json
 import os
 import smtplib
+import sys
 import urllib.error
 import urllib.request
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
-from claw_os_sdk import ai
-from cos_runtime import memory, policy
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.credentials import load_credential  # noqa: E402
+from claw_os_sdk import ai  # noqa: E402
+from cos_runtime import memory, policy  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +35,57 @@ from cos_runtime import memory, policy
 
 GMAIL_API_HOST = "gmail.googleapis.com"
 OUTLOOK_API_HOST = "graph.microsoft.com"
+GOOGLE_ACCESS_TOKEN = "GOOGLE_ACCESS_TOKEN"
+MICROSOFT_ACCESS_TOKEN = "MICROSOFT_ACCESS_TOKEN"
+
+
+def _credential_value(store_name, *legacy_env_names):
+    value = os.environ.get(store_name)
+    if value:
+        return value, None
+    for name in legacy_env_names:
+        value = os.environ.get(name)
+        if value:
+            return value, None
+    return load_credential(store_name)
+
+
+def _gmail_auth_error(detail, status=None):
+    result = {
+        "error": "Gmail authorization is required or has expired",
+        "provider": "gmail",
+        "auth_required": True,
+        "retryable": False,
+        "credential": f"default/{GOOGLE_ACCESS_TOKEN}",
+        "detail": detail,
+        "setup": {
+            "interactive_oauth_available": True,
+            "login_command": "cos credential oauth-login google",
+            "message": "Run the login command directly in the user's terminal.",
+        },
+    }
+    if status is not None:
+        result["status"] = status
+    return result
+
+
+def _outlook_auth_error(detail, status=None):
+    result = {
+        "error": "Outlook authorization is required or has expired",
+        "provider": "outlook",
+        "auth_required": True,
+        "retryable": False,
+        "credential": f"default/{MICROSOFT_ACCESS_TOKEN}",
+        "detail": detail,
+        "setup": {
+            "interactive_oauth_available": True,
+            "login_command": "cos credential oauth-login microsoft",
+            "message": "Run the login command directly in the user's terminal.",
+        },
+    }
+    if status is not None:
+        result["status"] = status
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -40,7 +94,11 @@ OUTLOOK_API_HOST = "graph.microsoft.com"
 
 def _detect_provider():
     """Detect which email provider is configured, in priority order."""
-    if os.environ.get("GMAIL_ACCESS_TOKEN") or os.environ.get("GOOGLE_OAUTH_TOKEN"):
+    if (
+        os.environ.get(GOOGLE_ACCESS_TOKEN)
+        or os.environ.get("GMAIL_ACCESS_TOKEN")
+        or os.environ.get("GOOGLE_OAUTH_TOKEN")
+    ):
         return "gmail"
     if os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN"):
         return "outlook"
@@ -135,7 +193,8 @@ def _send_smtp(to, subject, body, cc=None):
     host = os.environ.get("SMTP_HOST", "localhost")
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "")
-    password = os.environ.get("SMTP_PASSWORD", "")
+    password, _ = _credential_value("SMTP_PASSWORD")
+    password = password or ""
     from_addr = os.environ.get("SMTP_FROM", user)
 
     msg = MIMEMultipart()
@@ -161,12 +220,20 @@ def _send_smtp(to, subject, body, cc=None):
 # ---------------------------------------------------------------------------
 
 def _gmail_token():
-    return os.environ.get("GMAIL_ACCESS_TOKEN") or os.environ.get("GOOGLE_OAUTH_TOKEN")
+    return _credential_value(
+        GOOGLE_ACCESS_TOKEN,
+        "GMAIL_ACCESS_TOKEN",
+        "GOOGLE_OAUTH_TOKEN",
+    )
 
 
 def _gmail_request(url, method="GET", data=None):
     """Make an authenticated request to the Gmail API."""
-    token = _gmail_token()
+    token, credential_error = _gmail_token()
+    if not token:
+        return _gmail_auth_error(
+            credential_error or f"missing default/{GOOGLE_ACCESS_TOKEN}"
+        )
     headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -182,6 +249,10 @@ def _gmail_request(url, method="GET", data=None):
             err_body = e.read().decode("utf-8", errors="replace")
         except Exception:
             pass
+        finally:
+            e.close()
+        if e.code == 401:
+            return _gmail_auth_error(err_body or str(e), status=e.code)
         return {"error": err_body or str(e), "status": e.code}
     except urllib.error.URLError as e:
         return {"error": str(e.reason)}
@@ -281,6 +352,8 @@ def _search_gmail(query, max_results):
             f"?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
         )
         if "error" in detail:
+            if detail.get("auth_required") or detail.get("retryable") is False:
+                return detail
             continue
         parsed = _parse_gmail_message(detail)
         emails.append({
@@ -316,6 +389,8 @@ def _list_gmail(max_results, unread):
             f"?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date"
         )
         if "error" in detail:
+            if detail.get("auth_required") or detail.get("retryable") is False:
+                return detail
             continue
         parsed = _parse_gmail_message(detail)
         emails.append({
@@ -347,12 +422,16 @@ def _read_gmail(message_id):
 # ---------------------------------------------------------------------------
 
 def _outlook_token():
-    return os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN")
+    return _credential_value(MICROSOFT_ACCESS_TOKEN, "MICROSOFT_OAUTH_TOKEN")
 
 
 def _outlook_request(url, method="GET", data=None):
     """Make an authenticated request to the Microsoft Graph API."""
-    token = _outlook_token()
+    token, credential_error = _outlook_token()
+    if not token:
+        return _outlook_auth_error(
+            credential_error or f"missing default/{MICROSOFT_ACCESS_TOKEN}"
+        )
     headers = {"Authorization": f"Bearer {token}"}
     if data is not None:
         headers["Content-Type"] = "application/json"
@@ -368,6 +447,10 @@ def _outlook_request(url, method="GET", data=None):
             err_body = e.read().decode("utf-8", errors="replace")
         except Exception:
             pass
+        finally:
+            e.close()
+        if e.code == 401:
+            return _outlook_auth_error(err_body or str(e), status=e.code)
         return {"error": err_body or str(e), "status": e.code}
     except urllib.error.URLError as e:
         return {"error": str(e.reason)}
@@ -526,7 +609,7 @@ def cmd_send(args):
         return {
             "error": "no email provider configured",
             "hint": (
-                "Set SMTP_HOST for SMTP, GMAIL_ACCESS_TOKEN for Gmail, "
+                "Set SMTP_HOST for SMTP, GOOGLE_ACCESS_TOKEN for Gmail, "
                 "or MICROSOFT_ACCESS_TOKEN for Outlook"
             ),
         }
@@ -537,7 +620,7 @@ def cmd_send(args):
         policy.require("net.dial", host=smtp_host)
         result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "gmail":
-        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         result = _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
@@ -564,7 +647,7 @@ def cmd_search(args):
         return {
             "error": "no email provider configured",
             "hint": (
-                "Set GMAIL_ACCESS_TOKEN for Gmail "
+                "Set GOOGLE_ACCESS_TOKEN for Gmail "
                 "or MICROSOFT_ACCESS_TOKEN for Outlook"
             ),
         }
@@ -572,7 +655,7 @@ def cmd_search(args):
         return {"error": "search requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _search_gmail(opts.query, opts.max_results)
     elif provider == "outlook":
@@ -595,7 +678,7 @@ def cmd_list(args):
         return {
             "error": "no email provider configured",
             "hint": (
-                "Set GMAIL_ACCESS_TOKEN for Gmail "
+                "Set GOOGLE_ACCESS_TOKEN for Gmail "
                 "or MICROSOFT_ACCESS_TOKEN for Outlook"
             ),
         }
@@ -603,7 +686,7 @@ def cmd_list(args):
         return {"error": "list requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _list_gmail(opts.max_results, opts.unread)
     elif provider == "outlook":
@@ -626,7 +709,7 @@ def cmd_read(args):
         return {
             "error": "no email provider configured",
             "hint": (
-                "Set GMAIL_ACCESS_TOKEN for Gmail "
+                "Set GOOGLE_ACCESS_TOKEN for Gmail "
                 "or MICROSOFT_ACCESS_TOKEN for Outlook"
             ),
         }
@@ -634,7 +717,7 @@ def cmd_read(args):
         return {"error": "read requires gmail or outlook provider"}
 
     if provider == "gmail":
-        policy.require("secret.read", name="default/GMAIL_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
         policy.require("net.dial", host=GMAIL_API_HOST)
         return _read_gmail(opts.message_id)
     elif provider == "outlook":

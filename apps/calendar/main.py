@@ -9,17 +9,22 @@ import os
 import random
 import sqlite3
 import string
+import sys
 import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
-from cos_runtime import memory, policy
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.credentials import load_credential  # noqa: E402
+from cos_runtime import memory, policy  # noqa: E402
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 
 GOOGLE_CALENDAR_HOST = "www.googleapis.com"
 OUTLOOK_API_HOST = "graph.microsoft.com"
+GOOGLE_ACCESS_TOKEN = "GOOGLE_ACCESS_TOKEN"
+MICROSOFT_ACCESS_TOKEN = "MICROSOFT_ACCESS_TOKEN"
 
 
 # ---------------------------------------------------------------------------
@@ -81,7 +86,11 @@ def _detect_provider(explicit=None):
     """
     if explicit:
         return explicit
-    if os.environ.get("GOOGLE_CALENDAR_TOKEN") or os.environ.get("GOOGLE_OAUTH_TOKEN"):
+    if (
+        os.environ.get(GOOGLE_ACCESS_TOKEN)
+        or os.environ.get("GOOGLE_CALENDAR_TOKEN")
+        or os.environ.get("GOOGLE_OAUTH_TOKEN")
+    ):
         return "google"
     if os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN"):
         return "outlook"
@@ -109,7 +118,14 @@ def _default_end(start_iso):
 # ---------------------------------------------------------------------------
 
 def _google_token():
-    return os.environ.get("GOOGLE_CALENDAR_TOKEN") or os.environ.get("GOOGLE_OAUTH_TOKEN")
+    token = (
+        os.environ.get(GOOGLE_ACCESS_TOKEN)
+        or os.environ.get("GOOGLE_CALENDAR_TOKEN")
+        or os.environ.get("GOOGLE_OAUTH_TOKEN")
+    )
+    if token:
+        return token
+    return load_credential(GOOGLE_ACCESS_TOKEN)[0]
 
 
 def _google_request(method, url, body=None, token=None):
@@ -145,7 +161,38 @@ def _google_event_to_dict(item):
 # ---------------------------------------------------------------------------
 
 def _outlook_token():
-    return os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN")
+    token = os.environ.get(MICROSOFT_ACCESS_TOKEN) or os.environ.get(
+        "MICROSOFT_OAUTH_TOKEN"
+    )
+    if token:
+        return token
+    return load_credential(MICROSOFT_ACCESS_TOKEN)[0]
+
+
+def _provider_auth_error(provider, detail):
+    title = "Google Calendar" if provider == "google" else "Outlook Calendar"
+    return {
+        "error": f"{title} authorization is required or has expired",
+        "provider": provider,
+        "auth_required": True,
+        "retryable": False,
+        "detail": detail,
+        "setup": {
+            "interactive_oauth_available": True,
+            "login_command": (
+                "cos credential oauth-login google"
+                if provider == "google"
+                else "cos credential oauth-login microsoft"
+            ),
+            "message": "Run the login command directly in the user's terminal.",
+        },
+    }
+
+
+def _provider_http_error(provider, exc):
+    if exc.code == 401:
+        return _provider_auth_error(provider, f"API request failed ({exc.code})")
+    return {"error": f"API request failed ({exc.code})", "detail": exc.reason}
 
 
 def _outlook_request(method, url, body=None, token=None):
@@ -232,10 +279,10 @@ def _require_provider_access(provider, *, write):
     if provider == "local":
         policy.require(verb, name="calendar")
     elif provider == "google":
-        policy.require("secret.read", name="GOOGLE_CALENDAR_TOKEN")
+        policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
         policy.require("net.dial", host=GOOGLE_CALENDAR_HOST)
     elif provider == "outlook":
-        policy.require("secret.read", name="MICROSOFT_ACCESS_TOKEN")
+        policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
         policy.require("net.dial", host=OUTLOOK_API_HOST)
 
 
@@ -254,21 +301,15 @@ def cmd_list(args):
         if provider == "google":
             events = _list_google(from_time, to_time)
             if events is None:
-                return {
-                    "error": "Google Calendar token not configured",
-                    "hint": "Set GOOGLE_CALENDAR_TOKEN or GOOGLE_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("google", "GOOGLE_ACCESS_TOKEN is unavailable")
         elif provider == "outlook":
             events = _list_outlook(from_time, to_time)
             if events is None:
-                return {
-                    "error": "Outlook token not configured",
-                    "hint": "Set MICROSOFT_ACCESS_TOKEN or MICROSOFT_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("outlook", "MICROSOFT_ACCESS_TOKEN is unavailable")
         else:
             events = _list_local(from_time, to_time)
     except urllib.error.HTTPError as exc:
-        return {"error": f"API request failed ({exc.code})", "detail": exc.reason}
+        return _provider_http_error(provider, exc)
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
@@ -360,21 +401,15 @@ def cmd_create(args):
         if provider == "google":
             event = _create_google(title, start, end, description, location)
             if event is None:
-                return {
-                    "error": "Google Calendar token not configured",
-                    "hint": "Set GOOGLE_CALENDAR_TOKEN or GOOGLE_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("google", "GOOGLE_ACCESS_TOKEN is unavailable")
         elif provider == "outlook":
             event = _create_outlook(title, start, end, description, location)
             if event is None:
-                return {
-                    "error": "Outlook token not configured",
-                    "hint": "Set MICROSOFT_ACCESS_TOKEN or MICROSOFT_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("outlook", "MICROSOFT_ACCESS_TOKEN is unavailable")
         else:
             event = _create_local(title, start, end, description, location)
     except urllib.error.HTTPError as exc:
-        return {"error": f"API request failed ({exc.code})", "detail": exc.reason}
+        return _provider_http_error(provider, exc)
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
@@ -479,25 +514,19 @@ def cmd_update(args):
         if provider == "google":
             token = _google_token()
             if not token:
-                return {
-                    "error": "Google Calendar token not configured",
-                    "hint": "Set GOOGLE_CALENDAR_TOKEN or GOOGLE_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("google", "GOOGLE_ACCESS_TOKEN is unavailable")
             event = _update_google(event_id, fields)
         elif provider == "outlook":
             token = _outlook_token()
             if not token:
-                return {
-                    "error": "Outlook token not configured",
-                    "hint": "Set MICROSOFT_ACCESS_TOKEN or MICROSOFT_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("outlook", "MICROSOFT_ACCESS_TOKEN is unavailable")
             event = _update_outlook(event_id, fields)
         else:
             event = _update_local(event_id, fields)
             if event is None:
                 return {"error": f"event not found: {event_id}"}
     except urllib.error.HTTPError as exc:
-        return {"error": f"API request failed ({exc.code})", "detail": exc.reason}
+        return _provider_http_error(provider, exc)
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 
@@ -554,23 +583,17 @@ def cmd_delete(args):
         if provider == "google":
             result = _delete_google(event_id)
             if result is None:
-                return {
-                    "error": "Google Calendar token not configured",
-                    "hint": "Set GOOGLE_CALENDAR_TOKEN or GOOGLE_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("google", "GOOGLE_ACCESS_TOKEN is unavailable")
         elif provider == "outlook":
             result = _delete_outlook(event_id)
             if result is None:
-                return {
-                    "error": "Outlook token not configured",
-                    "hint": "Set MICROSOFT_ACCESS_TOKEN or MICROSOFT_OAUTH_TOKEN credential",
-                }
+                return _provider_auth_error("outlook", "MICROSOFT_ACCESS_TOKEN is unavailable")
         else:
             result = _delete_local(event_id)
             if not result:
                 return {"error": f"event not found: {event_id}"}
     except urllib.error.HTTPError as exc:
-        return {"error": f"API request failed ({exc.code})", "detail": exc.reason}
+        return _provider_http_error(provider, exc)
     except urllib.error.URLError as exc:
         return {"error": f"API request failed: {exc.reason}"}
 

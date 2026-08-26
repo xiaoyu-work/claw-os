@@ -35,7 +35,7 @@
             "arg": "provider",
             "values": {
               "smtp": { "kind": "name", "value": "default/SMTP_PASSWORD" },
-              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
               "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
             }
           },
@@ -65,7 +65,7 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
               "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
             }
           },
@@ -90,7 +90,7 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
               "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
             }
           },
@@ -115,7 +115,7 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GMAIL_ACCESS_TOKEN" },
+              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
               "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
             }
           },

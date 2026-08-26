@@ -5,11 +5,14 @@ Google Custom Search with Brave fallback.  Uses only stdlib (urllib).
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from cos_runtime import memory, policy
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from _shared.credentials import load_credential  # noqa: E402
+from cos_runtime import memory, policy  # noqa: E402
 
 VERSION = os.environ.get("COS_VERSION", "0.1.0")
 USER_AGENT = "cos/" + VERSION
@@ -27,7 +30,11 @@ BRAVE_HOST = "api.search.brave.com"
 def _google_credentials():
     """Return (api_key, engine_id) or (None, None)."""
     api_key = os.environ.get("GOOGLE_SEARCH_API_KEY")
+    if not api_key:
+        api_key, _ = load_credential("GOOGLE_SEARCH_API_KEY")
     engine_id = os.environ.get("GOOGLE_SEARCH_ENGINE_ID")
+    if not engine_id:
+        engine_id, _ = load_credential("GOOGLE_SEARCH_ENGINE_ID")
     if api_key and engine_id:
         return api_key, engine_id
     return None, None
@@ -35,41 +42,55 @@ def _google_credentials():
 
 def _brave_credential():
     """Return api_key or None."""
-    return os.environ.get("BRAVE_SEARCH_API_KEY") or None
+    value = os.environ.get("BRAVE_SEARCH_API_KEY")
+    if value:
+        return value
+    return load_credential("BRAVE_SEARCH_API_KEY")[0]
 
 
 def _pick_provider(preferred=None):
     """Choose a search provider.  Returns (provider, config) or (None, error_dict)."""
-    google_key, google_cx = _google_credentials()
-    brave_key = _brave_credential()
-
     if preferred == "google":
-        if google_key:
+        google_key, google_cx = _google_credentials()
+        if google_key and google_cx:
             return "google", {"key": google_key, "cx": google_cx}
-        return None, {"error": "Google credentials not configured",
-                      "hint": ("Store API credentials: "
-                               "cos credential store GOOGLE_SEARCH_API_KEY <key> --tier 1 && "
-                               "cos credential store GOOGLE_SEARCH_ENGINE_ID <id> --tier 1")}
+        return None, {
+            "error": "Google Search credentials are not configured",
+            "auth_required": True,
+            "retryable": False,
+            "required_credentials": [
+                "GOOGLE_SEARCH_API_KEY",
+                "GOOGLE_SEARCH_ENGINE_ID",
+            ],
+        }
 
     if preferred == "brave":
+        brave_key = _brave_credential()
         if brave_key:
             return "brave", {"key": brave_key}
-        return None, {"error": "Brave credentials not configured",
-                      "hint": ("Store API credentials: "
-                               "cos credential store BRAVE_SEARCH_API_KEY <key> --tier 1")}
+        return None, {
+            "error": "Brave Search credentials are not configured",
+            "auth_required": True,
+            "retryable": False,
+            "required_credentials": ["BRAVE_SEARCH_API_KEY"],
+        }
 
     # No preference — Google first, then Brave
-    if google_key:
+    google_key, google_cx = _google_credentials()
+    if google_key and google_cx:
         return "google", {"key": google_key, "cx": google_cx}
+    brave_key = _brave_credential()
     if brave_key:
         return "brave", {"key": brave_key}
 
     return None, {
         "error": "No search provider configured",
-        "hint": ("Store API credentials: "
-                 "cos credential store GOOGLE_SEARCH_API_KEY <key> --tier 1 && "
-                 "cos credential store GOOGLE_SEARCH_ENGINE_ID <id> --tier 1. "
-                 "Or: cos credential store BRAVE_SEARCH_API_KEY <key> --tier 1"),
+        "auth_required": True,
+        "retryable": False,
+        "providers": {
+            "google": ["GOOGLE_SEARCH_API_KEY", "GOOGLE_SEARCH_ENGINE_ID"],
+            "brave": ["BRAVE_SEARCH_API_KEY"],
+        },
     }
 
 
@@ -305,13 +326,10 @@ def cmd_web(args):
 
     if provider == "google":
         result = _google_web(query, max_results, config)
-        # Auto-fallback to Brave if Google fails
-        if "error" in result and _brave_credential():
-            brave_key = _brave_credential()
-            policy.require("net.dial", host=BRAVE_HOST)
-            result = _brave_web(query, max_results, {"key": brave_key})
     else:
         result = _brave_web(query, max_results, config)
+    if isinstance(result, dict):
+        result.setdefault("provider", provider)
     _remember_search("web", query, result)
     return result
 
@@ -331,13 +349,10 @@ def cmd_image(args):
 
     if provider == "google":
         result = _google_image(query, max_results, config)
-        # Auto-fallback to Brave if Google fails
-        if "error" in result and _brave_credential():
-            brave_key = _brave_credential()
-            policy.require("net.dial", host=BRAVE_HOST)
-            result = _brave_image(query, max_results, {"key": brave_key})
     else:
         result = _brave_image(query, max_results, config)
+    if isinstance(result, dict):
+        result.setdefault("provider", provider)
     _remember_search("image", query, result)
     return result
 
@@ -366,22 +381,22 @@ def _remember_search(kind, query, result):
 def _schema():
     return {
         "web": {
-            "description": "Search the web for information (Google Custom Search with Brave fallback)",
+            "description": "Search the web with the explicitly selected Google or Brave provider",
             "parameters": [
                 {"name": "query", "type": "string", "required": True, "description": "Search query words", "kind": "positional"},
                 {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
-                {"name": "--provider", "type": "string", "required": False, "description": "Search provider: google or brave", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": True, "description": "Search provider: google or brave", "kind": "flag"},
             ],
-            "example": "cos app search web 'rust programming language' --max-results 5",
+            "example": "cos app search web 'rust programming language' --provider brave --max-results 5",
         },
         "image": {
-            "description": "Search for images (Google Custom Search with Brave fallback)",
+            "description": "Search for images with the explicitly selected Google or Brave provider",
             "parameters": [
                 {"name": "query", "type": "string", "required": True, "description": "Image search query words", "kind": "positional"},
                 {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
-                {"name": "--provider", "type": "string", "required": False, "description": "Search provider: google or brave", "kind": "flag"},
+                {"name": "--provider", "type": "string", "required": True, "description": "Search provider: google or brave", "kind": "flag"},
             ],
-            "example": "cos app search image 'cute cats' --max-results 3",
+            "example": "cos app search image 'cute cats' --provider brave --max-results 3",
         },
     }
 

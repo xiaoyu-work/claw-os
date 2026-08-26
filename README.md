@@ -77,6 +77,7 @@ one integrated agent-native OS layer.
 
 Pick an entry point:
 
+- **Ubuntu** — install the system Agent layer without replacing Ubuntu
 - **WSL** — recommended
 - **Docker / OrbStack** — recommended
 - **Desktop / ISO / VM** — experimental
@@ -85,6 +86,47 @@ Pick an entry point:
 All artifacts share the same composed Debian rootfs; platform profiles only
 add their user, boot, and provisioning policy. See
 [Image architecture](docs/image-architecture.md).
+
+### Ubuntu — install the Agent layer
+
+Install the signed `claw-os-agent` package on an existing Ubuntu system:
+
+```bash
+sudo install -d -m 0755 /usr/share/keyrings
+
+curl -fsSL https://xiaoyu-work.github.io/claw-os/claw-os-archive-keyring.gpg \
+  | sudo tee /usr/share/keyrings/claw-os-archive-keyring.gpg >/dev/null
+
+ARCH="$(dpkg --print-architecture)"
+echo "deb [arch=$ARCH signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] https://xiaoyu-work.github.io/claw-os trixie main" \
+  | sudo tee /etc/apt/sources.list.d/claw-os.list >/dev/null
+
+sudo apt update
+sudo apt install claw-os-agent
+```
+
+Verify the daemon and configure a model provider:
+
+```bash
+systemctl is-enabled clawd.service
+systemctl is-active clawd.service
+sudo systemctl status clawd.service --no-pager
+
+cos agent setup llm
+cos agent chat
+```
+
+Authorize Google Gmail/Calendar or Microsoft Outlook/Calendar through the
+normal browser/device login flow:
+
+```bash
+cos credential oauth-login google
+cos credential oauth-login microsoft
+```
+
+The package keeps Ubuntu as the host distribution. `cos sys info` reports
+Ubuntu under `distribution` and reports Claw separately as the installed
+system-agent layer; only a complete Claw OS image reports `claw_os: true`.
 
 ### Updating an existing installation
 

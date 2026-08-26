@@ -33,6 +33,7 @@
 ///   list   [--namespace NS]         — omit NS to see all namespaces
 ///   bundle <name> --keys k1,k2,k3 [--namespace NS]
 ///   load-bundle <name> [--namespace NS]
+///   oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]
 ///   oauth-refresh <google|microsoft> [--namespace NS]
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -41,6 +42,8 @@ use std::path::{Path, PathBuf};
 
 use crate::caps::{require_or_json, Scope, Verb};
 use crate::policy;
+
+mod oauth_login;
 
 // ===========================================================================
 // Kernel crypto via AF_ALG (Linux) with pure-Rust fallback (non-Linux)
@@ -1483,6 +1486,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "list" => cmd_list(args),
         "bundle" => cmd_bundle(args),
         "load-bundle" => cmd_load_bundle(args),
+        "oauth-login" => oauth_login::cmd_oauth_login(args),
         "oauth-refresh" => cmd_oauth_refresh(args),
         _ => Err(format!("unknown credential command: {command}")),
     }
@@ -1765,9 +1769,40 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     .refresh_cmd
                     .clone()
                     .unwrap_or_else(|| refresh_cmd.clone());
-                let new_value = execute_refresh(&refresh_cmd_owned).map_err(|e| {
-                    format!("credential '{name}' expired and auto-refresh failed: {e}")
-                })?;
+                let command_output = match broker_oauth_provider(
+                    &refresh_cmd_owned,
+                    &namespace,
+                ) {
+                    Some(provider) => {
+                        let direct_admin = crate::proc::current_session_info_for_caps()
+                            .is_some_and(|session| {
+                                oauth_login::is_same_pid_admin_cli_session(&session)
+                            });
+                        if direct_admin {
+                            direct_oauth_refresh(provider, &namespace).map_err(|e| {
+                                format!(
+                                    "credential '{name}' expired and auto-refresh failed: {e}"
+                                )
+                            })?;
+                        } else if crate::proc::current_session_id().is_some() {
+                            request_brokered_oauth_refresh(name, &namespace).map_err(|e| {
+                                format!(
+                                    "credential '{name}' expired and broker refresh failed: {e}"
+                                )
+                            })?;
+                        } else {
+                            direct_oauth_refresh(provider, &namespace).map_err(|e| {
+                                format!(
+                                    "credential '{name}' expired and auto-refresh failed: {e}"
+                                )
+                            })?;
+                        }
+                        None
+                    }
+                    None => Some(execute_refresh(&refresh_cmd_owned).map_err(|e| {
+                        format!("credential '{name}' expired and auto-refresh failed: {e}")
+                    })?),
+                };
 
                 // A refresh command such as `cos credential oauth-refresh ...`
                 // persists the real token itself and prints only a status JSON
@@ -1800,6 +1835,11 @@ fn cmd_load(args: &[String]) -> Result<Value, String> {
                     }
                 }
 
+                let new_value = command_output.ok_or_else(|| {
+                    format!(
+                        "credential '{name}' OAuth broker completed without updating the access token"
+                    )
+                })?;
                 let ttl = compute_original_ttl(&fresh_cred);
                 let (new_value_b64, new_nonce_b64) =
                     encrypt_value(new_value.trim().as_bytes());
@@ -2359,32 +2399,37 @@ fn cmd_oauth_refresh(args: &[String]) -> Result<Value, String> {
 }
 
 fn oauth_refresh_google(namespace: &str) -> Result<Value, String> {
-    // Load required credentials
     let refresh_token = load_credential_value("GOOGLE_REFRESH_TOKEN", namespace)?;
-    let client_id = load_credential_value("GOOGLE_CLIENT_ID", namespace)?;
-    let client_secret = load_credential_value("GOOGLE_CLIENT_SECRET", namespace)?;
-    let derived_tier = [
-        credential_min_tier("GOOGLE_REFRESH_TOKEN", namespace)?,
-        credential_min_tier("GOOGLE_CLIENT_ID", namespace)?,
-        credential_min_tier("GOOGLE_CLIENT_SECRET", namespace)?,
-    ]
-    .into_iter()
-    .min()
-    .unwrap_or(0);
+    let (client_id, client_secret) = oauth_login::google_client_config(namespace)?;
+    let refresh_tier = credential_min_tier("GOOGLE_REFRESH_TOKEN", namespace)?;
     let output_tier =
         credential_min_tier_if_present("GOOGLE_ACCESS_TOKEN", namespace)?
-            .unwrap_or(derived_tier);
+            .unwrap_or(refresh_tier);
     require_secret(
         Verb::SECRET_WRITE,
         credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")?,
     )?;
+    refresh_google_tokens(
+        namespace,
+        &refresh_token,
+        &client_id,
+        &client_secret,
+        output_tier,
+    )
+}
 
-    // POST to Google token endpoint
+fn refresh_google_tokens(
+    namespace: &str,
+    refresh_token: &str,
+    client_id: &str,
+    client_secret: &str,
+    output_tier: u8,
+) -> Result<Value, String> {
     let body = format!(
         "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
-        urlencoded(&refresh_token),
-        urlencoded(&client_id),
-        urlencoded(&client_secret),
+        urlencoded(refresh_token),
+        urlencoded(client_id),
+        urlencoded(client_secret),
     );
 
     let result = http_post(
@@ -2422,28 +2467,11 @@ fn oauth_refresh_google(namespace: &str) -> Result<Value, String> {
 
 fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
     let refresh_token = load_credential_value("MICROSOFT_REFRESH_TOKEN", namespace)?;
-    let client_id = load_credential_value("MICROSOFT_CLIENT_ID", namespace)?;
-    let client_secret = load_credential_value("MICROSOFT_CLIENT_SECRET", namespace)?;
-    let tenant_id = if namespace_dir(namespace)
-        .join("MICROSOFT_TENANT_ID.json")
-        .is_file()
-    {
-        load_credential_value("MICROSOFT_TENANT_ID", namespace)?
-    } else {
-        "common".to_string()
-    };
+    let (client_id, tenant_id) = oauth_login::microsoft_client_config(namespace)?;
     let refresh_tier = credential_min_tier("MICROSOFT_REFRESH_TOKEN", namespace)?;
-    let derived_tier = [
-        refresh_tier,
-        credential_min_tier("MICROSOFT_CLIENT_ID", namespace)?,
-        credential_min_tier("MICROSOFT_CLIENT_SECRET", namespace)?,
-    ]
-    .into_iter()
-    .min()
-    .unwrap_or(refresh_tier);
     let access_tier =
         credential_min_tier_if_present("MICROSOFT_ACCESS_TOKEN", namespace)?
-            .unwrap_or(derived_tier);
+            .unwrap_or(refresh_tier);
     require_secret(
         Verb::SECRET_WRITE,
         credential_scope(namespace, "MICROSOFT_ACCESS_TOKEN")?,
@@ -2452,12 +2480,29 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
         Verb::SECRET_WRITE,
         credential_scope(namespace, "MICROSOFT_REFRESH_TOKEN")?,
     )?;
+    refresh_microsoft_tokens(
+        namespace,
+        &refresh_token,
+        &client_id,
+        &tenant_id,
+        refresh_tier,
+        access_tier,
+    )
+}
 
+fn refresh_microsoft_tokens(
+    namespace: &str,
+    refresh_token: &str,
+    client_id: &str,
+    tenant_id: &str,
+    refresh_tier: u8,
+    access_tier: u8,
+) -> Result<Value, String> {
     let body = format!(
-        "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}&scope=https://graph.microsoft.com/.default",
-        urlencoded(&refresh_token),
-        urlencoded(&client_id),
-        urlencoded(&client_secret),
+        "grant_type=refresh_token&refresh_token={}&client_id={}&scope={}",
+        urlencoded(refresh_token),
+        urlencoded(client_id),
+        urlencoded("offline_access openid email User.Read Mail.Read Mail.Send Calendars.ReadWrite"),
     );
 
     let url = format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
@@ -2503,6 +2548,101 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
     }))
 }
 
+fn direct_oauth_refresh(provider: &str, namespace: &str) -> Result<Value, String> {
+    match provider {
+        "google" => oauth_refresh_google(namespace),
+        "microsoft" => oauth_refresh_microsoft(namespace),
+        _ => Err(format!("unsupported OAuth provider: {provider}")),
+    }
+}
+
+fn request_brokered_oauth_refresh(name: &str, namespace: &str) -> Result<Value, String> {
+    let session = crate::proc::current_session_id()
+        .ok_or_else(|| "OAuth refresh broker requires an active session".to_string())?;
+    let response = crate::clawd::client::request_blocking(
+        crate::paths::clawd_socket_path(),
+        crate::clawd::protocol::Request {
+            id: None,
+            command: "credential.oauth-refresh".to_string(),
+            params: json!({
+                "session": session,
+                "namespace": namespace,
+                "credential": name,
+            }),
+        },
+    )?;
+    if response.ok {
+        Ok(response.result.unwrap_or(Value::Null))
+    } else {
+        Err(response
+            .error
+            .map(|error| error.message)
+            .unwrap_or_else(|| "clawd OAuth refresh failed".to_string()))
+    }
+}
+
+pub(crate) fn broker_refresh_access_token(
+    name: &str,
+    namespace: &str,
+) -> Result<Value, String> {
+    match name {
+        "GOOGLE_ACCESS_TOKEN" => {
+            let refresh_token = read_credential_value(
+                "GOOGLE_REFRESH_TOKEN",
+                namespace,
+                false,
+            )?;
+            let (client_id, client_secret) =
+                oauth_login::google_client_config_for_daemon(namespace)?;
+            let access_tier = credential_min_tier("GOOGLE_ACCESS_TOKEN", namespace)?;
+            refresh_google_tokens(
+                namespace,
+                &refresh_token,
+                &client_id,
+                &client_secret,
+                access_tier,
+            )
+        }
+        "MICROSOFT_ACCESS_TOKEN" => {
+            let refresh_token = read_credential_value(
+                "MICROSOFT_REFRESH_TOKEN",
+                namespace,
+                false,
+            )?;
+            let (client_id, tenant_id) =
+                oauth_login::microsoft_client_config_for_daemon(namespace)?;
+            let refresh_tier = credential_min_tier("MICROSOFT_REFRESH_TOKEN", namespace)?;
+            let access_tier = credential_min_tier("MICROSOFT_ACCESS_TOKEN", namespace)?;
+            refresh_microsoft_tokens(
+                namespace,
+                &refresh_token,
+                &client_id,
+                &tenant_id,
+                refresh_tier,
+                access_tier,
+            )
+        }
+        _ => Err(format!(
+            "credential `{name}` is not eligible for brokered OAuth refresh"
+        )),
+    }
+}
+
+
+fn broker_oauth_provider<'a>(refresh_cmd: &'a str, namespace: &str) -> Option<&'a str> {
+    let parts = refresh_cmd.split_whitespace().collect::<Vec<_>>();
+    let provider = match parts.as_slice() {
+        ["cos", "credential", "oauth-refresh", provider] => *provider,
+        ["cos", "credential", "oauth-refresh", provider, "--namespace", requested]
+            if *requested == namespace =>
+        {
+            *provider
+        }
+        _ => return None,
+    };
+    Some(provider)
+}
+
 // ===========================================================================
 // HTTP and encoding helpers
 // ===========================================================================
@@ -2515,7 +2655,8 @@ fn oauth_refresh_microsoft(namespace: &str) -> Result<Value, String> {
 /// be read by any same-uid process via `/proc/<pid>/cmdline` (the HIGH
 /// "OAuth client_secret / refresh_token leak via argv" audit finding).
 fn build_curl_post(url: &str, content_type: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("curl");
+    let mut cmd = std::process::Command::new("/usr/bin/curl");
+    cmd.env_clear();
     cmd.args([
         "-s",
         "-S",

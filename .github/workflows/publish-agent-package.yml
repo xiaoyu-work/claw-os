@@ -3,6 +3,15 @@ name: Publish Agent package
 on:
   workflow_dispatch:
   workflow_call:
+    secrets:
+      CLAW_OS_GOOGLE_OAUTH_CLIENT_ID:
+        required: true
+      CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET:
+        required: true
+      CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID:
+        required: true
+      CLAW_OS_MICROSOFT_OAUTH_TENANT_ID:
+        required: false
 
 jobs:
   build-agent:
@@ -57,7 +66,19 @@ jobs:
           cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
 
       - name: Build Agent package
-        run: ARCH="$ARCH" ./packaging/deb/build-debs.sh agent
+        env:
+          CLAW_OS_GOOGLE_OAUTH_CLIENT_ID: ${{ secrets.CLAW_OS_GOOGLE_OAUTH_CLIENT_ID }}
+          CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET: ${{ secrets.CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET }}
+          CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID: ${{ secrets.CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID }}
+          CLAW_OS_MICROSOFT_OAUTH_TENANT_ID: ${{ secrets.CLAW_OS_MICROSOFT_OAUTH_TENANT_ID }}
+        run: |
+          if [ -z "$CLAW_OS_GOOGLE_OAUTH_CLIENT_ID" ] \
+              || [ -z "$CLAW_OS_GOOGLE_OAUTH_CLIENT_SECRET" ] \
+              || [ -z "$CLAW_OS_MICROSOFT_OAUTH_CLIENT_ID" ]; then
+            echo "error: configure the Claw OS Google and Microsoft OAuth clients" >&2
+            exit 1
+          fi
+          ARCH="$ARCH" ./packaging/deb/build-debs.sh agent
 
       - name: Verify Agent package
         run: |

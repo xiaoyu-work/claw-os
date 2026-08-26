@@ -83,6 +83,51 @@ fn bootstrap_registers_session_and_grants_ai_chat() {
     );
 }
 
+#[test]
+fn bootstrapped_admin_cli_can_store_credentials_and_enter_oauth_login() {
+    let _lock = env_lock();
+    let _data = redirect_data_dir();
+    let credentials = tempfile::tempdir().unwrap();
+    let previous_credentials = env::var_os("COS_CREDENTIALS_DIR");
+    let previous_oauth = env::var_os("COS_OAUTH_CONFIG");
+    env::set_var("COS_CREDENTIALS_DIR", credentials.path());
+    env::set_var(
+        "COS_OAUTH_CONFIG",
+        credentials.path().join("missing-oauth.conf"),
+    );
+    env::remove_var("COS_SESSION");
+    env::remove_var("COS_PERMS_MODE");
+
+    let guard = bootstrap_user_cli_session_impl(
+        &["credential".into(), "oauth-login".into(), "google".into()],
+        true,
+    )
+    .expect("interactive credential CLI should bootstrap");
+    let stored = crate::credential::run(
+        "store",
+        &["BOOTSTRAP_TEST".into(), "value".into()],
+    );
+    let login = crate::credential::run(
+        "oauth-login",
+        &["google".into(), "--no-open".into(), "--timeout".into(), "30".into()],
+    )
+    .unwrap_err();
+
+    drop(guard);
+    match previous_credentials {
+        Some(value) => env::set_var("COS_CREDENTIALS_DIR", value),
+        None => env::remove_var("COS_CREDENTIALS_DIR"),
+    }
+    match previous_oauth {
+        Some(value) => env::set_var("COS_OAUTH_CONFIG", value),
+        None => env::remove_var("COS_OAUTH_CONFIG"),
+    }
+
+    assert!(stored.is_ok(), "{stored:?}");
+    assert!(login.contains("Google OAuth client is not configured"));
+    assert!(!login.contains("must be run directly"));
+}
+
 /// Per-user data dir override: sets `COS_USER_DATA_DIR` to a
 /// fresh tempdir so the per-user-default test isn't subject to
 /// the real `$HOME/.local/share/cos` contents.

@@ -44,6 +44,14 @@ fn scaffold_requires_runtime_evidence_citations() {
 }
 
 #[test]
+fn scaffold_stops_on_non_retryable_auth_errors() {
+    let prompt = build_system_prompt(None);
+    assert!(prompt.contains("`auth_required: true`"));
+    assert!(prompt.contains("stop retrying credential/catalog/filesystem tools"));
+    assert!(prompt.contains("Never ask the user to paste"));
+}
+
+#[test]
 fn extra_file_appended_when_provided() {
     let dir = std::env::temp_dir();
     let path = dir.join(format!("cos-prompt-{}.md", std::process::id()));

@@ -67,7 +67,8 @@ def test_web_no_credentials():
     _clear_credentials()
     result = run("web", ["test query"])
     assert "error" in result
-    assert "hint" in result
+    assert result["auth_required"] is True
+    assert result["retryable"] is False
     assert "No search provider configured" in result["error"]
 
 
@@ -76,7 +77,22 @@ def test_image_no_credentials():
     _clear_credentials()
     result = run("image", ["test query"])
     assert "error" in result
-    assert "hint" in result
+    assert result["auth_required"] is True
+    assert result["retryable"] is False
+
+
+def test_google_credentials_load_from_store():
+    _clear_credentials()
+    values = {
+        "GOOGLE_SEARCH_API_KEY": ("stored-key", None),
+        "GOOGLE_SEARCH_ENGINE_ID": ("stored-cx", None),
+    }
+    with mock.patch.object(
+        search_main,
+        "load_credential",
+        side_effect=lambda name: values[name],
+    ):
+        assert search_main._google_credentials() == ("stored-key", "stored-cx")
 
 
 # ---------------------------------------------------------------------------
@@ -262,11 +278,11 @@ def test_image_google_success():
 
 
 # ---------------------------------------------------------------------------
-# Google fails → Brave fallback (mocked)
+# Provider isolation
 # ---------------------------------------------------------------------------
 
-def test_web_google_fails_brave_fallback():
-    """When Google returns an HTTP error and Brave is configured, fall back."""
+def test_web_google_failure_does_not_cross_into_brave_scope():
+    """A Google-scoped invocation must not load or call Brave implicitly."""
     _clear_credentials()
     _set_google_credentials()
     _set_brave_credentials()
@@ -289,10 +305,11 @@ def test_web_google_fails_brave_fallback():
         return fake_resp
 
     with mock.patch("urllib.request.urlopen", side_effect=_side_effect):
-        result = run("web", ["fallback test"])
+        result = run("web", ["fallback test", "--provider", "google"])
 
-    assert "error" not in result
-    assert result["provider"] == "brave"
+    assert "error" in result
+    assert result["provider"] == "google"
+    assert call_count["n"] == 1
 
 
 # ---------------------------------------------------------------------------

@@ -33,23 +33,29 @@ cos service start my-agent   # OPENAI_KEY and DB_URL injected as env vars
 
 ## OAuth Token Auto-Refresh
 
-Store OAuth credentials with auto-refresh. When a token expires, `cos credential load` automatically refreshes it:
+Use the normal installed-app browser flow for initial Google login. The OAuth
+client id/secret identify the Claw OS application; users never handle a refresh
+token themselves:
 
 ```bash
-# One-time setup: store OAuth client credentials + refresh token
+# One-time application configuration (omit when the package provides these):
 cos credential store GOOGLE_CLIENT_ID "..." --tier 0
 cos credential store GOOGLE_CLIENT_SECRET "..." --tier 0
-cos credential store GOOGLE_REFRESH_TOKEN "1//..." --tier 0
 
-# Initial token refresh (creates access token with auto-refresh configured)
-cos credential oauth-refresh google
+# Normal user login: opens Google in the system browser, receives the
+# loopback callback, and stores access + refresh tokens automatically.
+cos credential oauth-login google
 
 # From now on, this always returns a valid token:
 cos credential load GOOGLE_ACCESS_TOKEN
 # → if expired, automatically calls oauth-refresh, stores new token, returns it
 ```
 
-Supported providers: `google`, `microsoft`.
+Interactive login and token refresh support `google` and `microsoft`:
+
+```bash
+cos credential oauth-login microsoft
+```
 
 For custom OAuth providers, use `--refresh-cmd` directly:
 

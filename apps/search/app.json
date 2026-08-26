@@ -5,13 +5,16 @@
     "en": "Web Search"
   },
   "summary": {
-    "en": "Web and image search — Google Custom Search with Brave fallback"
+    "en": "Web and image search through an explicitly selected Google or Brave provider"
   },
   "icon": "🔎",
   "runtime": "python",
   "operations": {
     "web": {
       "label": { "en": "Search the web for information (returns titles, URLs, snippets)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -22,11 +25,37 @@
           "verb": "memory.write",
           "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "search" } },
           "why": { "en": "Remember the search so the agent can recall what was looked up." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_SEARCH_API_KEY" },
+              "brave": { "kind": "name", "value": "default/BRAVE_SEARCH_API_KEY" }
+            }
+          },
+          "why": { "en": "Load only the selected search provider's API key." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_SEARCH_ENGINE_ID" }
+            }
+          },
+          "why": { "en": "Load the Google Custom Search engine id when Google is selected." }
         }
       ]
     },
     "image": {
       "label": { "en": "Search for images (returns titles, URLs, thumbnails)" },
+      "args": [
+        { "name": "provider", "kind": "name", "required": true }
+      ],
       "needs": [
         {
           "verb": "net.dial",
@@ -37,6 +66,29 @@
           "verb": "memory.write",
           "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "search" } },
           "why": { "en": "Remember the image search so the agent can recall what was looked up." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_SEARCH_API_KEY" },
+              "brave": { "kind": "name", "value": "default/BRAVE_SEARCH_API_KEY" }
+            }
+          },
+          "why": { "en": "Load only the selected search provider's API key." }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "google": { "kind": "name", "value": "default/GOOGLE_SEARCH_ENGINE_ID" }
+            }
+          },
+          "why": { "en": "Load the Google Custom Search engine id when Google is selected." }
         }
       ]
     }

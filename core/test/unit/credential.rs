@@ -593,6 +593,28 @@ fn oauth_refresh_missing_provider() {
     assert!(r.unwrap_err().contains("usage"));
 }
 
+#[test]
+fn broker_oauth_refresh_accepts_only_matching_builtin_command() {
+    assert_eq!(
+        broker_oauth_provider(
+            "cos credential oauth-refresh google --namespace default",
+            "default"
+        ),
+        Some("google")
+    );
+    assert_eq!(
+        broker_oauth_provider(
+            "cos credential oauth-refresh microsoft --namespace other",
+            "default"
+        ),
+        None
+    );
+    assert_eq!(
+        broker_oauth_provider("sh -c 'steal secrets'", "default"),
+        None
+    );
+}
+
 // ---- Persistent root key (CRITICAL audit fix) -------------------------
 
 /// Verifies the CRITICAL fix: when `/etc/machine-id` is unreadable AND no
@@ -766,6 +788,7 @@ fn test_oauth_refresh_no_argv_leak() {
         .collect();
     let argv_joined = argv.join(" ");
 
+    assert_eq!(cmd.get_program(), std::ffi::OsStr::new("/usr/bin/curl"));
     assert!(
         !argv_joined.contains(secret),
         "argv must never contain a secret; argv = {argv_joined}"

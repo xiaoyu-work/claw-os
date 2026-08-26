@@ -170,6 +170,7 @@ pub(super) fn builtin_apps() -> Vec<(
             ("list", "List credentials, optionally filtered by --namespace"),
             ("bundle", "Create a credential bundle (--keys key1,key2,key3)"),
             ("load-bundle", "Load all credentials in a bundle as a JSON object"),
+            ("oauth-login", "Complete Google PKCE or Microsoft device-code login"),
             ("oauth-refresh", "Refresh OAuth token (google or microsoft) using stored refresh token"),
         ]),
         ("cron", "Agent-native job scheduler — cron with execution context, result capture, and overlap protection", vec![
@@ -438,6 +439,22 @@ pub(super) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                         Param::flag("--namespace", "string", false, "Namespace"),
                     ],
                     example: "cos credential load-bundle openai-config",
+                },
+                CommandSchema {
+                    command: "oauth-login",
+                    description: "Open the system browser and complete installed-app OAuth login",
+                    params: vec![
+                        Param::positional(
+                            "provider",
+                            "string",
+                            true,
+                            "OAuth provider (google or microsoft)",
+                        ),
+                        Param::flag("--namespace", "string", false, "Namespace"),
+                        Param::flag("--no-open", "bool", false, "Print URL without opening browser"),
+                        Param::flag("--timeout", "integer", false, "Callback timeout in seconds"),
+                    ],
+                    example: "cos credential oauth-login google",
                 },
                 CommandSchema {
                     command: "oauth-refresh",

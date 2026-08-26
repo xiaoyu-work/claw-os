@@ -1,6 +1,7 @@
 """Tests for email app."""
 
 import base64
+import io
 import json
 import os
 import pathlib
@@ -32,6 +33,7 @@ email_main = load_local_module(
     clear_modules=("_shared",),
 )
 _detect_provider = email_main._detect_provider
+_gmail_token = email_main._gmail_token
 _parse_gmail_message = email_main._parse_gmail_message
 _parse_outlook_message = email_main._parse_outlook_message
 _resolve_provider = email_main._resolve_provider
@@ -42,6 +44,7 @@ run = email_main.run
 # ---------------------------------------------------------------------------
 
 PROVIDER_ENV_KEYS = [
+    "GOOGLE_ACCESS_TOKEN",
     "GMAIL_ACCESS_TOKEN",
     "GOOGLE_OAUTH_TOKEN",
     "MICROSOFT_ACCESS_TOKEN",
@@ -76,6 +79,10 @@ class TestDetectProvider(unittest.TestCase):
 
     def test_gmail_access_token(self):
         os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
+        self.assertEqual(_detect_provider(), "gmail")
+
+    def test_google_access_token(self):
+        os.environ["GOOGLE_ACCESS_TOKEN"] = "tok"
         self.assertEqual(_detect_provider(), "gmail")
 
     def test_google_oauth_token(self):
@@ -126,6 +133,76 @@ class TestResolveProvider(unittest.TestCase):
     def test_falls_back_to_detected(self):
         os.environ["SMTP_HOST"] = "localhost"
         self.assertEqual(_resolve_provider(None), "smtp")
+
+
+class TestCredentialStoreIntegration(unittest.TestCase):
+    def setUp(self):
+        _clear_provider_env()
+
+    def tearDown(self):
+        _clear_provider_env()
+
+    @patch(
+        "claw_test_email_main.load_credential",
+        return_value=("stored-token", None),
+    )
+    def test_gmail_loads_canonical_access_token_from_store(self, load):
+
+        token, error = _gmail_token()
+
+        self.assertEqual(token, "stored-token")
+        self.assertIsNone(error)
+        load.assert_called_once_with("GOOGLE_ACCESS_TOKEN")
+
+    @patch("claw_test_email_main.urllib.request.urlopen")
+    def test_gmail_request_sends_bearer_token(self, urlopen):
+        os.environ["GOOGLE_ACCESS_TOKEN"] = "access-token"
+        response = MagicMock()
+        response.__enter__.return_value.read.return_value = b"{}"
+        urlopen.return_value = response
+
+        result = email_main._gmail_request("https://gmail.googleapis.com/test")
+
+        self.assertEqual(result, {})
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer access-token")
+
+    @patch("claw_test_email_main.urllib.request.urlopen")
+    def test_gmail_401_returns_non_retryable_auth_guidance(self, urlopen):
+        os.environ["GOOGLE_ACCESS_TOKEN"] = "expired-token"
+        urlopen.side_effect = email_main.urllib.error.HTTPError(
+            "https://gmail.googleapis.com/test",
+            401,
+            "Unauthorized",
+            {},
+            io.BytesIO(b'{"error":"invalid_grant"}'),
+        )
+
+        result = email_main._gmail_request("https://gmail.googleapis.com/test")
+
+        self.assertEqual(result["status"], 401)
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+        self.assertTrue(result["setup"]["interactive_oauth_available"])
+        self.assertEqual(
+            result["setup"]["login_command"],
+            "cos credential oauth-login google",
+        )
+
+    @patch(
+        "claw_test_email_main.load_credential",
+        return_value=(None, "credential not found"),
+    )
+    def test_missing_gmail_login_returns_single_non_retryable_action(self, _load):
+        result = email_main._gmail_request("https://gmail.googleapis.com/test")
+
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+        self.assertTrue(result["setup"]["interactive_oauth_available"])
+        self.assertEqual(
+            result["setup"]["login_command"],
+            "cos credential oauth-login google",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +692,38 @@ class TestApiErrors(unittest.TestCase):
         result = run("search", ["--query", "test", "--provider", "outlook"])
         self.assertIn("error", result)
         self.assertEqual(result["status"], 403)
+
+    @patch("claw_test_email_main._gmail_request")
+    def test_gmail_search_propagates_detail_auth_failure(self, request):
+        request.side_effect = [
+            {"messages": [{"id": "m1"}]},
+            {
+                "error": "authorization required",
+                "auth_required": True,
+                "retryable": False,
+            },
+        ]
+
+        result = email_main._search_gmail("test", 10)
+
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
+
+    @patch("claw_test_email_main._gmail_request")
+    def test_gmail_list_propagates_detail_auth_failure(self, request):
+        request.side_effect = [
+            {"messages": [{"id": "m1"}]},
+            {
+                "error": "authorization required",
+                "auth_required": True,
+                "retryable": False,
+            },
+        ]
+
+        result = email_main._list_gmail(10, False)
+
+        self.assertTrue(result["auth_required"])
+        self.assertFalse(result["retryable"])
 
 
 if __name__ == "__main__":
