@@ -155,20 +155,18 @@ Azure supplies the administrator and SSH key for each VM through cloud-init.
 See [Building an Azure Compute Gallery image](docs/building-azure.md) for
 desktop builds and publishing commands.
 
-### Drive the OS
+### Drive the OS with the agent
+
+Call structured system primitives directly, or ask the built-in agent to choose
+and combine them:
 
 ```bash
-cos                                    # list primitives
-cos app web read https://example.com   # fetch URL → {url, title, text, links}
-```
-
-### Talk to the agent
-
-```bash
-cos agent setup                               # configure providers and credentials
+cos  # list primitives
+cos app web read https://example.com  # fetch URL → {url, title, text, links}
+cos agent setup  # configure providers and credentials
 cos agent ask "why is my network so slow right now?"
 cos agent ask "why did my last app crash?"
-cos agent chat                                 # interactive REPL with cross-app memory
+cos agent chat  # interactive REPL with cross-app memory
 ```
 
 ### Connect Discord or Telegram
