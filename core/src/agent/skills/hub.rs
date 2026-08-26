@@ -181,13 +181,6 @@ impl SkillsHub {
         Self { cfg, spec, gh }
     }
 
-    /// Allow tests to inject a custom-base GhClient (e.g. wiremock).
-    #[cfg(test)]
-    pub(crate) fn with_gh_client(cfg: HubConfig, gh: GhClient) -> Self {
-        let spec = cfg.gh_spec();
-        Self { cfg, spec, gh }
-    }
-
     /// Fetch the hub catalogue from the latest release of the
     /// configured repo. Skills whose `asset` field doesn't appear on
     /// the release are dropped (with a tracing warn) so callers

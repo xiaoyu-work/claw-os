@@ -12,7 +12,7 @@
 //! the new version.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use libloading::Library;
 
@@ -35,16 +35,6 @@ pub struct LlamaRuntime {
 /// Cached successful load. Failures are NOT stored — every miss
 /// re-attempts resolution + load.
 static SHARED: OnceLock<Arc<LlamaRuntime>> = OnceLock::new();
-
-/// Test-only override: lets tests inject a pre-built runtime (or pin
-/// resolution to a specific path) without poisoning the process-wide
-/// `OnceLock`.
-#[cfg(test)]
-static TEST_OVERRIDE: RwLock<Option<Arc<LlamaRuntime>>> = RwLock::new(None);
-
-#[cfg(not(test))]
-#[allow(dead_code)] // Field exists only to keep the import shape uniform.
-static TEST_OVERRIDE: RwLock<Option<Arc<LlamaRuntime>>> = RwLock::new(None);
 
 impl LlamaRuntime {
     /// Load `libllama` from a specific file path. Used by [`shared`]
@@ -92,8 +82,11 @@ impl LlamaRuntime {
     pub fn shared() -> Result<Arc<Self>, EngineError> {
         // Test override wins over the real cache so tests can pin the
         // runtime without race conditions across threads.
-        if let Some(rt) = test_override_runtime() {
-            return Ok(rt);
+        #[cfg(test)]
+        {
+            if let Some(rt) = tests::test_override_runtime() {
+                return Ok(rt);
+            }
         }
 
         if let Some(existing) = SHARED.get() {
@@ -116,25 +109,6 @@ impl LlamaRuntime {
         let _ = SHARED.set(runtime.clone());
         Ok(SHARED.get().cloned().unwrap_or(runtime))
     }
-}
-
-#[cfg(test)]
-pub fn test_override_runtime() -> Option<Arc<LlamaRuntime>> {
-    TEST_OVERRIDE.read().ok().and_then(|g| g.clone())
-}
-
-#[cfg(not(test))]
-fn test_override_runtime() -> Option<Arc<LlamaRuntime>> {
-    None
-}
-
-/// Test-only: install (or clear) a pre-built runtime that overrides the
-/// `OnceLock` cache. Returns the previous override, if any.
-#[cfg(test)]
-#[allow(dead_code)] // Reserved for future tests that want to mock.
-pub fn set_test_override(rt: Option<Arc<LlamaRuntime>>) -> Option<Arc<LlamaRuntime>> {
-    let mut slot = TEST_OVERRIDE.write().expect("test override lock poisoned");
-    std::mem::replace(&mut *slot, rt)
 }
 
 #[cfg(target_os = "windows")]
@@ -161,6 +135,9 @@ unsafe fn load_with_sibling_search(path: &Path) -> Result<Library, libloading::E
     // DYLD_LIBRARY_PATH. Documented in the engine_pkg readme.
     Library::new(path)
 }
+
+#[cfg(test)]
+pub use tests::set_test_override;
 
 #[cfg(test)]
 mod tests {

@@ -52,14 +52,6 @@ impl SemanticIndexer {
         }
     }
 
-    /// Inject an in-memory store (for tests).
-    #[cfg(test)]
-    pub fn from_store(store: SemanticStore) -> Arc<Self> {
-        Arc::new(Self {
-            store: Arc::new(store),
-        })
-    }
-
     /// Fire-and-forget upsert of one conversation message into the
     /// semantic store. Returns immediately; the actual embed + write
     /// runs on a background `tokio` task. Empty / whitespace-only
@@ -70,7 +62,13 @@ impl SemanticIndexer {
     /// runtime drops. Without the registry these tasks would be
     /// cancelled mid-embed and the last turn's user/assistant
     /// messages would be missing from semantic search.
-    pub fn spawn_index(self: &Arc<Self>, session_id: String, role: &str, msg_id: i64, text: String) {
+    pub fn spawn_index(
+        self: &Arc<Self>,
+        session_id: String,
+        role: &str,
+        msg_id: i64,
+        text: String,
+    ) {
         if text.trim().is_empty() {
             return;
         }
@@ -98,9 +96,7 @@ impl SemanticIndexer {
                 }
             };
             match trusted_session {
-                Some(session) => {
-                    crate::proc::with_trusted_session_override(session, run).await
-                }
+                Some(session) => crate::proc::with_trusted_session_override(session, run).await,
                 None => run.await,
             }
         });

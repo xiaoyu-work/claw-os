@@ -1,4 +1,5 @@
 use super::*;
+use crate::session;
 use std::env;
 
 fn lock_env() -> std::sync::MutexGuard<'static, ()> {

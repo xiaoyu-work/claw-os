@@ -1,5 +1,9 @@
 use super::*;
 
+fn current_override() -> Option<&'static CosConfig> {
+    CONFIG_OVERRIDE.try_with(|c| *c).ok()
+}
+
 #[test]
 fn default_config_has_sensible_values() {
     let cfg = CosConfig::default();
@@ -231,10 +235,9 @@ async fn override_propagates_through_awaited_futures() {
         let a = async { get().agent.provider.clone() }.await;
         // join_all-style concurrency drives futures within the
         // same task, so the override is still visible.
-        let bcd = futures_util::future::join_all((0..3).map(|_| async {
-            get().agent.provider.clone()
-        }))
-        .await;
+        let bcd =
+            futures_util::future::join_all((0..3).map(|_| async { get().agent.provider.clone() }))
+                .await;
         (a, bcd)
     })
     .await;

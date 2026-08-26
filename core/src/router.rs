@@ -25,8 +25,6 @@ use crate::service;
 use crate::sysinfo;
 use crate::triggers;
 use app_commands::dispatch_app;
-#[cfg(test)]
-use app_commands::{consent_cmd, create_cmd, install_cmd};
 use help::{builtin_apps, show_help_for, show_overview};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -1535,8 +1533,5 @@ fn dispatch_builtin(
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/router.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/router.rs"));
 }

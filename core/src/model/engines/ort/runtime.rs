@@ -12,7 +12,7 @@
 //! the new version. Mirrors `super::super::llama_cpp::runtime` exactly.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use libloading::Library;
 
@@ -35,15 +35,6 @@ pub struct OrtRuntime {
 /// Cached successful load. Failures are NOT stored — every miss
 /// re-attempts resolution + load.
 static SHARED: OnceLock<Arc<OrtRuntime>> = OnceLock::new();
-
-/// Test-only override: lets tests inject a pre-built runtime without
-/// poisoning the process-wide `OnceLock`.
-#[cfg(test)]
-static TEST_OVERRIDE: RwLock<Option<Arc<OrtRuntime>>> = RwLock::new(None);
-
-#[cfg(not(test))]
-#[allow(dead_code)] // Field exists only to keep the import shape uniform.
-static TEST_OVERRIDE: RwLock<Option<Arc<OrtRuntime>>> = RwLock::new(None);
 
 impl OrtRuntime {
     /// Load `libonnxruntime` from a specific file path. Used by
@@ -90,8 +81,11 @@ impl OrtRuntime {
     /// it up.
     #[allow(dead_code)] // Real callers land when ort wire-in starts.
     pub fn shared() -> Result<Arc<Self>, EngineError> {
-        if let Some(rt) = test_override_runtime() {
-            return Ok(rt);
+        #[cfg(test)]
+        {
+            if let Some(rt) = tests::test_override_runtime() {
+                return Ok(rt);
+            }
         }
 
         if let Some(existing) = SHARED.get() {
@@ -112,23 +106,6 @@ impl OrtRuntime {
         let _ = SHARED.set(runtime.clone());
         Ok(SHARED.get().cloned().unwrap_or(runtime))
     }
-}
-
-#[cfg(test)]
-pub fn test_override_runtime() -> Option<Arc<OrtRuntime>> {
-    TEST_OVERRIDE.read().ok().and_then(|g| g.clone())
-}
-
-#[cfg(not(test))]
-fn test_override_runtime() -> Option<Arc<OrtRuntime>> {
-    None
-}
-
-#[cfg(test)]
-#[allow(dead_code)] // Reserved for future tests.
-pub fn set_test_override(rt: Option<Arc<OrtRuntime>>) -> Option<Arc<OrtRuntime>> {
-    let mut slot = TEST_OVERRIDE.write().expect("test override lock poisoned");
-    std::mem::replace(&mut *slot, rt)
 }
 
 #[cfg(target_os = "windows")]
@@ -154,6 +131,9 @@ unsafe fn load_with_sibling_search(path: &Path) -> Result<Library, libloading::E
     // LD_LIBRARY_PATH / DYLD_LIBRARY_PATH.
     Library::new(path)
 }
+
+#[cfg(test)]
+pub use tests::set_test_override;
 
 #[cfg(test)]
 mod tests {

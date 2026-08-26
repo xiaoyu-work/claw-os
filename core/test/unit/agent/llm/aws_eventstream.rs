@@ -1,5 +1,11 @@
 use super::*;
 
+impl EventStreamParser {
+    fn pending_bytes(&self) -> usize {
+        self.buf.len()
+    }
+}
+
 fn good_chunk_frame() -> Vec<u8> {
     encode_frame(
         &[

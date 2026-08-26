@@ -1,5 +1,18 @@
 use super::*;
 
+thread_local! {
+    static ENGINES_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn engines_dir_override() -> Option<PathBuf> {
+    ENGINES_DIR_OVERRIDE.with(|c| c.borrow().clone())
+}
+
+pub fn set_engines_dir_override(p: Option<PathBuf>) {
+    ENGINES_DIR_OVERRIDE.with(|c| *c.borrow_mut() = p);
+}
+
 #[test]
 fn sanitize_blocks_path_traversal() {
     // `../etc` ⇒ `/` becomes `_`, giving `.._etc`. Because that

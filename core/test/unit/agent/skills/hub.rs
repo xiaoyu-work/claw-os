@@ -1,5 +1,12 @@
 use super::*;
 
+impl SkillsHub {
+    pub(crate) fn with_gh_client(cfg: HubConfig, gh: GhClient) -> Self {
+        let spec = cfg.gh_spec();
+        Self { cfg, spec, gh }
+    }
+}
+
 #[test]
 fn config_filters_empty_token() {
     let c = HubConfig::new("o", "r").with_token(Some(String::new()));

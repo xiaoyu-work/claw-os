@@ -185,11 +185,6 @@ impl EventStreamParser {
             Err(FrameError::Truncated(self.buf.len()))
         }
     }
-
-    #[cfg(test)]
-    pub fn pending_bytes(&self) -> usize {
-        self.buf.len()
-    }
 }
 
 fn parse_headers(mut buf: &[u8]) -> Result<HashMap<String, String>, FrameError> {

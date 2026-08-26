@@ -8,21 +8,10 @@
 
 use std::path::PathBuf;
 
-#[cfg(test)]
-thread_local! {
-    static ENGINES_DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-#[cfg(test)]
-pub fn set_engines_dir_override(p: Option<PathBuf>) {
-    ENGINES_DIR_OVERRIDE.with(|c| *c.borrow_mut() = p);
-}
-
 pub fn engines_dir() -> PathBuf {
     #[cfg(test)]
     {
-        if let Some(p) = ENGINES_DIR_OVERRIDE.with(|c| c.borrow().clone()) {
+        if let Some(p) = tests::engines_dir_override() {
             return p;
         }
     }
@@ -70,6 +59,9 @@ fn sanitize_segment(s: &str) -> String {
         cleaned
     }
 }
+
+#[cfg(test)]
+pub use tests::set_engines_dir_override;
 
 #[cfg(test)]
 mod tests {

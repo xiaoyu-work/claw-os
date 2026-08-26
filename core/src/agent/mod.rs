@@ -1113,8 +1113,7 @@ fn recall_cmd(args: &[String]) -> Result<Value, String> {
     let rendered: Vec<Value> = hits
         .iter()
         .map(|h| {
-            let content =
-                memory::history::sanitize_stored_content(&h.row.role, &h.row.content);
+            let content = memory::history::sanitize_stored_content(&h.row.role, &h.row.content);
             json!({
                 "id": h.row.id,
                 "session_id": h.row.session_id,
@@ -1643,9 +1642,7 @@ fn memory_forget(args: &[String]) -> Result<Value, String> {
         }
     }
     if source.is_some() == row.is_some() {
-        return Err(
-            "usage: cos agent memory forget {--row <id> | --source <id>} [--yes]".into(),
-        );
+        return Err("usage: cos agent memory forget {--row <id> | --source <id>} [--yes]".into());
     }
     let db = memory::sqlite_fts::MemoryDb::open_default()
         .map_err(|e| format!("memory db unavailable: {e}"))?;
@@ -2339,8 +2336,7 @@ fn llm_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .filter(|s| !s.is_empty())
                 .ok_or_else(|| "usage: cos agent llm model <name>".to_string())?;
-            let m = metadata::lookup(&name)
-                .ok_or_else(|| format!("unknown model: {name}"))?;
+            let m = metadata::lookup(&name).ok_or_else(|| format!("unknown model: {name}"))?;
             Ok(model_to_json(m))
         }
         other => Err(format!(
@@ -2834,201 +2830,6 @@ async fn stream_cmd_async(
     }))
 }
 
-/// Test-only harness for the full agent loop's provider-stream path.
-/// Production streaming remains owned by the chat and web UI surfaces.
-#[cfg(test)]
-async fn live_cmd_async(
-    provider: std::sync::Arc<dyn llm::Provider>,
-    cfg: &crate::config::AgentConfig,
-    user_prompt: &str,
-) -> Result<Value, String> {
-    use crate::agent::llm::accumulate::StreamSink;
-    use crate::agent::llm::types::StreamEvent;
-    use std::collections::HashSet;
-    use std::io::Write;
-    use std::sync::{Arc, Mutex};
-
-    // Build the same registry the production `ask` path builds.
-    let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
-    tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
-
-    /// Stream sink that writes tokens live, announces tool names without
-    /// payloads, and flags warnings. Captures the metadata the envelope needs
-    /// to summarise the run (the loop itself returns final answer text).
-    struct LiveSink {
-        tool_calls: Mutex<Vec<serde_json::Value>>,
-        announced_tools: Mutex<HashSet<String>>,
-        warnings: Mutex<Vec<String>>,
-        // Final usage + finish reason from the LAST `Done` event in
-        // the multi-turn run. Earlier turns' Done events are still
-        // forwarded — we just keep the latest.
-        last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
-        last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
-        // Heartbeat tasks keyed by tool_use id. Started on
-        // `on_tool_start`; cancelled on `on_tool_result`. Reuses
-        // the runtime-level [`progress::Heartbeat`] helper so the
-        // Reuse the same heartbeat implementation as the chat REPL.
-        heartbeat: crate::agent::runtime::progress::Heartbeat,
-    }
-    impl LiveSink {
-        fn announce_tool(&self, id: &str, name: &str, out: &mut impl Write) {
-            let should_announce =
-                id.is_empty() || mlock(&self.announced_tools).insert(id.to_string());
-            if should_announce {
-                let _ = writeln!(out, "\n[tool: {name}]");
-            }
-        }
-    }
-    impl StreamSink for LiveSink {
-        fn on_event(&self, event: &StreamEvent) {
-            let stderr = std::io::stderr();
-            let mut err_lock = stderr.lock();
-            match event {
-                StreamEvent::TextDelta { text } => {
-                    let _ = err_lock.write_all(text.as_bytes());
-                    let _ = err_lock.flush();
-                }
-                StreamEvent::ToolUseStart { id, name } => {
-                    self.announce_tool(id, name, &mut err_lock);
-                }
-                StreamEvent::ToolInputDelta { .. } => {}
-                StreamEvent::ToolUse(call) => {
-                    self.announce_tool(&call.id, &call.name, &mut err_lock);
-                    mlock(&self.tool_calls).push(serde_json::json!({
-                        "id": call.id,
-                        "name": call.name,
-                    }));
-                }
-                StreamEvent::Reasoning { .. } => {}
-                StreamEvent::ToolState { .. } => {}
-                StreamEvent::Message(resp) => {
-                    for block in &resp.content {
-                        if let crate::agent::llm::types::ContentBlock::Text { text } = block {
-                            let _ = err_lock.write_all(text.as_bytes());
-                        }
-                    }
-                    for call in &resp.tool_calls {
-                        self.announce_tool(&call.id, &call.name, &mut err_lock);
-                        mlock(&self.tool_calls).push(serde_json::json!({
-                            "id": call.id,
-                            "name": call.name,
-                        }));
-                    }
-                    let _ = err_lock.flush();
-                }
-                StreamEvent::Done { finish, usage } => {
-                    let _ = writeln!(err_lock, "\n[turn done finish={finish:?}]");
-                    *mlock(&self.last_usage) = Some(usage.clone());
-                    *mlock(&self.last_finish) = Some(*finish);
-                }
-                StreamEvent::Warning { message } => {
-                    let _ = writeln!(err_lock, "\n[warning] {message}");
-                    mlock(&self.warnings).push(message.clone());
-                }
-            }
-        }
-    }
-
-    impl crate::agent::runtime::progress::ProgressSink for LiveSink {
-        fn on_tool_start(
-            &self,
-            id: &str,
-            name: &str,
-            _input: &serde_json::Value,
-        ) {
-            self.announce_tool(id, name, &mut std::io::stderr().lock());
-            self.heartbeat.start(id, "");
-        }
-
-        fn on_tool_result(
-            &self,
-            id: &str,
-            name: &str,
-            ok: bool,
-            _latency_ms: u64,
-            _bytes_returned: usize,
-            _content_preview: &str,
-        ) {
-            self.heartbeat.stop(id);
-            if !ok {
-                let _ = writeln!(std::io::stderr().lock(), "\n[tool failed: {name}]");
-            }
-        }
-    }
-
-    let sink_obj = Arc::new(LiveSink {
-        tool_calls: Mutex::new(Vec::new()),
-        announced_tools: Mutex::new(HashSet::new()),
-        warnings: Mutex::new(Vec::new()),
-        last_usage: Mutex::new(None),
-        last_finish: Mutex::new(None),
-        heartbeat: crate::agent::runtime::progress::Heartbeat::new(),
-    });
-    let sink: Arc<dyn StreamSink> = sink_obj.clone();
-    let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
-
-    // Mirror the `ask` path's memory-DB handling: try default DB,
-    // fall back to no-recording on failure.
-    let result = match memory::sqlite_fts::MemoryDb::open_default() {
-        Ok(db) => {
-            let session_id = uuid::Uuid::new_v4().to_string();
-            runtime::loop_::ask_with_stream(
-                provider.clone(),
-                cfg,
-                user_prompt,
-                &tools,
-                Some((&db, session_id.as_str())),
-                sink,
-                progress,
-            )
-            .await
-        }
-        Err(e) => {
-            tracing::warn!(
-                "memory: default DB unavailable ({e}); running without history recording"
-            );
-            runtime::loop_::ask_with_stream(
-                provider.clone(),
-                cfg,
-                user_prompt,
-                &tools,
-                None,
-                sink,
-                progress,
-            )
-            .await
-        }
-    };
-
-    match result {
-        Ok(ask_result) => {
-            let usage = mlock(&sink_obj.last_usage).clone().unwrap_or_default();
-            let finish = mlock(&sink_obj.last_finish).take();
-            Ok(json!({
-                "answer": ask_result.answer,
-                "evidence": ask_result.evidence,
-                "fallback": ask_result.fallback,
-                "turns": ask_result.turns,
-                "provider": ask_result.provider,
-                "model": ask_result.model,
-                "session_id": ask_result.session_id,
-                "tool_calls": *mlock(&sink_obj.tool_calls),
-                "warnings": *mlock(&sink_obj.warnings),
-                "finish": finish.map(|f| format!("{f:?}")),
-                "usage": {
-                    "input_tokens": usage.input_tokens,
-                    "output_tokens": usage.output_tokens,
-                    "cache_read_tokens": usage.cache_read_tokens,
-                    "cache_write_tokens": usage.cache_write_tokens,
-                },
-            }))
-        }
-        Err(e) => Err(e.to_string()),
-    }
-}
-
 /// `cos agent chat [--session <id>] [--no-stream] [--no-memory]
 /// [--show-tools] [--max-turns N]` — interactive multi-turn REPL.
 ///
@@ -3146,7 +2947,6 @@ fn chat_cmd(args: &[String]) -> Result<Value, String> {
     })
 }
 
-
 /// `cos agent budget` — inspect per-app AI spend.
 ///
 /// Subcommands:
@@ -3229,11 +3029,9 @@ fn budget_cmd(args: &[String]) -> Result<Value, String> {
                 )),
             }
         }
-        _ => Err(
-            "usage: cos agent budget <show|reset|history> <app>  |  \
+        _ => Err("usage: cos agent budget <show|reset|history> <app>  |  \
              cos agent budget user <show|path>"
-                .to_string(),
-        ),
+            .to_string()),
     }
 }
 
@@ -3278,11 +3076,8 @@ fn override_cmd(args: &[String]) -> Result<Value, String> {
                 .get(app)
                 .cloned()
                 .ok_or_else(|| format!("unknown app `{app}`"))?;
-            let manifest_policy = installed
-                .manifest
-                .ai
-                .as_ref()
-                .ok_or_else(|| {
+            let manifest_policy =
+                installed.manifest.ai.as_ref().ok_or_else(|| {
                     format!("app `{app}` has no `ai` block — nothing to override")
                 })?;
             let ovr = overrides::load(app)?;
@@ -3296,10 +3091,7 @@ fn override_cmd(args: &[String]) -> Result<Value, String> {
                 "effective": effective,
             }))
         }
-        _ => Err(
-            "usage: cos agent override <show|path|effective> <app>"
-                .to_string(),
-        ),
+        _ => Err("usage: cos agent override <show|path|effective> <app>".to_string()),
     }
 }
 
@@ -3494,12 +3286,7 @@ async fn chat_cmd_async(
     }
 
     impl crate::agent::runtime::progress::ProgressSink for ChatSink {
-        fn on_tool_start(
-            &self,
-            id: &str,
-            name: &str,
-            _input: &serde_json::Value,
-        ) {
+        fn on_tool_start(&self, id: &str, name: &str, _input: &serde_json::Value) {
             self.announce_tool(id, name, &mut std::io::stderr().lock());
             self.heartbeat.start(id, "");
         }
@@ -3552,8 +3339,7 @@ async fn chat_cmd_async(
             );
         }
         let line = decoded.trim();
-        let repaired_command =
-            had_invalid_utf8.then(|| line.replace('\u{FFFD}', ""));
+        let repaired_command = had_invalid_utf8.then(|| line.replace('\u{FFFD}', ""));
         let command_line = repaired_command.as_deref().unwrap_or(line);
         if command_line.is_empty() {
             continue;
@@ -3599,13 +3385,10 @@ async fn chat_cmd_async(
                                     let _ = writeln!(e, "(no messages yet)");
                                 } else {
                                     for r in &rows {
-                                        let content =
-                                            memory::history::sanitize_stored_content(
-                                                &r.role,
-                                                &r.content,
-                                            );
-                                        let snippet: String =
-                                            content.chars().take(140).collect();
+                                        let content = memory::history::sanitize_stored_content(
+                                            &r.role, &r.content,
+                                        );
+                                        let snippet: String = content.chars().take(140).collect();
                                         let _ = writeln!(e, "[{}] {}", r.role, snippet);
                                     }
                                 }
@@ -3641,8 +3424,7 @@ async fn chat_cmd_async(
         let result = if streaming {
             sink_obj.reset();
             let sink: Arc<dyn StreamSink> = sink_obj.clone();
-            let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
-                sink_obj.clone();
+            let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
             if let Some(db) = &memory_db {
                 runtime::loop_::ask_with_stream_continuation(
                     provider.clone(),
@@ -3707,10 +3489,7 @@ async fn chat_cmd_async(
                     let _ = writeln!(
                         e,
                         "[turn {} done; turns={} model={} session={}]",
-                        prompt_seq,
-                        ask_result.turns,
-                        ask_result.model,
-                        ask_result.session_id
+                        prompt_seq, ask_result.turns, ask_result.model, ask_result.session_id
                     );
                 }
                 if !matches!(
@@ -5908,8 +5687,7 @@ fn display_transcript_with(
     let lines: Vec<String> = rows
         .iter()
         .map(|row| {
-            let content =
-                memory::history::sanitize_stored_content(&row.role, &row.content);
+            let content = memory::history::sanitize_stored_content(&row.role, &row.content);
             crate::agent::display::render_message(role_from_str(&row.role), &content, &cfg)
         })
         .collect();
@@ -6880,28 +6658,30 @@ fn osv_check_cmd(args: &[String]) -> Result<Value, String> {
     // emitted JSON remains stable.
     use futures_util::stream::{self, StreamExt};
     const CONCURRENCY: usize = 8;
-    let scored: Vec<(usize, Vec<crate::agent::safety::osv::OsvVulnerability>)> = rt.block_on(async {
-        stream::iter(pkgs.iter().enumerate())
-            .map(|(idx, pkg)| async move {
-                let vulns = crate::agent::safety::osv::query(pkg).await.unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "osv: {} {} {}: {}",
-                        pkg.ecosystem,
-                        pkg.name,
-                        pkg.version,
-                        e
-                    );
-                    Vec::new()
-                });
-                (idx, vulns)
-            })
-            .buffer_unordered(CONCURRENCY)
-            .collect()
-            .await
-    });
-    let mut by_idx: Vec<Vec<crate::agent::safety::osv::OsvVulnerability>> = (0..pkgs.len())
-        .map(|_| Vec::new())
-        .collect();
+    let scored: Vec<(usize, Vec<crate::agent::safety::osv::OsvVulnerability>)> =
+        rt.block_on(async {
+            stream::iter(pkgs.iter().enumerate())
+                .map(|(idx, pkg)| async move {
+                    let vulns = crate::agent::safety::osv::query(pkg)
+                        .await
+                        .unwrap_or_else(|e| {
+                            tracing::warn!(
+                                "osv: {} {} {}: {}",
+                                pkg.ecosystem,
+                                pkg.name,
+                                pkg.version,
+                                e
+                            );
+                            Vec::new()
+                        });
+                    (idx, vulns)
+                })
+                .buffer_unordered(CONCURRENCY)
+                .collect()
+                .await
+        });
+    let mut by_idx: Vec<Vec<crate::agent::safety::osv::OsvVulnerability>> =
+        (0..pkgs.len()).map(|_| Vec::new()).collect();
     for (idx, v) in scored {
         by_idx[idx] = v;
     }
@@ -8569,8 +8349,5 @@ fn curator_scan_cmd(args: &[String]) -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/agent.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/agent.rs"));
 }

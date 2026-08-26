@@ -1,5 +1,13 @@
 use super::*;
 
+impl SemanticIndexer {
+    fn from_store(store: SemanticStore) -> Arc<Self> {
+        Arc::new(Self {
+            store: Arc::new(store),
+        })
+    }
+}
+
 #[tokio::test]
 async fn empty_text_does_not_panic_and_does_not_spawn() {
     // No embedder → if we DID try to index, it'd error. The empty

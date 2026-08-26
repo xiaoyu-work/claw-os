@@ -1,4 +1,17 @@
 use super::*;
+use std::sync::RwLock;
+
+static TEST_OVERRIDE: RwLock<Option<Arc<OrtGenaiRuntime>>> = RwLock::new(None);
+
+pub(super) fn test_override_runtime() -> Option<Arc<OrtGenaiRuntime>> {
+    TEST_OVERRIDE.read().ok().and_then(|g| g.clone())
+}
+
+#[allow(dead_code)]
+pub fn set_test_override(rt: Option<Arc<OrtGenaiRuntime>>) -> Option<Arc<OrtGenaiRuntime>> {
+    let mut slot = TEST_OVERRIDE.write().expect("test override lock poisoned");
+    std::mem::replace(&mut *slot, rt)
+}
 
 #[test]
 fn load_missing_file_returns_not_installed() {

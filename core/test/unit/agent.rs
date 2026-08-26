@@ -18,11 +18,7 @@ fn override_cmd_help_shape() {
 
 #[test]
 fn override_cmd_path_returns_user_config_path() {
-    let v = override_cmd(&[
-        "path".to_string(),
-        "demo-app".to_string(),
-    ])
-    .expect("path ok");
+    let v = override_cmd(&["path".to_string(), "demo-app".to_string()]).expect("path ok");
     let p = v.get("path").and_then(|x| x.as_str()).expect("path field");
     assert!(p.contains("apps"));
     assert!(p.ends_with("demo-app.json"));
@@ -34,17 +30,10 @@ fn override_cmd_show_missing_file_reports_absent() {
     // env lock so we don't race with other env-touching tests.
     let _env_lock = crate::test_env::lock_env();
     // Point user-config at an empty tmp dir so the file definitely doesn't exist.
-    let tmp = std::env::temp_dir().join(format!(
-        "cos-override-cmd-missing-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("cos-override-cmd-missing-{}", std::process::id()));
     let prev = std::env::var_os("COS_USER_CONFIG_DIR");
     std::env::set_var("COS_USER_CONFIG_DIR", &tmp);
-    let v = override_cmd(&[
-        "show".to_string(),
-        "never-installed".to_string(),
-    ])
-    .expect("show ok");
+    let v = override_cmd(&["show".to_string(), "never-installed".to_string()]).expect("show ok");
     match prev {
         Some(p) => std::env::set_var("COS_USER_CONFIG_DIR", p),
         None => std::env::remove_var("COS_USER_CONFIG_DIR"),
@@ -70,10 +59,7 @@ fn budget_user_show_missing_file_reports_unlimited() {
     // Empty tmp dirs ⇒ no budget.json (unlimited) and a writable
     // data dir for the SQLite store (the default /var/lib/cos is
     // not writable on dev hosts).
-    let tmp = std::env::temp_dir().join(format!(
-        "cos-budget-user-show-{}",
-        std::process::id()
-    ));
+    let tmp = std::env::temp_dir().join(format!("cos-budget-user-show-{}", std::process::id()));
     let cfg_dir = tmp.join("config");
     let data_dir = tmp.join("data");
     let _ = std::fs::remove_dir_all(&tmp);
@@ -351,8 +337,8 @@ fn redact_from_file() {
     let dir = tempfile::tempdir().expect("tmp");
     let p = dir.path().join("sample.txt");
     std::fs::write(&p, "token=ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789").expect("write");
-    let v = redact_cmd(&["--file".into(), p.to_string_lossy().to_string()])
-        .expect("file redact ok");
+    let v =
+        redact_cmd(&["--file".into(), p.to_string_lossy().to_string()]).expect("file redact ok");
     let out = v.get("redacted").and_then(|x| x.as_str()).unwrap();
     assert!(
         out.contains("[REDACTED:github_token]"),
@@ -618,8 +604,7 @@ fn prompt_extra_nonexistent_file_does_not_panic() {
 
 #[test]
 fn think_scrub_strips_think_block() {
-    let v =
-        think_scrub_cmd(&["before <think>secret reasoning</think> after".into()]).expect("ok");
+    let v = think_scrub_cmd(&["before <think>secret reasoning</think> after".into()]).expect("ok");
     let out = v.get("scrubbed").and_then(|x| x.as_str()).unwrap();
     assert!(!out.contains("secret reasoning"), "got {out}");
     assert!(out.contains("before"));
@@ -832,8 +817,14 @@ fn usage_app_flag_combines_with_provider_scope() {
     ])
     .expect("usage provider --app ok");
     let filter = v.get("filter").unwrap();
-    assert_eq!(filter.get("provider").and_then(|x| x.as_str()), Some("anthropic"));
-    assert_eq!(filter.get("app_id").and_then(|x| x.as_str()), Some("summarize"));
+    assert_eq!(
+        filter.get("provider").and_then(|x| x.as_str()),
+        Some("anthropic")
+    );
+    assert_eq!(
+        filter.get("app_id").and_then(|x| x.as_str()),
+        Some("summarize")
+    );
 }
 
 #[test]
@@ -1004,8 +995,7 @@ fn providers_cmd_marks_active_provider() {
 
 #[test]
 fn providers_cmd_filters_by_names_flag() {
-    let v =
-        providers_cmd(&["--names".into(), "openai,anthropic".into()]).expect("providers ok");
+    let v = providers_cmd(&["--names".into(), "openai,anthropic".into()]).expect("providers ok");
     let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
     assert_eq!(arr.len(), 2);
     let names: Vec<_> = arr
@@ -1018,8 +1008,8 @@ fn providers_cmd_filters_by_names_flag() {
 
 #[test]
 fn providers_cmd_filter_drops_unknown_names_silently() {
-    let v = providers_cmd(&["--names".into(), "openai,does-not-exist".into()])
-        .expect("providers ok");
+    let v =
+        providers_cmd(&["--names".into(), "openai,does-not-exist".into()]).expect("providers ok");
     let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
     // "does-not-exist" is not in REGISTERED, so it gets dropped.
     assert_eq!(arr.len(), 1);
@@ -1028,8 +1018,8 @@ fn providers_cmd_filter_drops_unknown_names_silently() {
 
 #[test]
 fn providers_cmd_local_providers_have_no_canonical_env_or_credential() {
-    let v = providers_cmd(&["--names".into(), "ollama,mock,llama_local".into()])
-        .expect("providers ok");
+    let v =
+        providers_cmd(&["--names".into(), "ollama,mock,llama_local".into()]).expect("providers ok");
     let arr = v.get("providers").and_then(|p| p.as_array()).unwrap();
     assert_eq!(arr.len(), 3);
     for entry in arr {
@@ -1591,8 +1581,8 @@ fn classify_cmd_returns_null_on_no_match() {
 
 #[test]
 fn classify_cmd_tolerates_trailing_punctuation() {
-    let v = classify_cmd(&["yes.".into(), "--labels".into(), "yes,no".into()])
-        .expect("classify ok");
+    let v =
+        classify_cmd(&["yes.".into(), "--labels".into(), "yes,no".into()]).expect("classify ok");
     assert_eq!(v.get("matched").and_then(|m| m.as_str()), Some("yes"));
 }
 
@@ -1967,8 +1957,7 @@ fn todo_cmd_remove_drops_item() {
         &store,
     )
     .expect("add ok");
-    let v =
-        todo_cmd_at(&["remove".into(), "s1".into(), "t1".into()], &store).expect("remove ok");
+    let v = todo_cmd_at(&["remove".into(), "s1".into(), "t1".into()], &store).expect("remove ok");
     assert_eq!(v.get("count").and_then(|c| c.as_u64()), Some(1));
     let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
     let items = listed
@@ -2000,8 +1989,7 @@ fn todo_cmd_clear_with_yes_wipes_session() {
         &store,
     )
     .expect("add ok");
-    let v =
-        todo_cmd_at(&["clear".into(), "s1".into(), "--yes".into()], &store).expect("clear ok");
+    let v = todo_cmd_at(&["clear".into(), "s1".into(), "--yes".into()], &store).expect("clear ok");
     assert_eq!(v.get("cleared").and_then(|c| c.as_bool()), Some(true));
     let listed = todo_cmd_at(&["list".into(), "s1".into()], &store).expect("list ok");
     assert_eq!(listed.get("count").and_then(|c| c.as_u64()), Some(0));
@@ -2109,8 +2097,7 @@ fn compress_cmd_check_counts_by_role() {
     let body = format!(
         "{}\n{}\n{}\n",
         serde_json::to_string(&crate::agent::llm::types::Message::user_text("u1")).unwrap(),
-        serde_json::to_string(&crate::agent::llm::types::Message::assistant_text("a1"))
-            .unwrap(),
+        serde_json::to_string(&crate::agent::llm::types::Message::assistant_text("a1")).unwrap(),
         serde_json::to_string(&crate::agent::llm::types::Message::user_text("u2")).unwrap(),
     );
     std::fs::write(&path, body).expect("write");
@@ -2240,8 +2227,8 @@ fn compress_cmd_check_rejects_corrupt_jsonl() {
     let dir = tempfile::tempdir().expect("tmp");
     let path = dir.path().join("conv.jsonl");
     std::fs::write(&path, "{not json}\n").expect("write");
-    let err = compress_cmd(&["check".into(), "--file".into(), path.display().to_string()])
-        .unwrap_err();
+    let err =
+        compress_cmd(&["check".into(), "--file".into(), path.display().to_string()]).unwrap_err();
     assert!(err.contains("parse line 1"));
 }
 
@@ -2459,8 +2446,7 @@ fn retry_cmd_schedule_falls_back_to_standard_when_disabled() {
 
 #[test]
 fn retry_cmd_schedule_attempts_override() {
-    let v =
-        retry_cmd(&["schedule".into(), "--attempts".into(), "6".into()]).expect("schedule ok");
+    let v = retry_cmd(&["schedule".into(), "--attempts".into(), "6".into()]).expect("schedule ok");
     let waits = v
         .get("inter_attempt_waits")
         .and_then(|w| w.as_array())
@@ -2471,8 +2457,7 @@ fn retry_cmd_schedule_attempts_override() {
 
 #[test]
 fn retry_cmd_schedule_one_attempt_has_no_waits() {
-    let v =
-        retry_cmd(&["schedule".into(), "--attempts".into(), "1".into()]).expect("schedule ok");
+    let v = retry_cmd(&["schedule".into(), "--attempts".into(), "1".into()]).expect("schedule ok");
     let waits = v
         .get("inter_attempt_waits")
         .and_then(|w| w.as_array())
@@ -2486,8 +2471,7 @@ fn retry_cmd_schedule_caps_delay_at_max_ms() {
     // standard() base=500, max=8000. delay_for(4) would naively
     // be 500 << 3 = 4000 (≤ max), delay_for(5) = 500 << 4 = 8000
     // (= max), delay_for(10) > max → capped.
-    let v =
-        retry_cmd(&["schedule".into(), "--attempts".into(), "11".into()]).expect("schedule ok");
+    let v = retry_cmd(&["schedule".into(), "--attempts".into(), "11".into()]).expect("schedule ok");
     let waits = v
         .get("inter_attempt_waits")
         .and_then(|w| w.as_array())
@@ -2871,8 +2855,7 @@ fn sessions_purge_requires_older_than() {
 fn sessions_purge_validates_days_is_positive_integer() {
     let err = sessions_purge(&["--older-than".into(), "0".into(), "--yes".into()]).unwrap_err();
     assert!(err.contains("> 0"), "got {err}");
-    let err2 =
-        sessions_purge(&["--older-than".into(), "abc".into(), "--yes".into()]).unwrap_err();
+    let err2 = sessions_purge(&["--older-than".into(), "abc".into(), "--yes".into()]).unwrap_err();
     assert!(err2.contains("positive integer"), "got {err2}");
 }
 
@@ -3350,8 +3333,7 @@ fn vision_sniff_file_returns_mime_and_len() {
     )
     .unwrap();
 
-    let v =
-        vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
+    let v = vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
     assert_eq!(v.get("bytes_len").and_then(|n| n.as_u64()), Some(10));
     assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Png"));
     assert_eq!(
@@ -3371,8 +3353,7 @@ fn vision_sniff_file_unknown_magic_classifies_other() {
     let path = dir.join("x.bin");
     std::fs::write(&path, b"this is not an image").unwrap();
 
-    let v =
-        vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
+    let v = vision_sniff_cmd(&["--file".into(), path.to_string_lossy().to_string()]).expect("ok");
     assert_eq!(v.get("mime").and_then(|s| s.as_str()), Some("Other"));
     assert_eq!(v.get("is_other").and_then(|b| b.as_bool()), Some(true));
     assert_eq!(
@@ -3824,8 +3805,7 @@ fn binary_ext_extensions_returns_all_unbounded() {
 
 #[test]
 fn binary_ext_check_recognises_path_with_known_ext() {
-    let v =
-        binary_ext_cmd(&["check".into(), "C:\\Users\\me\\image.PNG".into()]).expect("check ok");
+    let v = binary_ext_cmd(&["check".into(), "C:\\Users\\me\\image.PNG".into()]).expect("check ok");
     assert_eq!(v.get("mode").and_then(|s| s.as_str()), Some("path"));
     assert_eq!(v.get("is_binary").and_then(|b| b.as_bool()), Some(true));
     assert_eq!(v.get("extension").and_then(|s| s.as_str()), Some("png"));
@@ -3875,8 +3855,7 @@ fn context_hints_finds_real_markers_in_temp_dir() {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("Cargo.toml"), "[package]\nname=\"x\"\n").unwrap();
-    let v =
-        context_hints_cmd(&["--cwd".into(), dir.to_string_lossy().to_string()]).expect("ok");
+    let v = context_hints_cmd(&["--cwd".into(), dir.to_string_lossy().to_string()]).expect("ok");
     assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
     let hints = v.get("hints").and_then(|h| h.as_array()).unwrap();
     assert!(hints
@@ -3962,8 +3941,7 @@ fn context_refs_extracts_paths_and_urls() {
 
 #[test]
 fn context_refs_unique_dedupes() {
-    let v =
-        context_refs_cmd(&["--text".into(), "@a @a @a".into(), "--unique".into()]).expect("ok");
+    let v = context_refs_cmd(&["--text".into(), "@a @a @a".into(), "--unique".into()]).expect("ok");
     assert_eq!(v.get("count").and_then(|n| n.as_u64()), Some(1));
     assert_eq!(v.get("unique").and_then(|b| b.as_bool()), Some(true));
 }
@@ -4011,8 +3989,8 @@ fn context_build_invalid_depth_errs() {
 
 #[test]
 fn context_build_with_text_extracts_references() {
-    let v = context_cmd(&["build".into(), "--text".into(), "look at @notes.md".into()])
-        .expect("ok");
+    let v =
+        context_cmd(&["build".into(), "--text".into(), "look at @notes.md".into()]).expect("ok");
     assert_eq!(v.get("is_empty").and_then(|b| b.as_bool()), Some(false));
     let refs = v.get("references").and_then(|x| x.as_array()).unwrap();
     assert_eq!(refs.len(), 1);
@@ -4102,8 +4080,7 @@ fn file_safety_check_rejects_multiple_paths() {
 
 #[test]
 fn file_safety_check_allows_normal_file() {
-    let v =
-        file_safety_cmd(&["check".into(), "/home/user/project/main.rs".into()]).expect("ok");
+    let v = file_safety_cmd(&["check".into(), "/home/user/project/main.rs".into()]).expect("ok");
     assert_eq!(v.get("verdict").and_then(|s| s.as_str()), Some("allow"));
     assert!(v.get("category").and_then(|c| c.as_str()).is_none());
 }
@@ -4195,8 +4172,7 @@ fn osv_parse_rejects_extra_args() {
 
 #[test]
 fn osv_parse_reads_cargo_lock() {
-    let dir =
-        std::env::temp_dir().join(format!("cos-osv-parse-{}", uuid::Uuid::new_v4().simple()));
+    let dir = std::env::temp_dir().join(format!("cos-osv-parse-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir).unwrap();
     let lock_path = dir.join("Cargo.lock");
     std::fs::write(
@@ -4224,8 +4200,7 @@ fn osv_parse_reads_cargo_lock() {
 
 #[test]
 fn osv_parse_unknown_lockfile_errs() {
-    let dir =
-        std::env::temp_dir().join(format!("cos-osv-bad-{}", uuid::Uuid::new_v4().simple()));
+    let dir = std::env::temp_dir().join(format!("cos-osv-bad-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join("Pipfile.lock");
     std::fs::write(&p, "{}").unwrap();
@@ -4284,8 +4259,14 @@ fn ask_rejects_empty_prompt() {
     let err = run("ask", &[]).unwrap_err();
     assert!(err.to_lowercase().contains("usage"), "got {err}");
     // Usage hint must document the remaining flag the handler accepts.
-    assert!(err.contains("--full"), "usage hint should mention --full: {err}");
-    assert!(!err.contains("--stream"), "removed flag leaked into usage: {err}");
+    assert!(
+        err.contains("--full"),
+        "usage hint should mention --full: {err}"
+    );
+    assert!(
+        !err.contains("--stream"),
+        "removed flag leaked into usage: {err}"
+    );
     let err2 = run("ask", &["".into()]).unwrap_err();
     assert!(err2.to_lowercase().contains("usage"), "got {err2}");
 }
@@ -4311,11 +4292,7 @@ fn ask_session_requires_non_empty_id() {
 #[test]
 fn ask_timeout_requires_positive_integer() {
     for value in ["", "0", "nope"] {
-        let err = run(
-            "ask",
-            &["--timeout-secs".into(), value.into(), "hi".into()],
-        )
-        .unwrap_err();
+        let err = run("ask", &["--timeout-secs".into(), value.into(), "hi".into()]).unwrap_err();
         assert!(err.contains("positive integer"), "got {err}");
     }
 }
@@ -4400,6 +4377,182 @@ fn stream_async_envelope_includes_usage_keys() {
     assert!(usage.get("output_tokens").is_some());
     assert!(usage.get("cache_read_tokens").is_some());
     assert!(usage.get("cache_write_tokens").is_some());
+}
+
+async fn live_cmd_async(
+    provider: std::sync::Arc<dyn llm::Provider>,
+    cfg: &crate::config::AgentConfig,
+    user_prompt: &str,
+) -> Result<Value, String> {
+    use crate::agent::llm::accumulate::StreamSink;
+    use crate::agent::llm::types::StreamEvent;
+    use std::collections::HashSet;
+    use std::io::Write;
+    use std::sync::{Arc, Mutex};
+
+    let mut tools = crate::agent::tools::registry::default_registry();
+    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
+    tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
+    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
+
+    struct LiveSink {
+        tool_calls: Mutex<Vec<serde_json::Value>>,
+        announced_tools: Mutex<HashSet<String>>,
+        warnings: Mutex<Vec<String>>,
+        last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
+        last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+        heartbeat: crate::agent::runtime::progress::Heartbeat,
+    }
+
+    impl LiveSink {
+        fn announce_tool(&self, id: &str, name: &str, out: &mut impl Write) {
+            let should_announce =
+                id.is_empty() || mlock(&self.announced_tools).insert(id.to_string());
+            if should_announce {
+                let _ = writeln!(out, "\n[tool: {name}]");
+            }
+        }
+    }
+
+    impl StreamSink for LiveSink {
+        fn on_event(&self, event: &StreamEvent) {
+            let stderr = std::io::stderr();
+            let mut err_lock = stderr.lock();
+            match event {
+                StreamEvent::TextDelta { text } => {
+                    let _ = err_lock.write_all(text.as_bytes());
+                    let _ = err_lock.flush();
+                }
+                StreamEvent::ToolUseStart { id, name } => {
+                    self.announce_tool(id, name, &mut err_lock);
+                }
+                StreamEvent::ToolInputDelta { .. } => {}
+                StreamEvent::ToolUse(call) => {
+                    self.announce_tool(&call.id, &call.name, &mut err_lock);
+                    mlock(&self.tool_calls).push(serde_json::json!({
+                        "id": call.id,
+                        "name": call.name,
+                    }));
+                }
+                StreamEvent::Reasoning { .. } => {}
+                StreamEvent::ToolState { .. } => {}
+                StreamEvent::Message(resp) => {
+                    for block in &resp.content {
+                        if let crate::agent::llm::types::ContentBlock::Text { text } = block {
+                            let _ = err_lock.write_all(text.as_bytes());
+                        }
+                    }
+                    for call in &resp.tool_calls {
+                        self.announce_tool(&call.id, &call.name, &mut err_lock);
+                        mlock(&self.tool_calls).push(serde_json::json!({
+                            "id": call.id,
+                            "name": call.name,
+                        }));
+                    }
+                    let _ = err_lock.flush();
+                }
+                StreamEvent::Done { finish, usage } => {
+                    let _ = writeln!(err_lock, "\n[turn done finish={finish:?}]");
+                    *mlock(&self.last_usage) = Some(usage.clone());
+                    *mlock(&self.last_finish) = Some(*finish);
+                }
+                StreamEvent::Warning { message } => {
+                    let _ = writeln!(err_lock, "\n[warning] {message}");
+                    mlock(&self.warnings).push(message.clone());
+                }
+            }
+        }
+    }
+
+    impl crate::agent::runtime::progress::ProgressSink for LiveSink {
+        fn on_tool_start(&self, id: &str, name: &str, _input: &serde_json::Value) {
+            self.announce_tool(id, name, &mut std::io::stderr().lock());
+            self.heartbeat.start(id, "");
+        }
+
+        fn on_tool_result(
+            &self,
+            id: &str,
+            name: &str,
+            ok: bool,
+            _latency_ms: u64,
+            _bytes_returned: usize,
+            _content_preview: &str,
+        ) {
+            self.heartbeat.stop(id);
+            if !ok {
+                let _ = writeln!(std::io::stderr().lock(), "\n[tool failed: {name}]");
+            }
+        }
+    }
+
+    let sink_obj = Arc::new(LiveSink {
+        tool_calls: Mutex::new(Vec::new()),
+        announced_tools: Mutex::new(HashSet::new()),
+        warnings: Mutex::new(Vec::new()),
+        last_usage: Mutex::new(None),
+        last_finish: Mutex::new(None),
+        heartbeat: crate::agent::runtime::progress::Heartbeat::new(),
+    });
+    let sink: Arc<dyn StreamSink> = sink_obj.clone();
+    let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
+
+    let result = match memory::sqlite_fts::MemoryDb::open_default() {
+        Ok(db) => {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                user_prompt,
+                &tools,
+                Some((&db, session_id.as_str())),
+                sink,
+                progress,
+            )
+            .await
+        }
+        Err(e) => {
+            tracing::warn!(
+                "memory: default DB unavailable ({e}); running without history recording"
+            );
+            runtime::loop_::ask_with_stream(
+                provider.clone(),
+                cfg,
+                user_prompt,
+                &tools,
+                None,
+                sink,
+                progress,
+            )
+            .await
+        }
+    };
+
+    match result {
+        Ok(ask_result) => {
+            let usage = mlock(&sink_obj.last_usage).clone().unwrap_or_default();
+            let finish = mlock(&sink_obj.last_finish).take();
+            Ok(json!({
+                "answer": ask_result.answer,
+                "evidence": ask_result.evidence,
+                "fallback": ask_result.fallback,
+                "turns": ask_result.turns,
+                "provider": ask_result.provider,
+                "model": ask_result.model,
+                "session_id": ask_result.session_id,
+                "tool_calls": *mlock(&sink_obj.tool_calls),
+                "warnings": *mlock(&sink_obj.warnings),
+                "finish": finish.map(|f| format!("{f:?}")),
+                "usage": {
+                    "input_tokens": usage.input_tokens,
+                    "output_tokens": usage.output_tokens,
+                    "cache_read_tokens": usage.cache_read_tokens,
+                    "cache_write_tokens": usage.cache_write_tokens,
+                },
+            }))
+        }
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 /// Helper for `cos agent live` integration tests. Mirrors the
@@ -4624,7 +4777,10 @@ fn isolate_cos_data_dir(tag: &str) -> LearnDataDir {
     ));
     std::fs::create_dir_all(&dir).unwrap();
     std::env::set_var("COS_DATA_DIR", &dir);
-    LearnDataDir { path: dir, _env: env }
+    LearnDataDir {
+        path: dir,
+        _env: env,
+    }
 }
 
 #[test]
@@ -5104,11 +5260,7 @@ fn cli_unknown_subcommand_lists_available_options() {
             skills_cmd(&["hub".into(), "bogus".into(), "owner/repo".into()]),
             ["list", "install"]
         ),
-        cli_case!(
-            "llm",
-            llm_cmd(&["bogus".into()]),
-            ["providers", "models"]
-        ),
+        cli_case!("llm", llm_cmd(&["bogus".into()]), ["providers", "models"]),
         cli_case!(
             "skills usage",
             {

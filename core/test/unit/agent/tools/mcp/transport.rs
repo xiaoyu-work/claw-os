@@ -1,5 +1,12 @@
 use super::*;
 
+impl StdioTransport {
+    fn with_max_frame_bytes(mut self, n: usize) -> Self {
+        self.max_frame_bytes = n;
+        self
+    }
+}
+
 #[tokio::test]
 async fn pair_round_trips() {
     let (a, b) = in_memory_pair();
@@ -96,8 +103,8 @@ async fn stdio_transport_rejects_oversize_frame() {
     use tokio::io::AsyncWriteExt;
     let (mut cli_in_w, srv_in) = tokio::io::duplex(8192);
     let (srv_out, _cli_out_r) = tokio::io::duplex(4096);
-    let server = StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out))
-        .with_max_frame_bytes(1024);
+    let server =
+        StdioTransport::from_pair(Box::new(srv_in), Box::new(srv_out)).with_max_frame_bytes(1024);
 
     let recv_task = tokio::spawn(async move { server.recv().await });
 

@@ -29,8 +29,6 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
-#[cfg(test)]
-use std::fs;
 use std::path::PathBuf;
 
 use crate::caps::{require_or_json, Scope, Verb};

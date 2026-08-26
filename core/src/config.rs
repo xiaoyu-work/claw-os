@@ -355,7 +355,6 @@ pub struct AgentConfig {
     #[serde(default)]
     pub agent_api_paths: Vec<String>,
 
-
     // -- AWS Bedrock credentials -----------------------------------------
     //
     // These fields are only consumed by the `bedrock` provider. They
@@ -1106,13 +1105,6 @@ where
     CONFIG_OVERRIDE.scope(cfg, fut).await
 }
 
-/// Test/inspection helper: snapshot of the currently active override
-/// pointer (`None` outside any `with_override` scope).
-#[cfg(test)]
-fn current_override() -> Option<&'static CosConfig> {
-    CONFIG_OVERRIDE.try_with(|c| *c).ok()
-}
-
 /// Get the global config. Inside a [`with_override`] scope this
 /// returns the override; outside, it returns the process-wide config
 /// loaded once from disk.
@@ -1147,8 +1139,5 @@ pub fn as_env_vars() -> Vec<(String, String)> {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/config.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/config.rs"));
 }

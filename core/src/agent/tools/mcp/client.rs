@@ -132,22 +132,6 @@ impl McpClient {
         })
     }
 
-    /// Override the per-request timeout. Returns a fresh `Arc<Self>`
-    /// because the existing one may have started its reader already.
-    /// Intended for caller code that knows its tools are slow (e.g. a
-    /// long-running batch job). Defaults to [`DEFAULT_REQUEST_TIMEOUT`].
-    #[cfg(test)]
-    pub fn new_with_timeout(transport: impl Transport, timeout: Duration) -> Arc<Self> {
-        Arc::new(Self {
-            transport: Arc::new(transport),
-            next_id: AtomicI64::new(1),
-            pending: Arc::new(Mutex::new(HashMap::new())),
-            reader: Mutex::new(None),
-            shutdown_tx: Mutex::new(None),
-            request_timeout: timeout,
-        })
-    }
-
     /// Spawn the background reader. Idempotent.
     pub async fn start(self: &Arc<Self>) {
         let mut guard = self.reader.lock().await;

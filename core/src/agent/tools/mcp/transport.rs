@@ -131,15 +131,6 @@ impl StdioTransport {
     pub fn stdio() -> Self {
         Self::from_pair(Box::new(tokio::io::stdin()), Box::new(tokio::io::stdout()))
     }
-
-    /// Test-only: override the per-frame byte cap so the
-    /// oversize-frame defence can be exercised without streaming
-    /// the full 16 MiB.
-    #[cfg(test)]
-    pub(crate) fn with_max_frame_bytes(mut self, n: usize) -> Self {
-        self.max_frame_bytes = n;
-        self
-    }
 }
 
 #[async_trait]
@@ -288,7 +279,9 @@ async fn read_capped_http_body(resp: reqwest::Response) -> Result<String, Transp
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| TransportError::Io(e.to_string()))?;
         if buf.len().saturating_add(chunk.len()) > CAP {
-            return Err(TransportError::Decode("http response exceeded 16 MiB".into()));
+            return Err(TransportError::Decode(
+                "http response exceeded 16 MiB".into(),
+            ));
         }
         buf.extend_from_slice(&chunk);
     }
@@ -311,7 +304,10 @@ impl Transport for HttpTransport {
             req = req.header("mcp-session-id", s.clone());
         }
 
-        let resp = req.send().await.map_err(|e| TransportError::Io(e.to_string()))?;
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| TransportError::Io(e.to_string()))?;
 
         // Capture the server-assigned session id (first response wins;
         // re-set if the server rotates it).

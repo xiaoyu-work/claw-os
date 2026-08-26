@@ -1,4 +1,16 @@
 use super::*;
+use std::sync::RwLock;
+
+static TEST_OVERRIDE: RwLock<Option<Arc<LlamaRuntime>>> = RwLock::new(None);
+
+pub(super) fn test_override_runtime() -> Option<Arc<LlamaRuntime>> {
+    TEST_OVERRIDE.read().ok().and_then(|g| g.clone())
+}
+
+pub fn set_test_override(rt: Option<Arc<LlamaRuntime>>) -> Option<Arc<LlamaRuntime>> {
+    let mut slot = TEST_OVERRIDE.write().expect("test override lock poisoned");
+    std::mem::replace(&mut *slot, rt)
+}
 
 /// `load()` against a path that doesn't exist returns the explicit
 /// `NotInstalled` variant so `cos agent status` can give a useful

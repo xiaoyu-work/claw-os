@@ -1,6 +1,19 @@
 use super::super::transport::in_memory_pair;
 use super::*;
 
+impl McpClient {
+    fn new_with_timeout(transport: impl Transport, timeout: Duration) -> Arc<Self> {
+        Arc::new(Self {
+            transport: Arc::new(transport),
+            next_id: AtomicI64::new(1),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+            reader: Mutex::new(None),
+            shutdown_tx: Mutex::new(None),
+            request_timeout: timeout,
+        })
+    }
+}
+
 #[tokio::test]
 async fn request_round_trip_via_in_memory_pair() {
     let (client_t, server_t) = in_memory_pair();

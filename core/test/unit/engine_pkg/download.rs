@@ -2,6 +2,9 @@ use super::*;
 use std::io::Read as _;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+pub(super) static TEST_ALLOW_INSECURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
 /// Acquire a guard that pins [`TEST_ALLOW_INSECURE`] for the
 /// duration of one test. The mutex serializes tests that need
 /// opposite settings so the parallel-test runner can't observe
@@ -141,8 +144,7 @@ async fn checksum_mismatch_fails() {
 #[tokio::test]
 async fn non_2xx_propagates_status() {
     let _g = allow_http_guard().await;
-    let (url, _h) =
-        spawn_blob_server(b"oops".to_vec(), "HTTP/1.1 500 Internal Server Error").await;
+    let (url, _h) = spawn_blob_server(b"oops".to_vec(), "HTTP/1.1 500 Internal Server Error").await;
     let err = stream_to_temp(&DownloadOpts {
         url: &url,
         headers: &[],

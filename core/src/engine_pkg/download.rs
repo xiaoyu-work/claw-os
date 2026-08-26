@@ -150,19 +150,10 @@ fn url_extension(url: &str) -> Option<String> {
     None
 }
 
-/// Test-only hook: cfg(test) builds may flip
-/// [`TEST_ALLOW_INSECURE`] to exercise the streaming/checksum logic
-/// against a local plaintext HTTP fixture. The flag is **never**
-/// honored in release builds — the scheme guard is unconditional
-/// outside `cfg(test)`.
-#[cfg(test)]
-pub(crate) static TEST_ALLOW_INSECURE: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-
 fn allow_insecure_for_tests() -> bool {
     #[cfg(test)]
     {
-        TEST_ALLOW_INSECURE.load(std::sync::atomic::Ordering::Relaxed)
+        tests::TEST_ALLOW_INSECURE.load(std::sync::atomic::Ordering::Relaxed)
     }
     #[cfg(not(test))]
     {

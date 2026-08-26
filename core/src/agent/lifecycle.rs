@@ -27,8 +27,6 @@ use std::io::Write;
 
 use serde_json::{json, Value};
 
-#[cfg(test)]
-use crate::session;
 use crate::session::{
     current_lease, get_meta, iter_mutations, iter_turns, list as list_sessions, rollback,
     session_dir, RollbackStatus, SessionId, Status,

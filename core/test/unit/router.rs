@@ -1,3 +1,4 @@
+use super::app_commands::{consent_cmd, create_cmd, install_cmd};
 use super::help::{command_schemas, show_builtin_schema, show_command_schema};
 use super::*;
 

@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use std::sync::{Mutex, Once};
 
 static INIT: Once = Once::new();
@@ -410,12 +411,7 @@ fn rate_check_no_lost_update() {
     let _g = setup();
     let domain = "concurrent.example.com";
     let limit: u32 = 8;
-    cmd_rate_limit(&vec![
-        domain.into(),
-        "--rpm".into(),
-        limit.to_string(),
-    ])
-    .unwrap();
+    cmd_rate_limit(&vec![domain.into(), "--rpm".into(), limit.to_string()]).unwrap();
 
     let allowed = Arc::new(AtomicUsize::new(0));
     let denied = Arc::new(AtomicUsize::new(0));
