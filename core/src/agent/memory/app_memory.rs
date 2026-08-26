@@ -217,7 +217,9 @@ pub fn semantic_namespace_for(source: &str) -> String {
 
 /// Persist one app-emitted memory entry. Writes FTS5 first
 /// (durable), then opportunistically embeds for semantic search.
-/// Returns an outcome describing what was stored.
+/// Once the FTS row is committed, semantic failures are best-effort:
+/// they are logged and the successful outcome reports
+/// `indexed_semantic = false`.
 ///
 /// Semantic indexing is awaited (we don't `spawn_index` here)
 /// because:
@@ -257,7 +259,14 @@ pub async fn remember(
                     // No embedder configured — silently skip. The FTS
                     // row is still there.
                 }
-                Err(e) => return Err(RememberError::Semantic(e)),
+                Err(e) => {
+                    tracing::warn!(
+                        source = %entry.source,
+                        row_id,
+                        error = %e,
+                        "app_memory: semantic indexing failed; FTS row remains available"
+                    );
+                }
             }
         }
     }
@@ -290,8 +299,6 @@ pub enum RememberError {
     Invalid(String),
     #[error("memory db: {0}")]
     Db(#[from] MemoryError),
-    #[error("semantic store: {0}")]
-    Semantic(#[from] SemanticError),
 }
 
 // ---------------------------------------------------------------------------

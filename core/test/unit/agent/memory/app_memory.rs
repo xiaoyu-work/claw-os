@@ -1,5 +1,8 @@
 use super::*;
 use crate::agent::memory::semantic::SemanticStore;
+use crate::model::tasks::embed::{EmbedError, EmbedRequest, EmbedResponse, Embedder};
+use async_trait::async_trait;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 fn open_db() -> MemoryDb {
     MemoryDb::open_in_memory().unwrap()
@@ -7,6 +10,30 @@ fn open_db() -> MemoryDb {
 
 fn open_store() -> Arc<SemanticStore> {
     Arc::new(SemanticStore::open_in_memory(None).unwrap())
+}
+
+struct FailingEmbedder {
+    calls: Arc<AtomicUsize>,
+}
+
+#[async_trait]
+impl Embedder for FailingEmbedder {
+    fn name(&self) -> &str {
+        "failing-test"
+    }
+
+    fn model(&self) -> &str {
+        "failing-test/v1"
+    }
+
+    fn is_configured(&self) -> bool {
+        true
+    }
+
+    async fn embed(&self, _request: EmbedRequest) -> Result<EmbedResponse, EmbedError> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Err(EmbedError::Transport("temporary outage".into()))
+    }
 }
 
 fn entry(source: &str, text: &str) -> AppMemoryEntry {
@@ -172,6 +199,31 @@ async fn remember_with_disabled_embedder_does_not_error() {
     // Should fall back gracefully when the store is configured
     // without an embedder.
     assert!(!out.indexed_semantic);
+}
+
+#[tokio::test]
+async fn remember_semantic_failure_returns_fts_success_without_retry() {
+    let db = open_db();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let embedder: Arc<dyn Embedder> = Arc::new(FailingEmbedder {
+        calls: Arc::clone(&calls),
+    });
+    let store = Arc::new(SemanticStore::open_in_memory(Some(embedder)).unwrap());
+
+    let out = remember(
+        &db,
+        Some(&store),
+        entry("expense-tracker", "Lunch at Eatsa"),
+        true,
+    )
+    .await
+    .expect("the committed FTS row must be reported as success");
+
+    assert!(!out.indexed_semantic);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "embedding is not retried");
+    let rows = list(&db, Some("expense-tracker"), 10).unwrap();
+    assert_eq!(rows.len(), 1, "the FTS row remains available");
+    assert_eq!(rows[0].id, out.row_id);
 }
 
 #[test]

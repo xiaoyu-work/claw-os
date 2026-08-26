@@ -110,7 +110,6 @@ fn remember_error_to_string(e: RememberError) -> String {
     match e {
         RememberError::Invalid(m) => format!("memory remember: {m}"),
         RememberError::Db(m) => format!("memory remember: db error: {m}"),
-        RememberError::Semantic(m) => format!("memory remember: semantic error: {m}"),
     }
 }
 
