@@ -1,5 +1,44 @@
 use super::*;
 
+#[test]
+fn info_distinguishes_ubuntu_host_from_claw_agent() {
+    let info = info_from_os_release(
+        Some(
+            "NAME=\"Ubuntu\"\n\
+             PRETTY_NAME=\"Ubuntu 26.04 LTS\"\n\
+             ID=ubuntu\n\
+             ID_LIKE=debian\n\
+             VERSION_ID=\"26.04\"\n",
+        ),
+        "0.1.0",
+    );
+
+    assert_eq!(info["name"], "ubuntu");
+    assert_eq!(info["version"], "26.04");
+    assert_eq!(info["distribution"]["pretty_name"], "Ubuntu 26.04 LTS");
+    assert_eq!(info["agent"]["name"], "claw-os-agent");
+    assert_eq!(info["claw_os"], false);
+    assert_eq!(info["environment"], "claw-agent-on-host");
+}
+
+#[test]
+fn info_recognizes_full_claw_os_from_os_release() {
+    let info = info_from_os_release(
+        Some(
+            "NAME=\"ClawOS\"\n\
+             PRETTY_NAME=\"ClawOS 0.1.0\"\n\
+             ID=clawos\n\
+             ID_LIKE=debian\n\
+             VERSION_ID=\"0.1.0\"\n",
+        ),
+        "0.1.0",
+    );
+
+    assert_eq!(info["name"], "clawos");
+    assert_eq!(info["claw_os"], true);
+    assert_eq!(info["environment"], "claw-os");
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn read_arg_long_form() {

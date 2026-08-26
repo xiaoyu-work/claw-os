@@ -9,6 +9,68 @@
 use super::*;
 
 #[test]
+fn terminal_tool_line_has_no_surrounding_blank_lines() {
+    let mut state = TerminalOutputState::default();
+    let mut out = Vec::new();
+
+    state.write_line(&mut out, "[tool: cos_sysinfo]");
+    state.finish_line(&mut out);
+    state.write_text(&mut out, "Ubuntu 26.04");
+    state.finish_line(&mut out);
+
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "[tool: cos_sysinfo]\nUbuntu 26.04\n"
+    );
+}
+
+#[test]
+fn terminal_tool_line_separates_unfinished_text_once() {
+    let mut state = TerminalOutputState::default();
+    let mut out = Vec::new();
+
+    state.write_text(&mut out, "Let me check");
+    state.write_line(&mut out, "[tool: cos_sysinfo]");
+
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Let me check\n[tool: cos_sysinfo]\n"
+    );
+}
+
+#[test]
+fn terminal_heartbeat_line_finishes_before_tool_failure() {
+    let mut state = TerminalOutputState::default();
+    let mut out = Vec::new();
+
+    state.write_line(&mut out, "[tool: cos_sysinfo]");
+    state.write_text(&mut out, "...");
+    state.finish_line(&mut out);
+    state.write_line(&mut out, "[tool failed: cos_sysinfo]");
+
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "[tool: cos_sysinfo]\n...\n[tool failed: cos_sysinfo]\n"
+    );
+}
+
+#[test]
+fn terminal_heartbeat_line_finishes_before_next_prompt() {
+    let mut state = TerminalOutputState::default();
+    let mut out = Vec::new();
+
+    state.write_line(&mut out, "[tool: cos_sysinfo]");
+    state.write_text(&mut out, "..");
+    state.finish_line(&mut out);
+    out.extend_from_slice(b"you> ");
+
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "[tool: cos_sysinfo]\n..\nyou> "
+    );
+}
+
+#[test]
 fn override_cmd_help_shape() {
     let err = override_cmd(&[]).unwrap_err();
     assert!(err.contains("show"));

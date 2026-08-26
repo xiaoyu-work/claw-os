@@ -65,6 +65,40 @@ fn mlock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|p| p.into_inner())
 }
 
+#[derive(Debug, Default)]
+struct TerminalOutputState {
+    line_open: bool,
+}
+
+impl TerminalOutputState {
+    fn reset(&mut self) {
+        self.line_open = false;
+    }
+
+    fn write_text(&mut self, out: &mut impl std::io::Write, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+        let _ = out.write_all(text.as_bytes());
+        self.line_open = !text.ends_with('\n');
+    }
+
+    fn write_line(&mut self, out: &mut impl std::io::Write, line: &str) {
+        if self.line_open {
+            let _ = writeln!(out);
+        }
+        let _ = writeln!(out, "{line}");
+        self.line_open = false;
+    }
+
+    fn finish_line(&mut self, out: &mut impl std::io::Write) {
+        if self.line_open {
+            let _ = writeln!(out);
+            self.line_open = false;
+        }
+    }
+}
+
 /// Dispatch a `cos agent <command>` invocation.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     match command {
@@ -3193,6 +3227,7 @@ async fn chat_cmd_async(
         warnings: Mutex<Vec<String>>,
         last_usage: Mutex<Option<crate::agent::llm::types::Usage>>,
         last_finish: Mutex<Option<crate::agent::llm::types::FinishReason>>,
+        terminal: Arc<Mutex<TerminalOutputState>>,
         // Heartbeat keyed by tool_use id. Started when the runtime
         // dispatches a tool (via `ProgressSink::on_tool_start`),
         // cancelled when the result arrives. Without it the REPL
@@ -3209,6 +3244,7 @@ async fn chat_cmd_async(
                 warnings: Mutex::new(Vec::new()),
                 last_usage: Mutex::new(None),
                 last_finish: Mutex::new(None),
+                terminal: Arc::new(Mutex::new(TerminalOutputState::default())),
                 heartbeat: crate::agent::runtime::progress::Heartbeat::new(),
             }
         }
@@ -3218,13 +3254,14 @@ async fn chat_cmd_async(
             mlock(&self.warnings).clear();
             *mlock(&self.last_usage) = None;
             *mlock(&self.last_finish) = None;
+            mlock(&self.terminal).reset();
         }
 
         fn announce_tool(&self, id: &str, name: &str, out: &mut impl Write) {
             let should_announce =
                 id.is_empty() || mlock(&self.announced_tools).insert(id.to_string());
             if should_announce {
-                let _ = writeln!(out, "\n[tool: {name}]");
+                mlock(&self.terminal).write_line(out, &format!("[tool: {name}]"));
             }
         }
     }
@@ -3234,7 +3271,7 @@ async fn chat_cmd_async(
             let mut e = stderr.lock();
             match event {
                 StreamEvent::TextDelta { text } => {
-                    let _ = e.write_all(text.as_bytes());
+                    mlock(&self.terminal).write_text(&mut e, text);
                     let _ = e.flush();
                 }
                 StreamEvent::ToolUseStart { id, name } => {
@@ -3253,7 +3290,7 @@ async fn chat_cmd_async(
                 StreamEvent::Message(resp) => {
                     for block in &resp.content {
                         if let crate::agent::llm::types::ContentBlock::Text { text } = block {
-                            let _ = e.write_all(text.as_bytes());
+                            mlock(&self.terminal).write_text(&mut e, text);
                         }
                     }
                     for call in &resp.tool_calls {
@@ -3267,18 +3304,17 @@ async fn chat_cmd_async(
                 }
                 StreamEvent::Done { finish, usage } => {
                     if self.verbose_telemetry {
-                        let _ = writeln!(e, "\n[turn done finish={finish:?}]");
+                        mlock(&self.terminal)
+                            .write_line(&mut e, &format!("[turn done finish={finish:?}]"));
                     } else {
-                        // Still advance to a fresh line so the next
-                        // `you> ` prompt isn't appended to the
-                        // assistant's last token.
-                        let _ = writeln!(e);
+                        mlock(&self.terminal).finish_line(&mut e);
                     }
                     *mlock(&self.last_usage) = Some(usage.clone());
                     *mlock(&self.last_finish) = Some(*finish);
                 }
                 StreamEvent::Warning { message } => {
-                    let _ = writeln!(e, "\n[warning] {message}");
+                    mlock(&self.terminal)
+                        .write_line(&mut e, &format!("[warning] {message}"));
                     mlock(&self.warnings).push(message.clone());
                 }
             }
@@ -3288,7 +3324,16 @@ async fn chat_cmd_async(
     impl crate::agent::runtime::progress::ProgressSink for ChatSink {
         fn on_tool_start(&self, id: &str, name: &str, _input: &serde_json::Value) {
             self.announce_tool(id, name, &mut std::io::stderr().lock());
-            self.heartbeat.start(id, "");
+            let terminal = Arc::clone(&self.terminal);
+            self.heartbeat.start_with_callback(id, move |cancelled| {
+                let mut terminal = mlock(&terminal);
+                if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                    return;
+                }
+                let mut stderr = std::io::stderr().lock();
+                terminal.write_text(&mut stderr, ".");
+                let _ = stderr.flush();
+            });
         }
 
         fn on_tool_result(
@@ -3301,8 +3346,15 @@ async fn chat_cmd_async(
             _content_preview: &str,
         ) {
             self.heartbeat.stop(id);
+            {
+                let mut stderr = std::io::stderr().lock();
+                mlock(&self.terminal).finish_line(&mut stderr);
+            }
             if !ok {
-                let _ = writeln!(std::io::stderr().lock(), "\n[tool failed: {name}]");
+                mlock(&self.terminal).write_line(
+                    &mut std::io::stderr().lock(),
+                    &format!("[tool failed: {name}]"),
+                );
             }
         }
     }

@@ -69,14 +69,79 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_info() -> Result<Value, String> {
-    Ok(json!({
-        "name": "claw-os",
-        "version": env::var("COS_VERSION").unwrap_or_else(|_| "unknown".into()),
+    let os_release = std::fs::read_to_string("/etc/os-release").ok();
+    let agent_version = env::var("COS_VERSION").unwrap_or_else(|_| "unknown".into());
+    Ok(info_from_os_release(os_release.as_deref(), &agent_version))
+}
+
+fn info_from_os_release(raw: Option<&str>, agent_version: &str) -> Value {
+    let release = raw.map(parse_os_release).unwrap_or_default();
+    let distribution_id = release
+        .get("ID")
+        .cloned()
+        .unwrap_or_else(|| std::env::consts::OS.to_string())
+        .to_ascii_lowercase();
+    let distribution_name = release
+        .get("NAME")
+        .cloned()
+        .unwrap_or_else(|| distribution_id.clone());
+    let pretty_name = release
+        .get("PRETTY_NAME")
+        .cloned()
+        .unwrap_or_else(|| distribution_name.clone());
+    let distribution_version = release
+        .get("VERSION_ID")
+        .or_else(|| release.get("VERSION"))
+        .cloned()
+        .unwrap_or_else(|| "unknown".to_string());
+    let id_like = release.get("ID_LIKE").cloned().unwrap_or_default();
+    let is_claw_os = matches!(distribution_id.as_str(), "clawos" | "claw-os");
+
+    json!({
+        "name": distribution_id,
+        "version": distribution_version,
         "platform": std::env::consts::OS,
         "arch": std::env::consts::ARCH,
         "hostname": hostname(),
         "pid": std::process::id(),
-    }))
+        "claw_os": is_claw_os,
+        "environment": if is_claw_os { "claw-os" } else { "claw-agent-on-host" },
+        "cos_version": agent_version,
+        "agent": {
+            "name": "claw-os-agent",
+            "version": agent_version,
+            "system_level": true,
+        },
+        "distribution": {
+            "id": distribution_id,
+            "name": distribution_name,
+            "pretty_name": pretty_name,
+            "version_id": distribution_version,
+            "id_like": id_like,
+        },
+    })
+}
+
+fn parse_os_release(raw: &str) -> std::collections::BTreeMap<String, String> {
+    raw.lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            let (key, value) = line.split_once('=')?;
+            let value = value.trim();
+            let value = if value.len() >= 2
+                && ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
+            {
+                &value[1..value.len() - 1]
+            } else {
+                value
+            };
+            Some((key.to_string(), value.to_string()))
+        })
+        .collect()
 }
 
 fn cmd_env(args: &[String]) -> Result<Value, String> {

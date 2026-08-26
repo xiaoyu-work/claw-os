@@ -7,6 +7,9 @@ fn scaffold_is_returned_when_no_extra() {
     assert!(p.contains("ClawOS"));
     assert!(p.contains("You are Claw,"));
     assert!(p.contains("cos_"));
+    assert!(!p.contains("kernel-resident"));
+    assert!(p.contains("does not imply that the host operating system is ClawOS"));
+    assert!(p.contains("`claw_os: true`"));
 }
 
 #[test]

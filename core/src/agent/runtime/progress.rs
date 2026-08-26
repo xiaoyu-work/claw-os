@@ -44,6 +44,7 @@
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -194,7 +195,12 @@ pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(2);
 /// whichever runtime is current at `start()` time.
 #[derive(Default)]
 pub struct Heartbeat {
-    inflight: Mutex<HashMap<String, oneshot::Sender<()>>>,
+    inflight: Mutex<HashMap<String, HeartbeatHandle>>,
+}
+
+struct HeartbeatHandle {
+    cancel: oneshot::Sender<()>,
+    cancelled: Arc<AtomicBool>,
 }
 
 impl Heartbeat {
@@ -212,35 +218,61 @@ impl Heartbeat {
     /// signal "we're waiting on $name" if they want a richer label.
     /// Pass an empty string for plain dots only.
     pub fn start(&self, id: &str, prefix: &str) {
+        let prefix = prefix.to_string();
+        let mut printed_prefix = false;
+        self.start_with_callback(id, move |cancelled| {
+            let stderr = std::io::stderr();
+            let mut e = stderr.lock();
+            if cancelled.load(Ordering::Acquire) {
+                return;
+            }
+            if !printed_prefix && !prefix.is_empty() {
+                let _ = write!(e, "{prefix}");
+                printed_prefix = true;
+            }
+            let _ = write!(e, ".");
+            let _ = e.flush();
+        });
+    }
+
+    /// Begin a heartbeat whose ticks are rendered by `on_tick`.
+    ///
+    /// The callback receives the shared cancellation flag. Renderers that
+    /// coordinate with another output mutex should acquire that mutex first
+    /// and then re-check the flag before writing. This prevents a tick from
+    /// racing after [`Heartbeat::stop`] has finalized the terminal line.
+    pub fn start_with_callback<F>(&self, id: &str, mut on_tick: F)
+    where
+        F: FnMut(&AtomicBool) + Send + 'static,
+    {
         let (tx, mut rx) = oneshot::channel::<()>();
+        let cancelled = Arc::new(AtomicBool::new(false));
         {
             let mut g = self.inflight.lock().expect("heartbeat lock");
-            // Replace any stale entry under the same id. The previous
-            // sender drops → its task observes the channel close on
-            // its next tick and exits. Should never happen in
-            // practice (every `start` is paired with a `stop`) but
-            // defending here keeps memory bounded if a tool panics.
-            g.insert(id.to_string(), tx);
+            if let Some(stale) = g.insert(
+                id.to_string(),
+                HeartbeatHandle {
+                    cancel: tx,
+                    cancelled: Arc::clone(&cancelled),
+                },
+            ) {
+                stale.cancelled.store(true, Ordering::Release);
+                let _ = stale.cancel.send(());
+            }
         }
-        let prefix = prefix.to_string();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
             // First tick fires immediately by default; consume it so
             // the first user-visible dot is at +HEARTBEAT_INTERVAL.
             ticker.tick().await;
-            let mut printed_prefix = false;
             loop {
                 tokio::select! {
                     _ = &mut rx => break,
                     _ = ticker.tick() => {
-                        let stderr = std::io::stderr();
-                        let mut e = stderr.lock();
-                        if !printed_prefix && !prefix.is_empty() {
-                            let _ = write!(e, "{prefix}");
-                            printed_prefix = true;
+                        if cancelled.load(Ordering::Acquire) {
+                            break;
                         }
-                        let _ = write!(e, ".");
-                        let _ = e.flush();
+                        on_tick(cancelled.as_ref());
                     }
                 }
             }
@@ -249,15 +281,16 @@ impl Heartbeat {
 
     /// Stop the heartbeat for `id`. Idempotent.
     pub fn stop(&self, id: &str) {
-        let tx = {
+        let handle = {
             let mut g = self.inflight.lock().expect("heartbeat lock");
             g.remove(id)
         };
-        if let Some(tx) = tx {
+        if let Some(handle) = handle {
+            handle.cancelled.store(true, Ordering::Release);
             // Receiver might already have exited (race during
             // shutdown). Either way the heartbeat task closes
             // promptly. We don't care about the result.
-            let _ = tx.send(());
+            let _ = handle.cancel.send(());
         }
     }
 }

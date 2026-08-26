@@ -221,7 +221,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     PrimitiveSpec {
         name: "cos_sysinfo",
         description: "Read live Linux system telemetry. Commands:\n\
-                      identity: info | env | uptime | who | desktop;\n\
+                      identity: info (host distribution + Claw Agent layer) | env | uptime | who | desktop;\n\
                       load: resources | loadavg | sensors | cgroup;\n\
                       processes: proc | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
                       network: net | net_rate [--interval ms];\n\
