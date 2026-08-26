@@ -1,0 +1,52 @@
+name: Publish Base package
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-base:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install package build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y dpkg-dev fakeroot
+
+      - name: Build Base package
+        run: ./packaging/deb/build-debs.sh base
+
+      - name: Verify Base package
+        run: |
+          base_deb="$(printf '%s\n' build/debs/claw-os-base_*_all.deb)"
+          test -f "$base_deb"
+          test "$(dpkg-deb -f "$base_deb" Package)" = "claw-os-base"
+          dpkg-deb -c "$base_deb" > "$RUNNER_TEMP/claw-os-base.files"
+          grep -q './usr/local/bin/cos-init$' "$RUNNER_TEMP/claw-os-base.files"
+          grep -q './usr/lib/systemd/system/cos-home-setup.service$' "$RUNNER_TEMP/claw-os-base.files"
+          ! grep -q './usr/local/bin/cos$' "$RUNNER_TEMP/claw-os-base.files"
+          ! grep -q '/usr/lib/cos/apps/' "$RUNNER_TEMP/claw-os-base.files"
+
+      - name: Upload Base package
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-base
+          path: build/debs/claw-os-base_*_all.deb
+          if-no-files-found: error
+
+  publish-base:
+    needs: build-base
+    uses: ./.github/workflows/publish-apt-repo.yml
+    with:
+      artifact_pattern: claw-os-base
+      pages_artifact_name: github-pages-base
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

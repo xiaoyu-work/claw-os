@@ -504,6 +504,11 @@ if [ ! -f "$DESKTOP_DEB" ]; then
     echo "  error: expected desktop package missing: $DESKTOP_DEB" >&2
     exit 1
 fi
+if [ "${DESKTOP_PACKAGE_ONLY:-0}" = "1" ]; then
+    echo "  :: DESKTOP_PACKAGE_ONLY=1 -- package built without installing into rootfs"
+    rm -rf "$DESKTOP_PACKAGE_ROOT"
+    exit 0
+fi
 echo "  :: installing $(basename "$DESKTOP_DEB")"
 
 mkdir -p "$ROOTFS/var/cache/cos-debs"

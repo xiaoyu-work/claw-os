@@ -1,0 +1,122 @@
+name: Publish Agent package
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+jobs:
+  build-agent:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            rust_targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
+            musl_target: x86_64-unknown-linux-musl
+            gnu_target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            rust_targets: aarch64-unknown-linux-musl,aarch64-unknown-linux-gnu
+            musl_target: aarch64-unknown-linux-musl
+            gnu_target: aarch64-unknown-linux-gnu
+    runs-on: ${{ matrix.runner }}
+    env:
+      ARCH: ${{ matrix.arch }}
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+
+      - name: Install host build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y musl-tools dpkg-dev fakeroot
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ runner.arch }}-agent-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-agent-
+            ${{ runner.os }}-${{ runner.arch }}-cargo-build-
+
+      - name: Build Agent binaries
+        run: |
+          cargo build --release -p cos --target ${{ matrix.musl_target }}
+          cargo build --release -p cos-browser --target ${{ matrix.gnu_target }}
+          cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
+
+      - name: Build Agent package
+        run: ARCH="$ARCH" ./packaging/deb/build-debs.sh agent
+
+      - name: Verify Agent package
+        run: |
+          agent_deb="$(printf '%s\n' build/debs/claw-os-agent_*_"$ARCH".deb)"
+          test -f "$agent_deb"
+          test "$(dpkg-deb -f "$agent_deb" Package)" = "claw-os-agent"
+          dpkg-deb -c "$agent_deb" > "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/cos$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/clawd$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/cos-browser$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/claw-semantic$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/local/bin/claw-semantic-daemon$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/apps/web/app.json$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/systemd/system/clawd.service$' "$RUNNER_TEMP/claw-os-agent.files"
+          ! grep -q '/apps/agent/' "$RUNNER_TEMP/claw-os-agent.files"
+          ! grep -q '/apps/panel-calendar/' "$RUNNER_TEMP/claw-os-agent.files"
+
+      - name: Install Agent package on Ubuntu
+        run: |
+          agent_deb="$(printf '%s\n' build/debs/claw-os-agent_*_"$ARCH".deb)"
+          sudo apt-get install -y --no-install-recommends "$PWD/$agent_deb"
+          for attempt in {1..30}; do
+            if sudo systemctl is-active --quiet clawd.service \
+                && sudo test -S /run/cos/clawd.sock; then
+              break
+            fi
+            sleep 1
+          done
+          sudo systemctl is-active --quiet clawd.service
+          sudo test -S /run/cos/clawd.sock
+          /usr/local/bin/cos-browser --help >/dev/null
+          sudo python3 - <<'PY'
+          import json
+          import socket
+
+          client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+          client.connect("/run/cos/clawd.sock")
+          client.sendall(b'{"id":1,"command":"daemon.health","params":{}}\n')
+          response = json.loads(client.makefile("r", encoding="utf-8").readline())
+          assert response["ok"] is True, response
+          assert response["result"]["daemon"] == "clawd", response
+          PY
+
+      - name: Upload Agent package
+        uses: actions/upload-artifact@v4
+        with:
+          name: claw-os-agent-${{ matrix.arch }}
+          path: build/debs/claw-os-agent_*_${{ matrix.arch }}.deb
+          if-no-files-found: error
+
+  publish-agent:
+    needs: build-agent
+    uses: ./.github/workflows/publish-apt-repo.yml
+    with:
+      artifact_pattern: claw-os-agent-*
+      pages_artifact_name: github-pages-agent
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

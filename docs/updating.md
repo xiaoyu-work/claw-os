@@ -21,10 +21,9 @@ sudo apt update
 sudo apt full-upgrade
 ```
 
-`full-upgrade` is preferred over plain `upgrade` because `claw-os-base`
-requires the exact matching Agent version. The desktop declares a minimum
-compatible base version so Agent/base security updates do not wait for a
-desktop rebuild:
+`full-upgrade` is preferred over plain `upgrade` so APT can resolve package
+dependency changes when Agent, Base, and Desktop advance on independent
+release schedules:
 
 | Package | Contents |
 | --- | --- |
@@ -97,7 +96,7 @@ Do not use `trusted=yes` or bypass signature verification. If the key,
 `InRelease`, or package index cannot be downloaded or verified, stop and fix
 the repository configuration instead of installing unsigned packages.
 
-Claw OS image composition installs `claw-os-base` instead. Its exact-version
+Claw OS image composition installs `claw-os-base` instead. Its runtime
 dependency pulls in the same `claw-os-agent` package used by Ubuntu:
 
 ```bash
@@ -129,23 +128,21 @@ Use a replacement image only when the release notes explicitly require it:
 
 Pushing a commit does not immediately make it available to existing
 installations. The repository workflows are manually dispatched. A maintainer
-must run one of:
+can publish each package independently:
 
-- **Build APT repo (.deb packages)**, to build and publish only the APT channel.
-- **Build Desktop packages**, to produce amd64/arm64 desktop `.deb` artifacts;
-  pass its run ID to the APT or umbrella workflow to publish a new desktop.
-  This workflow requires dedicated Linux runners labeled
-  `claw-os-desktop-amd64` and `claw-os-desktop-arm64` with at least 50 GB free.
-- **Release everything (test + Docker + WSL + APT)**, to publish every channel.
+- **Publish Agent package** builds, installs, and publishes only
+  `claw-os-agent`.
+- **Publish Base package** builds and publishes only `claw-os-base`.
+- **Publish Desktop package** builds and publishes only `claw-os-desktop`; it
+  requires dedicated Linux runners labeled `claw-os-desktop-amd64` and
+  `claw-os-desktop-arm64` with at least 50 GB free.
+- **Release everything (test + Docker + WSL + APT)** invokes all distribution
+  channels when a coordinated full release is wanted.
 
-APT publication requires the repository Actions secrets
+Each package workflow requires the repository Actions secrets
 `CLAW_OS_APT_SIGNING_PRIVATE_KEY` and
-`CLAW_OS_APT_SIGNING_PASSPHRASE`. The workflow builds both amd64 and arm64
-packages, signs the multi-architecture repository, and deploys it to GitHub
-Pages. Existing installations can upgrade only after that deployment succeeds.
-
-The lightweight APT workflow rebuilds `claw-os-agent` and `claw-os-base`.
-Before replacing the repository, it verifies the currently signed index and
-copies forward the latest `claw-os-desktop` artifact for each architecture
-that does not have a newly built desktop package. Agent/base releases therefore
-do not remove desktop installation or recovery packages from the APT pool.
+`CLAW_OS_APT_SIGNING_PASSPHRASE`. The shared internal publisher restores the
+other packages from the current signed repository, merges only the package
+built by the caller, signs the new multi-architecture indexes, and deploys
+GitHub Pages. Publications are serialized so independent package workflows
+cannot overwrite each other.

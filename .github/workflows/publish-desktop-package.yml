@@ -1,12 +1,13 @@
-name: Build Desktop packages
+name: Publish Desktop package
 
 on:
   workflow_dispatch:
+  workflow_call:
 
 # Desktop package builds are intentionally separate from lightweight
 # Agent/base publication. They require a full Debian rootfs and the vendored
-# desktop workspace, but their artifacts can be supplied to Build APT repo by
-# workflow run ID.
+# desktop workspace. The package is published independently through the shared
+# signed APT publisher.
 jobs:
   build-desktop:
     strategy:
@@ -15,18 +16,12 @@ jobs:
         include:
           - arch: amd64
             runner: claw-os-desktop-amd64
-            rust_targets: x86_64-unknown-linux-musl,x86_64-unknown-linux-gnu
-            musl_target: x86_64-unknown-linux-musl
-            gnu_target: x86_64-unknown-linux-gnu
           - arch: arm64
             runner: claw-os-desktop-arm64
-            rust_targets: aarch64-unknown-linux-musl,aarch64-unknown-linux-gnu
-            musl_target: aarch64-unknown-linux-musl
-            gnu_target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     env:
       ARCH: ${{ matrix.arch }}
-      ROOTFS_FEATURES: base,cos-core,browser,systemd,desktop
+      ROOTFS_FEATURES: base,desktop
 
     steps:
       - uses: actions/checkout@v5
@@ -34,35 +29,15 @@ jobs:
           fetch-depth: 0
           lfs: true
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.rust_targets }}
-
       - name: Install host build tools
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg git-lfs
 
-      - name: Cache cargo registry and target
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ runner.os }}-${{ runner.arch }}-desktop-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-desktop-
-            ${{ runner.os }}-${{ runner.arch }}-cargo-build-
-
-      - name: Build reusable Agent binaries
-        run: |
-          cargo build --release -p cos --target ${{ matrix.musl_target }}
-          cargo build --release -p cos-browser --target ${{ matrix.gnu_target }}
-          cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
-
       - name: Build desktop package in Debian rootfs
-        run: sudo ARCH="$ARCH" ./rootfs/build.sh --features "$ROOTFS_FEATURES"
+        run: |
+          sudo env ARCH="$ARCH" DESKTOP_PACKAGE_ONLY=1 \
+            ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
       - name: Verify desktop package
         run: |
@@ -82,3 +57,16 @@ jobs:
           path: build/debs/claw-os-desktop_*_${{ matrix.arch }}.deb
           if-no-files-found: error
           retention-days: 30
+
+  publish-desktop:
+    needs: build-desktop
+    uses: ./.github/workflows/publish-apt-repo.yml
+    with:
+      artifact_pattern: claw-os-desktop-*
+      pages_artifact_name: github-pages-desktop
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit

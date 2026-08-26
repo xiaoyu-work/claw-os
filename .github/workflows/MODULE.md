@@ -18,15 +18,18 @@ pipelines.
 | --- | --- |
 | `test.yml` | Reusable test/clippy workflow |
 | `build-docker-and-wsl.yml` | Shared rootfs, GHCR image, WSL artifacts/releases |
-| `build-apt-repo.yml` | `.deb`, signed repository, Pages deployment |
+| `publish-agent-package.yml` | Independent Agent build, Ubuntu smoke test, and publication |
+| `publish-base-package.yml` | Independent Claw OS Base build and publication |
+| `publish-desktop-package.yml` | Independent full-rootfs Desktop build and publication |
+| `publish-apt-repo.yml` | Internal cumulative signed-repository publisher |
 | `release.yml` | Umbrella test + all publication channels |
 
 ## Dependencies
 
 Workflow commands call repository scripts that remain the implementation source
-of truth. Secrets are referenced by name only. A missing signing key skips APT
-publication rather than producing unsigned output. Trigger documentation must
-match each `on:` block.
+of truth. Secrets are referenced by name only. Package publication requires the
+signing key and never produces an unsigned fallback. Trigger documentation
+must match each `on:` block.
 
 ## Tests
 

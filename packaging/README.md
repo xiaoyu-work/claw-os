@@ -9,13 +9,13 @@ to newer versions.
 ```
 packaging/
 ├── deb/                       Debian package definitions
-│   ├── build-debs.sh          Build Agent/base .debs into build/debs/
+│   ├── build-debs.sh          Build Agent, Base, or both into build/debs/
 │   ├── build-desktop-deb.sh   Wrap a staged desktop root into a .deb
 │   ├── claw-os-agent/         Reusable headless Agent for Debian/Ubuntu
 │   ├── claw-os-base/          Claw OS distribution integration
 │   └── claw-os-desktop/       Optional graphical desktop metadata
 └── apt-repo/
-    ├── preserve-desktop.sh     Retain the last signed desktop artifacts
+    ├── sync-existing-packages.sh  Retain packages not rebuilt by this CI
     └── build-repo.sh          Assemble build/apt-repo/ from build/debs/
 ```
 
@@ -24,8 +24,8 @@ packaging/
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
 | `claw-os-agent` | `cos`, `clawd`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
-| `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent (= ${binary:Version})` |
-| `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base (>= ${binary:Version})` |
+| `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
+| `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser` and all command-style apps. `claw-os-base` adds only behavior
@@ -37,22 +37,28 @@ The .debs are built **from already-compiled binaries** — `dpkg-deb --build`
 just assembles staging trees. CI builds `cos` (musl) and `cos-browser`
 (glibc) first, then invokes `packaging/deb/build-debs.sh`.
 
-Package versions are generated as `<semver>+git<commit-count>.g<sha>`.
-Pull-request artifacts use a lower-sorting `~pr...` suffix. Local dirty
-trees must set `COS_PACKAGE_VERSION` explicitly to avoid reusing a stale
-commit-derived package filename.
+Each package version is generated independently as
+`<semver>+git<commit-count>.g<sha>`. Pull-request artifacts use a lower-sorting
+`~pr...` suffix. Local dirty trees must set `COS_PACKAGE_VERSION` explicitly
+to avoid reusing a stale commit-derived package filename.
 
 ```bash
 # Build binaries for the host architecture (amd64 shown here).
 cargo build --release -p cos --target x86_64-unknown-linux-musl
 cargo build --release -p cos-browser --target x86_64-unknown-linux-gnu
 
-# Build .debs
-./packaging/deb/build-debs.sh
+# Build only the reusable Agent
+./packaging/deb/build-debs.sh agent
 # -> build/debs/claw-os-agent_<version>_amd64.deb
+
+# Build only the architecture-independent Claw OS integration
+./packaging/deb/build-debs.sh base
 # -> build/debs/claw-os-base_<version>_all.deb
 
-# The desktop rootfs feature stages and builds this separately:
+# Rootfs composition can still build Agent + Base together:
+./packaging/deb/build-debs.sh all
+
+# The desktop rootfs feature builds Desktop independently:
 # -> build/debs/claw-os-desktop_<version>_amd64.deb
 
 # Build apt repo
@@ -70,32 +76,27 @@ enforce its control-directory permissions:
 COS_DEB_STAGE_DIR=/tmp/claw-os-deb-staging ./packaging/deb/build-debs.sh
 ```
 
-The lightweight APT workflow rebuilds Agent/base on every architecture. Before
-regenerating the repository, it verifies the currently published signed index
-and restores the latest desktop package for any architecture without a newly
-built desktop artifact. Agent/base releases therefore cannot erase an
-independently published desktop from the cumulative APT pool.
+## Independent publication
 
-To publish a new desktop version:
+Each package has its own manually dispatched CI:
 
-1. Provision Linux runners labeled `claw-os-desktop-amd64` and
-   `claw-os-desktop-arm64`, each with at least 50 GB free on the workspace
-   filesystem.
-2. Manually run **Build Desktop packages** and wait for both architecture
-   artifacts.
-3. Copy that workflow run ID into the `desktop_run_id` input of
-   **Build APT repo (.deb packages)** or **Release everything**.
-4. The APT workflow rejects a desktop built from a newer commit than the
-   Agent/base packages it is about to publish.
+| Workflow | Builds and publishes |
+| --- | --- |
+| **Publish Agent package** | `claw-os-agent` for amd64 and arm64 |
+| **Publish Base package** | `claw-os-base` (`Architecture: all`) |
+| **Publish Desktop package** | `claw-os-desktop` for amd64 and arm64 |
 
-For the first repository publication, either provide both desktop artifacts or
-explicitly select `bootstrap_repository`. Normal publications fail closed when
-the existing signed repository is missing, so a transient Pages 404 cannot
-silently erase cumulative packages.
+Every package workflow calls the internal reusable APT publisher. The publisher
+reads the current signed repository, restores the latest packages not rebuilt
+by the caller, inserts only the caller's new package, regenerates the indexes,
+signs them, and deploys Pages. A fixed non-cancelling concurrency group
+serializes this read/merge/publish operation, while package builds remain
+independent.
 
-APT publications share one non-cancelling concurrency group across direct and
-umbrella runs. The signed-repository read, desktop preservation, regeneration,
-and Pages deployment therefore cannot race another publication.
+No workflow run IDs or bootstrap flags are exchanged between package
+workflows. A missing repository is treated automatically as first publication.
+Desktop publication requires Linux runners labeled `claw-os-desktop-amd64`
+and `claw-os-desktop-arm64`, each with at least 50 GB free.
 
 ## Apt repo URL
 
@@ -115,8 +116,8 @@ sudo apt install claw-os-agent
 
 That one package installs and enables `clawd.service`. It does not install
 Claw OS home overlays, boot policy, or desktop integration. To turn a composed
-rootfs into Claw OS, install `claw-os-base`; its exact-version dependency pulls
-in the same `claw-os-agent` artifact.
+rootfs into Claw OS, install `claw-os-base`; its runtime dependency pulls in
+`claw-os-agent` without coupling their release schedules.
 
 Repository builds require `GPG_KEY_ID` and refuse to emit unsigned metadata.
 GitHub Actions imports the private key from the
@@ -126,9 +127,7 @@ Local rootfs builds should set `COS_APT_PUBLIC_KEY_FILE` to a trusted
 binary export of that public key. Download fallback is available only when
 `COS_APT_PUBLIC_KEY_FINGERPRINT` is supplied explicitly.
 
-When the `CLAW_OS_APT_SIGNING_PRIVATE_KEY` secret is not configured (forks,
-pull requests, or before a key has been provisioned), CI does not fail and
-does not fall back to an unsigned repo: it drops the `apt-source` feature
-from the images and skips the apt repo build and publication entirely. The
-Docker and WSL pipelines are unaffected. Configuring the secret re-enables
-the signed repo automatically, with no workflow changes.
+Package publication workflows require `CLAW_OS_APT_SIGNING_PRIVATE_KEY` and
+cannot publish without it. Image workflows never fall back to an unsigned
+source: when the key is unavailable they omit the `apt-source` feature while
+continuing to build Docker and WSL artifacts.

@@ -1,0 +1,78 @@
+name: Publish package artifacts to APT
+
+on:
+  workflow_call:
+    inputs:
+      artifact_pattern:
+        description: "Artifact pattern produced by the calling package workflow"
+        required: true
+        type: string
+      pages_artifact_name:
+        description: "Unique Pages artifact name for this package publisher"
+        required: true
+        type: string
+    secrets:
+      CLAW_OS_APT_SIGNING_PRIVATE_KEY:
+        required: true
+      CLAW_OS_APT_SIGNING_PASSPHRASE:
+        required: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: claw-os-apt-pages
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download newly built package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ inputs.artifact_pattern }}
+          path: build/debs
+          merge-multiple: true
+
+      - name: Merge, sign, and publish APT repository
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq apt-utils gnupg
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-apt-gnupg"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          GPG_KEY_ID="$(gpg --batch --with-colons --list-secret-keys | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$GPG_KEY_ID"
+          export GNUPGHOME GPG_KEY_ID GPG_PASSPHRASE
+
+          gpg --batch --export "$GPG_KEY_ID" > "$RUNNER_TEMP/claw-os-existing-repo.gpg"
+          EXISTING_APT_REPO_URL="https://xiaoyu-work.github.io/claw-os" \
+            APT_PUBLIC_KEYRING="$RUNNER_TEMP/claw-os-existing-repo.gpg" \
+            bash ./packaging/apt-repo/sync-existing-packages.sh
+          ./packaging/apt-repo/build-repo.sh
+
+      - name: Upload APT repository
+        uses: actions/upload-pages-artifact@v3
+        with:
+          name: ${{ inputs.pages_artifact_name }}
+          path: build/apt-repo
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          artifact_name: ${{ inputs.pages_artifact_name }}

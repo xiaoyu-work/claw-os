@@ -45,7 +45,7 @@ editing additional surfaces.
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings and conformance tests |
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
-| Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `build-apt-repo.yml`, rootfs package-install features |
+| Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; workflows are manually dispatched |
 

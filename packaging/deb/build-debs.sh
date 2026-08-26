@@ -4,6 +4,9 @@
 #
 # Output: $PROJECT_DIR/build/debs/
 #
+# Usage:
+#   ./packaging/deb/build-debs.sh [all|agent|base]
+#
 # Required tools: dpkg-deb, fakeroot (or run as root).
 # Optional:       gzip, find, install, sed.
 #
@@ -30,6 +33,18 @@ STAGE_DIR="${COS_DEB_STAGE_DIR:-$PROJECT_DIR/build/deb-staging}"
 
 source "$PROJECT_DIR/scripts/lib/package-version.sh"
 VERSION="$(package_version "$PROJECT_DIR")"
+PACKAGE_SET="${1:-all}"
+if [ "$#" -gt 1 ]; then
+    echo "usage: $0 [all|agent|base]" >&2
+    exit 2
+fi
+case "$PACKAGE_SET" in
+    all|agent|base) ;;
+    *)
+        echo "error: unknown package set '$PACKAGE_SET'; expected all, agent, or base" >&2
+        exit 2
+        ;;
+esac
 
 DPKG_DEB="$(command -v dpkg-deb || true)"
 if [ -z "$DPKG_DEB" ]; then
@@ -61,6 +76,14 @@ find "$OUT_DIR" -maxdepth 1 -type f -name 'claw-os-*.deb' \
     ! -name 'claw-os-base_*.deb' \
     ! -name 'claw-os-desktop_*.deb' \
     -delete
+case "$PACKAGE_SET" in
+    all)
+        rm -f "$OUT_DIR"/claw-os-agent_*_"$DEB_ARCH".deb
+        rm -f "$OUT_DIR"/claw-os-base_*_all.deb
+        ;;
+    agent) rm -f "$OUT_DIR"/claw-os-agent_*_"$DEB_ARCH".deb ;;
+    base) rm -f "$OUT_DIR"/claw-os-base_*_all.deb ;;
+esac
 
 ###############################################################################
 # Helper: verify and locate a built binary across known target dirs.
@@ -229,9 +252,12 @@ render_control() {
     sed -e "s/__VERSION__/$VERSION/g" -e "s/__ARCH__/$DEB_ARCH/g" "$src" > "$dst"
 }
 
+SYSTEM_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
+
 ###############################################################################
 # 1. claw-os-agent
 ###############################################################################
+if [ "$PACKAGE_SET" = "all" ] || [ "$PACKAGE_SET" = "agent" ]; then
 echo "===> staging claw-os-agent"
 AGENT_STAGE="$STAGE_DIR/claw-os-agent"
 mkdir -p \
@@ -354,7 +380,6 @@ cp -a "$RUNTIME_PY_SRC" "$AGENT_STAGE/usr/lib/cos/python/cos_runtime"
 find "$AGENT_STAGE/usr/lib/cos/python" -name '__pycache__' -type d \
     -exec rm -rf {} + 2>/dev/null || true
 
-SYSTEM_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system"
 USER_UNITS_SRC="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/user"
 install -m 644 "$SYSTEM_UNITS_SRC/clawd.service" \
     "$AGENT_STAGE/usr/lib/systemd/system/clawd.service"
@@ -368,10 +393,12 @@ install -m 644 "$USER_UNITS_SRC/claw-semantic.service" \
 echo "  :: dpkg-deb --build claw-os-agent"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$AGENT_STAGE" \
     "$OUT_DIR/claw-os-agent_${VERSION}_${DEB_ARCH}.deb" >/dev/null
+fi
 
 ###############################################################################
 # 2. claw-os-base (architecture-independent Claw OS integration)
 ###############################################################################
+if [ "$PACKAGE_SET" = "all" ] || [ "$PACKAGE_SET" = "base" ]; then
 echo "===> staging claw-os-base"
 BASE_STAGE="$STAGE_DIR/claw-os-base"
 mkdir -p \
@@ -400,6 +427,7 @@ install -m 644 "$PROJECT_DIR/rootfs/features/systemd/overlay/etc/default/cos-hom
 echo "  :: dpkg-deb --build claw-os-base"
 $FAKEROOT $DPKG_DEB --root-owner-group --build "$BASE_STAGE" \
     "$OUT_DIR/claw-os-base_${VERSION}_all.deb" >/dev/null
+fi
 
 ###############################################################################
 # Done.

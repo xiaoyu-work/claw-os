@@ -78,13 +78,12 @@ for deb in "$DEBS_DIR"/*.deb; do
     esac
 done
 
-if [ ${#binary_arches[@]} -eq 0 ]; then
-    echo "error: no architecture-specific .debs found in $DEBS_DIR" >&2
-    exit 1
-fi
-
 echo ":: building apt repo at $REPO_DIR"
-echo ":: arches: ${binary_arches[*]}"
+if [ ${#binary_arches[@]} -eq 0 ]; then
+    echo ":: arches: all"
+else
+    echo ":: arches: ${binary_arches[*]} all"
+fi
 
 rm -rf "$REPO_DIR"
 for a in "${binary_arches[@]}"; do
@@ -131,7 +130,11 @@ gzip -fk9 "dists/$SUITE/$COMPONENT/binary-all/Packages"
 # Generate the Release file. The Architectures: list determines which
 # binary-<arch>/ trees apt will fetch.
 echo ":: generating Release"
-arch_list="${binary_arches[*]} all"
+if [ ${#binary_arches[@]} -eq 0 ]; then
+    arch_list="all"
+else
+    arch_list="${binary_arches[*]} all"
+fi
 cat > "$REPO_DIR/apt-ftparchive-release.conf" <<EOF
 APT::FTPArchive::Release::Origin "Claw OS";
 APT::FTPArchive::Release::Label "Claw OS";

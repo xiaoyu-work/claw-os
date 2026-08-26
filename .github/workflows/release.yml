@@ -10,17 +10,6 @@ name: Release everything (test + Docker + WSL + APT)
 #   - Signed APT repo          -> GitHub Pages
 on:
   workflow_dispatch:
-    inputs:
-      desktop_run_id:
-        description: "Optional Build Desktop packages workflow run ID"
-        required: false
-        default: ""
-        type: string
-      bootstrap_repository:
-        description: "Allow first APT publication without an existing repository"
-        required: false
-        default: false
-        type: boolean
 
 jobs:
   test:
@@ -34,12 +23,29 @@ jobs:
       packages: write   # Docker push to GHCR
     secrets: inherit
 
-  apt-repo:
+  agent-package:
     needs: test
-    uses: ./.github/workflows/build-apt-repo.yml
-    with:
-      desktop_run_id: ${{ inputs.desktop_run_id }}
-      bootstrap_repository: ${{ inputs.bootstrap_repository }}
+    uses: ./.github/workflows/publish-agent-package.yml
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit
+
+  base-package:
+    needs: test
+    uses: ./.github/workflows/publish-base-package.yml
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    secrets: inherit
+
+  desktop-package:
+    needs: test
+    uses: ./.github/workflows/publish-desktop-package.yml
     permissions:
       actions: read
       contents: read

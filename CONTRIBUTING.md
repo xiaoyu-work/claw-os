@@ -126,15 +126,13 @@ installed targets.
 
 ### `apt` repository
 
-The reusable `claw-os-agent` and Claw OS integration `claw-os-base` `.deb`
-packages are assembled from compiled binaries and source-tree files; building
-those APT artifacts does not require a rootfs. The optional desktop package is
-staged by the desktop rootfs feature. The manually dispatched
-**Build APT repo (.deb packages)** workflow builds both architectures, signs the
-repository, and publishes it to GitHub Pages. The umbrella **Release
-everything (test + Docker + WSL + APT)** workflow includes the same channel.
-Desktop `.deb` updates are built by the separately dispatched **Build Desktop
-packages** workflow; pass that run ID to either publication workflow.
+`claw-os-agent`, `claw-os-base`, and `claw-os-desktop` each have an independent
+manually dispatched build/publication workflow. Agent and Base are assembled
+from source-tree assets and compiled binaries without a rootfs; Desktop is
+staged by its rootfs feature. Each workflow merges only its new package into
+the existing signed APT repository and preserves the other package families.
+The umbrella **Release everything (test + Docker + WSL + APT)** workflow invokes
+all package channels when a coordinated release is wanted.
 The repository is consumable as:
 
 ```bash
