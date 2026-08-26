@@ -15,8 +15,10 @@ packaging/
 │   ├── claw-os-base/          Claw OS distribution integration
 │   └── claw-os-desktop/       Optional graphical desktop metadata
 └── apt-repo/
-    ├── sync-existing-packages.sh  Retain packages not rebuilt by this CI
-    └── build-repo.sh          Assemble build/apt-repo/ from build/debs/
+    ├── sync-existing-packages.sh  Merge local and signed candidates safely
+    ├── build-repo.sh              Assemble build/apt-repo/ from build/debs/
+    └── tests/
+        └── test-sync-existing-packages.sh  Exercise safe package merging
 ```
 
 ## Packages
@@ -92,10 +94,12 @@ Each package has its own manually dispatched CI:
 
 Every package workflow calls the internal reusable APT publisher. The publisher
 reads the current signed repository, restores the latest packages not rebuilt
-by the caller, inserts only the caller's new package, regenerates the indexes,
-signs them, and deploys Pages. A fixed non-cancelling concurrency group
-serializes this read/merge/publish operation, while package builds remain
-independent.
+by the caller, and compares each locally built package with the signed candidate
+for that package and architecture. Only a strictly newer local version replaces
+the existing candidate; equal or older artifacts are discarded before the
+indexes are regenerated, signed, and deployed to Pages. A fixed non-cancelling
+concurrency group serializes this read/merge/publish operation, while package
+builds remain independent.
 
 No workflow run IDs or bootstrap flags are exchanged between package
 workflows. A missing repository is treated automatically as first publication.

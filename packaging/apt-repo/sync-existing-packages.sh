@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Fill DEBS_DIR with the latest signed packages that were not rebuilt by the
-# current package workflow. Locally built packages always win.
+# Merge locally built packages with the latest candidates from the existing
+# signed repository. A local package replaces its candidate only when it is
+# strictly newer in Debian version order.
 
 set -euo pipefail
 
@@ -23,19 +24,6 @@ targets=(
     "claw-os-desktop|amd64|amd64|claw-os-desktop:amd64"
     "claw-os-desktop|arm64|arm64|claw-os-desktop:arm64"
 )
-
-missing_targets=()
-for target in "${targets[@]}"; do
-    IFS='|' read -r package file_arch query_arch query <<< "$target"
-    if compgen -G "$DEBS_DIR/${package}_*_${file_arch}.deb" >/dev/null; then
-        echo "  :: using newly built $package package for $file_arch"
-    else
-        missing_targets+=("$target")
-    fi
-done
-if [ "${#missing_targets[@]}" -eq 0 ]; then
-    exit 0
-fi
 
 inrelease_url="$EXISTING_APT_REPO_URL/dists/$SUITE/InRelease"
 status="$(curl -L -sS -o /dev/null -w '%{http_code}' "$inrelease_url")"
@@ -82,7 +70,8 @@ prepare_arch() {
     prepared_arches[$arch]=1
 }
 
-for target in "${missing_targets[@]}"; do
+shopt -s nullglob
+for target in "${targets[@]}"; do
     IFS='|' read -r package file_arch query_arch query <<< "$target"
     prepare_arch "$query_arch"
 
@@ -102,11 +91,51 @@ for target in "${missing_targets[@]}"; do
         apt-cache "${apt_options[@]}" policy "$query" \
             | awk '/^[[:space:]]*Candidate:/ { candidate=$2 } END { print candidate }'
     )"
+
+    local_debs=("$DEBS_DIR/${package}_"*"_${file_arch}.deb")
+    newest_local=""
+    newest_local_version=""
+    for deb in "${local_debs[@]}"; do
+        if ! version="$(dpkg-deb --field "$deb" Version)"; then
+            echo "error: cannot read package version from $deb" >&2
+            exit 1
+        fi
+        if [ -z "$version" ]; then
+            echo "error: package has no version: $deb" >&2
+            exit 1
+        fi
+        if [ -z "$newest_local_version" ] \
+            || dpkg --compare-versions "$version" gt "$newest_local_version"; then
+            newest_local="$deb"
+            newest_local_version="$version"
+        fi
+    done
+
     if [ -z "$candidate" ] || [ "$candidate" = "(none)" ]; then
-        echo "  :: no existing $package package for $file_arch"
+        if [ -z "$newest_local" ]; then
+            echo "  :: no existing or local $package package for $file_arch"
+            continue
+        fi
+        for deb in "${local_debs[@]}"; do
+            [ "$deb" = "$newest_local" ] || rm -f -- "$deb"
+        done
+        echo "  :: using newly built $package $newest_local_version for $file_arch (no existing candidate)"
         continue
     fi
 
+    if [ -n "$newest_local" ] \
+        && dpkg --compare-versions "$newest_local_version" gt "$candidate"; then
+        for deb in "${local_debs[@]}"; do
+            [ "$deb" = "$newest_local" ] || rm -f -- "$deb"
+        done
+        echo "  :: using newly built $package $newest_local_version for $file_arch; newer than signed candidate $candidate"
+        continue
+    fi
+
+    if [ -n "$newest_local" ]; then
+        echo "  :: ignoring local $package $newest_local_version for $file_arch; signed candidate $candidate is not older"
+        rm -f -- "${local_debs[@]}"
+    fi
     echo "  :: preserving $package $candidate for $file_arch"
     (
         cd "$DEBS_DIR"

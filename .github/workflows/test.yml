@@ -35,6 +35,9 @@ jobs:
             exit 1
           fi
 
+      - name: Test APT package synchronization
+        run: bash packaging/apt-repo/tests/test-sync-existing-packages.sh
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:
