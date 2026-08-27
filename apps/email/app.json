@@ -28,7 +28,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "trusted_resolver": "email-provider"
         },
         {
           "name": "to",
@@ -68,40 +69,25 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/SMTP_PASSWORD"
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "smtp": {
+                "kind": "name",
+                "value": "default/SMTP_PASSWORD"
+              },
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
           "why": {
-            "en": "Read only the credential for the selected provider."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/GOOGLE_ACCESS_TOKEN"
-            }
-          },
-          "why": {
-            "en": "Read only the credential for the selected provider."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/MICROSOFT_ACCESS_TOKEN"
-            }
-          },
-          "why": {
-            "en": "Read only the credential for the selected provider."
+            "en": "Read only the credential for the provider selected before dispatch."
           }
         },
         {
@@ -128,7 +114,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "trusted_resolver": "email-provider"
         },
         {
           "name": "query",
@@ -157,27 +144,21 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/GOOGLE_ACCESS_TOKEN"
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
           "why": {
-            "en": "Read only the credential for the selected provider."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/MICROSOFT_ACCESS_TOKEN"
-            }
-          },
-          "why": {
-            "en": "Read only the credential for the selected provider."
+            "en": "Read only the credential for the provider selected before dispatch."
           }
         }
       ]
@@ -191,7 +172,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "trusted_resolver": "email-provider"
         },
         {
           "name": "max-results",
@@ -221,27 +203,21 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/GOOGLE_ACCESS_TOKEN"
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
           "why": {
-            "en": "Read only the credential for the selected provider."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/MICROSOFT_ACCESS_TOKEN"
-            }
-          },
-          "why": {
-            "en": "Read only the credential for the selected provider."
+            "en": "Read only the credential for the provider selected before dispatch."
           }
         }
       ]
@@ -255,7 +231,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "trusted_resolver": "email-provider"
         },
         {
           "name": "id",
@@ -277,27 +254,21 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/GOOGLE_ACCESS_TOKEN"
+            "kind": "from-arg-map",
+            "arg": "provider",
+            "values": {
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
           "why": {
-            "en": "Read only the credential for the selected provider."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "name",
-              "value": "default/MICROSOFT_ACCESS_TOKEN"
-            }
-          },
-          "why": {
-            "en": "Read only the credential for the selected provider."
+            "en": "Read only the credential for the provider selected before dispatch."
           }
         }
       ]

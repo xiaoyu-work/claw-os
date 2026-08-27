@@ -269,7 +269,10 @@ impl AppIdentitySession {
             None => None,
         };
         let bound = match declared {
-            Some(declared) => bind_operation_args(declared, args)?,
+            Some(declared) => {
+                let trusted_args = trusted_pre_dispatch_args(app_id, declared, args)?;
+                bind_operation_args(declared, &trusted_args)?
+            }
             None => BoundOperationArgs {
                 values: BTreeMap::new(),
                 argv: args.to_vec(),
@@ -942,41 +945,179 @@ fn bind_operation_args(
         .apply_arg_defaults(&mut values)
         .map_err(|error| format!("resolve operation defaults: {error}"))?;
     normalize_path_args(operation, &mut values)?;
-
-    let mut argv = args.to_vec();
-    for name in defaulted {
-        let value = values
-            .get(&name)
-            .ok_or_else(|| format!("resolved default for `{name}` is missing"))?;
-        let declaration = operation
-            .args
-            .iter()
-            .find(|declaration| declaration.name == name)
-            .ok_or_else(|| format!("resolved default for undeclared arg `{name}`"))?;
-        match declaration.effective_binding() {
-            crate::caps::manifest::ArgBinding::Positional => {
-                if declaration.kind != ArgKind::Bool {
-                    argv.push(arg_value_to_string(value)?);
-                }
-            }
-            crate::caps::manifest::ArgBinding::Flag => {
-                if declaration.kind == ArgKind::Bool {
-                    if value.as_bool() == Some(true) {
-                        argv.push(format!("--{}", crate::caps::args::flag_name(declaration)));
-                    }
-                } else {
-                    argv.push(format!("--{}", crate::caps::args::flag_name(declaration)));
-                    argv.push(arg_value_to_string(value)?);
-                }
-            }
-        }
-    }
     for declaration in &operation.args {
         if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
             values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
         }
     }
+    let argv = canonical_operation_argv(operation, args, &values, &defaulted)?;
     Ok(BoundOperationArgs { values, argv })
+}
+
+fn trusted_pre_dispatch_args(
+    app_id: &str,
+    operation: &Operation,
+    args: &[String],
+) -> Result<Vec<String>, String> {
+    let Some(selector) = operation
+        .args
+        .iter()
+        .find(|arg| arg.trusted_resolver.is_some())
+    else {
+        return Ok(args.to_vec());
+    };
+    if app_id != "email" {
+        return Err(format!(
+            "App `{app_id}` is not allowed to use a trusted argument resolver"
+        ));
+    }
+    let flag = crate::caps::args::flag_name(selector);
+    if args
+        .iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")))
+    {
+        return Ok(args.to_vec());
+    }
+
+    let mappings = operation
+        .needs
+        .iter()
+        .find_map(|need| match &need.scope {
+            ScopeBinding::FromArgMap { arg, values } if arg == &selector.name => Some(values),
+            _ => None,
+        })
+        .ok_or_else(|| {
+            format!(
+                "trusted resolver `{}` requires a from-arg-map capability",
+                selector.name
+            )
+        })?;
+    let mut provider = None;
+    for candidate in ["gmail", "outlook", "smtp"] {
+        let Some(scope) = mappings.get(candidate) else {
+            continue;
+        };
+        let configured = match scope {
+            Scope::Name(name) => {
+                let (namespace, credential) = name.split_once('/').ok_or_else(|| {
+                    format!("email provider `{candidate}` has an invalid credential scope")
+                })?;
+                crate::credential::is_configured(credential, namespace)
+                    .map_err(|error| format!("resolve email provider: {error}"))?
+                    || (candidate == "smtp" && std::env::var_os("SMTP_HOST").is_some())
+            }
+            _ => {
+                return Err(format!(
+                    "email provider `{candidate}` must map to a credential name scope"
+                ));
+            }
+        };
+        if configured {
+            provider = Some(candidate);
+            break;
+        }
+    }
+    let provider = provider.ok_or_else(|| {
+        "no email provider configured; pass --provider or configure credentials".to_string()
+    })?;
+
+    let mut resolved = args.to_vec();
+    let delimiter = resolved
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(resolved.len());
+    resolved.splice(
+        delimiter..delimiter,
+        [format!("--{flag}"), provider.to_string()],
+    );
+    Ok(resolved)
+}
+
+fn canonical_operation_argv(
+    operation: &Operation,
+    raw: &[String],
+    values: &BTreeMap<String, serde_json::Value>,
+    defaulted: &[String],
+) -> Result<Vec<String>, String> {
+    use crate::caps::manifest::ArgBinding;
+
+    let supplied_positionals = raw_operation_positionals(operation, raw);
+    let positional_declarations = operation
+        .args
+        .iter()
+        .filter(|declaration| declaration.effective_binding() == ArgBinding::Positional)
+        .collect::<Vec<_>>();
+    let supplied_count = supplied_positionals.len().min(positional_declarations.len());
+
+    let mut positionals = Vec::new();
+    for (index, declaration) in positional_declarations.iter().enumerate() {
+        if index >= supplied_count && !defaulted.contains(&declaration.name) {
+            continue;
+        }
+        let value = values
+            .get(&declaration.name)
+            .ok_or_else(|| format!("bound positional `{}` is missing", declaration.name))?;
+        positionals.push(arg_value_to_string(value)?);
+    }
+    positionals.extend(supplied_positionals.into_iter().skip(supplied_count));
+
+    let mut flags = Vec::new();
+    for declaration in operation
+        .args
+        .iter()
+        .filter(|declaration| declaration.effective_binding() == ArgBinding::Flag)
+    {
+        let Some(value) = values.get(&declaration.name) else {
+            continue;
+        };
+        let name = format!("--{}", crate::caps::args::flag_name(declaration));
+        if declaration.kind == ArgKind::Bool {
+            if value.as_bool() == Some(true) {
+                flags.push(name);
+            }
+        } else {
+            flags.push(name);
+            flags.push(arg_value_to_string(value)?);
+        }
+    }
+
+    if positionals.iter().any(|value| value.starts_with("--")) {
+        flags.push("--".to_string());
+        flags.extend(positionals);
+        Ok(flags)
+    } else {
+        positionals.extend(flags);
+        Ok(positionals)
+    }
+}
+
+fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<String> {
+    let mut positionals = Vec::new();
+    let mut options = true;
+    let mut index = 0;
+    while index < raw.len() {
+        let token = &raw[index];
+        if options && token == "--" {
+            options = false;
+        } else if options && token.starts_with("--") {
+            let raw_name = token[2..].split_once('=').map_or(&token[2..], |(name, _)| name);
+            if let Some(declaration) = operation.args.iter().find(|declaration| {
+                declaration.effective_binding()
+                    == crate::caps::manifest::ArgBinding::Flag
+                    && (declaration.name == raw_name
+                        || crate::caps::args::flag_name(declaration) == raw_name)
+            }) {
+                if declaration.kind != ArgKind::Bool && !token.contains('=') {
+                    index += 1;
+                }
+            }
+        } else {
+            positionals.push(token.clone());
+        }
+        index += 1;
+    }
+    positionals
 }
 
 fn parse_supplied_operation_args(
@@ -1071,6 +1212,10 @@ const SAFE_APP_ENV_KEYS: &[&str] = &[
     "LOGNAME",
     "SHELL",
     "LANG",
+    "SMTP_HOST",
+    "SMTP_PORT",
+    "SMTP_USER",
+    "SMTP_FROM",
     "LC_ALL",
     "LC_CTYPE",
     "LC_MESSAGES",

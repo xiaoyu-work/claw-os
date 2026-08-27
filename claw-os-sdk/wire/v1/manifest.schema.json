@@ -78,6 +78,24 @@
         {
           "if": { "properties": { "kind": { "const": "bool" } }, "required": ["kind"] },
           "then": { "properties": { "default": { "type": "boolean" } } }
+        },
+        {
+          "if": { "required": ["trusted_resolver"] },
+          "then": {
+            "properties": {
+              "name": { "const": "provider" },
+              "kind": { "const": "name" },
+              "binding": { "const": "flag" },
+              "required": { "const": false }
+            },
+            "required": ["binding"],
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] }
+              ]
+            }
+          }
         }
       ],
       "properties": {
@@ -87,6 +105,7 @@
         "required": { "type": "boolean" },
         "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
         "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
+        "trusted_resolver": { "type": "string", "enum": ["email-provider"], "description": "Trusted pre-dispatch resolver. Restricted by the kernel to the bundled email provider flag." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
     },
@@ -101,37 +120,36 @@
         "fallback": { "type": "string", "description": "Safe fallback when the transform produces no value." }
       }
     },
-    "sessionArg": {
-      "allOf": [
-        { "$ref": "#/$defs/arg" },
-        { "not": { "required": ["default_from"] } }
-      ]
-    },
     "need": {
       "type": "object",
       "description": "A single capability request: verb + scope binding + human reason.",
       "required": ["verb", "scope", "why"],
       "additionalProperties": true,
+      "not": {
+        "properties": { "verb": { "const": "ai.bypass" } },
+        "required": ["verb"]
+      },
       "properties": {
         "verb": {
           "type": "string",
           "description": "Capability verb. Must be a verb the kernel recognises (core/src/caps/verb.rs).",
           "enum": [
             "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta",
-            "net.dial", "net.listen", "net.raw", "net.resolve",
+            "net.dial", "net.listen", "net.raw", "net.resolve", "net.manage", "net.firewall",
             "proc.spawn", "proc.signal", "proc.observe",
-            "sys.observe", "sys.service", "sys.package", "sys.mount", "sys.time", "sys.power", "sys.kernel",
+            "sys.observe", "sys.crash", "sys.container", "sys.config", "sys.events", "sys.identity", "sys.security", "sys.storage",
+            "sys.service", "sys.package", "sys.mount", "sys.snapshot", "sys.time", "sys.power", "sys.kernel",
             "secret.read", "secret.write", "secret.grant",
             "agent.spawn", "agent.invoke", "agent.observe", "agent.delegate",
-            "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write",
+            "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write", "data.backup",
             "memory.write", "memory.read",
             "ipc.publish", "ipc.subscribe", "ipc.invoke",
-            "ui.notify", "ui.prompt", "ui.window", "ui.input",
+            "ui.notify", "ui.prompt", "ui.window", "ui.input", "ui.accessibility",
             "clipboard.read", "clipboard.write",
-            "device.audio", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
+            "device.audio", "device.bluetooth", "device.media-route", "device.printer", "device.display", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
             "time.cron", "time.delay",
-            "ai.chat", "ai.chat.untrusted",
-            "desktop.launch",
+            "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.audio.tts", "ai.audio.stt", "ai.vision.analyze", "ai.video.generate", "ai.video.analyze", "ai.bypass",
+            "desktop.launch", "desktop.window",
             "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval"
           ]
         },
@@ -144,6 +162,42 @@
       "description": "How an operation's scope is determined at invocation time. kind=from-arg reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an explicit wildcard (no implicit '*').",
       "required": ["kind"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "from-arg" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "from-arg-map" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg", "values"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "from-arg-or-wild" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg", "wild_when"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "fixed" } }, "required": ["kind"] },
+          "then": {
+            "required": ["scope"],
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "wild" } }, "required": ["kind"] },
+          "then": {
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+          }
+        }
+      ],
       "properties": {
         "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild"] },
         "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
@@ -214,7 +268,18 @@
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
         "summary": { "$ref": "#/$defs/localizedText" },
-        "args": { "type": "array", "items": { "$ref": "#/$defs/sessionArg" } },
+        "args": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/arg",
+            "not": {
+              "anyOf": [
+                { "required": ["default_from"] },
+                { "required": ["trusted_resolver"] }
+              ]
+            }
+          }
+        },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
       }
     },

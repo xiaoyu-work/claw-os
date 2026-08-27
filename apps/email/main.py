@@ -103,35 +103,6 @@ def _outlook_auth_error(detail, status=None):
 
 
 # ---------------------------------------------------------------------------
-# Provider detection
-# ---------------------------------------------------------------------------
-
-def _detect_provider():
-    """Detect which email provider is configured, in priority order."""
-    if (
-        os.environ.get(GOOGLE_ACCESS_TOKEN)
-        or os.environ.get("GMAIL_ACCESS_TOKEN")
-        or os.environ.get("GOOGLE_OAUTH_TOKEN")
-    ):
-        return "gmail"
-    if os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN"):
-        return "outlook"
-    if os.environ.get("SMTP_HOST"):
-        return "smtp"
-    return None
-
-
-def _resolve_provider(requested):
-    """Return the provider to use, or an error dict if none available."""
-    if requested:
-        return requested
-    detected = _detect_provider()
-    if detected:
-        return detected
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Argument parsers
 # ---------------------------------------------------------------------------
 
@@ -141,7 +112,7 @@ def _build_send_parser():
     p.add_argument("--subject", required=True)
     p.add_argument("--body", required=True)
     p.add_argument("--cc", default=None)
-    p.add_argument("--provider", default=None, choices=["smtp", "gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["smtp", "gmail", "outlook"])
     return p
 
 
@@ -149,7 +120,7 @@ def _build_search_parser():
     p = argparse.ArgumentParser(prog="cos email search", add_help=False)
     p.add_argument("--query", required=True)
     p.add_argument("--max-results", type=int, default=10)
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 
@@ -157,14 +128,14 @@ def _build_list_parser():
     p = argparse.ArgumentParser(prog="cos email list", add_help=False)
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--unread", action="store_true")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 
 def _build_read_parser():
     p = argparse.ArgumentParser(prog="cos email read", add_help=False)
     p.add_argument("--id", required=True, dest="message_id")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 
@@ -618,15 +589,7 @@ def cmd_send(args):
     except SystemExit:
         return {"error": "missing required arguments: --to, --subject, --body"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set SMTP_HOST for SMTP, GOOGLE_ACCESS_TOKEN for Gmail, "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
 
     if provider == "smtp":
         smtp_host = os.environ.get("SMTP_HOST", "localhost")
@@ -656,15 +619,7 @@ def cmd_search(args):
     except SystemExit:
         return {"error": "missing required argument: --query"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
     if provider == "smtp":
         return {"error": "search requires gmail or outlook provider"}
 
@@ -687,15 +642,7 @@ def cmd_list(args):
     except SystemExit:
         return {"error": "invalid arguments for list command"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
     if provider == "smtp":
         return {"error": "list requires gmail or outlook provider"}
 
@@ -718,15 +665,7 @@ def cmd_read(args):
     except SystemExit:
         return {"error": "missing required argument: --id"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
     if provider == "smtp":
         return {"error": "read requires gmail or outlook provider"}
 

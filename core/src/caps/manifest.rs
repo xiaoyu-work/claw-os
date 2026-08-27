@@ -359,6 +359,10 @@ pub struct Arg {
         skip_serializing_if = "Option::is_none"
     )]
     pub default_from: Option<ArgDefaultBinding>,
+    /// Trusted kernel resolver applied before binding and capability
+    /// derivation. Only the bundled email provider selector supports this.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_resolver: Option<TrustedArgResolver>,
     /// Human-readable help. Optional.
     #[serde(default)]
     pub label: LocalizedText,
@@ -386,6 +390,12 @@ pub enum ArgDefaultTransform {
     #[default]
     Identity,
     UrlPathBasename,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum TrustedArgResolver {
+    EmailProvider,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -739,7 +749,7 @@ pub struct Need {
 /// - [`ScopeBinding::Wild`] — explicit wildcard. The author has to spell
 ///   this out; there is no implicit `*`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum ScopeBinding {
     FromArg {
         arg: String,
@@ -1105,6 +1115,22 @@ impl Manifest {
                         arg: arg.name.clone(),
                     });
                 }
+                if arg.trusted_resolver.is_some()
+                    && (self.id != "email"
+                        || arg.name != "provider"
+                        || arg.kind != ArgKind::Name
+                        || arg.effective_binding() != ArgBinding::Flag
+                        || arg.required
+                        || arg.default.is_some()
+                        || arg.default_from.is_some())
+                {
+                    return Err(ManifestError::ArgDefaultInvalid {
+                        op: op_name.clone(),
+                        arg: arg.name.clone(),
+                        detail: "trusted resolver is restricted to the optional email provider flag"
+                            .to_string(),
+                    });
+                }
             }
             if let Err((arg, detail)) = validate_arg_defaults(&op.args) {
                 return Err(ManifestError::ArgDefaultInvalid {
@@ -1258,12 +1284,12 @@ impl Manifest {
                 if let Some(arg) = tool
                     .args
                     .iter()
-                    .find(|arg| arg.default_from.is_some())
+                    .find(|arg| arg.default_from.is_some() || arg.trusted_resolver.is_some())
                 {
                     return Err(ManifestError::SessionArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg: arg.name.clone(),
-                        detail: "`default_from` is only supported for one-shot operations"
+                        detail: "`default_from` and trusted resolvers are only supported for one-shot operations"
                             .to_string(),
                     });
                 }

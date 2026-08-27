@@ -2814,6 +2814,15 @@ pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
     read_credential_value(name, namespace, false).map(Some)
 }
 
+/// Return whether a credential record exists without decrypting its value.
+///
+/// Trusted launch planning uses this to select an exact provider capability
+/// before an App starts. User/App-facing reads still go through `cmd_load`.
+pub fn is_configured(name: &str, namespace: &str) -> Result<bool, String> {
+    credential_scope(namespace, name)?;
+    Ok(namespace_dir(namespace).join(format!("{name}.json")).is_file())
+}
+
 pub(crate) fn load_for_broker(
     name: &str,
     namespace: &str,

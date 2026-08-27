@@ -176,9 +176,22 @@ class _ArgRequired(TypedDict):
 class Arg(_ArgRequired, total=False):
     """arg.
     """
+    binding: str
     required: bool
     default: Any
+    default_from: "Argdefaultbinding"
+    trusted_resolver: str
     label: "Localizedtext"
+
+class _ArgdefaultbindingRequired(TypedDict):
+    arg: str
+
+class Argdefaultbinding(_ArgdefaultbindingRequired, total=False):
+    """argDefaultBinding.
+    """
+    transform: str
+    prefix: str
+    fallback: str
 
 class Need(TypedDict):
     """need.
@@ -200,6 +213,8 @@ class Scopebinding(_ScopebindingRequired, total=False):
     an explicit wildcard (no implicit '*').
     """
     arg: str
+    values: Dict[str, Any]
+    wild_when: str
     scope: "Scope"
 
 class _ScopeRequired(TypedDict):

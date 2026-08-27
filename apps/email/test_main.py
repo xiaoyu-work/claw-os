@@ -32,11 +32,9 @@ email_main = load_local_module(
     "claw_test_email_main",
     clear_modules=("_shared",),
 )
-_detect_provider = email_main._detect_provider
 _gmail_token = email_main._gmail_token
 _parse_gmail_message = email_main._parse_gmail_message
 _parse_outlook_message = email_main._parse_outlook_message
-_resolve_provider = email_main._resolve_provider
 run = email_main.run
 
 # ---------------------------------------------------------------------------
@@ -60,79 +58,6 @@ PROVIDER_ENV_KEYS = [
 def _clear_provider_env():
     for key in PROVIDER_ENV_KEYS:
         os.environ.pop(key, None)
-
-
-# ---------------------------------------------------------------------------
-# Provider detection
-# ---------------------------------------------------------------------------
-
-
-class TestDetectProvider(unittest.TestCase):
-    def setUp(self):
-        _clear_provider_env()
-
-    def tearDown(self):
-        _clear_provider_env()
-
-    def test_no_env_returns_none(self):
-        self.assertIsNone(_detect_provider())
-
-    def test_gmail_access_token(self):
-        os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "gmail")
-
-    def test_google_access_token(self):
-        os.environ["GOOGLE_ACCESS_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "gmail")
-
-    def test_google_oauth_token(self):
-        os.environ["GOOGLE_OAUTH_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "gmail")
-
-    def test_microsoft_access_token(self):
-        os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "outlook")
-
-    def test_microsoft_oauth_token(self):
-        os.environ["MICROSOFT_OAUTH_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "outlook")
-
-    def test_smtp_host(self):
-        os.environ["SMTP_HOST"] = "mail.example.com"
-        self.assertEqual(_detect_provider(), "smtp")
-
-    def test_gmail_takes_priority_over_outlook(self):
-        os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
-        os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
-        self.assertEqual(_detect_provider(), "gmail")
-
-    def test_gmail_takes_priority_over_smtp(self):
-        os.environ["GMAIL_ACCESS_TOKEN"] = "tok"
-        os.environ["SMTP_HOST"] = "localhost"
-        self.assertEqual(_detect_provider(), "gmail")
-
-    def test_outlook_takes_priority_over_smtp(self):
-        os.environ["MICROSOFT_ACCESS_TOKEN"] = "tok"
-        os.environ["SMTP_HOST"] = "localhost"
-        self.assertEqual(_detect_provider(), "outlook")
-
-
-class TestResolveProvider(unittest.TestCase):
-    def setUp(self):
-        _clear_provider_env()
-
-    def tearDown(self):
-        _clear_provider_env()
-
-    def test_explicit_provider_returned_directly(self):
-        self.assertEqual(_resolve_provider("gmail"), "gmail")
-
-    def test_none_when_no_env(self):
-        self.assertIsNone(_resolve_provider(None))
-
-    def test_falls_back_to_detected(self):
-        os.environ["SMTP_HOST"] = "localhost"
-        self.assertEqual(_resolve_provider(None), "smtp")
 
 
 class TestCredentialStoreIntegration(unittest.TestCase):
@@ -265,7 +190,7 @@ class TestSendCommand(unittest.TestCase):
     def test_send_no_provider(self):
         result = run("send", ["--to", "x@y.com", "--subject", "hi", "--body", "hello"])
         self.assertIn("error", result)
-        self.assertIn("no email provider configured", result["error"])
+        self.assertIn("missing required arguments", result["error"])
 
     def test_send_missing_to(self):
         os.environ["SMTP_HOST"] = "localhost"
@@ -296,7 +221,7 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello"],
+            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
         )
         self.assertTrue(result.get("sent"))
         self.assertEqual(result["to"], "x@y.com")

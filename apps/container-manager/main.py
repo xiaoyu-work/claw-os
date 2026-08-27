@@ -77,7 +77,7 @@ def _identifier(raw, name):
     return raw
 
 
-def _base(args, target=True):
+def _base(args, target=True, namespace_flag=False):
     minimum = 2 if target else 1
     if len(args) < minimum:
         raise ValueError("missing runtime or container target")
@@ -85,7 +85,16 @@ def _base(args, target=True):
     container = _identifier(args[1], "container") if target else None
     remainder = args[2:] if target else args[1:]
     namespace = None
-    if runtime == "containerd":
+    if namespace_flag:
+        if "--namespace" in remainder:
+            index = remainder.index("--namespace")
+            if runtime != "containerd" or index + 1 >= len(remainder):
+                raise ValueError("--namespace is only valid for containerd and requires a value")
+            namespace = _identifier(remainder[index + 1], "namespace")
+            remainder = remainder[:index] + remainder[index + 2 :]
+        elif runtime == "containerd":
+            raise ValueError("containerd requires --namespace")
+    elif runtime == "containerd":
         if not remainder:
             raise ValueError("containerd requires a namespace")
         namespace = _identifier(remainder[0], "namespace")
@@ -121,7 +130,7 @@ def run(command, args):
         return _broker(command, runtime=runtime, target=target, namespace=namespace)
     if command == "logs":
         try:
-            runtime, target, namespace, rest = _base(args)
+            runtime, target, namespace, rest = _base(args, namespace_flag=True)
             lines = int(rest[0]) if rest else 100
         except (ValueError, TypeError) as exc:
             return {"error": str(exc)}

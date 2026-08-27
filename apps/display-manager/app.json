@@ -129,12 +129,12 @@
         },
         {
           "name": "x",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         },
         {
           "name": "y",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         }
       ],
@@ -166,12 +166,12 @@
         },
         {
           "name": "width",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         },
         {
           "name": "height",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         },
         {
@@ -314,7 +314,7 @@
         },
         {
           "name": "percent",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         }
       ],

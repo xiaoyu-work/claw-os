@@ -9,6 +9,8 @@ from __future__ import annotations
 import ast
 import json
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 
@@ -446,10 +448,203 @@ def test_argparse_contracts_match_manifests() -> None:
                     continue
                 if _binding(arg) != parsed["binding"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} binding")
-                if bool(arg.get("required", False)) != parsed["required"]:
+                handler_required = bool(arg.get("required", False)) or bool(
+                    arg.get("trusted_resolver")
+                )
+                if handler_required != parsed["required"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} required")
                 if parsed["kind"] is not None and arg.get("kind") != parsed["kind"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} kind")
                 if parsed["default"] is not None and arg.get("default") != parsed["default"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} default")
     assert not drift, "\n".join(drift)
+
+
+def test_every_manifest_matches_published_schema_contract() -> None:
+    schema = json.loads(
+        (APPS_ROOT.parent / "claw-os-sdk/wire/v1/manifest.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    defs = schema["$defs"]
+    kinds = set(defs["arg"]["properties"]["kind"]["enum"])
+    bindings = set(defs["arg"]["properties"]["binding"]["enum"])
+    verbs = set(defs["need"]["properties"]["verb"]["enum"])
+    scope_kinds = set(defs["scopeBinding"]["properties"]["kind"]["enum"])
+    payloads = {
+        "from-arg": ({"arg"}, {"scope", "values", "wild_when"}),
+        "from-arg-map": ({"arg", "values"}, {"scope", "wild_when"}),
+        "from-arg-or-wild": ({"arg", "wild_when"}, {"scope", "values"}),
+        "fixed": ({"scope"}, {"arg", "values", "wild_when"}),
+        "wild": (set(), {"arg", "scope", "values", "wild_when"}),
+    }
+    drift: list[str] = []
+
+    def check_args(path, app_id, surface, args, *, session=False):
+        for arg in args:
+            if arg.get("kind") not in kinds:
+                drift.append(f"{path}:{surface}.{arg.get('name')} unknown kind")
+            binding = arg.get("binding")
+            if binding is not None and binding not in bindings:
+                drift.append(f"{path}:{surface}.{arg.get('name')} unknown binding")
+            if arg.get("default") is None and "default" in arg:
+                drift.append(f"{path}:{surface}.{arg.get('name')} null default")
+            if session and (
+                "default_from" in arg or "trusted_resolver" in arg
+            ):
+                drift.append(f"{path}:{surface}.{arg.get('name')} session resolver")
+            if arg.get("trusted_resolver") and (
+                app_id != "email"
+                or arg.get("name") != "provider"
+                or arg.get("kind") != "name"
+                or _binding(arg) != "flag"
+                or arg.get("required", False)
+            ):
+                drift.append(f"{path}:{surface}.{arg.get('name')} trusted resolver")
+            if "default" in arg:
+                value = arg["default"]
+                kind = arg.get("kind")
+                valid = (
+                    (kind in {"path", "host", "name", "text"} and isinstance(value, str))
+                    or (kind == "bool" and isinstance(value, bool))
+                    or (
+                        kind == "integer"
+                        and isinstance(value, int)
+                        and not isinstance(value, bool)
+                    )
+                    or (
+                        kind == "number"
+                        and isinstance(value, (int, float))
+                        and not isinstance(value, bool)
+                    )
+                )
+                if not valid:
+                    drift.append(f"{path}:{surface}.{arg.get('name')} default type")
+
+    def check_needs(path, surface, needs):
+        for need in needs:
+            if need.get("verb") not in verbs:
+                drift.append(f"{path}:{surface} unknown verb {need.get('verb')}")
+            scope = need.get("scope", {})
+            kind = scope.get("kind")
+            if kind not in scope_kinds:
+                drift.append(f"{path}:{surface} unknown scope binding {kind}")
+                continue
+            required, forbidden = payloads[kind]
+            fields = set(scope)
+            if not required <= fields or forbidden & fields:
+                drift.append(f"{path}:{surface} invalid {kind} payload")
+
+    for manifest_path in sorted(APPS_ROOT.rglob("app.json")):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for name, operation in manifest.get("operations", {}).items():
+            check_args(
+                manifest_path, manifest["id"], name, operation.get("args", [])
+            )
+            check_needs(manifest_path, name, operation.get("needs", []))
+        for tool in manifest.get("session", {}).get("tools", []):
+            check_args(
+                manifest_path,
+                manifest["id"],
+                tool["name"],
+                tool.get("args", []),
+                session=True,
+            )
+            check_needs(manifest_path, tool["name"], tool.get("needs", []))
+    assert not drift, "\n".join(drift)
+
+
+def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:
+    schema = json.loads(
+        (APPS_ROOT.parent / "claw-os-sdk/wire/v1/manifest.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    wire = set(schema["$defs"]["need"]["properties"]["verb"]["enum"])
+    source = (APPS_ROOT.parent / "core/src/caps/verb.rs").read_text(encoding="utf-8")
+    kernel = set(re.findall(r'Verb::new\("([^"]+)"\)', source))
+    declared = set()
+    for manifest_path in APPS_ROOT.rglob("app.json"):
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        for operation in manifest.get("operations", {}).values():
+            declared.update(need["verb"] for need in operation.get("needs", []))
+        for tool in manifest.get("session", {}).get("tools", []):
+            declared.update(need["verb"] for need in tool.get("needs", []))
+    assert wire == kernel
+    assert declared <= wire
+
+
+def _direct_numeric_positions(node: ast.AST, caster: str) -> set[int]:
+    positions = set()
+    for call in (candidate for candidate in ast.walk(node) if isinstance(candidate, ast.Call)):
+        if (
+            isinstance(call.func, ast.Name)
+            and call.func.id == caster
+            and call.args
+            and isinstance(call.args[0], ast.Subscript)
+            and isinstance(call.args[0].value, ast.Name)
+            and call.args[0].value.id == "args"
+            and isinstance(call.args[0].slice, ast.Constant)
+            and isinstance(call.args[0].slice.value, int)
+        ):
+            positions.add(call.args[0].slice.value)
+    return positions
+
+
+def test_direct_numeric_parsers_match_manifest_kinds() -> None:
+    drift: list[str] = []
+    for path, tree, manifest in _sources():
+        run = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "run"
+        )
+        assignments = _assignments(tree, run)
+        functions = _function_map(tree)
+        handlers = _handler_map(tree)
+        checks = []
+        for statement in run.body:
+            if (
+                isinstance(statement, ast.If)
+                and isinstance(statement.test, ast.Compare)
+                and isinstance(statement.test.left, ast.Name)
+                and statement.test.left.id == "command"
+            ):
+                operations = set().union(
+                    *(
+                        _strings(comparator, assignments)
+                        for comparator in statement.test.comparators
+                    )
+                )
+                body = ast.Module(body=statement.body, type_ignores=[])
+                checks.append((operations, body))
+        for operation, handler in handlers.items():
+            if handler in functions:
+                checks.append(({operation}, functions[handler]))
+
+        for operations, node in checks:
+            for operation in operations & set(manifest.get("operations", {})):
+                positionals = [
+                    arg
+                    for arg in manifest["operations"][operation].get("args", [])
+                    if _binding(arg) == "positional"
+                ]
+                for caster, expected in (("int", "integer"), ("float", "number")):
+                    for index in _direct_numeric_positions(node, caster):
+                        if index < len(positionals) and positionals[index]["kind"] != expected:
+                            drift.append(
+                                f"{path}:{operation}.{positionals[index]['name']} "
+                                f"uses {caster} but declares {positionals[index]['kind']}"
+                            )
+    assert not drift, "\n".join(drift)
+
+
+def test_wire_generation_is_fresh() -> None:
+    sdk_root = APPS_ROOT.parent / "claw-os-sdk"
+    result = subprocess.run(
+        [sys.executable, "wire/codegen.py", "--check"],
+        cwd=sdk_root,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

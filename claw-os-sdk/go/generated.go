@@ -144,9 +144,20 @@ type Operation struct {
 type Arg struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
+	Binding string `json:"binding,omitempty"`
 	Required bool `json:"required,omitempty"`
 	Default *interface{} `json:"default,omitempty"`
+	DefaultFrom *Argdefaultbinding `json:"default_from,omitempty"`
+	TrustedResolver string `json:"trusted_resolver,omitempty"`
 	Label *Localizedtext `json:"label,omitempty"`
+}
+
+// Argdefaultbinding — argDefaultBinding.
+type Argdefaultbinding struct {
+	Arg string `json:"arg"`
+	Transform string `json:"transform,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // Need — need.
@@ -164,6 +175,8 @@ type Need struct {
 type Scopebinding struct {
 	Kind string `json:"kind"`
 	Arg string `json:"arg,omitempty"`
+	Values map[string]interface{} `json:"values,omitempty"`
+	WildWhen string `json:"wild_when,omitempty"`
 	Scope *Scope `json:"scope,omitempty"`
 }
 

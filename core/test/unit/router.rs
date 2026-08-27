@@ -1397,7 +1397,11 @@ fn write_runtime_app_manifest(
                 "label": "Echo",
                 "args": [
                     {"name": "first", "kind": "text"},
-                    {"name": "second", "kind": "text"}
+                    {"name": "second", "kind": "text"},
+                    {"name": "confirm", "kind": "bool", "binding": "flag",
+                     "default": false},
+                    {"name": "limit", "kind": "integer", "binding": "flag",
+                     "default": 10}
                 ]
             },
             "fail": {"label": "Fail"}
@@ -1504,13 +1508,17 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 "echo".to_string(),
                 "alpha".to_string(),
                 "beta".to_string(),
+                "--confirm=true".to_string(),
             ])
             .unwrap()
             .unwrap();
             let value: Value = serde_json::from_str(&output).unwrap();
             assert_eq!(value["runtime"], runtime);
             assert_eq!(value["command"], "echo");
-            assert_eq!(value["args"], json!(["alpha", "beta"]));
+            assert_eq!(
+                value["args"],
+                json!(["alpha", "beta", "--confirm", "--limit", "10"])
+            );
             assert_eq!(value["app_id"], id);
             assert!(value["session"]
                 .as_str()
@@ -1544,7 +1552,10 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 .iter()
                 .find(|entry| entry["app"] == id && entry["command"] == "echo")
                 .unwrap();
-            assert_eq!(success["args"], json!(["alpha", "beta"]));
+            assert_eq!(
+                success["args"],
+                json!(["alpha", "beta", "--confirm=true"])
+            );
             assert_eq!(success["status"], "ok");
 
             let failure = audit

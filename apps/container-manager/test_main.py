@@ -50,3 +50,12 @@ def test_containerd_requires_namespace():
         result = main.run("inspect", ["containerd", "web"])
     assert "error" in result
     require.assert_not_called()
+
+
+def test_containerd_logs_accept_namespace_flag_after_lone_limit():
+    completed = mock.Mock(returncode=0, stdout=json.dumps({"lines": "25"}), stderr="")
+    with mock.patch.dict(os.environ, {"COS_BIN": "/usr/local/bin/cos"}), mock.patch.object(
+        main.policy, "require"
+    ), mock.patch.object(main.subprocess, "run", return_value=completed) as run:
+        main.run("logs", ["containerd", "web", "25", "--namespace", "default"])
+    assert run.call_args.args[0][-4:] == ["--namespace", "default", "--lines", "25"]

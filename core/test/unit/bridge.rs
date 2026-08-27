@@ -437,8 +437,8 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
     assert_eq!(
         bound.argv,
         vec![
-            "--recursive".to_string(),
             "primary".to_string(),
+            "--recursive".to_string(),
             "--limit".to_string(),
             "10".to_string()
         ],
@@ -462,4 +462,137 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
     parent.insert(Cap::new(Verb::DATA_KV_READ, Scope::name("primary")));
     let caps = constrained_operation_caps(&parent, true, operation, &rebound).unwrap();
     assert!(caps.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("primary"))));
+}
+
+#[test]
+fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"canonical","version":"0.1","name":"Canonical",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"text","kind":"text","required":true},
+                {"name":"confirm","kind":"bool","binding":"flag","default":false},
+                {"name":"enabled","kind":"bool","binding":"positional","default":true},
+                {"name":"limit","kind":"integer","binding":"flag","default":10}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["run"];
+
+    let inline_true = bind_operation_args(
+        operation,
+        &["hello".into(), "--confirm=true".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        inline_true.argv,
+        ["hello", "true", "--confirm", "--limit", "10"]
+    );
+    assert_eq!(inline_true.values["confirm"], serde_json::json!(true));
+
+    let inline_false = bind_operation_args(
+        operation,
+        &["hello".into(), "--confirm=false".into()],
+    )
+    .unwrap();
+    assert_eq!(inline_false.argv, ["hello", "true", "--limit", "10"]);
+    assert_eq!(inline_false.values["confirm"], serde_json::json!(false));
+
+    let delimited = bind_operation_args(operation, &["--".into(), "--literal".into()]).unwrap();
+    assert_eq!(
+        delimited.argv,
+        ["--limit", "10", "--", "--literal", "true"]
+    );
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &delimited.argv).unwrap();
+    assert_eq!(rebound, delimited.values);
+}
+
+#[test]
+fn trusted_email_provider_is_bound_before_capability_derivation() {
+    let credentials = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let _smtp = crate::test_env::TestEnvVarGuard::set("SMTP_HOST", "mail.example.test");
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"email","version":"0.1","name":"Email",
+            "operations":{"send":{"label":"Send","args":[
+                {"name":"body","kind":"text","required":true},
+                {"name":"provider","kind":"name","binding":"flag",
+                 "trusted_resolver":"email-provider"}
+            ],"needs":[{"verb":"secret.read","scope":{
+                "kind":"from-arg-map","arg":"provider","values":{
+                    "smtp":{"kind":"name","value":"default/SMTP_PASSWORD"},
+                    "gmail":{"kind":"name","value":"default/GOOGLE_ACCESS_TOKEN"}
+                }},"why":"Read provider credential"}]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    let trusted = trusted_pre_dispatch_args("email", operation, &["hello".into()]).unwrap();
+    assert_eq!(trusted, ["hello", "--provider", "smtp"]);
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    assert_eq!(bound.values["provider"], serde_json::json!("smtp"));
+    assert_eq!(bound.argv, trusted);
+
+    let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
+    assert_eq!(resolved[0].scope, Scope::name("default/SMTP_PASSWORD"));
+}
+
+#[test]
+fn bundled_lone_limits_bind_before_optional_selectors() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| {
+                path.join(component)
+            })
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+
+    let events = load(&["event-center"]);
+    let recent = &events.operations["recent"];
+    let lone_limit = bind_operation_args(recent, &["25".into()]).unwrap();
+    assert_eq!(lone_limit.values["limit"], serde_json::json!(25));
+    assert_eq!(lone_limit.argv, ["25"]);
+    let selected = bind_operation_args(
+        recent,
+        &["--source".into(), "security".into()],
+    )
+    .unwrap();
+    assert_eq!(selected.values["source"], serde_json::json!("security"));
+    assert_eq!(selected.values["limit"], serde_json::json!(100));
+    assert_eq!(selected.argv, ["100", "--source", "security"]);
+
+    let containers = load(&["container-manager"]);
+    let logs = &containers.operations["logs"];
+    let docker = bind_operation_args(
+        logs,
+        &["docker".into(), "web".into(), "50".into()],
+    )
+    .unwrap();
+    assert_eq!(docker.values["lines"], serde_json::json!(50));
+    assert_eq!(docker.argv, ["docker", "web", "50"]);
+    let containerd = bind_operation_args(
+        logs,
+        &[
+            "containerd".into(),
+            "web".into(),
+            "25".into(),
+            "--namespace".into(),
+            "default".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(containerd.values["lines"], serde_json::json!(25));
+    assert_eq!(containerd.values["namespace"], serde_json::json!("default"));
+    assert_eq!(
+        containerd.argv,
+        ["containerd", "web", "25", "--namespace", "default"]
+    );
 }

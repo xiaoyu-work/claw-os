@@ -36,15 +36,17 @@
       },
       "args": [
         {
-          "name": "source",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "limit",
           "kind": "integer",
           "required": false,
-          "default": 100
+          "default": 100,
+          "binding": "positional"
+        },
+        {
+          "name": "source",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

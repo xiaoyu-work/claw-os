@@ -158,12 +158,22 @@ Defaulted arguments must be optional; defaulted positional arguments follow
 all required positional arguments. The bridge resolves paths before capability
 derivation and materializes defaults using their declared binding: positional
 values remain positional, non-boolean flags become `--name value`, and a true
-boolean flag becomes `--name`. The handler must consume that materialized value
-rather than recompute a separate default.
+boolean flag becomes `--name`. False flags are omitted and positional booleans
+are serialized as `true` or `false`. Flag defaults are placed before an
+end-of-options delimiter; positional defaults follow supplied positional
+values. The handler must consume that canonical argv rather than recompute a
+separate default.
 
 Session tools receive a JSON object rather than argv. Before capability
 resolution and MCP forwarding, the kernel inserts every declared literal
 default into that object, including defaults unrelated to a capability scope.
+
+The bundled email app's optional provider selector uses the reserved
+`trusted_resolver: "email-provider"` contract. Before capability derivation,
+the trusted launcher resolves one configured provider, materializes
+`--provider <name>`, and the manifest's `from-arg-map` grants only that
+provider's exact credential scope. Third-party apps and session tools cannot
+use trusted resolvers.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.

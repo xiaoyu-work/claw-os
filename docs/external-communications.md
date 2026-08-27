@@ -147,7 +147,7 @@ Outbound gateways use the same app surface:
 ```bash
 cos app gateway-slack send C123ABC "deployment finished"
 cos app gateway-matrix send '!room:example.org' "deployment finished"
-cos app gateway-ntfy send alerts "deployment finished"
+cos app gateway-ntfy send "deployment finished" --topic alerts
 ```
 
 Run `cos app <gateway-id> --schema` to inspect the exact credentials,

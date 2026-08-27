@@ -53,7 +53,7 @@
         },
         {
           "name": "port",
-          "kind": "number",
+          "kind": "integer",
           "required": true
         },
         {

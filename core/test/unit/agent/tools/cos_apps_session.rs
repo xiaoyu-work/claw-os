@@ -98,6 +98,7 @@ fn build_schema_marks_required_args() {
             required: true,
             default: None,
             default_from: None,
+            trusted_resolver: None,
             label: LocalizedText::default(),
         },
         Arg {
@@ -107,6 +108,7 @@ fn build_schema_marks_required_args() {
             required: false,
             default: Some(serde_json::json!(60)),
             default_from: None,
+            trusted_resolver: None,
             label: LocalizedText::default(),
         },
     ];

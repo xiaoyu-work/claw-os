@@ -180,11 +180,29 @@ pub struct Arg {
     pub name: String,
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_from: Option<Argdefaultbinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_resolver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Localizedtext>,
+}
+
+/// argDefaultBinding
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Argdefaultbinding {
+    pub arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 /// need
@@ -205,6 +223,10 @@ pub struct Scopebinding {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wild_when: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
 }

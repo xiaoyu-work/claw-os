@@ -115,15 +115,17 @@
           "required": true
         },
         {
-          "name": "namespace",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "lines",
           "kind": "integer",
           "required": false,
-          "default": 100
+          "default": 100,
+          "binding": "positional"
+        },
+        {
+          "name": "namespace",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [
