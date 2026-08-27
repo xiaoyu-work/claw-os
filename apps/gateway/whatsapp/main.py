@@ -39,55 +39,6 @@ API_VERSION = "v21.0"
 SOFT_LEN = 4096  # WhatsApp text body limit (per Meta docs, 4096 chars)
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "WhatsApp Cloud API gateway. ``send`` posts text via "
-            "Meta's Graph API. ``start``/``stop`` (webhook server) "
-            "are not yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Run inbound webhook server (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-whatsapp start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-whatsapp stop",
-            },
-            "status": {
-                "description": "Show running state",
-                "parameters": [],
-                "example": "cos app gateway-whatsapp status",
-            },
-            "send": {
-                "description": "Send a text message via WhatsApp Cloud API",
-                "parameters": [
-                    {
-                        "name": "recipient_phone",
-                        "type": "string",
-                        "required": True,
-                        "description": "Recipient's WhatsApp phone in E.164 (digits only, no + or spaces)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Plain-text message body (truncated to 4096 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-whatsapp send 15551234567 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -201,19 +152,6 @@ def _send(recipient_phone: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "WhatsApp inbound webhook server still pending. "
-            "Use ``send <recipient_phone> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     return {
         "ok": True,
@@ -225,8 +163,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         if isinstance(args, list):
             recipient = args[0] if len(args) > 0 else ""
@@ -241,8 +180,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

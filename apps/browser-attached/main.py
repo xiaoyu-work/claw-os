@@ -344,16 +344,7 @@ def _cmd_eval(argv):
 
 def _parse_kv(argv, required=(), optional=()):
     out: dict[str, str] = {}
-    positionals: list[str] = []
-    for token in argv:
-        if token.startswith("--"):
-            if "=" in token:
-                k, v = token[2:].split("=", 1)
-            else:
-                k, v = token[2:], "true"
-            out[k] = v
-        else:
-            positionals.append(token)
+    positionals = [str(token) for token in argv]
     for name, value in zip(required, positionals):
         out.setdefault(name, value)
     for name, value in zip(optional, positionals[len(required):]):
@@ -382,17 +373,12 @@ HANDLERS = {
 }
 
 
-def _schema():
-    return {
-        "id": "browser-attached",
-        "commands": sorted(HANDLERS),
-        "socket": SOCK_PATH,
-    }
-
-
 def run(command, argv):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import parse_canonical_argv
+    try:
+        argv, _ = parse_canonical_argv(argv)
+    except ValueError as error:
+        return {"error": str(error)}
     handler = HANDLERS.get(command)
     if handler is None:
         return {"ok": False, "error": f"unknown command: {command}"}
@@ -415,9 +401,6 @@ def main():
             "commands": sorted(HANDLERS),
         }))
         sys.exit(1)
-    if argv[0] in ("--schema", "-h", "--help"):
-        print(json.dumps(_schema(), indent=2))
-        return
     cmd, rest = argv[0], argv[1:]
     result = run(cmd, rest)
     print(json.dumps(result, indent=2, ensure_ascii=False))

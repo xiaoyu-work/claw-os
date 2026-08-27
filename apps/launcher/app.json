@@ -19,27 +19,61 @@
       "summary": {
         "en": "Enumerate every `.desktop` entry installed under the standard XDG application directories. Returns AppID, localized name, comment, categories, keywords, and icon."
       },
-      "args": [],
+      "args": [
+        {
+          "name": "include-no-display",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        },
+        {
+          "name": "include-hidden",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        }
+      ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries shipped by system packages." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries shipped by system packages."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/local/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed locally as admin." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed locally as admin."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$XDG_DATA_HOME/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed in your home directory." }
-        },
-        {
-          "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$HOME/.local/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed under ~/.local/share/applications." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "~/.local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed in your home directory."
+          }
         }
       ]
     },
@@ -51,28 +85,59 @@
         "en": "Fuzzy-search installed apps by localized name, generic name, comment, or keywords. Returns the top matches ranked by relevance."
       },
       "args": [
-        { "name": "query", "kind": "name", "required": true }
+        {
+          "name": "query",
+          "kind": "text",
+          "required": true,
+          "repeatable": true
+        },
+        {
+          "name": "limit",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 10
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries shipped by system packages." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries shipped by system packages."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/local/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed locally as admin." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed locally as admin."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$XDG_DATA_HOME/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed in your home directory." }
-        },
-        {
-          "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$HOME/.local/share/applications/**" } },
-          "why": { "en": "Read `.desktop` entries installed under ~/.local/share/applications." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "~/.local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed in your home directory."
+          }
         }
       ]
     },
@@ -84,13 +149,67 @@
         "en": "Launch an installed graphical app. `app_id` is the AppID — the `.desktop` filename without extension (e.g. `com.clawos.Files`, `org.mozilla.firefox`). Extra positional arguments are passed as URIs/paths the app should open."
       },
       "args": [
-        { "name": "app_id", "kind": "name", "required": true }
+        {
+          "name": "app_id",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "uri_or_path",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        }
       ],
       "needs": [
         {
           "verb": "desktop.launch",
-          "scope": { "kind": "from-arg", "arg": "app_id" },
-          "why": { "en": "Open the graphical application you asked to launch." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "app_id"
+          },
+          "why": {
+            "en": "Open the graphical application you asked to launch."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries shipped by system packages."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed locally as admin."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "~/.local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed in your home directory."
+          }
         }
       ]
     },
@@ -101,7 +220,15 @@
       "summary": {
         "en": "Show desktop apps the agent has launched recently, newest first. Useful for re-opening the last app the user worked with."
       },
-      "args": [],
+      "args": [
+        {
+          "name": "limit",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 20
+        }
+      ],
       "needs": []
     },
     "is-running": {
@@ -112,33 +239,60 @@
         "en": "Look for live processes whose executable matches the AppID's `Exec=` binary. Returns the list of matching PIDs (empty if the app is not running)."
       },
       "args": [
-        { "name": "app_id", "kind": "name", "required": true }
+        {
+          "name": "app_id",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "proc.observe",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Scan the process list for the app you asked about." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Scan the process list for the app you asked about."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/share/applications/**" } },
-          "why": { "en": "Resolve the AppID to its `.desktop` entry so we know which binary to look for." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries shipped by system packages."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/usr/local/share/applications/**" } },
-          "why": { "en": "Same, for admin-installed entries." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed locally as admin."
+          }
         },
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$XDG_DATA_HOME/applications/**" } },
-          "why": { "en": "Same, for entries under $XDG_DATA_HOME." }
-        },
-        {
-          "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "$HOME/.local/share/applications/**" } },
-          "why": { "en": "Same, for entries under ~/.local/share/applications." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "~/.local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed in your home directory."
+          }
         }
       ]
     }

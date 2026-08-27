@@ -136,6 +136,7 @@ type Localizedtext struct {
 type Operation struct {
 	Label Localizedtext `json:"label"`
 	Summary *Localizedtext `json:"summary,omitempty"`
+	Stdin bool `json:"stdin,omitempty"`
 	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
 }
@@ -144,9 +145,41 @@ type Operation struct {
 type Arg struct {
 	Name string `json:"name"`
 	Kind string `json:"kind"`
+	Binding string `json:"binding,omitempty"`
 	Required bool `json:"required,omitempty"`
+	RequiredWhen *Needcondition `json:"required_when,omitempty"`
+	Repeatable bool `json:"repeatable,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	PositionalAlias bool `json:"positional_alias,omitempty"`
+	Choices []interface{} `json:"choices,omitempty"`
 	Default *interface{} `json:"default,omitempty"`
+	DefaultFrom *Argdefaultbinding `json:"default_from,omitempty"`
+	TrustedResolver string `json:"trusted_resolver,omitempty"`
 	Label *Localizedtext `json:"label,omitempty"`
+}
+
+// Positionalarg — positionalArg.
+type Positionalarg struct {
+}
+
+// Optionalpositionalgap — optionalPositionalGap.
+type Optionalpositionalgap struct {
+}
+
+// Optionalpositional — optionalPositional.
+type Optionalpositional struct {
+}
+
+// Defaultedpositional — defaultedPositional.
+type Defaultedpositional struct {
+}
+
+// Argdefaultbinding — argDefaultBinding.
+type Argdefaultbinding struct {
+	Arg string `json:"arg"`
+	Transform string `json:"transform,omitempty"`
+	Prefix string `json:"prefix,omitempty"`
+	Fallback string `json:"fallback,omitempty"`
 }
 
 // Need — need.
@@ -154,7 +187,15 @@ type Arg struct {
 type Need struct {
 	Verb string `json:"verb"`
 	Scope Scopebinding `json:"scope"`
+	When *Needcondition `json:"when,omitempty"`
 	Why Localizedtext `json:"why"`
+}
+
+// Needcondition — needCondition.
+type Needcondition struct {
+	Kind string `json:"kind"`
+	Arg string `json:"arg"`
+	Value *interface{} `json:"value,omitempty"`
 }
 
 // Scopebinding — scopeBinding.
@@ -164,6 +205,9 @@ type Need struct {
 type Scopebinding struct {
 	Kind string `json:"kind"`
 	Arg string `json:"arg,omitempty"`
+	Transform string `json:"transform,omitempty"`
+	Values map[string]interface{} `json:"values,omitempty"`
+	WildWhen string `json:"wild_when,omitempty"`
 	Scope *Scope `json:"scope,omitempty"`
 }
 

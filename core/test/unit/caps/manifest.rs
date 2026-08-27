@@ -182,8 +182,11 @@ fn resolve_needs_substitutes_runtime_arg_value() {
     args.insert("path".to_string(), serde_json::json!("/home/jay/x.md"));
     let caps = m.resolve_needs("rm", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::FS_DELETE);
-    assert_eq!(caps[0].scope, Scope::path("/home/jay/x.md"));
+    assert_eq!(caps[0][0].verb, Verb::FS_DELETE);
+    assert_eq!(
+        caps[0][0].scope,
+        Scope::path("/home/jay/x.md")
+    );
 }
 
 #[test]
@@ -215,8 +218,11 @@ fn resolve_needs_uses_literal_arg_default() {
     let caps = manifest.resolve_needs("search", &args).unwrap();
 
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::FS_READ);
-    assert_eq!(caps[0].scope, Scope::path("/workspace"));
+    assert_eq!(caps[0][0].verb, Verb::FS_READ);
+    assert_eq!(
+        caps[0][0].scope,
+        Scope::path("/workspace")
+    );
 }
 
 #[test]
@@ -256,14 +262,20 @@ fn resolve_needs_uses_validated_default_binding() {
 
     let caps = manifest.resolve_needs("download", &args).unwrap();
 
-    assert_eq!(caps[0].scope, Scope::path("~/archive.tar"));
+    assert_eq!(
+        caps[0][0].scope,
+        Scope::path("~/archive.tar")
+    );
 
     args.insert(
         "url".to_string(),
         serde_json::json!("https://example.com/releases/"),
     );
     let fallback = manifest.resolve_needs("download", &args).unwrap();
-    assert_eq!(fallback[0].scope, Scope::path("~/download"));
+    assert_eq!(
+        fallback[0][0].scope,
+        Scope::path("~/download")
+    );
 }
 
 #[test]
@@ -312,6 +324,470 @@ fn invalid_arg_defaults_are_rejected() {
 }
 
 #[test]
+fn null_defaults_and_ambiguous_positionals_are_rejected() {
+    for arg in [
+        r#"{"name":"value","kind":"text","default":null}"#,
+        r#"{"name":"value","kind":"text","default_from":null}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"defaults","version":"0.1","name":"Defaults",
+                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err());
+    }
+
+    let ambiguous = Manifest::from_json(
+        r#"{
+            "id":"ambiguous","version":"0.1","name":"Ambiguous",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"destination","kind":"name"},
+                {"name":"text","kind":"text","required":true}
+            ]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        ambiguous,
+        ManifestError::ArgDefaultInvalid { .. }
+    ));
+}
+
+#[test]
+fn session_tool_defaults_feed_arguments_and_capabilities() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"session-defaults","version":"0.1","name":"Session defaults",
+            "session":{"tools":[{
+                "name":"session-defaults.read","summary":"Read",
+                "args":[
+                    {"name":"key","kind":"name","default":"primary"},
+                    {"name":"limit","kind":"integer","default":10}
+                ],
+                "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why":"Read"}]
+            }]}
+        }"#,
+    )
+    .unwrap();
+    let resolved = manifest
+        .resolve_session_tool_args("session-defaults.read", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(resolved["key"], serde_json::json!("primary"));
+    assert_eq!(resolved["limit"], serde_json::json!(10));
+    let caps = manifest
+        .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(caps[0][0].scope, Scope::name("primary"));
+}
+
+#[test]
+fn fixed_path_scopes_reject_environment_placeholders() {
+    let error = Manifest::from_json(
+        r#"{
+            "id":"placeholder","version":"0.1","name":"Placeholder",
+            "operations":{"read":{"label":"Read","needs":[{
+                "verb":"fs.read",
+                "scope":{"kind":"fixed","scope":{"kind":"path","value":"$HOME/data/**"}},
+                "why":"Read"
+            }]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
+fn conditional_needs_skip_only_explicit_inactive_cases() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"conditional","version":"0.1","name":"Conditional",
+            "operations":{"explain":{"label":"Explain","args":[
+                {"name":"file","kind":"path","binding":"flag"},
+                {"name":"provider","kind":"name","binding":"flag","default":"local"}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},
+                 "when":{"kind":"arg-present","arg":"file"},"why":"Read file"},
+                {"verb":"secret.read","scope":{"kind":"fixed","scope":{"kind":"name","value":"default/TOKEN"}},
+                 "when":{"kind":"arg-equals","arg":"provider","value":"cloud"},"why":"Read token"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+
+    let local = manifest
+        .resolve_needs("explain", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(local, [Vec::new(), Vec::new()]);
+
+    let mut cloud_file = BTreeMap::new();
+    cloud_file.insert("file".to_string(), serde_json::json!("/workspace/a.txt"));
+    cloud_file.insert("provider".to_string(), serde_json::json!("cloud"));
+    let active = manifest.resolve_needs("explain", &cloud_file).unwrap();
+    assert_eq!(
+        active[0][0].scope,
+        Scope::path("/workspace/a.txt")
+    );
+    assert_eq!(
+        active[1][0].scope,
+        Scope::name("default/TOKEN")
+    );
+}
+
+#[test]
+fn optional_capability_bindings_require_conditions() {
+    let error = Manifest::from_json(
+        r#"{
+            "id":"unsafe","version":"0.1","name":"Unsafe",
+            "operations":{"read":{"label":"Read","args":[
+                {"name":"file","kind":"path","binding":"flag"}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},"why":"Read"}
+            ]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
+fn repeatable_scope_arguments_resolve_one_capability_per_value() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"repeat","version":"0.1","name":"Repeat",
+            "operations":{"read":{"label":"Read","args":[
+                {"name":"path","kind":"path","binding":"flag","repeatable":true}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+                 "when":{"kind":"arg-present","arg":"path"},"why":"Read paths"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let args = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["/workspace/a", "/workspace/b"]),
+    )]);
+    let resolved = manifest.resolve_needs("read", &args).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(
+        resolved[0]
+            .iter()
+            .map(|cap| cap.scope.clone())
+            .collect::<Vec<_>>(),
+        [
+            Scope::path("/workspace/a"),
+            Scope::path("/workspace/b")
+        ]
+    );
+}
+
+#[test]
+fn scope_transforms_derive_exact_parent_and_url_host_resources() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"transforms","version":"0.1","name":"Transforms",
+            "operations":{
+                "tag":{"label":"Tag","args":[
+                    {"name":"path","kind":"path","required":true}
+                ],"needs":[
+                    {"verb":"fs.write","scope":{"kind":"from-arg","arg":"path",
+                     "transform":"parent"},"why":"Write sidecar"}
+                ]},
+                "fetch":{"label":"Fetch","args":[
+                    {"name":"url","kind":"text","required":true}
+                ],"needs":[
+                    {"verb":"net.dial","scope":{"kind":"from-arg","arg":"url",
+                     "transform":"url-host"},"why":"Fetch host"}
+                ]}
+            }
+        }"#,
+    )
+    .unwrap();
+    let tag = manifest
+        .resolve_needs(
+            "tag",
+            &BTreeMap::from([(
+                "path".to_string(),
+                serde_json::json!("/workspace/note.txt"),
+            )]),
+        )
+        .unwrap();
+    assert_eq!(tag[0][0].scope, Scope::path("/workspace"));
+    let fetch = manifest
+        .resolve_needs(
+            "fetch",
+            &BTreeMap::from([(
+                "url".to_string(),
+                serde_json::json!("https://api.example.test/v1?q=1"),
+            )]),
+        )
+        .unwrap();
+    assert_eq!(fetch[0][0].scope, Scope::host("api.example.test:443"));
+    for (url, expected) in [
+        ("https://api.example.test:8443/v1", "api.example.test:8443"),
+        ("http://[2001:db8::1]:8080/", "[2001:db8::1]:8080"),
+        ("http://[2001:db8::2]/", "[2001:db8::2]:80"),
+        ("ftp://files.example.test:2121/", "files.example.test:2121"),
+        ("ftp://files.example.test:21/", "files.example.test:21"),
+    ] {
+        let fetch = manifest
+            .resolve_needs(
+                "fetch",
+                &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+            )
+            .unwrap();
+        assert_eq!(fetch[0][0].scope, Scope::host(expected));
+    }
+    let unsupported = manifest.resolve_needs(
+        "fetch",
+        &BTreeMap::from([(
+            "url".to_string(),
+            serde_json::json!("ftp://files.example.test/archive"),
+        )]),
+    );
+    assert!(unsupported.is_err());
+}
+
+#[test]
+fn python_and_rust_share_url_host_scope_vectors() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let vectors: Vec<serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(repository.join("apps/_shared/url_host_scope_vectors.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"url-vectors","version":"1","name":"URL vectors",
+            "operations":{"fetch":{"label":"Fetch","args":[
+                {"name":"url","kind":"text","required":true}
+            ],"needs":[{"verb":"net.dial","scope":{
+                "kind":"from-arg","arg":"url","transform":"url-host"
+            },"why":"Fetch URL"}]}}
+        }"#,
+    )
+    .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    for vector in vectors {
+        let url = vector["url"].as_str().unwrap();
+        let resolved = manifest.resolve_operation_call(
+            "fetch",
+            &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+            &paths,
+        );
+        if vector["error"].as_bool().unwrap_or(false) {
+            assert!(resolved.is_err(), "accepted {url}");
+        } else {
+            let canonical_url = vector["canonical_url"].as_str().unwrap();
+            let expected = vector["scope"].as_str().unwrap();
+            let resolved = resolved.unwrap();
+            assert_eq!(resolved.values["url"], canonical_url, "{url}");
+            assert_eq!(
+                resolved.needs[0][0].scope,
+                Scope::host(expected),
+                "{url}"
+            );
+        }
+    }
+}
+
+#[test]
+fn destructive_confirmation_is_required_and_true_before_capability_resolution() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/firewall-manager/app.json")).unwrap(),
+    )
+    .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    assert!(manifest
+        .resolve_operation_call("clear", &BTreeMap::new(), &paths)
+        .is_err());
+    assert!(manifest
+        .resolve_operation_call(
+            "clear",
+            &BTreeMap::from([("confirm".to_string(), serde_json::json!(false))]),
+            &paths,
+        )
+        .is_err());
+    let confirmed = manifest
+        .resolve_operation_call(
+            "clear",
+            &BTreeMap::from([("confirm".to_string(), serde_json::json!(true))]),
+            &paths,
+        )
+        .unwrap();
+    assert_eq!(confirmed.values["confirm"], serde_json::json!(true));
+    assert_eq!(confirmed.needs[0][0].verb, Verb::NET_FIREWALL);
+}
+
+#[test]
+fn usb_authorize_conditionally_requires_true_confirmation_before_authority() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+    )
+    .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    let base = |state| {
+        BTreeMap::from([
+            ("device".to_string(), serde_json::json!("1-2")),
+            ("state".to_string(), serde_json::json!(state)),
+        ])
+    };
+    let enabled = manifest
+        .resolve_operation_call("authorize", &base("on"), &paths)
+        .unwrap();
+    assert!(!enabled.values.contains_key("confirm"));
+    assert_eq!(enabled.needs[0][0].verb, Verb::DEVICE_USB);
+    let mut unnecessary = base("on");
+    unnecessary.insert("confirm".to_string(), serde_json::json!(true));
+    assert!(manifest
+        .resolve_operation_call("authorize", &unnecessary, &paths)
+        .is_err());
+
+    assert!(manifest
+        .resolve_operation_call("authorize", &base("off"), &paths)
+        .is_err());
+    let mut denied = base("off");
+    denied.insert("confirm".to_string(), serde_json::json!(false));
+    assert!(manifest
+        .resolve_operation_call("authorize", &denied, &paths)
+        .is_err());
+    denied.insert("confirm".to_string(), serde_json::json!(true));
+    let disabled = manifest
+        .resolve_operation_call("authorize", &denied, &paths)
+        .unwrap();
+    assert_eq!(disabled.needs[0][0].verb, Verb::DEVICE_USB);
+}
+
+#[test]
+fn invalid_conditional_requiredness_is_rejected() {
+    for args in [
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool","required":true,
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}}
+        ]"#,
+        r#"[
+          {"name":"confirm","kind":"bool",
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}},
+          {"name":"mode","kind":"name","required":true}
+        ]"#,
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool","default":false,
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}}
+        ]"#,
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool",
+           "required_when":{"kind":"arg-equals","arg":"mode","value":false}}
+        ]"#,
+    ] {
+        let body = format!(
+            r#"{{
+              "id":"bad-condition","version":"1","name":"Bad",
+              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
+    }
+}
+
+#[test]
+fn ambiguous_repeatable_declarations_are_rejected() {
+    for arg in [
+        r#"{"name":"toggle","kind":"bool","repeatable":true}"#,
+        r#"{"name":"first","kind":"text","repeatable":true},
+            {"name":"later","kind":"text"}"#,
+        r#"{"name":"path","kind":"path","repeatable":true,
+            "default_from":{"arg":"source"}}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"bad-repeat","version":"0.1","name":"Bad repeat",
+                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {arg}");
+    }
+}
+
+#[test]
+fn positional_default_gaps_and_alias_conflicts_are_rejected() {
+    for args in [
+        r#"[
+          {"name":"optional","kind":"text"},
+          {"name":"later","kind":"text","default":"value"}
+        ]"#,
+        r#"[
+          {"name":"first","kind":"text","binding":"flag","aliases":["-x"]},
+          {"name":"second","kind":"text","binding":"flag","aliases":["-x"]}
+        ]"#,
+        r#"[
+          {"name":"text","kind":"text","repeatable":true},
+          {"name":"target","kind":"name","binding":"flag","positional_alias":true}
+        ]"#,
+        r#"[
+          {"name":"text","kind":"text","required":false},
+          {"name":"target","kind":"name","binding":"flag","positional_alias":true}
+        ]"#,
+    ] {
+        let body = format!(
+            r#"{{
+              "id":"bad-layout","version":"1","name":"Bad",
+              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
+    }
+}
+
+#[test]
+fn scope_binding_discriminators_reject_missing_and_unknown_payloads() {
+    for scope in [
+        r#"{"kind":"wild","arg":"path"}"#,
+        r#"{"kind":"from-arg-map","arg":"path"}"#,
+        r#"{"kind":"fixed","scope":{"kind":"path","value":"/tmp"},"values":{}}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"scope-shape","version":"0.1","name":"Scope shape",
+                "operations":{{"read":{{"label":"Read","args":[
+                    {{"name":"path","kind":"path","required":true}}
+                ],"needs":[{{"verb":"fs.read","scope":{scope},"why":"Read"}}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {scope}");
+    }
+
+    let condition_with_wrong_payload = r#"{
+        "id":"condition-shape","version":"0.1","name":"Condition shape",
+        "operations":{"read":{"label":"Read","args":[
+            {"name":"path","kind":"path","binding":"flag"}
+        ],"needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+            "when":{"kind":"arg-present","arg":"path","value":"/tmp"},"why":"Read"}]}}
+    }"#;
+    assert!(Manifest::from_json(condition_with_wrong_payload).is_err());
+}
+
+#[test]
 fn resolve_needs_with_fixed_scope() {
     let m = parse(
         r#"{
@@ -331,8 +807,11 @@ fn resolve_needs_with_fixed_scope() {
             }"#,
     );
     let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
-    assert_eq!(caps[0].verb, Verb::DATA_LOG_READ);
-    assert_eq!(caps[0].scope, Scope::name("system/*"));
+    assert_eq!(caps[0][0].verb, Verb::DATA_LOG_READ);
+    assert_eq!(
+        caps[0][0].scope,
+        Scope::name("system/*")
+    );
 }
 
 #[test]
@@ -359,7 +838,7 @@ fn resolve_needs_missing_arg_at_runtime_is_error() {
     match err {
         ManifestError::NeedInvalid { op, detail, .. } => {
             assert_eq!(op, "rm");
-            assert!(detail.contains("not supplied"));
+            assert!(detail.contains("required"));
         }
         other => panic!("expected NeedInvalid, got {other:?}"),
     }
@@ -707,8 +1186,94 @@ fn session_tool_resolve_needs_from_arg() {
     args.insert("key".to_string(), serde_json::json!("user/jay"));
     let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::DATA_KV_READ);
-    assert_eq!(caps[0].scope, Scope::name("user/jay"));
+    assert_eq!(caps[0][0].verb, Verb::DATA_KV_READ);
+    assert_eq!(
+        caps[0][0].scope,
+        Scope::name("user/jay")
+    );
+}
+
+#[test]
+fn session_repeatable_scope_arg_resolves_every_capability() {
+    let manifest = parse(
+        r#"{
+          "id":"files","version":"0.1","name":"Files",
+          "session":{"tools":[{
+            "name":"files.read","summary":"Read files",
+            "args":[{"name":"path","kind":"path","repeatable":true}],
+            "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+                      "when":{"kind":"arg-present","arg":"path"},"why":"Read files"}]
+          }]}
+        }"#,
+    );
+    let args = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["/workspace/a", "/workspace/b"]),
+    )]);
+    let resolved = manifest
+        .resolve_session_tool_needs("files.read", &args)
+        .unwrap();
+    assert_eq!(resolved[0].len(), 2);
+    assert_eq!(resolved[0][0].scope, Scope::path("/workspace/a"));
+    assert_eq!(resolved[0][1].scope, Scope::path("/workspace/b"));
+}
+
+#[test]
+fn session_effective_call_matches_one_shot_argument_semantics() {
+    let manifest = parse(
+        r#"{
+          "id":"session-parity","version":"0.1","name":"Session parity",
+          "session":{"tools":[{
+            "name":"files.read","summary":"Read files",
+            "args":[
+              {"name":"path","kind":"path","repeatable":true},
+              {"name":"mode","kind":"name","binding":"flag",
+               "choices":["safe","fast"],"default":"safe"},
+              {"name":"enabled","kind":"bool"}
+            ],
+            "needs":[
+              {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+               "when":{"kind":"arg-present","arg":"path"},"why":"Read files"},
+              {"verb":"data.kv.read","scope":{"kind":"fixed",
+               "scope":{"kind":"name","value":"enabled"}},
+               "when":{"kind":"arg-equals","arg":"enabled","value":true},
+               "why":"Read enabled state"}
+            ]
+          }]}
+        }"#,
+    );
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    let supplied = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["a.txt", "b.txt"]),
+    )]);
+    let effective = manifest
+        .resolve_session_tool_call("files.read", &supplied, &paths)
+        .unwrap();
+    assert_eq!(
+        effective.values["path"],
+        serde_json::json!(["/workspace/a.txt", "/workspace/b.txt"])
+    );
+    assert_eq!(effective.values["mode"], serde_json::json!("safe"));
+    assert_eq!(effective.values["enabled"], serde_json::json!(false));
+    assert_eq!(effective.needs[0].len(), 2);
+    assert!(effective.needs[1].is_empty());
+
+    let invalid = BTreeMap::from([("mode".to_string(), serde_json::json!("unsafe"))]);
+    assert!(manifest
+        .resolve_session_tool_call("files.read", &invalid, &paths)
+        .is_err());
+    let undeclared = BTreeMap::from([
+        ("path".to_string(), serde_json::json!(["a.txt"])),
+        ("protocol_metadata".to_string(), serde_json::json!("not-an-argument")),
+    ]);
+    let error = manifest
+        .resolve_session_tool_call("files.read", &undeclared, &paths)
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown argument `protocol_metadata`"));
 }
 
 #[test]

@@ -11,11 +11,38 @@
   "runtime": "python",
   "operations": {
     "run": {
-      "label": { "en": "Run a shell command" },
-      "summary": { "en": "Start a process to run the command you specified and capture its output." },
+      "label": {
+        "en": "Run a shell command"
+      },
+      "summary": {
+        "en": "Start a process to run the command you specified and capture its output."
+      },
       "args": [
-        { "name": "command", "kind": "name", "required": true },
-        { "name": "shell", "kind": "bool", "required": false, "default": false }
+        {
+          "name": "command",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "arguments",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 300
+        },
+        {
+          "name": "shell",
+          "kind": "bool",
+          "required": false,
+          "default": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
@@ -25,66 +52,152 @@
             "arg": "command",
             "wild_when": "shell"
           },
-          "why": { "en": "Start a new process to run the command you asked to run." }
+          "why": {
+            "en": "Start a new process to run the command you asked to run."
+          }
         }
       ]
     },
     "script": {
-      "label": { "en": "Run a script file or inline code in any language" },
-      "summary": { "en": "Run a script inline or from a file using bash, python, or node." },
+      "label": {
+        "en": "Run a script file or inline code in any language"
+      },
+      "summary": {
+        "en": "Run a script inline or from a file using bash, python, or node."
+      },
+      "args": [
+        {
+          "name": "code",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
+        {
+          "name": "lang",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "default": "bash"
+        },
+        {
+          "name": "file",
+          "kind": "path",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 300
+        }
+      ],
       "needs": [
         {
           "verb": "proc.spawn",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Start a new process for the interpreter to run your script." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Start a new process for the interpreter to run your script."
+          }
         }
       ]
     },
     "which": {
-      "label": { "en": "Check if a command exists" },
+      "label": {
+        "en": "Check if a command exists"
+      },
       "args": [
-        { "name": "command", "kind": "name", "required": true }
+        {
+          "name": "name",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.meta",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Look up where the command lives on the filesystem." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "name"
+          },
+          "why": {
+            "en": "Look up where the command lives on the filesystem."
+          }
         }
       ]
     },
     "start": {
-      "label": { "en": "Start a command in the background" },
+      "label": {
+        "en": "Start a command in the background"
+      },
       "args": [
-        { "name": "command", "kind": "name", "required": true }
+        {
+          "name": "command",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "arguments",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        }
       ],
       "needs": [
         {
           "verb": "proc.spawn",
-          "scope": { "kind": "from-arg", "arg": "command" },
-          "why": { "en": "Start a new background process for the command you asked to run." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "command"
+          },
+          "why": {
+            "en": "Start a new background process for the command you asked to run."
+          }
         }
       ]
     },
     "stop": {
-      "label": { "en": "Stop a background process by PID" },
+      "label": {
+        "en": "Stop a background process by PID"
+      },
+      "args": [
+        {
+          "name": "pid",
+          "kind": "integer",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "proc.signal",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send a termination signal to the process you asked to stop." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send a termination signal to the process you asked to stop."
+          }
         }
       ]
     },
     "ps": {
-      "label": { "en": "List running background processes" },
+      "label": {
+        "en": "List running background processes"
+      },
       "needs": [
         {
           "verb": "proc.observe",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Read the list of background processes started by this app." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Read the list of background processes started by this app."
+          }
         }
-      ]
+      ],
+      "args": []
     }
   },
   "dependencies": {

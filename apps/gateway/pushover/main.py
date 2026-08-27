@@ -41,7 +41,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "pushover"
@@ -51,114 +51,6 @@ TITLE_LEN = 250
 URL_LEN = 512
 URL_TITLE_LEN = 100
 API_URL = "https://api.pushover.net/1/messages.json"
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Pushover (pushover.net) push-notification gateway. "
-            "``send`` posts a message to the configured user / group "
-            "key with optional title, priority, sound, and URL action."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-pushover start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-pushover stop",
-            },
-            "status": {
-                "description": "Show whether the app token and default user key are configured",
-                "parameters": [],
-                "example": "cos app gateway-pushover status",
-            },
-            "send": {
-                "description": "Send a push notification to a user or group",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 1024 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "User or group key to receive (default: pushover_user_key credential)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Notification title (default: app name)",
-                    },
-                    {
-                        "name": "priority",
-                        "type": "integer",
-                        "required": False,
-                        "description": "-2 .. 2 (lowest .. emergency)",
-                    },
-                    {
-                        "name": "sound",
-                        "type": "string",
-                        "required": False,
-                        "description": "Pushover named sound (e.g. magic, siren, none)",
-                    },
-                    {
-                        "name": "url",
-                        "type": "string",
-                        "required": False,
-                        "description": "Supplementary action URL (max 512 chars)",
-                    },
-                    {
-                        "name": "url_title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Title for the action URL (max 100 chars)",
-                    },
-                    {
-                        "name": "device",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated device names to target",
-                    },
-                    {
-                        "name": "html",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Enable Pushover's HTML subset in the body",
-                    },
-                    {
-                        "name": "ttl",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds before auto-deletion on the device",
-                    },
-                    {
-                        "name": "retry",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds between retries (priority=2 only; >=30)",
-                    },
-                    {
-                        "name": "expire",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds before retries expire (priority=2 only; <=10800)",
-                    },
-                ],
-                "example": "cos app gateway-pushover send 'build green'",
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -307,19 +199,6 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Pushover doesn't deliver inbound messages to apps. Use "
-            "``send <text>`` for outbound notifications only."
-        ),
-    }
-
-
 def _status() -> dict:
     app_token, app_err = _env_or_credential("COS_PUSHOVER_APP_TOKEN", "pushover_app_token")
     user_key, user_err = _env_or_credential("COS_PUSHOVER_USER_KEY", "pushover_user_key")
@@ -334,8 +213,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         recipient = None
@@ -350,8 +227,45 @@ def run(command: str, args):
         retry: int | None = None
         expire: int | None = None
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed_args, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=(
+                    "recipient",
+                    "title",
+                    "priority",
+                    "sound",
+                    "url",
+                    "url-title",
+                    "device",
+                    "ttl",
+                    "retry",
+                    "expire",
+                ),
+                bool_flags=("html",),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed_args["text"]
+            recipient = parsed_args["recipient"]
+            title = parsed_args["title"]
+            sound = parsed_args["sound"]
+            url = parsed_args["url"]
+            url_title = parsed_args["url-title"]
+            device = parsed_args["device"]
+            html = parsed_args["html"]
+            for name in ("priority", "ttl", "retry", "expire"):
+                parsed, error = _coerce_int(parsed_args[name], name)
+                if error:
+                    return {"ok": False, "error": error}
+                if name == "priority":
+                    priority = parsed
+                elif name == "ttl":
+                    ttl = parsed
+                elif name == "retry":
+                    retry = parsed
+                else:
+                    expire = parsed
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             recipient = args.get("recipient") or None
@@ -403,8 +317,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

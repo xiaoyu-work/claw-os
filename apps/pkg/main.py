@@ -199,29 +199,13 @@ def cmd_has(args):
 
 def _parse_search_args(args):
     """Pull out --limit / -n and return (query, limit)."""
-    limit = DEFAULT_SEARCH_LIMIT
-    query_parts = []
-    i = 0
-    while i < len(args):
-        tok = args[i]
-        if tok in ("--limit", "-n"):
-            if i + 1 >= len(args):
-                raise ValueError(f"{tok} requires a value")
-            try:
-                limit = int(args[i + 1])
-            except ValueError as exc:
-                raise ValueError(f"{tok} expects an integer, got {args[i + 1]!r}") from exc
-            i += 2
-            continue
-        if tok.startswith("--limit="):
-            try:
-                limit = int(tok.split("=", 1)[1])
-            except ValueError as exc:
-                raise ValueError(f"--limit expects an integer, got {tok!r}") from exc
-            i += 1
-            continue
-        query_parts.append(tok)
-        i += 1
+    from canonical_argv import parse_canonical_argv
+    query_parts, options = parse_canonical_argv(
+        args,
+        value_flags={"limit"},
+        aliases={"-n": "limit"},
+    )
+    limit = int(options.get("limit", DEFAULT_SEARCH_LIMIT))
     if limit <= 0:
         raise ValueError("--limit must be positive")
     if limit > MAX_SEARCH_LIMIT:
@@ -433,57 +417,14 @@ def cmd_upgrade_all(args):
     return _package_broker("upgrade-all")
 
 
-def _schema():
-    return {
-        "need": {
-            "description": "Ensure packages are installed, only installing what is missing",
-            "parameters": [
-                {"name": "packages", "type": "string", "required": True, "description": "One or more package names to ensure are installed", "kind": "positional"},
-            ],
-            "example": "cos app pkg need curl jq ripgrep",
-        },
-        "has": {
-            "description": "Check if a package or command is available on the system",
-            "parameters": [
-                {"name": "name", "type": "string", "required": True, "description": "Package or command name to check", "kind": "positional"},
-            ],
-            "example": "cos app pkg has python3",
-        },
-        "list": {
-            "description": "List all installed system packages via dpkg",
-            "parameters": [],
-            "example": "cos app pkg list",
-        },
-        "search": {
-            "description": "Search the apt catalog for packages whose name or description matches the query",
-            "parameters": [
-                {"name": "query", "type": "string", "required": True, "description": "Search term(s) to match against package names and short summaries", "kind": "positional"},
-                {"name": "--limit", "type": "int", "required": False, "description": f"Max results to return (default {DEFAULT_SEARCH_LIMIT}, capped at {MAX_SEARCH_LIMIT})", "kind": "flag"},
-            ],
-            "example": "cos app pkg search image converter --limit 10",
-        },
-        "show": {
-            "description": "Show detailed metadata (version, description, homepage, depends, size) for a single package from the apt catalog",
-            "parameters": [
-                {"name": "name", "type": "string", "required": True, "description": "Package name to describe", "kind": "positional"},
-            ],
-            "example": "cos app pkg show imagemagick",
-        },
-        "remove": {"description": "Remove one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "purge": {"description": "Purge one package and its configuration", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "upgrade": {"description": "Upgrade one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "install-version": {"description": "Install an exact package version", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}, {"name": "version", "type": "string", "required": True, "kind": "positional"}]},
-        "hold": {"description": "Prevent upgrades for one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "unhold": {"description": "Release a package hold", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "update": {"description": "Refresh apt package indexes", "parameters": []},
-        "upgrade-all": {"description": "Upgrade every package with an available candidate", "parameters": []},
-    }
-
-
 def run(command, args):
     """Entry point called by the cos router."""
-    if command == "__schema__":
-        return _schema()
+    if command != "search":
+        from canonical_argv import parse_canonical_argv
+        try:
+            args, _ = parse_canonical_argv(args)
+        except ValueError as error:
+            return {"error": str(error)}
     commands = {
         "need": cmd_need,
         "has": cmd_has,

@@ -15,8 +15,9 @@
 //!   "I trust you with the whole world" answer and must be authored
 //!   on purpose — there is no implicit wildcard.
 //! - [`Scope::Path`]: glob match with `*` matching a single path
-//!   segment and `**` matching any number of segments. Tildes and
-//!   `$VAR` are expanded before matching.
+//!   segment and `**` matching any number of segments. A leading
+//!   tilde is expanded before matching; environment placeholders are
+//!   always literal and manifests reject them.
 //! - [`Scope::Host`]: `*` matches a single DNS label between dots,
 //!   `**` matches multiple labels. Port match is exact when both
 //!   sides specify one; granted-without-port covers any port.

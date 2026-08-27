@@ -52,8 +52,8 @@ def _broker(action, value=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -70,13 +70,3 @@ def run(command, args):
         policy.require("ui.accessibility", name="control")
         return _broker(command, args[0])
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect COSMIC and AT-SPI accessibility state", "parameters": []},
-        "screen-reader": {"description": "Enable or disable AT-SPI screen reader state", "parameters": []},
-        "magnifier": {"description": "Enable or disable the COSMIC magnifier", "parameters": []},
-        "invert": {"description": "Enable or disable color inversion", "parameters": []},
-        "filter": {"description": "Set a COSMIC color-vision filter", "parameters": []},
-    }

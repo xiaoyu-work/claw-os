@@ -42,55 +42,6 @@ API_VERSION = "2010-04-01"
 SOFT_LEN = 1600  # Twilio caps a single Body at 1600 chars (auto-segmented)
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "SMS gateway via Twilio. ``send`` delivers one-shot text "
-            "messages. ``start``/``stop`` (inbound webhook) are not "
-            "yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Start an inbound webhook receiver (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-sms start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-sms stop",
-            },
-            "status": {
-                "description": "Show running state (always 'stopped' until inbound webhook lands)",
-                "parameters": [],
-                "example": "cos app gateway-sms status",
-            },
-            "send": {
-                "description": "Send a one-shot SMS message",
-                "parameters": [
-                    {
-                        "name": "to",
-                        "type": "string",
-                        "required": True,
-                        "description": "Recipient phone in E.164 format, e.g. +14155552671",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 1600 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-sms send '+14155552671' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -218,19 +169,6 @@ def _send(to: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound webhook receiver still pending. "
-            "Use ``send <to> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     cfg, err = _load_config()
     return {
@@ -245,8 +183,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         if isinstance(args, list):
             to = args[0] if len(args) > 0 else ""
@@ -261,8 +200,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

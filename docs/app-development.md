@@ -101,22 +101,71 @@ def run(command, args):
 The bridge calls `mod.run(command, args)` exactly once per invocation
 ([`bridge.rs:64`](../core/src/bridge.rs)). Two crucial details:
 
-* `command` is a **string** — the operation name, such as `"say"`.
-* `args` is a **list of strings**, not a dict — every CLI token after
-  the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`),
-  followed by any manifest defaults the bridge resolved. Apps parse their
-  own flags; see
+* `command` is a **string** — the manifest-declared operation name, such as
+  `"say"`. The kernel rejects undeclared operations before starting the app.
+* `args` is a **list of strings**, not a dict — the bridge validates every
+  declared positional and `--flag` value, rejects undeclared flags, and then
+  passes the effective argv (including manifest defaults) to the handler. Apps
+  parse the already validated values; see
   [`apps/notify/main.py:46-99`](../apps/notify/main.py) for the
   conventional positional-vs-flag style.
 
-An optional operation argument may declare a literal `default` matching its
-`kind`. If its default depends on an earlier string argument, use
+Each argument declares a value `kind`: `path`, `host`, `name`, `text`,
+`number`, `integer`, or `bool`. `number` accepts decimal values while
+`integer` rejects fractional input. `binding` is either `positional` or
+`flag`. When omitted, booleans retain the historical `flag` behavior and every
+other kind remains positional:
+
+```jsonc
+{
+  "name": "timeout",
+  "kind": "integer",
+  "binding": "flag",
+  "required": false,
+  "default": 30
+}
+```
+
+Use `--` to end flag parsing when a positional value itself begins with `--`.
+Any supplied number, integer, or explicit boolean literal that does not match
+its declared kind is rejected before launch. Missing required booleans are
+rejected before optional booleans are materialized as `false`. A destructive
+confirmation uses `"required": true, "choices": [true]`, so omission and
+`--confirm=false` both fail before capability resolution.
+For a mode-specific confirmation, use `required_when` with the same
+`arg-present`, `arg-equals`, or `arg-not-equals` condition model as capability
+needs. The argument is accepted exactly when the condition applies and is then
+required. The condition must reference an earlier argument; conditionally
+required arguments cannot be repeatable or also declare `required: true`,
+defaults, or trusted resolvers. A conditional confirmation still declares
+`choices: [true]`.
+
+Use `choices` for a closed scalar enum. Set `repeatable: true` when every
+occurrence is meaningful: the bound value becomes an ordered JSON array and a
+flag is emitted once per item. Repeatable positional arguments must be the
+last positional declaration. Repeatable booleans, derived defaults, and
+trusted resolvers are rejected because their occurrence semantics would be
+ambiguous.
+
+Use `aliases` for explicit alternate option spellings, such as
+`"aliases": ["-n"]` or a positional argument's compatibility
+`"aliases": ["--output"]`. Every spelling binds the same effective value and
+conflicting forms are rejected. `positional_alias: true` is reserved for an
+optional flag that historically occupied a surplus leading positional slot;
+the one-positional canonical form remains unambiguous and canonical argv emits
+the flag form. Positional aliases cannot coexist with optional or repeatable
+positional arguments.
+
+An optional argument may declare a non-null literal `default` matching its
+`kind`. Omit `default` when there is no default; explicit JSON `null` is
+invalid. If its default depends on an earlier string argument, use
 `default_from`:
 
 ```jsonc
 {
   "name": "output",
   "kind": "path",
+  "binding": "flag",
   "required": false,
   "default_from": {
     "arg": "url",
@@ -129,12 +178,49 @@ An optional operation argument may declare a literal `default` matching its
 
 The supported transforms are `identity` and `url-path-basename`.
 `url-path-basename` requires a text source, path destination, and safe
-single-component fallback. `default_from` is limited to one-shot operations.
-Defaulted arguments must be optional and follow every required argument.
-The bridge validates and resolves defaults, converts path values to the same
-absolute path used for capability derivation, and appends omitted values as
-positional strings in declaration order. The handler must consume that value
-rather than recompute a separate default.
+single-component fallback. `default_from` is limited to one-shot operations
+and is rejected for session-tool arguments.
+Defaulted arguments must be optional; defaulted positional arguments follow
+all required positional arguments. Defaulted positionals cannot be mixed with
+optional positional slots that have no default because argv cannot represent
+those gaps consistently. The bridge resolves paths before capability
+derivation and materializes defaults using their declared binding: positional
+values remain positional, non-boolean flags become `--name value` (or
+`--name=value` when the value starts with `--`), and a true boolean flag
+becomes `--name`. An explicitly supplied false flag becomes `--name=false`;
+only an omitted/default-false flag is omitted. Positional booleans are
+serialized as `true` or `false`. Flag defaults are placed before an
+end-of-options delimiter; positional defaults follow supplied positional
+values. The handler must consume that canonical argv rather than recompute a
+separate default.
+
+Session tools receive a JSON object rather than argv. Before capability
+resolution and MCP forwarding, the kernel inserts every declared literal
+default and omitted boolean into that object, validates choices and repeatable
+arrays, and normalizes path values. One shared effective-call resolver feeds
+the in-process gate, daemon gate, and forwarded tool arguments.
+
+The bundled email and calendar apps use the reserved `email-provider` and
+`calendar-provider` trusted resolvers. Before capability derivation, the
+trusted launcher selects a provider from credential metadata, materializes
+`--provider <name>`, and the manifest grants only that provider's exact
+credential and host scopes. Calendar falls back to `local` when neither remote
+credential exists. The bundled ntfy gateway similarly materializes its
+configured `NTFY_SERVER` before deriving the exact URL-host scope and falls
+back to `https://ntfy.sh` only when no server is configured. Third-party apps
+and session tools cannot use trusted resolvers.
+
+An operation may set `stdin: true` to receive explicitly forwarded caller
+input. The top-level CLI opts in with `--stdin`, for example
+`printf data | cos app fs write /workspace/out.txt --stdin`. This switch is
+recognized only in an App operation's pre-`--` option region, so command-owned
+`--stdin` flags elsewhere remain untouched. The CLI streams at most 16 MiB
+(configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
+overflow. The bridge never inherits or probes process stdin. Agent, session,
+service, and ordinary CLI calls therefore keep child stdin closed. Python list
+handlers use `apps/canonical_argv.py`;
+argparse and gateway parsers consume the same inline flags and `--` delimiter
+directly.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
@@ -198,14 +284,50 @@ Declare it in `operations.<op>.needs[]`:
 * `"fixed"` — hard-code a scope: `{"kind": "fixed", "scope": {...}}`.
   Useful for ops that always touch the same resource.
 * `"from-arg"` — late binding: `{"kind": "from-arg", "arg": "path"}`
-  reads the named op argument and constructs the scope from it. Only
-  works for args of `kind` `path` / `host` / `name`; text args must
-  use `"wild"` and the handler narrows the scope at runtime.
+  reads the named op argument and constructs the scope from it. Without a
+  transform it works for `path` / `host` / `name`. The optional safe
+  `transform` is `parent` for a path's containing directory or `url-host`
+  for the exact host and effective port parsed from a text URL. `url-host`
+  resolves HTTP and HTTPS defaults to ports 80 and 443, preserves explicit
+  ports and bracketed IPv6, and rejects schemes without a known or explicit
+  port. App-side URL checks must derive the identical scope; HTTP clients use
+  `_shared.safe_http.host_scope`, including for every redirect hop. The shared
+  `_shared/url_host_scope_vectors.json` corpus locks Rust and Python behavior
+  for UTS-46 ignored/mapped/contextual/rejected input, IDNA/punycode domains,
+  legacy IPv4 forms, IPv6 compression, and ports. Production images provide
+  `idna >= 3.3, < 4`; missing or unsupported versions fail closed. Core's
+  `url 2.5.8` parser materializes caller URLs as canonical ASCII effective
+  arguments before capability derivation and child dispatch. Python therefore
+  never reinterprets caller Unicode on the initial request; it applies UTS-46
+  itself only when canonicalizing redirect locations before requesting their
+  authority. Rust browser/JavaScript consumers use
+  `obscura_net::effective_host_scope` so every initial and redirect policy
+  check includes the same effective port and bracketed IPv6 form.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a
   wildcard when it equals `wild_when`:
   `{"kind": "from-arg-or-wild", "arg": "target", "wild_when": "all"}`.
+
+Needs that apply only in one mode declare `when` explicitly:
+
+```jsonc
+{
+  "verb": "fs.read",
+  "scope": { "kind": "from-arg", "arg": "file" },
+  "when": { "kind": "arg-present", "arg": "file" },
+  "why": { "en": "Read the optional file when one was supplied." }
+}
+```
+
+`arg-equals` gates provider/mode-specific fixed needs:
+`{"kind":"arg-equals","arg":"provider","value":"google"}`. An inactive
+condition omits only that declared need. Once active, missing arguments and
+unmapped `from-arg-map` values remain errors. Binding a capability
+unconditionally to an optional argument without a default or trusted resolver
+is rejected at manifest load time. `arg-not-equals` provides the inverse
+comparison when a safe fallback must omit authority, such as preventing a
+private credential from being used with a public default endpoint.
 
 Check it at runtime by importing the internal runtime:
 
@@ -280,8 +402,16 @@ Describe every operation in the manifest:
 }
 ```
 
-Keep the manifest schema aligned with the entry point's argument parser. There
-is no `__schema__` callback or runtime merge step.
+The manifest is the only maintained operation and argument contract. The entry
+point implements behavior for those declared operations; it must not define
+`_schema()`, handle `__schema__`, or maintain a parallel parameter list.
+Static app tests compare manifest operations with dispatcher branches, require
+parser flags to use `binding: "flag"`, and compare argparse required/default/
+integer/repeatable/choice behavior without importing entrypoints. Optional
+positional arguments cannot precede required positionals, and repeatable
+positionals must be last. Fixed path scopes use absolute paths or
+`~/...`; `$HOME`, `$XDG_DATA_HOME`, and other environment placeholders are
+rejected because capability matching does not expand them.
 
 ## 7. AI features
 

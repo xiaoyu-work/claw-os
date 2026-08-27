@@ -16,9 +16,9 @@ Body is sent as ``text/plain; charset=utf-8`` so it works against
 both ntfy.sh and self-hosted ntfy servers without going through
 the JSON-publish endpoint.
 
-Server defaults to ``https://ntfy.sh`` (override via
-``--server`` arg, ``COS_NTFY_SERVER`` env, or ``ntfy_server``
-credential). Topic defaults to ``ntfy_default_topic`` /
+The kernel resolves the server from ``--server``, ``COS_NTFY_SERVER``,
+or the ``ntfy_server`` credential before launch, falling back to
+``https://ntfy.sh``. Topic defaults to ``ntfy_default_topic`` /
 ``COS_NTFY_DEFAULT_TOPIC`` when only the body is supplied.
 
 Stdlib only.
@@ -36,7 +36,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "ntfy"
@@ -44,121 +44,6 @@ USER_AGENT = "ClawOSNtfy/0.1.0"
 DEFAULT_SERVER = "https://ntfy.sh"
 SOFT_LEN = 4000
 ALLOWED_PRIORITIES = {"min", "low", "default", "high", "max", "urgent"}
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "ntfy.sh push-notification gateway. POSTs a plain-text "
-            "body to <server>/<topic> with optional Bearer/Basic auth "
-            "and ntfy header metadata."
-        ),
-        "commands": {
-            "start": {
-                "description": "Subscribe to a topic (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-ntfy start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-ntfy stop",
-            },
-            "status": {
-                "description": "Show whether server/topic/token are set",
-                "parameters": [],
-                "example": "cos app gateway-ntfy status",
-            },
-            "send": {
-                "description": "Send a notification to a topic.",
-                "parameters": [
-                    {
-                        "name": "topic",
-                        "type": "string",
-                        "required": False,
-                        "description": (
-                            "Topic name; defaults to ntfy_default_topic "
-                            "credential if only one positional arg is "
-                            "supplied (treated as body)."
-                        ),
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Notification body (max ~4000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional title header",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "priority",
-                        "type": "string",
-                        "required": False,
-                        "description": "min|low|default|high|max|urgent",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "tags",
-                        "type": "string",
-                        "required": False,
-                        "description": (
-                            "Comma-separated emoji shortcodes / tags "
-                            "(e.g. 'rocket,deploy')"
-                        ),
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "click",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional click-target URL",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "markdown",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Render body as markdown",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "server",
-                        "type": "string",
-                        "required": False,
-                        "description": "Override default ntfy server",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "bearer",
-                        "type": "string",
-                        "required": False,
-                        "description": "Bearer access token (overrides creds)",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "basic",
-                        "type": "string",
-                        "required": False,
-                        "description": "Basic auth as 'user:pass'",
-                        "kind": "flag",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-ntfy send my-alerts 'deploy ok' "
-                    "--priority high --tags 'rocket,deploy'"
-                ),
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -189,19 +74,23 @@ def _resolve_server(server: str | None) -> str:
     if server and server.strip():
         s = server.strip().rstrip("/")
     else:
-        cred = _env_or_credential("COS_NTFY_SERVER", "ntfy_server")
-        s = (cred or DEFAULT_SERVER).rstrip("/")
+        s = DEFAULT_SERVER
     return s
 
 
 def _resolve_auth_header(
-    bearer: str | None, basic: str | None
+    bearer: str | None,
+    basic: str | None,
+    *,
+    allow_stored_token: bool = True,
 ) -> str | None:
     if bearer and bearer.strip():
         return f"Bearer {bearer.strip()}"
     if basic and basic.strip():
         token = base64.b64encode(basic.encode("utf-8")).decode("ascii")
         return f"Basic {token}"
+    if not allow_stored_token:
+        return None
     cred = _env_or_credential("COS_NTFY_TOKEN", "ntfy_token")
     if cred:
         return f"Bearer {cred}"
@@ -260,7 +149,11 @@ def _send(
         headers["Click"] = str(click).strip()
     if markdown:
         headers["Markdown"] = "yes"
-    auth = _resolve_auth_header(bearer, basic)
+    auth = _resolve_auth_header(
+        bearer,
+        basic,
+        allow_stored_token=resolved_server != DEFAULT_SERVER,
+    )
     if auth:
         headers["Authorization"] = auth
 
@@ -331,21 +224,8 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound ntfy needs SSE subscription on /<topic>/sse or "
-            "WebSocket on /<topic>/ws. Use ``send`` for outbound."
-        ),
-    }
-
-
-def _status() -> dict:
-    server = _env_or_credential("COS_NTFY_SERVER", "ntfy_server") or DEFAULT_SERVER
+def _status(server: str | None = None) -> dict:
+    server = _resolve_server(server)
     topic = _env_or_credential("COS_NTFY_DEFAULT_TOPIC", "ntfy_default_topic")
     has_token = bool(_env_or_credential("COS_NTFY_TOKEN", "ntfy_token"))
     return {
@@ -362,18 +242,7 @@ def _status() -> dict:
     }
 
 
-_FLAG_KEYS = {
-    "--title": "title",
-    "--priority": "priority",
-    "--tags": "tags",
-    "--click": "click",
-    "--server": "server",
-    "--bearer": "bearer",
-    "--basic": "basic",
-}
-
-
-def _parse_send_args(args) -> tuple[str | None, str, dict]:
+def _parse_send_args(args) -> tuple[str | None, str, dict, str | None]:
     flags: dict = {"markdown": False}
     if isinstance(args, dict):
         topic = args.get("topic")
@@ -396,36 +265,44 @@ def _parse_send_args(args) -> tuple[str | None, str, dict]:
             str(topic) if topic is not None else None,
             str(text or ""),
             flags,
+            None,
         )
     if not isinstance(args, list):
-        return None, "", flags
-    positional: list[str] = []
-    i = 0
-    while i < len(args):
-        a = str(args[i])
-        if a == "--markdown":
-            flags["markdown"] = True
-            i += 1
-            continue
-        key = _FLAG_KEYS.get(a)
-        if key is not None and i + 1 < len(args):
-            flags[key] = str(args[i + 1])
-            i += 2
-            continue
-        positional.append(a)
-        i += 1
-    if len(positional) >= 2:
-        return positional[0], positional[1], flags
-    if len(positional) == 1:
-        return None, positional[0], flags
-    return None, "", flags
+        return None, "", flags, "invalid args"
+    parsed, error = gateway_args.parse(
+        args,
+        positional=("text",),
+        positional_aliases=("topic",),
+        value_flags=(
+            "topic",
+            "title",
+            "priority",
+            "tags",
+            "click",
+            "server",
+            "bearer",
+            "basic",
+        ),
+        bool_flags=("markdown",),
+    )
+    if error:
+        return None, "", flags, error
+    flags.update(
+        {
+            name: parsed[name]
+            for name in ("title", "priority", "tags", "click", "server", "bearer", "basic")
+            if parsed[name] is not None
+        }
+    )
+    flags["markdown"] = parsed["markdown"]
+    return parsed["topic"], parsed["text"], flags, None
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
-        topic, text, flags = _parse_send_args(args)
+        topic, text, flags, error = _parse_send_args(args)
+        if error:
+            return {"ok": False, "error": error}
         result = _send(
             topic,
             text,
@@ -446,9 +323,12 @@ def run(command: str, args):
         )
         return result
     if command == "status":
-        return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
+        if isinstance(args, dict):
+            return _status(args.get("server"))
+        parsed, error = gateway_args.parse(args, value_flags=("server",))
+        if error:
+            return {"ok": False, "error": error}
+        return _status(parsed["server"])
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

@@ -10,6 +10,19 @@ import urllib.request
 
 from cos_runtime import policy
 
+try:
+    import idna
+except ImportError as error:  # pragma: no cover - exercised by packaging checks
+    idna = None
+    _IDNA_ERROR = error
+else:
+    _IDNA_ERROR = None
+    _IDNA_VERSION = tuple(int(part) for part in idna.__version__.split(".")[:2])
+    if not (3, 3) <= _IDNA_VERSION < (4, 0):
+        _IDNA_ERROR = RuntimeError(
+            f"idna >= 3.3, < 4 is required; found {idna.__version__}"
+        )
+
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 10
 
@@ -19,22 +32,133 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _host_scope(parsed):
+def _parse_ipv4_number(part):
+    radix = 10
+    digits = part
+    if digits.lower().startswith("0x"):
+        radix = 16
+        digits = digits[2:]
+    elif len(digits) > 1 and digits.startswith("0"):
+        radix = 8
+        digits = digits[1:]
+    if not digits:
+        return 0
+    valid = {
+        8: "01234567",
+        10: "0123456789",
+        16: "0123456789abcdefABCDEF",
+    }[radix]
+    if any(char not in valid for char in digits):
+        return None
+    return int(digits, radix)
+
+
+def _canonical_ipv4(host):
+    parts = host.split(".")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if not parts or len(parts) > 4:
+        return None
+    numbers = [_parse_ipv4_number(part) for part in parts]
+    if numbers[-1] is None:
+        return None
+    if any(number is None for number in numbers):
+        raise ValueError("invalid IPv4 address")
+    if any(number > 255 for number in numbers[:-1]):
+        raise ValueError("invalid IPv4 address")
+    last_limit = 256 ** (5 - len(numbers))
+    if numbers[-1] >= last_limit:
+        raise ValueError("invalid IPv4 address")
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number * (256 ** (3 - index))
+    return str(ipaddress.IPv4Address(value))
+
+
+def _canonical_domain(host):
+    if _IDNA_ERROR is not None:
+        raise RuntimeError(
+            "standards-conformant URL host validation requires idna >= 3.3, < 4"
+        ) from _IDNA_ERROR
+    try:
+        if host.isascii():
+            canonical = idna.uts46_remap(
+                host,
+                std3_rules=True,
+                transitional=False,
+            )
+            if not canonical.isascii():
+                raise ValueError("ASCII URL host remapped to non-ASCII")
+            return canonical
+        return idna.encode(
+            host, uts46=True, std3_rules=True, transitional=False
+        ).decode("ascii")
+    except idna.IDNAError as error:
+        raise ValueError(f"URL host is not valid UTS-46: {error}") from None
+
+
+def canonical_host(host):
+    """Canonicalize a URL hostname with the WHATWG forms used by Rust url."""
+    if _IDNA_ERROR is not None:
+        raise RuntimeError(
+            "standards-conformant URL host validation requires idna >= 3.3, < 4"
+        ) from _IDNA_ERROR
+    if ":" in host:
+        return ipaddress.IPv6Address(host).compressed
+    ipv4 = _canonical_ipv4(host)
+    if ipv4 is not None:
+        return ipv4
+    return _canonical_domain(host)
+
+
+def canonical_url(parsed):
+    """Serialize a parsed URL with the canonical host used for authority."""
+    host = canonical_host(parsed.hostname)
+    authority = f"[{host}]" if ":" in host else host
+    if parsed.port is not None:
+        authority = f"{authority}:{parsed.port}"
+    return urllib.parse.urlunparse(parsed._replace(netloc=authority))
+
+
+def _canonical_request(request, parsed):
+    url = canonical_url(parsed)
+    headers = {
+        key: value
+        for key, value in request.header_items()
+        if key.lower() != "host"
+    }
+    return urllib.request.Request(
+        url,
+        data=request.data,
+        headers=headers,
+        method=request.get_method(),
+    )
+
+
+def host_scope(parsed):
+    """Return the exact host:port scope used by kernel URL authority."""
     host = parsed.hostname
     if not host:
         raise ValueError("URL has no host")
-    if parsed.port is None:
-        return host
+    host = canonical_host(host)
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "http":
+            port = 80
+        elif parsed.scheme == "https":
+            port = 443
+        else:
+            raise ValueError(f"scheme {parsed.scheme!r} has no known port")
     if ":" in host:
-        return f"[{host}]:{parsed.port}"
-    return f"{host}:{parsed.port}"
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
 
 
 def _socket_host(parsed):
     host = parsed.hostname
     if not host:
         raise ValueError("URL has no host")
-    return host
+    return canonical_host(host)
 
 
 def parse_url(url):
@@ -64,7 +188,7 @@ def resolve_public(parsed):
 
 def validate_and_authorize(url):
     parsed = parse_url(url)
-    policy.require("net.dial", host=_host_scope(parsed))
+    policy.require("net.dial", host=host_scope(parsed))
     addresses = resolve_public(parsed)
     return parsed, addresses
 
@@ -156,11 +280,13 @@ def open_url(
     current = request
     redirects = []
     for hop in range(max_redirects + 1):
+        parsed = parse_url(current.full_url)
+        current = _canonical_request(current, parsed)
         if hop == 0 and initial_authorized:
-            parsed = parse_url(current.full_url)
             addresses = resolve_public(parsed)
         else:
-            _, addresses = validate_and_authorize(current.full_url)
+            policy.require("net.dial", host=host_scope(parsed))
+            addresses = resolve_public(parsed)
         try:
             response = _open_pinned(current, timeout, addresses)
             if response.geturl() != current.full_url:

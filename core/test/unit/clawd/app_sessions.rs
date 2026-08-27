@@ -127,6 +127,36 @@ fn delegation(ceiling: CapSet) -> Delegation {
     }
 }
 
+#[test]
+fn daemon_plan_skips_inactive_calendar_provider_needs() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("apps/calendar/app.json");
+    let manifest =
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let operation = &manifest.operations["today"];
+    let values =
+        BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]);
+    let resolved = manifest.resolve_needs("today", &values).unwrap();
+
+    let local = Cap::new(Verb::DATA_DB_READ, Scope::name("calendar"));
+    let google = Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN"),
+    );
+    let plan = derive_plan(
+        &operation.needs,
+        &resolved,
+        &delegation(CapSet::from_iter([local.clone(), google.clone()])),
+    )
+    .unwrap();
+
+    assert!(plan.caps.covers(&local));
+    assert!(!plan.caps.covers(&google));
+    assert!(plan.missing.is_empty());
+}
+
 /// Derive and settle a plan the way egister does, so tests exercise
 /// the real authorization path.
 fn operation_caps(
@@ -915,11 +945,8 @@ fn wildcard_inheritance_never_exceeds_the_restricted_ceiling() {
         );
     }
     for verb in [Verb::AI_CHAT, Verb::NET_DIAL] {
-        let inherited = inherited_wild_caps(verb, &delegation).expect("inheritable");
-        for cap in &inherited {
-            assert!(delegation.ceiling.covers(cap));
-            assert!(!matches!(cap.scope, Scope::Wild));
-        }
+        inherited_wild_caps(verb, &delegation)
+            .expect_err("typed wildcard ceilings are not bounded authority");
     }
 }
 
@@ -939,6 +966,13 @@ fn wildcard_need_never_inherits_unbounded_resource_authority() {
     let error = inherited_wild_caps(Verb::NET_DIAL, &host_wild)
         .expect_err("host-scoped verbs address resources too");
     assert!(error.message.contains("unbounded"), "unexpected: {error}");
+
+    for scope in [Scope::host("**"), Scope::path("/**"), Scope::name("**")] {
+        let typed = delegation(CapSet::from_caps([Cap::new(Verb::NET_DIAL, scope)]));
+        let error = inherited_wild_caps(Verb::NET_DIAL, &typed)
+            .expect_err("typed wildcard scopes are still unbounded");
+        assert!(error.message.contains("unbounded"), "unexpected: {error}");
+    }
 }
 
 #[test]
@@ -1015,11 +1049,9 @@ fn gui_caps_skip_argument_bound_needs() {
 #[test]
 fn gui_wildcard_need_never_inherits_unbounded_authority() {
     let delegation = delegation(CapSet::from_caps([Cap::new(Verb::FS_META, Scope::Wild)]));
-    let caps = gui_caps(&test_app(), "--gui", &delegation).expect("gui caps");
-    assert!(
-        caps.is_empty(),
-        "an unbounded ceiling must not satisfy a GUI wildcard need"
-    );
+    let error = gui_caps(&test_app(), "--gui", &delegation)
+        .expect_err("an unbounded ceiling must fail the whole GUI plan");
+    assert!(error.message.contains("unbounded"), "unexpected: {error}");
 }
 
 #[test]

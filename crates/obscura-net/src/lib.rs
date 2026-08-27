@@ -11,5 +11,6 @@ pub use client::{ObscuraHttpClient, ObscuraNetError, RequestInfo, ResourceType, 
 pub use cookies::{CookieInfo, CookieJar};
 pub use robots::RobotsCache;
 pub use blocklist::is_blocked as is_tracker_blocked;
+pub use url_policy::effective_host_scope;
 #[cfg(feature = "stealth")]
 pub use wreq_client::{StealthHttpClient, STEALTH_USER_AGENT};

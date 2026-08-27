@@ -17,12 +17,21 @@
         {
           "name": "recipient",
           "kind": "name",
-          "required": true
+          "required": true,
+          "binding": "positional"
         },
         {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "plain",
+          "kind": "bool",
+          "required": false,
+          "default": false,
+          "binding": "flag"
         }
       ],
       "needs": [

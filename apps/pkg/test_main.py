@@ -66,7 +66,12 @@ class ParseSearchArgsTests(unittest.TestCase):
         self.assertEqual(query, "pdf")
         self.assertEqual(limit, 5)
 
-    def test_flag_limit_short(self):
+    def test_delimited_limit_token_is_query_text(self):
+        query, limit = _parse_search_args(["--", "--limit"])
+        self.assertEqual(query, "--limit")
+        self.assertEqual(limit, DEFAULT_SEARCH_LIMIT)
+
+    def test_short_limit_alias(self):
         query, limit = _parse_search_args(["-n", "3", "json"])
         self.assertEqual(query, "json")
         self.assertEqual(limit, 3)
@@ -301,11 +306,6 @@ class CmdShowTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class RunDispatcherTests(unittest.TestCase):
-    def test_schema_lists_new_commands(self):
-        schema = run("__schema__", [])
-        for cmd in ("need", "has", "list", "search", "show"):
-            self.assertIn(cmd, schema, f"missing schema entry: {cmd}")
-
     def test_unknown_command(self):
         result = run("flarp", [])
         self.assertIn("error", result)

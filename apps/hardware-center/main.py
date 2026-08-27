@@ -51,21 +51,11 @@ def _broker(action):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command not in COMMANDS:
         return {"error": f"unknown command: {command}"}
     if args:
         return {"error": f"{command} takes no arguments"}
     policy.require("sys.observe", name="hardware")
     return _broker(command)
-
-
-def _schema():
-    return {
-        command: {
-            "description": f"Inspect {command} hardware information",
-            "parameters": [],
-        }
-        for command in sorted(COMMANDS)
-    }

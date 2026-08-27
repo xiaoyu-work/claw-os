@@ -64,8 +64,8 @@ def _broker(action, identifier=None, app_id=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command == "list":
         if args:
             return {"error": "list takes no arguments"}
@@ -87,39 +87,3 @@ def run(command, args):
         policy.require("desktop.launch", name=args[1])
         return _broker(command, identifier=args[0], app_id=args[1])
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    identifier = {
-        "name": "identifier",
-        "type": "string",
-        "kind": "positional",
-        "required": True,
-        "description": "Stable identifier returned by desktop-manager list",
-    }
-    return {
-        "list": {
-            "description": "List running COSMIC Wayland toplevels",
-            "parameters": [],
-        },
-        "focus": {
-            "description": "Activate a selected window",
-            "parameters": [identifier],
-        },
-        "close": {
-            "description": "Request that a selected window close",
-            "parameters": [identifier],
-        },
-        "restart": {
-            "description": "Close all matching AppID windows and relaunch the desktop app",
-            "parameters": [
-                identifier,
-                {
-                    "name": "app_id",
-                    "type": "string",
-                    "kind": "positional",
-                    "required": True,
-                },
-            ],
-        },
-    }

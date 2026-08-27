@@ -66,8 +66,8 @@ def _broker(action, unit):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command not in MUTATING | {"status"}:
         return {"error": f"unknown command: {command}"}
     if len(args) != 1 or not _valid_unit(args[0]):
@@ -84,21 +84,3 @@ def run(command, args):
     else:
         policy.require("sys.service", name=unit)
     return _broker(command, unit)
-
-
-def _schema():
-    commands = {}
-    for command in ["status", "start", "stop", "restart", "reload", "enable", "disable"]:
-        commands[command] = {
-            "description": f"{command.capitalize()} a native systemd unit",
-            "parameters": [
-                {
-                    "name": "unit",
-                    "type": "string",
-                    "kind": "positional",
-                    "required": True,
-                }
-            ],
-            "example": f"cos app systemd {command} ssh.service",
-        }
-    return commands

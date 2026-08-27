@@ -40,55 +40,6 @@ DEFAULT_BASE_URL = "http://localhost:8080"
 SOFT_LEN = 4000  # signal-cli-rest-api passes through; cap for sanity
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Signal gateway via signal-cli-rest-api. ``send`` posts to "
-            "/v2/send. ``start``/``stop`` (inbound /v1/receive polling) "
-            "are not yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Poll /v1/receive for inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-signal start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-signal stop",
-            },
-            "status": {
-                "description": "Show running state and reachability of the configured base URL",
-                "parameters": [],
-                "example": "cos app gateway-signal status",
-            },
-            "send": {
-                "description": "Send a text message to one or more recipients",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": True,
-                        "description": "Recipient phone in E.164 (e.g. +14155552671) or group id",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 4000 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-signal send '+14155552671' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -232,19 +183,6 @@ def _send(recipient: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound /v1/receive polling still pending. "
-            "Use ``send <recipient> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     number, err = _load_number()
     base_url = _load_base_url()
@@ -261,8 +199,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         if isinstance(args, list):
             recipient = args[0] if len(args) > 0 else ""
@@ -277,8 +216,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

@@ -243,7 +243,7 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
                   "label": "Download",
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
-                    {"name": "output", "kind": "path",
+                    {"name": "output", "kind": "path", "binding": "flag",
                      "default_from": {
                        "arg": "url",
                        "transform": "url-path-basename",
@@ -270,9 +270,14 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_READ,
         Scope::path(current_dir.to_string_lossy()),
     ));
-    let ls_caps =
-        constrained_operation_caps(&ls_parent, true, &manifest.operations["ls"], &ls.values)
-            .unwrap();
+    let ls_resolved = manifest.resolve_needs("ls", &ls.values).unwrap();
+    let ls_caps = constrained_operation_caps(
+        &ls_parent,
+        true,
+        &manifest.operations["ls"].needs,
+        &ls_resolved,
+    )
+    .unwrap();
     assert!(ls_caps.covers(&Cap::new(
         Verb::FS_READ,
         Scope::path(current_dir.to_string_lossy()),
@@ -283,14 +288,15 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     assert_eq!(search.argv, vec!["needle", "/workspace"]);
     assert!(bind_operation_args(&manifest.operations["search"], &[])
         .unwrap_err()
-        .contains("required operation arg `query`"));
+        .contains("argument `query` is required"));
     let mut search_parent = CapSet::new();
     search_parent.insert(Cap::new(Verb::FS_READ, Scope::path("/workspace")));
+    let search_resolved = manifest.resolve_needs("search", &search.values).unwrap();
     let search_caps = constrained_operation_caps(
         &search_parent,
         true,
-        &manifest.operations["search"],
-        &search.values,
+        &manifest.operations["search"].needs,
+        &search_resolved,
     )
     .unwrap();
     assert!(search_caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/workspace"))));
@@ -301,18 +307,23 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     let default_output = home.path().join("artifact.bin");
     assert_eq!(
         download.argv,
-        vec![url.clone(), default_output.to_string_lossy().into_owned()]
+        vec![
+            url.clone(),
+            "--output".to_string(),
+            default_output.to_string_lossy().into_owned()
+        ]
     );
     let mut download_parent = CapSet::new();
     download_parent.insert(Cap::new(
         Verb::FS_WRITE,
         Scope::path(default_output.to_string_lossy()),
     ));
+    let download_resolved = manifest.resolve_needs("download", &download.values).unwrap();
     let download_caps = constrained_operation_caps(
         &download_parent,
         true,
-        &manifest.operations["download"],
-        &download.values,
+        &manifest.operations["download"].needs,
+        &download_resolved,
     )
     .unwrap();
     assert!(download_caps.covers(&Cap::new(
@@ -333,11 +344,12 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_WRITE,
         Scope::path(explicit_output.to_string_lossy()),
     ));
+    let explicit_resolved = manifest.resolve_needs("download", &explicit.values).unwrap();
     let explicit_caps = constrained_operation_caps(
         &explicit_parent,
         true,
-        &manifest.operations["download"],
-        &explicit.values,
+        &manifest.operations["download"].needs,
+        &explicit_resolved,
     )
     .unwrap();
     assert!(explicit_caps.covers(&Cap::new(
@@ -411,8 +423,11 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
                 "sync": {
                   "label": "Sync",
                   "args": [
-                    {"name": "recursive", "kind": "bool", "default": true},
-                    {"name": "target", "kind": "name", "default": "primary"}
+                    {"name": "recursive", "kind": "bool", "binding": "flag",
+                     "default": true},
+                    {"name": "target", "kind": "name", "default": "primary"},
+                    {"name": "limit", "kind": "integer", "binding": "flag",
+                     "default": 10}
                   ],
                   "needs": [
                     {"verb": "data.kv.read",
@@ -429,23 +444,699 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
     let bound = bind_operation_args(operation, &[]).unwrap();
     assert_eq!(
         bound.argv,
-        vec!["primary".to_string()],
-        "a boolean default is not a positional token"
+        vec![
+            "primary".to_string(),
+            "--recursive".to_string(),
+            "--limit".to_string(),
+            "10".to_string()
+        ],
+        "flag defaults retain their declared argv binding"
     );
     assert_eq!(bound.values["recursive"], serde_json::Value::Bool(true));
     assert_eq!(
         bound.values["target"],
         serde_json::Value::String("primary".into())
     );
+    assert_eq!(bound.values["limit"], serde_json::json!(10));
 
     // The authority re-binds this argv and must reach the same values,
     // otherwise the scope it derives would name a different resource.
-    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv);
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
     assert_eq!(rebound["target"], bound.values["target"]);
     assert_eq!(rebound["recursive"], bound.values["recursive"]);
+    assert_eq!(rebound["limit"], bound.values["limit"]);
 
     let mut parent = CapSet::new();
     parent.insert(Cap::new(Verb::DATA_KV_READ, Scope::name("primary")));
-    let caps = constrained_operation_caps(&parent, true, operation, &rebound).unwrap();
+    let resolved = manifest.resolve_needs("sync", &rebound).unwrap();
+    let caps = constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
     assert!(caps.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("primary"))));
+}
+
+#[test]
+fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"canonical","version":"0.1","name":"Canonical",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"text","kind":"text","required":true},
+                {"name":"confirm","kind":"bool","binding":"flag","default":false},
+                {"name":"enabled","kind":"bool","binding":"positional","default":true},
+                {"name":"limit","kind":"integer","binding":"flag","default":10},
+                {"name":"label","kind":"text","binding":"flag"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["run"];
+
+    let inline_true = bind_operation_args(
+        operation,
+        &["hello".into(), "--confirm=true".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        inline_true.argv,
+        ["hello", "true", "--confirm", "--limit", "10"]
+    );
+    assert_eq!(inline_true.values["confirm"], serde_json::json!(true));
+
+    let inline_false = bind_operation_args(
+        operation,
+        &["hello".into(), "--confirm=false".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        inline_false.argv,
+        ["hello", "true", "--confirm=false", "--limit", "10"]
+    );
+    assert_eq!(inline_false.values["confirm"], serde_json::json!(false));
+    let rebound =
+        crate::caps::args::bind_cli_args(&operation.args, &inline_false.argv).unwrap();
+    assert_eq!(rebound, inline_false.values);
+
+    let delimited = bind_operation_args(operation, &["--".into(), "--literal".into()]).unwrap();
+    assert_eq!(
+        delimited.argv,
+        ["--limit", "10", "--", "--literal", "true"]
+    );
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &delimited.argv).unwrap();
+    assert_eq!(rebound, delimited.values);
+
+    let option_shaped_value = bind_operation_args(
+        operation,
+        &["hello".into(), "--label=--urgent".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        option_shaped_value.argv,
+        ["hello", "true", "--limit", "10", "--label=--urgent"]
+    );
+    let rebound =
+        crate::caps::args::bind_cli_args(&operation.args, &option_shaped_value.argv).unwrap();
+    assert_eq!(rebound, option_shaped_value.values);
+}
+
+#[test]
+fn repeatable_flags_round_trip_through_canonical_argv() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"repeat","version":"0.1","name":"Repeat",
+            "operations":{"fetch":{"label":"Fetch","args":[
+                {"name":"url","kind":"text","required":true},
+                {"name":"header","kind":"text","binding":"flag","repeatable":true}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["fetch"];
+    let bound = bind_operation_args(
+        operation,
+        &[
+            "https://example.test".into(),
+            "--header=A: 1".into(),
+            "--header".into(),
+            "--urgent".into(),
+        ],
+    )
+    .unwrap_err();
+    assert!(bound.contains("valid text value"));
+
+    let bound = bind_operation_args(
+        operation,
+        &[
+            "https://example.test".into(),
+            "--header=A: 1".into(),
+            "--header=--urgent".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        bound.argv,
+        [
+            "https://example.test",
+            "--header",
+            "A: 1",
+            "--header=--urgent"
+        ]
+    );
+    assert_eq!(
+        bound.values["header"],
+        serde_json::json!(["A: 1", "--urgent"])
+    );
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
+    assert_eq!(rebound, bound.values);
+}
+
+#[test]
+fn explicit_false_overrides_true_default_for_authority_and_child() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"boolean","version":"0.1","name":"Boolean",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"enabled","kind":"bool","binding":"flag","default":true}
+            ],"needs":[
+                {"verb":"data.kv.read","scope":{"kind":"fixed",
+                 "scope":{"kind":"name","value":"enabled"}},
+                 "when":{"kind":"arg-equals","arg":"enabled","value":true},
+                 "why":"Read enabled data"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["run"];
+    let bound =
+        bind_operation_args(operation, &["--enabled=false".to_string()]).unwrap();
+    assert_eq!(bound.argv, ["--enabled=false"]);
+    assert_eq!(bound.values["enabled"], serde_json::json!(false));
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
+    assert_eq!(rebound, bound.values);
+    assert_eq!(
+        manifest.resolve_needs("run", &rebound).unwrap(),
+        [Vec::new()]
+    );
+}
+
+#[test]
+fn in_process_wild_need_rejects_typed_wildcard_authority() {
+    let manifest = Manifest::from_json(
+        r#"{"id":"wild","version":"1","name":"Wild",
+             "operations":{"dial":{"label":"Dial","needs":[
+               {"verb":"net.dial","scope":{"kind":"wild"},"why":"Dial"}
+             ]}}}"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["dial"];
+    let resolved = manifest.resolve_needs("dial", &BTreeMap::new()).unwrap();
+    let parent = CapSet::from_caps([Cap::new(Verb::NET_DIAL, Scope::host("**"))]);
+    assert!(constrained_operation_caps(
+        &parent,
+        true,
+        &operation.needs,
+        &resolved
+    )
+    .is_err());
+}
+
+#[test]
+fn trusted_email_provider_is_bound_before_capability_derivation() {
+    let credentials = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let _smtp = crate::test_env::TestEnvVarGuard::set("SMTP_HOST", "mail.example.test");
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"email","version":"0.1","name":"Email",
+            "operations":{"send":{"label":"Send","args":[
+                {"name":"body","kind":"text","required":true},
+                {"name":"provider","kind":"name","binding":"flag",
+                 "trusted_resolver":"email-provider"},
+                {"name":"host","kind":"host","binding":"flag",
+                 "trusted_resolver":"email-host"}
+            ],"needs":[{"verb":"secret.read","scope":{
+                "kind":"from-arg-map","arg":"provider","values":{
+                    "smtp":{"kind":"name","value":"default/SMTP_PASSWORD"},
+                    "gmail":{"kind":"name","value":"default/GOOGLE_ACCESS_TOKEN"}
+                }},"why":"Read provider credential"},
+                {"verb":"net.dial","scope":{"kind":"from-arg","arg":"host"},
+                 "why":"Connect to provider"}]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    let trusted = trusted_pre_dispatch_args("email", operation, &["hello".into()]).unwrap();
+    assert_eq!(
+        trusted,
+        ["hello", "--provider", "smtp", "--host", "mail.example.test"]
+    );
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    assert_eq!(bound.values["provider"], serde_json::json!("smtp"));
+    assert_eq!(bound.values["host"], serde_json::json!("mail.example.test"));
+    assert_eq!(bound.argv, trusted);
+
+    let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
+    assert_eq!(
+        resolved[0][0].scope,
+        Scope::name("default/SMTP_PASSWORD")
+    );
+    assert_eq!(resolved[1][0].scope, Scope::host("mail.example.test"));
+}
+
+#[test]
+fn local_calendar_resolution_is_identical_for_in_process_caps() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let app_dir = repository.join("apps/calendar");
+    let manifest = load_manifest(&app_dir).unwrap().unwrap();
+    let operation = &manifest.operations["today"];
+    let credentials = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
+    assert_eq!(trusted, ["--provider", "local"]);
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let resolved = manifest.resolve_needs("today", &bound.values).unwrap();
+
+    let mut parent = CapSet::new();
+    parent.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
+    parent.insert(Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN"),
+    ));
+    parent.insert(Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com")));
+    let caps =
+        constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
+    assert!(caps.covers(&Cap::new(
+        Verb::DATA_DB_READ,
+        Scope::name("calendar")
+    )));
+    assert!(!caps.covers(&Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN")
+    )));
+    assert!(!caps.covers(&Cap::new(
+        Verb::NET_DIAL,
+        Scope::host("www.googleapis.com")
+    )));
+
+    let namespace = credentials.path().join("default");
+    std::fs::create_dir_all(&namespace).unwrap();
+    std::fs::write(namespace.join("GOOGLE_ACCESS_TOKEN.json"), "{}").unwrap();
+    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
+    assert_eq!(trusted, ["--provider", "google"]);
+}
+
+#[test]
+fn ntfy_server_is_resolved_before_exact_host_capability() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    let _server =
+        crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "https://notify.example:8443");
+    let trusted =
+        trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
+    assert!(trusted
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://notify.example:8443"]));
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let needs = manifest.resolve_needs("send", &bound.values).unwrap();
+    assert!(needs
+        .into_iter()
+        .flatten()
+        .any(|cap| cap.verb == Verb::NET_DIAL
+            && cap.scope == Scope::host("notify.example:8443")));
+}
+
+#[test]
+fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
+    let _env = crate::test_env::lock_env();
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+    )
+    .unwrap();
+    let send = &manifest.operations["send"];
+    let status = &manifest.operations["status"];
+    let credentials = tempfile::tempdir().unwrap();
+    let process = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let _session = crate::test_env::TestSessionGuard::admin(process.path());
+    let _server_env = crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "");
+    let fallback = trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
+    assert!(fallback
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://ntfy.sh"]));
+    let fallback_bound = bind_operation_args(send, &fallback).unwrap();
+    let fallback_needs = manifest
+        .resolve_needs("send", &fallback_bound.values)
+        .unwrap();
+    assert_eq!(fallback_needs[0][0].scope, Scope::host("ntfy.sh:443"));
+    assert!(fallback_needs[3].is_empty());
+
+    crate::credential::run(
+        "store",
+        &[
+            "ntfy_server".into(),
+            "https://credential.example:9443".into(),
+        ],
+    )
+    .unwrap();
+
+    let from_credential =
+        trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
+    assert!(from_credential
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://credential.example:9443"]));
+
+    let explicit = trusted_pre_dispatch_args(
+        "gateway-ntfy",
+        send,
+        &[
+            "hello".into(),
+            "--server".into(),
+            "https://explicit.example:7443".into(),
+        ],
+    )
+    .unwrap();
+    assert!(explicit
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://explicit.example:7443"]));
+    assert!(!explicit.iter().any(|arg| arg == "https://credential.example:9443"));
+
+    let status_args = trusted_pre_dispatch_args("gateway-ntfy", status, &[]).unwrap();
+    assert_eq!(
+        status_args,
+        ["--server", "https://credential.example:9443"]
+    );
+}
+
+#[test]
+fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["authorize"];
+
+    let enabled = bind_operation_args(operation, &["1-2".into(), "on".into()]).unwrap();
+    assert!(!enabled.values.contains_key("confirm"));
+    assert!(bind_operation_args(
+        operation,
+        &["1-2".into(), "on".into(), "--confirm".into()]
+    )
+    .is_err());
+    assert!(bind_operation_args(operation, &["1-2".into(), "off".into()]).is_err());
+    assert!(bind_operation_args(
+        operation,
+        &["1-2".into(), "off".into(), "--confirm=false".into()]
+    )
+    .is_err());
+    let disabled = bind_operation_args(
+        operation,
+        &["1-2".into(), "off".into(), "--confirm".into()],
+    )
+    .unwrap();
+    assert_eq!(disabled.values["confirm"], serde_json::json!(true));
+}
+
+#[test]
+fn canonical_url_is_materialized_in_child_argv_before_authority() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/net/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["fetch"];
+    let bound =
+        bind_operation_args(operation, &["https://exam\u{ad}ple.com:/path".into()]).unwrap();
+    assert_eq!(
+        bound.values["url"],
+        serde_json::json!("https://example.com/path")
+    );
+    assert_eq!(bound.argv[0], "https://example.com/path");
+    let needs = manifest.resolve_needs("fetch", &bound.values).unwrap();
+    assert_eq!(needs[0][0].scope, Scope::host("example.com:443"));
+
+    let web = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/web/app.json")).unwrap(),
+    )
+    .unwrap();
+    let scrape = &web.operations["scrape"];
+    let bound = bind_operation_args(
+        scrape,
+        &[
+            "https://bücher.example/a".into(),
+            "https://example.com:/b".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        bound.values["urls"],
+        serde_json::json!([
+            "https://xn--bcher-kva.example/a",
+            "https://example.com/b"
+        ])
+    );
+    assert_eq!(
+        &bound.argv[..2],
+        [
+            "https://xn--bcher-kva.example/a",
+            "https://example.com/b"
+        ]
+    );
+}
+
+#[test]
+fn stdin_forwarding_requires_an_explicit_operation_contract() {
+    let app = tempfile::tempdir().unwrap();
+    std::fs::write(
+        app.path().join("app.json"),
+        r#"{
+            "id":"stdin","version":"0.1","name":"Stdin",
+            "operations":{
+                "pipe":{"label":"Pipe","stdin":true},
+                "closed":{"label":"Closed"}
+            }
+        }"#,
+    )
+    .unwrap();
+    assert!(operation_forwards_stdin(app.path(), "pipe").unwrap());
+    assert!(!operation_forwards_stdin(app.path(), "closed").unwrap());
+}
+
+#[cfg(unix)]
+#[test]
+fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
+    let _env = crate::test_env::lock_env();
+    let state = tempfile::tempdir().unwrap();
+    let _session = crate::test_env::TestSessionGuard::admin(state.path());
+    let _local_sessions =
+        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let runner = state.path().join("claw-app-runner");
+    std::fs::write(
+        &runner,
+        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _runner = crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", &runner);
+
+    let python = state.path().join("python-app");
+    std::fs::create_dir_all(&python).unwrap();
+    std::fs::write(
+        python.join("app.json"),
+        r#"{"id":"python-app","version":"1","name":"Pipe",
+             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        python.join("main.py"),
+        "import sys\ndef run(command, args):\n    return {'input': sys.stdin.read()}\n",
+    )
+    .unwrap();
+    let state_text = state.path().to_string_lossy();
+    let output = run_python_app_with_stdin(
+        &python,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+        Some(b"python input".to_vec()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["input"],
+        "python input"
+    );
+    let closed = run_python_app(
+        &python,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&closed).unwrap()["input"],
+        ""
+    );
+
+    let shell = state.path().join("shell-app");
+    std::fs::create_dir_all(&shell).unwrap();
+    std::fs::write(
+        shell.join("app.json"),
+        r#"{"id":"shell-app","version":"1","name":"Pipe","runtime":"shell",
+             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+    )
+    .unwrap();
+    let entry = shell.join("main.sh");
+    std::fs::write(
+        &entry,
+        "#!/bin/sh\npayload=$(cat)\nprintf '{\"input\":\"%s\"}\\n' \"$payload\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = run_app_with_stdin(
+        &shell,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+        Some(b"shell input".to_vec()),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["input"],
+        "shell input"
+    );
+}
+
+#[test]
+fn bundled_lone_limits_bind_before_optional_selectors() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| {
+                path.join(component)
+            })
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+
+    let events = load(&["event-center"]);
+    let recent = &events.operations["recent"];
+    let lone_limit = bind_operation_args(recent, &["25".into()]).unwrap();
+    assert_eq!(lone_limit.values["limit"], serde_json::json!(25));
+    assert_eq!(lone_limit.argv, ["25"]);
+    let selected = bind_operation_args(
+        recent,
+        &["--source".into(), "security".into()],
+    )
+    .unwrap();
+    assert_eq!(selected.values["source"], serde_json::json!("security"));
+    assert_eq!(selected.values["limit"], serde_json::json!(100));
+    assert_eq!(selected.argv, ["100", "--source", "security"]);
+
+    let containers = load(&["container-manager"]);
+    let logs = &containers.operations["logs"];
+    let docker = bind_operation_args(
+        logs,
+        &["docker".into(), "web".into(), "50".into()],
+    )
+    .unwrap();
+    assert_eq!(docker.values["lines"], serde_json::json!(50));
+    assert_eq!(docker.argv, ["docker", "web", "50"]);
+    let containerd = bind_operation_args(
+        logs,
+        &[
+            "containerd".into(),
+            "web".into(),
+            "25".into(),
+            "--namespace".into(),
+            "default".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(containerd.values["lines"], serde_json::json!(25));
+    assert_eq!(containerd.values["namespace"], serde_json::json!("default"));
+    assert_eq!(
+        containerd.argv,
+        ["containerd", "web", "25", "--namespace", "default"]
+    );
+
+    let net = load(&["net"]);
+    let output = effective_app_home().join("download.bin");
+    let args = vec![
+        "https://example.test/download.bin".to_string(),
+        output.to_string_lossy().into_owned(),
+    ];
+    let download = bind_operation_args(&net.operations["download"], &args).unwrap();
+    assert_eq!(download.argv, args);
+    assert_eq!(
+        download.values["output"],
+        serde_json::json!(output.to_string_lossy())
+    );
+}
+
+#[test]
+fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| path.join(component))
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    for (app, alias) in [
+        ("googlechat", "recipient"),
+        ("mattermost", "recipient"),
+        ("teams", "recipient"),
+        ("webhook", "target"),
+        ("ntfy", "topic"),
+    ] {
+        let manifest = load(&["gateway", app]);
+        let operation = &manifest.operations["send"];
+        let legacy =
+            bind_operation_args(operation, &["destination".into(), "hello".into()]).unwrap();
+        let canonical = bind_operation_args(
+            operation,
+            &[
+                "hello".into(),
+                format!("--{alias}"),
+                "destination".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(legacy.values, canonical.values, "{app}");
+        assert_eq!(legacy.argv, canonical.argv, "{app}");
+    }
+
+    let net = load(&["net"]);
+    let output = effective_app_home().join("alias.bin");
+    let url = "https://example.test/alias.bin".to_string();
+    let flagged = bind_operation_args(
+        &net.operations["download"],
+        &[
+            url.clone(),
+            "--output".into(),
+            output.to_string_lossy().into_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        flagged.argv,
+        [url, output.to_string_lossy().into_owned()]
+    );
+
+    let pkg = load(&["pkg"]);
+    let short = bind_operation_args(
+        &pkg.operations["search"],
+        &["editor".into(), "-n".into(), "3".into()],
+    )
+    .unwrap();
+    assert_eq!(short.argv, ["editor", "--limit", "3"]);
 }

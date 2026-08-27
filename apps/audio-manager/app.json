@@ -1,126 +1,290 @@
 {
   "id": "audio-manager",
   "version": "0.1.0",
-  "name": {"en": "Audio Manager"},
-  "summary": {"en": "Control PipeWire and WirePlumber volume, mute, defaults, routes, and profiles"},
+  "name": {
+    "en": "Audio Manager"
+  },
+  "summary": {
+    "en": "Control PipeWire and WirePlumber volume, mute, defaults, routes, and profiles"
+  },
   "icon": "🔊",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "Inspect PipeWire audio state"},
+      "label": {
+        "en": "Inspect PipeWire audio state"
+      },
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "audio"}},
-          "why": {"en": "Read audio devices, nodes, streams, defaults, and volume state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "audio"
+            }
+          },
+          "why": {
+            "en": "Read audio devices, nodes, streams, defaults, and volume state."
+          }
         }
       ]
     },
     "output-volume": {
-      "label": {"en": "Set output volume"},
-      "args": [{"name": "percent", "kind": "number", "required": true}],
+      "label": {
+        "en": "Set output volume"
+      },
+      "args": [
+        {
+          "name": "percent",
+          "kind": "integer",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.audio",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "output"}},
-          "why": {"en": "Change speaker or headphone volume."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "output"
+            }
+          },
+          "why": {
+            "en": "Change speaker or headphone volume."
+          }
         }
       ]
     },
     "input-volume": {
-      "label": {"en": "Set microphone volume"},
-      "args": [{"name": "percent", "kind": "number", "required": true}],
+      "label": {
+        "en": "Set microphone volume"
+      },
+      "args": [
+        {
+          "name": "percent",
+          "kind": "integer",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.microphone",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "input"}},
-          "why": {"en": "Change microphone input volume."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "input"
+            }
+          },
+          "why": {
+            "en": "Change microphone input volume."
+          }
         }
       ]
     },
     "output-mute": {
-      "label": {"en": "Mute or unmute output"},
-      "args": [{"name": "state", "kind": "name", "required": true}],
+      "label": {
+        "en": "Mute or unmute output"
+      },
+      "args": [
+        {
+          "name": "state",
+          "kind": "name",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.audio",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "output"}},
-          "why": {"en": "Change speaker or headphone mute state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "output"
+            }
+          },
+          "why": {
+            "en": "Change speaker or headphone mute state."
+          }
         }
       ]
     },
     "input-mute": {
-      "label": {"en": "Mute or unmute microphone"},
-      "args": [{"name": "state", "kind": "name", "required": true}],
+      "label": {
+        "en": "Mute or unmute microphone"
+      },
+      "args": [
+        {
+          "name": "state",
+          "kind": "name",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.microphone",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "input"}},
-          "why": {"en": "Change microphone mute state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "input"
+            }
+          },
+          "why": {
+            "en": "Change microphone mute state."
+          }
         }
       ]
     },
     "output-default": {
-      "label": {"en": "Set default output node"},
-      "args": [{"name": "node_id", "kind": "number", "required": true}],
+      "label": {
+        "en": "Set default output node"
+      },
+      "args": [
+        {
+          "name": "node_id",
+          "kind": "integer",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.media-route",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "pipewire"}},
-          "why": {"en": "Change a default target in the PipeWire media graph."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "pipewire"
+            }
+          },
+          "why": {
+            "en": "Change a default target in the PipeWire media graph."
+          }
         }
       ]
     },
     "input-default": {
-      "label": {"en": "Set default input node"},
-      "args": [{"name": "node_id", "kind": "number", "required": true}],
+      "label": {
+        "en": "Set default input node"
+      },
+      "args": [
+        {
+          "name": "node_id",
+          "kind": "integer",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.media-route",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "pipewire"}},
-          "why": {"en": "Change a default target in the PipeWire media graph."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "pipewire"
+            }
+          },
+          "why": {
+            "en": "Change a default target in the PipeWire media graph."
+          }
         }
       ]
     },
     "output-route": {
-      "label": {"en": "Set an output node route"},
+      "label": {
+        "en": "Set an output node route"
+      },
       "args": [
-        {"name": "node_id", "kind": "number", "required": true},
-        {"name": "route_index", "kind": "number", "required": true}
+        {
+          "name": "node_id",
+          "kind": "integer",
+          "required": true
+        },
+        {
+          "name": "route_index",
+          "kind": "integer",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.media-route",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "pipewire"}},
-          "why": {"en": "Change a route in the PipeWire media graph."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "pipewire"
+            }
+          },
+          "why": {
+            "en": "Change a route in the PipeWire media graph."
+          }
         }
       ]
     },
     "input-route": {
-      "label": {"en": "Set an input node route"},
+      "label": {
+        "en": "Set an input node route"
+      },
       "args": [
-        {"name": "node_id", "kind": "number", "required": true},
-        {"name": "route_index", "kind": "number", "required": true}
+        {
+          "name": "node_id",
+          "kind": "integer",
+          "required": true
+        },
+        {
+          "name": "route_index",
+          "kind": "integer",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.media-route",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "pipewire"}},
-          "why": {"en": "Change a route in the PipeWire media graph."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "pipewire"
+            }
+          },
+          "why": {
+            "en": "Change a route in the PipeWire media graph."
+          }
         }
       ]
     },
     "profile": {
-      "label": {"en": "Set an audio device profile"},
+      "label": {
+        "en": "Set an audio device profile"
+      },
       "args": [
-        {"name": "device_id", "kind": "number", "required": true},
-        {"name": "profile_index", "kind": "number", "required": true}
+        {
+          "name": "device_id",
+          "kind": "integer",
+          "required": true
+        },
+        {
+          "name": "profile_index",
+          "kind": "integer",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.media-route",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "pipewire"}},
-          "why": {"en": "Change a device profile in the PipeWire media graph."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "pipewire"
+            }
+          },
+          "why": {
+            "en": "Change a device profile in the PipeWire media graph."
+          }
         }
       ]
     }

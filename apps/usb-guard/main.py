@@ -62,8 +62,8 @@ def _broker(action, device=None, state=None, rule_id=None, token=None, confirm=F
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"confirm"})
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -93,14 +93,3 @@ def run(command, args):
         policy.require("device.usb", name="control")
         return _broker(command, token=args[0].lower(), confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect USB devices and managed policy", "parameters": []},
-        "authorize": {"description": "Authorize/deauthorize a current device", "parameters": []},
-        "block": {"description": "Persistently block a serial-bearing non-hub device", "parameters": []},
-        "unblock": {"description": "Remove one persistent block rule", "parameters": []},
-        "eject": {"description": "Safely power off USB block disks", "parameters": []},
-        "restore": {"description": "Restore a previous block policy", "parameters": []},
-    }

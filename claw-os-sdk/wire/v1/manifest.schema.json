@@ -40,7 +40,28 @@
       "properties": {
         "label": { "$ref": "#/$defs/localizedText" },
         "summary": { "$ref": "#/$defs/localizedText" },
-        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input parameters; order is significant for the UI." },
+        "stdin": { "type": "boolean", "description": "Forward piped caller input. Interactive stdin is always closed." },
+        "args": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/arg" },
+          "description": "Declared input parameters; order is significant for the UI.",
+          "not": {
+            "anyOf": [
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+                ]
+              },
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
+                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
+                ]
+              }
+            ]
+          }
+        },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
       }
     },
@@ -48,12 +69,183 @@
       "type": "object",
       "required": ["name", "kind"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "not": { "required": ["default", "default_from"] }
+        },
+        {
+          "if": { "properties": { "required": { "const": true } }, "required": ["required"] },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "required": ["required_when"] },
+          "then": {
+            "properties": {
+              "required": { "const": false },
+              "repeatable": { "const": false }
+            },
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] },
+                { "required": ["trusted_resolver"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["path", "host", "name", "text"] } }, "required": ["kind"] },
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+            "choices": { "items": { "type": "string" } }
+          } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "number" } }, "required": ["kind"] },
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "number" }, { "type": "array", "items": { "type": "number" } }] },
+            "choices": { "items": { "type": "number" } }
+          } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "integer" } }, "required": ["kind"] },
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "integer" }, { "type": "array", "items": { "type": "integer" } }] },
+            "choices": { "items": { "type": "integer" } }
+          } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "bool" } }, "required": ["kind"] },
+          "then": { "properties": {
+            "default": { "type": "boolean" },
+            "choices": { "items": { "type": "boolean" } }
+          } }
+        },
+        {
+          "if": { "properties": { "repeatable": { "const": true } }, "required": ["repeatable"] },
+          "then": {
+            "properties": {
+              "default": { "type": "array" },
+              "kind": { "not": { "const": "bool" } }
+            },
+            "not": { "anyOf": [{ "required": ["default_from"] }, { "required": ["trusted_resolver"] }] }
+          },
+          "else": { "properties": { "default": { "not": { "type": "array" } } } }
+        },
+        {
+          "if": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] },
+          "then": {
+            "properties": {
+              "binding": { "const": "flag" },
+              "required": { "const": false },
+              "repeatable": { "const": false },
+              "kind": { "not": { "const": "bool" } }
+            },
+            "required": ["binding"]
+          }
+        },
+        {
+          "if": { "required": ["trusted_resolver"] },
+          "then": {
+            "properties": {
+              "binding": { "const": "flag" },
+              "required": { "const": false }
+            },
+            "required": ["binding"],
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "trusted_resolver": { "const": "email-host" } }, "required": ["trusted_resolver"] },
+          "then": { "properties": { "name": { "const": "host" }, "kind": { "const": "host" } } },
+          "else": {
+            "if": { "properties": { "trusted_resolver": { "const": "ntfy-server" } }, "required": ["trusted_resolver"] },
+            "then": { "properties": { "name": { "const": "server" }, "kind": { "const": "text" } } },
+            "else": {
+              "if": { "required": ["trusted_resolver"] },
+              "then": { "properties": { "name": { "const": "provider" }, "kind": { "const": "name" } } }
+            }
+          }
+        }
+      ],
       "properties": {
         "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
-        "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/bool cannot." },
+        "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
+        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
         "required": { "type": "boolean" },
-        "default": { "description": "Optional default value (any JSON type)." },
+        "required_when": { "$ref": "#/$defs/needCondition", "description": "Require and accept this argument only when an earlier declared argument satisfies the condition." },
+        "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
+        "aliases": { "type": "array", "items": { "type": "string", "pattern": "^(-[A-Za-z0-9]|--[a-z][a-z0-9-]*)$" }, "uniqueItems": true, "description": "Additional short or long option spellings for the same effective argument." },
+        "positional_alias": { "type": "boolean", "description": "Accept this optional flag argument as a surplus leading positional before the canonical positional grammar." },
+        "choices": { "type": "array", "uniqueItems": true, "description": "Optional closed set of accepted scalar values." },
+        "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
+        "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
+        "trusted_resolver": { "type": "string", "enum": ["email-provider", "email-host", "calendar-provider", "ntfy-server"], "description": "Trusted pre-dispatch resolver, restricted by the kernel to its matching bundled app." },
         "label": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "positionalArg": {
+      "anyOf": [
+        {
+          "properties": { "binding": { "const": "positional" } },
+          "required": ["binding"]
+        },
+        {
+          "properties": { "kind": { "not": { "const": "bool" } } },
+          "not": { "required": ["binding"] }
+        }
+      ]
+    },
+    "optionalPositionalGap": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        {
+          "anyOf": [
+            { "properties": { "required": { "const": false } }, "required": ["required"] },
+            { "not": { "required": ["required"] } }
+          ]
+        },
+        { "not": { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] } }
+      ]
+    },
+    "optionalPositional": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        {
+          "anyOf": [
+            { "properties": { "required": { "const": false } }, "required": ["required"] },
+            { "not": { "required": ["required"] } }
+          ]
+        }
+      ]
+    },
+    "defaultedPositional": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] }
+      ]
+    },
+    "argDefaultBinding": {
+      "type": "object",
+      "required": ["arg"],
+      "additionalProperties": false,
+      "properties": {
+        "arg": { "type": "string", "description": "Earlier declared string argument used as input." },
+        "transform": { "type": "string", "enum": ["identity", "url-path-basename"], "default": "identity" },
+        "prefix": { "type": "string", "default": "" },
+        "fallback": { "type": "string", "description": "Safe fallback when the transform produces no value." }
       }
     },
     "need": {
@@ -61,41 +253,106 @@
       "description": "A single capability request: verb + scope binding + human reason.",
       "required": ["verb", "scope", "why"],
       "additionalProperties": true,
+      "not": {
+        "properties": { "verb": { "const": "ai.bypass" } },
+        "required": ["verb"]
+      },
       "properties": {
         "verb": {
           "type": "string",
           "description": "Capability verb. Must be a verb the kernel recognises (core/src/caps/verb.rs).",
           "enum": [
             "fs.read", "fs.write", "fs.delete", "fs.exec", "fs.watch", "fs.meta",
-            "net.dial", "net.listen", "net.raw", "net.resolve",
+            "net.dial", "net.listen", "net.raw", "net.resolve", "net.manage", "net.firewall",
             "proc.spawn", "proc.signal", "proc.observe",
-            "sys.observe", "sys.service", "sys.package", "sys.mount", "sys.time", "sys.power", "sys.kernel",
+            "sys.observe", "sys.crash", "sys.container", "sys.config", "sys.events", "sys.identity", "sys.security", "sys.storage",
+            "sys.service", "sys.package", "sys.mount", "sys.snapshot", "sys.time", "sys.power", "sys.kernel",
             "secret.read", "secret.write", "secret.grant",
             "agent.spawn", "agent.invoke", "agent.observe", "agent.delegate",
-            "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write",
+            "data.kv.read", "data.kv.write", "data.kv.delete", "data.db.read", "data.db.write", "data.log.read", "data.log.write", "data.inbox.read", "data.inbox.write", "data.backup",
             "memory.write", "memory.read",
             "ipc.publish", "ipc.subscribe", "ipc.invoke",
-            "ui.notify", "ui.prompt", "ui.window", "ui.input",
+            "ui.notify", "ui.prompt", "ui.window", "ui.input", "ui.accessibility",
             "clipboard.read", "clipboard.write",
-            "device.audio", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
+            "device.audio", "device.bluetooth", "device.media-route", "device.printer", "device.display", "device.camera", "device.microphone", "device.location", "device.sensor", "device.usb",
             "time.cron", "time.delay",
-            "ai.chat", "ai.chat.untrusted",
-            "desktop.launch",
+            "ai.chat", "ai.chat.untrusted", "ai.embed", "ai.image.generate", "ai.image.analyze", "ai.audio.tts", "ai.audio.stt", "ai.vision.analyze", "ai.video.generate", "ai.video.analyze", "ai.bypass",
+            "desktop.launch", "desktop.window",
             "browser.tabs.read", "browser.nav", "browser.dom.read", "browser.dom.write", "browser.input.secret", "browser.eval"
           ]
         },
         "scope": { "$ref": "#/$defs/scopeBinding" },
+        "when": { "$ref": "#/$defs/needCondition", "description": "Explicit condition under which this capability is required." },
         "why": { "$ref": "#/$defs/localizedText", "description": "Plain-language reason shown in the approval dialog." }
+      }
+    },
+    "needCondition": {
+      "type": "object",
+      "required": ["kind", "arg"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "arg-present" } }, "required": ["kind"] },
+          "then": { "not": { "required": ["value"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["arg-equals", "arg-not-equals"] } }, "required": ["kind"] },
+          "then": { "required": ["value"] }
+        }
+      ],
+      "properties": {
+        "kind": { "type": "string", "enum": ["arg-present", "arg-equals", "arg-not-equals"] },
+        "arg": { "type": "string" },
+        "value": { "not": { "type": "null" } }
       }
     },
     "scopeBinding": {
       "type": "object",
       "description": "How an operation's scope is determined at invocation time. kind=from-arg reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an explicit wildcard (no implicit '*').",
       "required": ["kind"],
-      "additionalProperties": true,
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "from-arg" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "from-arg-map" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg", "values"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "from-arg-or-wild" } }, "required": ["kind"] },
+          "then": {
+            "required": ["arg", "wild_when"],
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["transform"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "fixed" } }, "required": ["kind"] },
+          "then": {
+            "required": ["scope"],
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "wild" } }, "required": ["kind"] },
+          "then": {
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
+          }
+        }
+      ],
       "properties": {
-        "kind": { "type": "string", "enum": ["from-arg", "fixed", "wild"] },
+        "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild"] },
         "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
+        "transform": { "type": "string", "enum": ["identity", "parent", "url-host"], "description": "Safe transformation applied after binding a scope source." },
+        "values": { "type": "object", "additionalProperties": { "$ref": "#/$defs/scope" }, "description": "Explicit argument-value to scope mapping for kind=from-arg-map." },
+        "wild_when": { "type": "string", "description": "Boolean argument that selects wildcard scope for kind=from-arg-or-wild." },
         "scope": { "$ref": "#/$defs/scope", "description": "Hard-coded scope (kind=fixed)." }
       }
     },
@@ -104,6 +361,21 @@
       "description": "A concrete capability scope. value is a glob for path/host/name, the self-reference string for self-ref, and absent for wild.",
       "required": ["kind"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "path" } }, "required": ["kind"] },
+          "then": {
+            "required": ["value"],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[^$]*$",
+                "description": "Absolute or ~/ path glob; environment placeholders are not expanded."
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "kind": { "type": "string", "enum": ["path", "host", "name", "self-ref", "wild"] },
         "value": { "type": "string" }
@@ -146,7 +418,36 @@
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
         "summary": { "$ref": "#/$defs/localizedText" },
-        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" } },
+        "args": {
+          "type": "array",
+          "not": {
+            "anyOf": [
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+                ]
+              },
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
+                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
+                ]
+              }
+            ]
+          },
+          "items": {
+            "$ref": "#/$defs/arg",
+            "not": {
+              "anyOf": [
+                { "required": ["default_from"] },
+                { "required": ["trusted_resolver"] },
+                { "required": ["aliases"] },
+                { "required": ["positional_alias"] }
+              ]
+            }
+          }
+        },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
       }
     },

@@ -62,68 +62,6 @@ _BODY_CHARSET = email_charset.Charset("utf-8")
 _BODY_CHARSET.body_encoding = email_charset.QP
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "SMTP email gateway. ``send`` delivers one-shot text emails. "
-            "``start``/``stop`` (IMAP polling) are not yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Connect to IMAP and stream inbound mail (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-email start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-email stop",
-            },
-            "status": {
-                "description": "Show running state (always 'stopped' until IMAP polling lands)",
-                "parameters": [],
-                "example": "cos app gateway-email status",
-            },
-            "send": {
-                "description": "Send a one-shot text email",
-                "parameters": [
-                    {
-                        "name": "to",
-                        "type": "string",
-                        "required": True,
-                        "description": "Recipient address (single, e.g. user@example.com)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "subject",
-                        "type": "string",
-                        "required": True,
-                        "description": "Subject line",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "body",
-                        "type": "string",
-                        "required": True,
-                        "description": "Plain-text body (truncated to 200 KB)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "cc",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated Cc addresses",
-                        "kind": "named",
-                    },
-                ],
-                "example": "cos app gateway-email send 'user@example.com' 'hello' 'body text'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -289,19 +227,6 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
     }
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "IMAP polling loop still pending. "
-            "Use ``send <to> <subject> <body>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     cfg, err = _load_config()
     return {
@@ -321,8 +246,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         if isinstance(args, list):
             to = args[0] if len(args) > 0 else ""
@@ -346,8 +272,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

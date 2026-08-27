@@ -88,23 +88,52 @@ fn registry_name_replaces_dots_with_underscores() {
 
 #[test]
 fn build_schema_marks_required_args() {
-    use crate::caps::manifest::{Arg, ArgKind};
+    use crate::caps::manifest::{Arg, ArgBinding, ArgKind};
     use crate::i18n::LocalizedText;
     let args = vec![
         Arg {
             name: "key".into(),
             kind: ArgKind::Name,
+            binding: Some(ArgBinding::Positional),
             required: true,
+            required_when: None,
+            repeatable: false,
+            aliases: Vec::new(),
+            positional_alias: false,
+            choices: Vec::new(),
             default: None,
             default_from: None,
+            trusted_resolver: None,
+            label: LocalizedText::default(),
+        },
+        Arg {
+            name: "provider".into(),
+            kind: ArgKind::Name,
+            binding: Some(ArgBinding::Positional),
+            required: false,
+            required_when: None,
+            repeatable: true,
+            aliases: Vec::new(),
+            positional_alias: false,
+            choices: vec![serde_json::json!("a"), serde_json::json!("b")],
+            default: None,
+            default_from: None,
+            trusted_resolver: None,
             label: LocalizedText::default(),
         },
         Arg {
             name: "ttl".into(),
             kind: ArgKind::Number,
+            binding: Some(ArgBinding::Positional),
             required: false,
+            required_when: None,
+            repeatable: false,
+            aliases: Vec::new(),
+            positional_alias: false,
+            choices: Vec::new(),
             default: Some(serde_json::json!(60)),
             default_from: None,
+            trusted_resolver: None,
             label: LocalizedText::default(),
         },
     ];
@@ -116,8 +145,35 @@ fn build_schema_marks_required_args() {
         schema["properties"]["ttl"]["default"],
         serde_json::json!(60)
     );
+    assert_eq!(schema["properties"]["provider"]["type"], "array");
+    assert_eq!(
+        schema["properties"]["provider"]["items"]["enum"],
+        serde_json::json!(["a", "b"])
+    );
     assert_eq!(schema["properties"]["key"]["type"], "string");
     assert_eq!(schema["properties"]["ttl"]["type"], "number");
+}
+
+#[test]
+fn build_schema_exposes_conditional_requiredness() {
+    let args: Vec<crate::caps::manifest::Arg> =
+        serde_json::from_value(serde_json::json!([
+        {"name":"state","kind":"name","required":true},
+        {
+            "name":"confirm","kind":"bool","choices":[true],
+            "required_when":{"kind":"arg-equals","arg":"state","value":"off"}
+        }
+    ]))
+        .unwrap();
+    let schema = build_schema(&args);
+    assert_eq!(
+        schema["allOf"][0],
+        serde_json::json!({
+            "if":{"properties":{"state":{"const":"off"}},"required":["state"]},
+            "then":{"required":["confirm"]},
+            "else":{"not":{"required":["confirm"]}}
+        })
+    );
 }
 
 /// Spawn the real `apps/kv` server via [`open_session`], drive it

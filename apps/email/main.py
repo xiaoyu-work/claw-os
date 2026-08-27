@@ -103,35 +103,6 @@ def _outlook_auth_error(detail, status=None):
 
 
 # ---------------------------------------------------------------------------
-# Provider detection
-# ---------------------------------------------------------------------------
-
-def _detect_provider():
-    """Detect which email provider is configured, in priority order."""
-    if (
-        os.environ.get(GOOGLE_ACCESS_TOKEN)
-        or os.environ.get("GMAIL_ACCESS_TOKEN")
-        or os.environ.get("GOOGLE_OAUTH_TOKEN")
-    ):
-        return "gmail"
-    if os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN"):
-        return "outlook"
-    if os.environ.get("SMTP_HOST"):
-        return "smtp"
-    return None
-
-
-def _resolve_provider(requested):
-    """Return the provider to use, or an error dict if none available."""
-    if requested:
-        return requested
-    detected = _detect_provider()
-    if detected:
-        return detected
-    return None
-
-
-# ---------------------------------------------------------------------------
 # Argument parsers
 # ---------------------------------------------------------------------------
 
@@ -141,7 +112,8 @@ def _build_send_parser():
     p.add_argument("--subject", required=True)
     p.add_argument("--body", required=True)
     p.add_argument("--cc", default=None)
-    p.add_argument("--provider", default=None, choices=["smtp", "gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["smtp", "gmail", "outlook"])
+    p.add_argument("--host", default=None)
     return p
 
 
@@ -149,7 +121,8 @@ def _build_search_parser():
     p = argparse.ArgumentParser(prog="cos email search", add_help=False)
     p.add_argument("--query", required=True)
     p.add_argument("--max-results", type=int, default=10)
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
+    p.add_argument("--host", default=None)
     return p
 
 
@@ -157,14 +130,16 @@ def _build_list_parser():
     p = argparse.ArgumentParser(prog="cos email list", add_help=False)
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--unread", action="store_true")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
+    p.add_argument("--host", default=None)
     return p
 
 
 def _build_read_parser():
     p = argparse.ArgumentParser(prog="cos email read", add_help=False)
     p.add_argument("--id", required=True, dest="message_id")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
+    p.add_argument("--host", default=None)
     return p
 
 
@@ -202,9 +177,9 @@ _DRAFT_SYSTEMS = {
 # SMTP send
 # ---------------------------------------------------------------------------
 
-def _send_smtp(to, subject, body, cc=None):
+def _send_smtp(to, subject, body, cc=None, host=None):
     """Send an email via SMTP."""
-    host = os.environ.get("SMTP_HOST", "localhost")
+    host = host or os.environ.get("SMTP_HOST", "localhost")
     port = int(os.environ.get("SMTP_PORT", "587"))
     user = os.environ.get("SMTP_USER", "")
     password, _ = _credential_value("SMTP_PASSWORD")
@@ -618,28 +593,24 @@ def cmd_send(args):
     except SystemExit:
         return {"error": "missing required arguments: --to, --subject, --body"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set SMTP_HOST for SMTP, GOOGLE_ACCESS_TOKEN for Gmail, "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
+    host = opts.host or {
+        "smtp": os.environ.get("SMTP_HOST", "localhost"),
+        "gmail": GMAIL_API_HOST,
+        "outlook": OUTLOOK_API_HOST,
+    }[provider]
 
     if provider == "smtp":
-        smtp_host = os.environ.get("SMTP_HOST", "localhost")
         policy.require("secret.read", name="default/SMTP_PASSWORD")
-        policy.require("net.dial", host=smtp_host)
-        result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc)
+        policy.require("net.dial", host=host)
+        result = _send_smtp(opts.to, opts.subject, opts.body, cc=opts.cc, host=host)
     elif provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=GMAIL_API_HOST)
+        policy.require("net.dial", host=host)
         result = _send_gmail(opts.to, opts.subject, opts.body, cc=opts.cc)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=OUTLOOK_API_HOST)
+        policy.require("net.dial", host=host)
         result = _send_outlook(opts.to, opts.subject, opts.body, cc=opts.cc)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -656,25 +627,18 @@ def cmd_search(args):
     except SystemExit:
         return {"error": "missing required argument: --query"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
+    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
     if provider == "smtp":
         return {"error": "search requires gmail or outlook provider"}
 
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=GMAIL_API_HOST)
+        policy.require("net.dial", host=host)
         return _search_gmail(opts.query, opts.max_results)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=OUTLOOK_API_HOST)
+        policy.require("net.dial", host=host)
         return _search_outlook(opts.query, opts.max_results)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -687,25 +651,18 @@ def cmd_list(args):
     except SystemExit:
         return {"error": "invalid arguments for list command"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
+    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
     if provider == "smtp":
         return {"error": "list requires gmail or outlook provider"}
 
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=GMAIL_API_HOST)
+        policy.require("net.dial", host=host)
         return _list_gmail(opts.max_results, opts.unread)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=OUTLOOK_API_HOST)
+        policy.require("net.dial", host=host)
         return _list_outlook(opts.max_results, opts.unread)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -718,25 +675,18 @@ def cmd_read(args):
     except SystemExit:
         return {"error": "missing required argument: --id"}
 
-    provider = _resolve_provider(opts.provider)
-    if provider is None:
-        return {
-            "error": "no email provider configured",
-            "hint": (
-                "Set GOOGLE_ACCESS_TOKEN for Gmail "
-                "or MICROSOFT_ACCESS_TOKEN for Outlook"
-            ),
-        }
+    provider = opts.provider
+    host = opts.host or (GMAIL_API_HOST if provider == "gmail" else OUTLOOK_API_HOST)
     if provider == "smtp":
         return {"error": "read requires gmail or outlook provider"}
 
     if provider == "gmail":
         policy.require("secret.read", name="default/GOOGLE_ACCESS_TOKEN")
-        policy.require("net.dial", host=GMAIL_API_HOST)
+        policy.require("net.dial", host=host)
         return _read_gmail(opts.message_id)
     elif provider == "outlook":
         policy.require("secret.read", name="default/MICROSOFT_ACCESS_TOKEN")
-        policy.require("net.dial", host=OUTLOOK_API_HOST)
+        policy.require("net.dial", host=host)
         return _read_outlook(opts.message_id)
     else:
         return {"error": f"unknown provider: {provider}"}
@@ -802,60 +752,10 @@ def cmd_draft(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "send": {
-            "description": "Send an email via SMTP, Gmail, or Outlook",
-            "parameters": [
-                {"name": "--to", "type": "string", "required": True, "description": "Recipient email address", "kind": "flag"},
-                {"name": "--subject", "type": "string", "required": True, "description": "Email subject line", "kind": "flag"},
-                {"name": "--body", "type": "string", "required": True, "description": "Email body text", "kind": "flag"},
-                {"name": "--cc", "type": "string", "required": False, "description": "CC recipient email address", "kind": "flag"},
-                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: smtp, gmail, or outlook (auto-detected if omitted)", "kind": "flag"},
-            ],
-            "example": "cos app email send --to user@example.com --subject 'Hello' --body 'Hi there'",
-        },
-        "search": {
-            "description": "Search emails by query (requires Gmail or Outlook provider)",
-            "parameters": [
-                {"name": "--query", "type": "string", "required": True, "description": "Search query string", "kind": "flag"},
-                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return", "kind": "flag", "default": 10},
-                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
-            ],
-            "example": "cos app email search --query 'from:boss@example.com' --max-results 5",
-        },
-        "list": {
-            "description": "List recent emails (requires Gmail or Outlook provider)",
-            "parameters": [
-                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum emails to return", "kind": "flag", "default": 10},
-                {"name": "--unread", "type": "boolean", "required": False, "description": "Show only unread emails", "kind": "flag", "default": False},
-                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
-            ],
-            "example": "cos app email list --max-results 20 --unread",
-        },
-        "read": {
-            "description": "Read a specific email by message ID (requires Gmail or Outlook provider)",
-            "parameters": [
-                {"name": "--id", "type": "string", "required": True, "description": "Message ID to read", "kind": "flag"},
-                {"name": "--provider", "type": "string", "required": False, "description": "Email provider: gmail or outlook", "kind": "flag"},
-            ],
-            "example": "cos app email read --id abc123def",
-        },
-        "draft": {
-            "description": "Draft an email reply via the AI gate. Pure text generation — does NOT send.",
-            "parameters": [
-                {"name": "--context", "type": "string", "required": True, "description": "The email thread or instruction to base the draft on", "kind": "flag"},
-                {"name": "--style", "type": "string", "required": False, "description": "Tone of the reply: formal, casual, or short", "kind": "flag", "default": "formal"},
-            ],
-            "example": "cos app email draft --context 'Thanks for the update — can you confirm the deadline?' --style formal",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_argparse_booleans
+    args = normalize_argparse_booleans(args, bool_flags={"unread"})
     handlers = {
         "send": cmd_send,
         "search": cmd_search,

@@ -1,138 +1,378 @@
 {
   "id": "bluetooth-manager",
   "version": "0.1.0",
-  "name": {"en": "Bluetooth Manager"},
-  "summary": {"en": "Discover, pair, connect, trust, forget, and power BlueZ devices"},
+  "name": {
+    "en": "Bluetooth Manager"
+  },
+  "summary": {
+    "en": "Discover, pair, connect, trust, forget, and power BlueZ devices"
+  },
   "icon": "ᛒ",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "List Bluetooth adapters and devices"},
+      "label": {
+        "en": "List Bluetooth adapters and devices"
+      },
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "bluetooth"}},
-          "why": {"en": "Read BlueZ adapter and device state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "bluetooth"
+            }
+          },
+          "why": {
+            "en": "Read BlueZ adapter and device state."
+          }
         }
-      ]
+      ],
+      "args": []
     },
     "power": {
-      "label": {"en": "Power a Bluetooth adapter on or off"},
+      "label": {
+        "en": "Power a Bluetooth adapter on or off"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "state", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "state",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Change global Bluetooth adapter power state."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Change global Bluetooth adapter power state."
+          }
         }
       ]
     },
     "scan": {
-      "label": {"en": "Scan for nearby Bluetooth devices"},
+      "label": {
+        "en": "Scan for nearby Bluetooth devices"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "seconds", "kind": "number", "required": false, "default": 10}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "seconds",
+          "kind": "integer",
+          "required": false,
+          "default": 10
+        }
       ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Temporarily enable discovery on a Bluetooth adapter."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Temporarily enable discovery on a Bluetooth adapter."
+          }
         }
       ]
     },
     "pair": {
-      "label": {"en": "Pair a Bluetooth device"},
+      "label": {
+        "en": "Pair a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Start BlueZ pairing; the desktop agent may request confirmation or a passkey."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Start BlueZ pairing; the desktop agent may request confirmation or a passkey."
+          }
         }
       ]
     },
     "pair-status": {
-      "label": {"en": "Check a Bluetooth pairing session"},
-      "args": [{"name": "pairing_id", "kind": "name", "required": true}],
+      "label": {
+        "en": "Check a Bluetooth pairing session"
+      },
+      "args": [
+        {
+          "name": "pairing_id",
+          "kind": "name",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Read the state and pending prompt of an active pairing session."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Read the state and pending prompt of an active pairing session."
+          }
         }
       ]
     },
     "pair-respond": {
-      "label": {"en": "Respond to a Bluetooth pairing prompt"},
+      "label": {
+        "en": "Respond to a Bluetooth pairing prompt"
+      },
       "args": [
-        {"name": "pairing_id", "kind": "name", "required": true},
-        {"name": "response", "kind": "text", "required": true}
+        {
+          "name": "pairing_id",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "response",
+          "kind": "text",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Confirm, reject, or provide the PIN/passkey requested by BlueZ."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Confirm, reject, or provide the PIN/passkey requested by BlueZ."
+          }
         }
       ]
     },
     "pair-cancel": {
-      "label": {"en": "Cancel a Bluetooth pairing session"},
-      "args": [{"name": "pairing_id", "kind": "name", "required": true}],
+      "label": {
+        "en": "Cancel a Bluetooth pairing session"
+      },
+      "args": [
+        {
+          "name": "pairing_id",
+          "kind": "name",
+          "required": true
+        }
+      ],
       "needs": [
         {
           "verb": "device.bluetooth",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}},
-          "why": {"en": "Cancel the selected active BlueZ pairing transaction."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Cancel the selected active BlueZ pairing transaction."
+          }
         }
       ]
     },
     "connect": {
-      "label": {"en": "Connect a Bluetooth device"},
+      "label": {
+        "en": "Connect a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
-      "needs": [{"verb": "device.bluetooth", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Connect the selected Bluetooth device."}}]
+      "needs": [
+        {
+          "verb": "device.bluetooth",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Connect the selected Bluetooth device."
+          }
+        }
+      ]
     },
     "disconnect": {
-      "label": {"en": "Disconnect a Bluetooth device"},
+      "label": {
+        "en": "Disconnect a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
-      "needs": [{"verb": "device.bluetooth", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Disconnect the selected Bluetooth device."}}]
+      "needs": [
+        {
+          "verb": "device.bluetooth",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Disconnect the selected Bluetooth device."
+          }
+        }
+      ]
     },
     "trust": {
-      "label": {"en": "Trust a Bluetooth device"},
+      "label": {
+        "en": "Trust a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
-      "needs": [{"verb": "device.bluetooth", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Allow future automatic connections from this device."}}]
+      "needs": [
+        {
+          "verb": "device.bluetooth",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Allow future automatic connections from this device."
+          }
+        }
+      ]
     },
     "untrust": {
-      "label": {"en": "Remove trust from a Bluetooth device"},
+      "label": {
+        "en": "Remove trust from a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
-      "needs": [{"verb": "device.bluetooth", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Disable trusted automatic connections for this device."}}]
+      "needs": [
+        {
+          "verb": "device.bluetooth",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Disable trusted automatic connections for this device."
+          }
+        }
+      ]
     },
     "forget": {
-      "label": {"en": "Forget a Bluetooth device"},
+      "label": {
+        "en": "Forget a Bluetooth device"
+      },
       "args": [
-        {"name": "adapter", "kind": "name", "required": true},
-        {"name": "device", "kind": "name", "required": true}
+        {
+          "name": "adapter",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "device",
+          "kind": "name",
+          "required": true
+        }
       ],
-      "needs": [{"verb": "device.bluetooth", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "control"}}, "why": {"en": "Remove pairing and saved state for this device."}}]
+      "needs": [
+        {
+          "verb": "device.bluetooth",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "control"
+            }
+          },
+          "why": {
+            "en": "Remove pairing and saved state for this device."
+          }
+        }
+      ]
     }
   }
 }

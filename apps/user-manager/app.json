@@ -1,22 +1,401 @@
 {
   "id": "user-manager",
   "version": "0.1.0",
-  "name": {"en": "User Manager"},
-  "summary": {"en": "Manage regular local users, groups, passwords, shells, and memberships with rollback"},
+  "name": {
+    "en": "User Manager"
+  },
+  "summary": {
+    "en": "Manage regular local users, groups, passwords, shells, and memberships with rollback"
+  },
   "icon": "👤",
   "runtime": "python",
   "operations": {
-    "status": {"label": {"en": "List local users and groups"}, "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "identities"}}, "why": {"en": "Read local passwd/group state without password hashes."}}]},
-    "create-user": {"label": {"en": "Create a regular local user"}, "args": [{"name": "user", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Create a home-backed regular user and private primary group."}}]},
-    "delete-user": {"label": {"en": "Delete a regular user account"}, "args": [{"name": "user", "kind": "name", "required": true}, {"name": "--confirm", "kind": "bool", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Delete the account while deliberately retaining its home directory."}}]},
-    "lock-user": {"label": {"en": "Lock a user password"}, "args": [{"name": "user", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Lock password authentication for this regular user."}}]},
-    "unlock-user": {"label": {"en": "Unlock a user password"}, "args": [{"name": "user", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Unlock the existing password hash for this regular user."}}]},
-    "set-shell": {"label": {"en": "Set a user's login shell"}, "args": [{"name": "user", "kind": "name", "required": true}, {"name": "shell", "kind": "path", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Change the user's shell to one listed in /etc/shells."}}]},
-    "set-password": {"label": {"en": "Set a user password from a credential"}, "args": [{"name": "user", "kind": "name", "required": true}, {"name": "credential", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Replace the local password hash."}}, {"verb": "secret.read", "scope": {"kind": "from-arg", "arg": "credential"}, "why": {"en": "Read the password without placing plaintext in argv."}}]},
-    "create-group": {"label": {"en": "Create a regular group"}, "args": [{"name": "group", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Create a regular local group."}}]},
-    "delete-group": {"label": {"en": "Delete a regular group"}, "args": [{"name": "group", "kind": "name", "required": true}, {"name": "--confirm", "kind": "bool", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Delete a non-system group with no group admins/password."}}]},
-    "add-to-group": {"label": {"en": "Add a user to a group"}, "args": [{"name": "user", "kind": "name", "required": true}, {"name": "group", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Grant this supplementary group membership."}}]},
-    "remove-from-group": {"label": {"en": "Remove a user from a group"}, "args": [{"name": "user", "kind": "name", "required": true}, {"name": "group", "kind": "name", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Remove this supplementary group membership."}}]},
-    "restore": {"label": {"en": "Restore an identity backup"}, "args": [{"name": "backup_token", "kind": "name", "required": true}, {"name": "--confirm", "kind": "bool", "required": true}], "needs": [{"verb": "sys.identity", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "manage"}}, "why": {"en": "Restore the previous exact identity state if no newer change exists."}}]}
+    "status": {
+      "label": {
+        "en": "List local users and groups"
+      },
+      "needs": [
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "identities"
+            }
+          },
+          "why": {
+            "en": "Read local passwd/group state without password hashes."
+          }
+        }
+      ],
+      "args": []
+    },
+    "create-user": {
+      "label": {
+        "en": "Create a regular local user"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "groups",
+          "kind": "text",
+          "binding": "flag",
+          "required": false
+        },
+        {
+          "name": "full-name",
+          "kind": "text",
+          "binding": "flag",
+          "required": false
+        },
+        {
+          "name": "shell",
+          "kind": "path",
+          "binding": "flag",
+          "required": false
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Create a home-backed regular user and private primary group."
+          }
+        }
+      ]
+    },
+    "delete-user": {
+      "label": {
+        "en": "Delete a regular user account"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag",
+          "choices": [true]
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Delete the account while deliberately retaining its home directory."
+          }
+        }
+      ]
+    },
+    "lock-user": {
+      "label": {
+        "en": "Lock a user password"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Lock password authentication for this regular user."
+          }
+        }
+      ]
+    },
+    "unlock-user": {
+      "label": {
+        "en": "Unlock a user password"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Unlock the existing password hash for this regular user."
+          }
+        }
+      ]
+    },
+    "set-shell": {
+      "label": {
+        "en": "Set a user's login shell"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "shell",
+          "kind": "path",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Change the user's shell to one listed in /etc/shells."
+          }
+        }
+      ]
+    },
+    "set-password": {
+      "label": {
+        "en": "Set a user password from a credential"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "credential",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Replace the local password hash."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "credential"
+          },
+          "why": {
+            "en": "Read the password without placing plaintext in argv."
+          }
+        }
+      ]
+    },
+    "create-group": {
+      "label": {
+        "en": "Create a regular group"
+      },
+      "args": [
+        {
+          "name": "group",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Create a regular local group."
+          }
+        }
+      ]
+    },
+    "delete-group": {
+      "label": {
+        "en": "Delete a regular group"
+      },
+      "args": [
+        {
+          "name": "group",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag",
+          "choices": [true]
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Delete a non-system group with no group admins/password."
+          }
+        }
+      ]
+    },
+    "add-to-group": {
+      "label": {
+        "en": "Add a user to a group"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "group",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Grant this supplementary group membership."
+          }
+        }
+      ]
+    },
+    "remove-from-group": {
+      "label": {
+        "en": "Remove a user from a group"
+      },
+      "args": [
+        {
+          "name": "user",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "group",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Remove this supplementary group membership."
+          }
+        }
+      ]
+    },
+    "restore": {
+      "label": {
+        "en": "Restore an identity backup"
+      },
+      "args": [
+        {
+          "name": "backup_token",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag",
+          "choices": [true]
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.identity",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "manage"
+            }
+          },
+          "why": {
+            "en": "Restore the previous exact identity state if no newer change exists."
+          }
+        }
+      ]
+    }
   }
 }

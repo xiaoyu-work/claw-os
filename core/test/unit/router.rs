@@ -3,6 +3,40 @@ use super::help::{command_schemas, show_builtin_schema, show_command_schema};
 use super::*;
 
 #[test]
+fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
+    let root = tempfile::tempdir().unwrap();
+    let app = root.path().join("pipe");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{
+            "id":"pipe","version":"0.1","name":"Pipe",
+            "operations":{
+                "read":{"label":"Read"},
+                "write":{"label":"Write","stdin":true}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let args = |values: &[&str]| values.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    assert!(app_operation_accepts_stdin_in(
+        &args(&["app", "pipe", "write", "--stdin"]),
+        root.path()
+    ));
+    for invocation in [
+        args(&["app", "pipe", "read", "--stdin"]),
+        args(&["app", "pipe", "unknown", "--stdin"]),
+        args(&["app", "pipe", "write", "--schema", "--stdin"]),
+        args(&["app", "install", "pipe", "--stdin"]),
+        args(&["app", "create", "pipe", "--stdin"]),
+        args(&["app", "tool", "list", "--stdin"]),
+    ] {
+        assert!(!app_operation_accepts_stdin_in(&invocation, root.path()));
+    }
+}
+
+#[test]
 fn recovery_hint_permission_denied() {
     let hint = recovery_hint("Permission denied on /home/cos/file.txt").unwrap();
     assert_eq!(hint["hint"], "Permission denied. Check file permissions.");
@@ -248,6 +282,15 @@ fn show_command_schema_unknown_returns_error() {
 fn show_command_schema_unknown_command_returns_error() {
     let result = show_command_schema("checkpoint", "nonexistent");
     assert!(result.is_err());
+}
+
+#[test]
+fn app_schema_switch_only_applies_before_end_of_options() {
+    assert!(app_commands::schema_requested(&["--schema".to_string()]));
+    assert!(!app_commands::schema_requested(&[
+        "--".to_string(),
+        "--schema".to_string(),
+    ]));
 }
 
 #[test]
@@ -1397,7 +1440,11 @@ fn write_runtime_app_manifest(
                 "label": "Echo",
                 "args": [
                     {"name": "first", "kind": "text"},
-                    {"name": "second", "kind": "text"}
+                    {"name": "second", "kind": "text"},
+                    {"name": "confirm", "kind": "bool", "binding": "flag",
+                     "default": false},
+                    {"name": "limit", "kind": "integer", "binding": "flag",
+                     "default": 10}
                 ]
             },
             "fail": {"label": "Fail"}
@@ -1504,13 +1551,17 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 "echo".to_string(),
                 "alpha".to_string(),
                 "beta".to_string(),
+                "--confirm=true".to_string(),
             ])
             .unwrap()
             .unwrap();
             let value: Value = serde_json::from_str(&output).unwrap();
             assert_eq!(value["runtime"], runtime);
             assert_eq!(value["command"], "echo");
-            assert_eq!(value["args"], json!(["alpha", "beta"]));
+            assert_eq!(
+                value["args"],
+                json!(["alpha", "beta", "--confirm", "--limit", "10"])
+            );
             assert_eq!(value["app_id"], id);
             assert!(value["session"]
                 .as_str()
@@ -1544,7 +1595,10 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 .iter()
                 .find(|entry| entry["app"] == id && entry["command"] == "echo")
                 .unwrap();
-            assert_eq!(success["args"], json!(["alpha", "beta"]));
+            assert_eq!(
+                success["args"],
+                json!(["alpha", "beta", "--confirm=true"])
+            );
             assert_eq!(success["status"], "ok");
 
             let failure = audit

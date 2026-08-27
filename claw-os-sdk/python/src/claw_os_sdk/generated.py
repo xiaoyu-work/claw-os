@@ -166,6 +166,7 @@ class Operation(_OperationRequired, total=False):
     A one-shot operation: its inputs and the capabilities it needs.
     """
     summary: "Localizedtext"
+    stdin: bool
     args: List["Arg"]
     needs: List["Need"]
 
@@ -176,18 +177,68 @@ class _ArgRequired(TypedDict):
 class Arg(_ArgRequired, total=False):
     """arg.
     """
+    binding: str
     required: bool
+    required_when: "Needcondition"
+    repeatable: bool
+    aliases: List[str]
+    positional_alias: bool
+    choices: List[Any]
     default: Any
+    default_from: "Argdefaultbinding"
+    trusted_resolver: str
     label: "Localizedtext"
 
-class Need(TypedDict):
+class Positionalarg(TypedDict, total=False):
+    """positionalArg.
+    """
+    pass
+
+class Optionalpositionalgap(TypedDict, total=False):
+    """optionalPositionalGap.
+    """
+    pass
+
+class Optionalpositional(TypedDict, total=False):
+    """optionalPositional.
+    """
+    pass
+
+class Defaultedpositional(TypedDict, total=False):
+    """defaultedPositional.
+    """
+    pass
+
+class _ArgdefaultbindingRequired(TypedDict):
+    arg: str
+
+class Argdefaultbinding(_ArgdefaultbindingRequired, total=False):
+    """argDefaultBinding.
+    """
+    transform: str
+    prefix: str
+    fallback: str
+
+class _NeedRequired(TypedDict):
+    verb: str
+    scope: "Scopebinding"
+    why: "Localizedtext"
+
+class Need(_NeedRequired, total=False):
     """need.
 
     A single capability request: verb + scope binding + human reason.
     """
-    verb: str
-    scope: "Scopebinding"
-    why: "Localizedtext"
+    when: "Needcondition"
+
+class _NeedconditionRequired(TypedDict):
+    kind: str
+    arg: str
+
+class Needcondition(_NeedconditionRequired, total=False):
+    """needCondition.
+    """
+    value: Any
 
 class _ScopebindingRequired(TypedDict):
     kind: str
@@ -200,6 +251,9 @@ class Scopebinding(_ScopebindingRequired, total=False):
     an explicit wildcard (no implicit '*').
     """
     arg: str
+    transform: str
+    values: Dict[str, Any]
+    wild_when: str
     scope: "Scope"
 
 class _ScopeRequired(TypedDict):

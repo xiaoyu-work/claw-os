@@ -336,39 +336,8 @@ COMMANDS = {
 }
 
 
-def _schema():
-    return {
-        "search": {
-            "description": "Full-text search of the local Recoll index",
-            "parameters": [
-                {"name": "--query", "type": "string", "required": True, "description": "Query string (Recoll plaintext mode).", "kind": "flag"},
-                {"name": "--max-results", "type": "integer", "required": False, "description": f"Max hits to return (1..{MAX_MAX_RESULTS}, default {DEFAULT_MAX_RESULTS}).", "kind": "flag"},
-            ],
-            "example": "cos app docs search --query 'budget Q3' --max-results 10",
-        },
-        "index": {
-            "description": "Incremental Recoll index (re)build",
-            "parameters": [],
-            "example": "cos app docs index",
-        },
-        "status": {
-            "description": "Show index + config status",
-            "parameters": [],
-            "example": "cos app docs status",
-        },
-        "configure": {
-            "description": "Bootstrap ~/.recoll/recoll.conf with default topdirs",
-            "parameters": [],
-            "example": "cos app docs configure",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
-
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

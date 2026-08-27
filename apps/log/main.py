@@ -37,19 +37,14 @@ def _read_entries():
 
 def _cmd_write(args):
     """Write a manual log entry. Usage: write <message> [--level LEVEL]"""
-    level = "info"
-    message_parts = []
-
-    i = 0
-    while i < len(args):
-        if args[i] == "--level" and i + 1 < len(args):
-            level = args[i + 1].lower()
-            if level not in VALID_LEVELS:
-                return {"error": f"invalid level: {level} (must be one of {', '.join(VALID_LEVELS)})"}
-            i += 2
-        else:
-            message_parts.append(args[i])
-            i += 1
+    from canonical_argv import parse_canonical_argv
+    try:
+        message_parts, options = parse_canonical_argv(args, value_flags={"level"})
+    except ValueError as error:
+        return {"error": str(error)}
+    level = options.get("level", "info").lower()
+    if level not in VALID_LEVELS:
+        return {"error": f"invalid level: {level} (must be one of {', '.join(VALID_LEVELS)})"}
 
     if not message_parts:
         return {"error": "usage: log write <message> [--level LEVEL]"}
@@ -70,26 +65,18 @@ def _cmd_write(args):
 
 def _cmd_read(args):
     """Read recent log entries. Usage: read [--limit N] [--app NAME] [--status ok|error]"""
-    limit = 20
-    app_filter = None
-    status_filter = None
-
-    i = 0
-    while i < len(args):
-        if args[i] == "--limit" and i + 1 < len(args):
-            try:
-                limit = int(args[i + 1])
-            except ValueError:
-                return {"error": f"invalid limit: {args[i + 1]}"}
-            i += 2
-        elif args[i] == "--app" and i + 1 < len(args):
-            app_filter = args[i + 1]
-            i += 2
-        elif args[i] == "--status" and i + 1 < len(args):
-            status_filter = args[i + 1]
-            i += 2
-        else:
-            return {"error": f"unknown argument: {args[i]}"}
+    from canonical_argv import parse_canonical_argv
+    try:
+        positionals, options = parse_canonical_argv(
+            args, value_flags={"limit", "app", "status"}
+        )
+        limit = int(options.get("limit", 20))
+    except (ValueError, TypeError) as error:
+        return {"error": str(error)}
+    if positionals:
+        return {"error": f"unknown argument: {positionals[0]}"}
+    app_filter = options.get("app")
+    status_filter = options.get("status")
 
     entries = _read_entries()
 
@@ -106,6 +93,11 @@ def _cmd_read(args):
 
 def _cmd_tail(args):
     """Show last N log entries. Usage: tail [N]"""
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     n = 10
     if args:
         try:
@@ -119,24 +111,15 @@ def _cmd_tail(args):
 
 def _cmd_search(args):
     """Search logs by keyword. Usage: search <query> [--limit N] [--app NAME]"""
-    limit = 20
-    app_filter = None
-    query_parts = []
-
-    i = 0
-    while i < len(args):
-        if args[i] == "--limit" and i + 1 < len(args):
-            try:
-                limit = int(args[i + 1])
-            except ValueError:
-                return {"error": f"invalid limit: {args[i + 1]}"}
-            i += 2
-        elif args[i] == "--app" and i + 1 < len(args):
-            app_filter = args[i + 1]
-            i += 2
-        else:
-            query_parts.append(args[i])
-            i += 1
+    from canonical_argv import parse_canonical_argv
+    try:
+        query_parts, options = parse_canonical_argv(
+            args, value_flags={"limit", "app"}
+        )
+        limit = int(options.get("limit", 20))
+    except (ValueError, TypeError) as error:
+        return {"error": str(error)}
+    app_filter = options.get("app")
 
     if not query_parts:
         return {"error": "usage: log search <query> [--limit N] [--app NAME]"}
@@ -157,48 +140,8 @@ def _cmd_search(args):
     return {"entries": matches[:limit], "total": len(matches)}
 
 
-def _schema():
-    return {
-        "search": {
-            "description": "Search logs by keyword across all text fields",
-            "parameters": [
-                {"name": "query", "type": "string", "required": True, "description": "Search query string", "kind": "positional"},
-                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum results to return", "kind": "flag", "default": 20},
-                {"name": "--app", "type": "string", "required": False, "description": "Filter by app name", "kind": "flag"},
-            ],
-            "example": "cos app log search 'error' --limit 50 --app fs",
-        },
-        "tail": {
-            "description": "Show last N log entries",
-            "parameters": [
-                {"name": "n", "type": "integer", "required": False, "description": "Number of entries to show (default 10)", "kind": "positional", "default": 10},
-            ],
-            "example": "cos app log tail 20",
-        },
-        "read": {
-            "description": "Read recent log entries with optional filters",
-            "parameters": [
-                {"name": "--limit", "type": "integer", "required": False, "description": "Maximum entries to return", "kind": "flag", "default": 20},
-                {"name": "--app", "type": "string", "required": False, "description": "Filter by app name", "kind": "flag"},
-                {"name": "--status", "type": "string", "required": False, "description": "Filter by status (ok or error)", "kind": "flag"},
-            ],
-            "example": "cos app log read --limit 50 --app fs --status error",
-        },
-        "write": {
-            "description": "Write a manual log entry",
-            "parameters": [
-                {"name": "message", "type": "string", "required": True, "description": "Log message text", "kind": "positional"},
-                {"name": "--level", "type": "string", "required": False, "description": "Log level: debug, info, warn, error", "kind": "flag", "default": "info"},
-            ],
-            "example": "cos app log write 'Deployment completed' --level info",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     commands = {
         "write": _cmd_write,
         "read": _cmd_read,

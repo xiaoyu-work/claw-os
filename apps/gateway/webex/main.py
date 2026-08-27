@@ -33,7 +33,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "webex"
@@ -41,61 +41,6 @@ USER_AGENT = "ClawOSWebex/0.1.0"
 SOFT_LEN = 7400  # Webex caps messages around 7439 chars
 API_URL = "https://webexapis.com/v1/messages"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Webex gateway via REST API. ``send`` posts a markdown "
-            "message to a roomId, personEmail, or personId. Bot tokens "
-            "only (no OAuth user flow)."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-webex start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-webex stop",
-            },
-            "status": {
-                "description": "Show whether the bot token is configured",
-                "parameters": [],
-                "example": "cos app gateway-webex status",
-            },
-            "send": {
-                "description": "Send a markdown message to a room or person",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": True,
-                        "description": "roomId (opaque) | personEmail | personId",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body, Markdown (truncated to ~7400 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "plain",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as plain text only (no Markdown rendering)",
-                    },
-                ],
-                "example": "cos app gateway-webex send alice@example.com 'hello'",
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -237,20 +182,6 @@ def _send(recipient: str, text: str, plain: bool = False) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound Webex messages need a webhook subscription "
-            "(POST /v1/webhooks). Use ``send <recipient> <text>`` for "
-            "outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     token, err = _load_token()
     return {
@@ -264,17 +195,21 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""
         plain = False
         if isinstance(args, list):
-            if len(args) >= 2:
-                recipient, text = str(args[0]), str(args[1])
-            elif len(args) == 1:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("recipient", "text"),
+                bool_flags=("plain",),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            recipient = parsed["recipient"]
+            text = parsed["text"]
+            plain = parsed["plain"]
         elif isinstance(args, dict):
             recipient = str(args.get("recipient", "") or "")
             text = str(args.get("text", "") or "")
@@ -286,8 +221,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

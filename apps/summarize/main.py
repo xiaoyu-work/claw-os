@@ -112,28 +112,10 @@ def _remember_run(source, summary):
         pass
 
 
-def _schema():
-    return {
-        "run": {
-            "description": "Summarize text into 3 short lines using an LLM.",
-            "parameters": [
-                {
-                    "name": "--file",
-                    "type": "string",
-                    "required": False,
-                    "description": "Read input from this file (UTF-8). If omitted, reads stdin or positional args.",
-                    "kind": "flag",
-                }
-            ],
-            "example": "cos app summarize run --file article.txt",
-        }
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     commands = {"run": _cmd_run}
     handler = commands.get(command)
     if handler is None:

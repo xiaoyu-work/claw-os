@@ -37,55 +37,6 @@ DEFAULT_HOMESERVER = "https://matrix.org"
 SOFT_LEN = 4000  # Matrix has no hard cap on body, but keep replies sane
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Matrix gateway. ``send`` posts text to a room via the "
-            "Client-Server REST API. ``start``/``stop`` (sync loop) "
-            "are not yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Connect to a Matrix homeserver and stream events (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-matrix start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-matrix stop",
-            },
-            "status": {
-                "description": "Show running state (always 'stopped' until /sync lands)",
-                "parameters": [],
-                "example": "cos app gateway-matrix status",
-            },
-            "send": {
-                "description": "Send a text message to a Matrix room",
-                "parameters": [
-                    {
-                        "name": "room_id",
-                        "type": "string",
-                        "required": True,
-                        "description": "Target room id (e.g. !abcdef:matrix.org) or alias",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Plain-text message body (truncated to 4000 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-matrix send '!abcdef:matrix.org' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     """Load a single named credential via `cos credential load`."""
     return safe_subprocess.safe_credential_load(name)
@@ -202,19 +153,6 @@ def _send(room_id: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Matrix /sync long-poll loop still pending. "
-            "Use ``send <room_id> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     return {
         "ok": True,
@@ -226,8 +164,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         if isinstance(args, list):
             room_id = args[0] if len(args) > 0 else ""
@@ -242,8 +181,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

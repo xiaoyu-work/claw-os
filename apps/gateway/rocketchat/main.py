@@ -45,60 +45,6 @@ USER_AGENT = "ClawOSRocketChat/0.1.0"
 SOFT_LEN = 5000
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Rocket.Chat gateway via REST chat.postMessage with "
-            "personal-access-token auth (X-Auth-Token / X-User-Id "
-            "headers)."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat stop",
-            },
-            "status": {
-                "description": "Show whether the bot is configured",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat status",
-            },
-            "send": {
-                "description": "Send a markdown message",
-                "parameters": [
-                    {
-                        "name": "target",
-                        "type": "string",
-                        "required": True,
-                        "description": (
-                            "#channel | channel | @user (Rocket.Chat "
-                            "treats #general and general identically)"
-                        ),
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~5000 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-rocketchat send '#general' 'deploy ok'"
-                ),
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -221,20 +167,6 @@ def _send(target: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound Rocket.Chat messages need either Realtime API "
-            "(WebSocket) or an outgoing-webhook integration. Use "
-            "``send <target> <text>`` for outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     cfg, err = _load_config()
     return {
@@ -250,8 +182,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         target = ""
         text = ""
@@ -270,8 +203,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

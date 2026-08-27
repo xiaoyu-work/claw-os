@@ -40,6 +40,36 @@ class _Response:
         return self._body.read(size)
 
 
+def test_repeatable_inline_headers_reach_argparse_in_order():
+    parsed = main._build_fetch_parser().parse_args(
+        [
+            "https://example.test",
+            "--header=A: 1",
+            "--header=--urgent",
+            "--header=B: 2",
+        ]
+    )
+    assert parsed.header == ["A: 1", "--urgent", "B: 2"]
+
+
+def test_download_accepts_output_flag_alias_and_rejects_conflicts():
+    parsed = main._build_download_parser().parse_args(
+        ["https://example.test/file", "--output", "/workspace/file"]
+    )
+    assert parsed.output is None
+    assert parsed.output_alias == "/workspace/file"
+    result = main.run(
+        "download",
+        [
+            "https://example.test/file",
+            "/workspace/a",
+            "--output",
+            "/workspace/b",
+        ],
+    )
+    assert "both positional and --output" in result["error"]
+
+
 def _run_download(response, destination):
     with mock.patch.object(main.policy, "require") as require, mock.patch.object(
         main,
@@ -47,7 +77,7 @@ def _run_download(response, destination):
         return_value=(response, "https://example.com/file", []),
     ):
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
     require.assert_called_once_with("fs.write", path=os.path.realpath(destination))
     return result
@@ -67,7 +97,7 @@ def test_network_open_failure_preserves_existing_destination(tmp_path):
         side_effect=urllib.error.URLError("offline"),
     ), mock.patch.object(main.tempfile, "mkstemp") as mkstemp:
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
 
     require.assert_called_once_with("fs.write", path=os.path.realpath(destination))
@@ -216,7 +246,7 @@ def test_success_uses_private_same_directory_temp_and_replaces_after_fsync(tmp_p
         main.os, "replace", side_effect=replace
     ):
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
 
     required.assert_called_once_with("fs.write", path=os.path.realpath(destination))

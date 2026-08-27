@@ -51,91 +51,13 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "dingtalk"
 USER_AGENT = "ClawOSDingTalk/0.1.0"
 SOFT_LEN = 19000  # DingTalk caps message bodies around 20 KB
 DEFAULT_TITLE = "ClawOS notice"
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "DingTalk (钉钉) custom-robot gateway. ``send`` POSTs a text "
-            "or markdown message to a robot webhook URL with optional "
-            "HMAC-SHA256 sign."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL and optional secret are configured",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk status",
-            },
-            "send": {
-                "description": "Send a text or markdown message to the configured robot",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~19000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "markdown",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as msgtype=markdown (default text)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Markdown title (only used with --markdown; defaults to first line)",
-                    },
-                    {
-                        "name": "keyword",
-                        "type": "string",
-                        "required": False,
-                        "description": "Keyword to prepend (for keyword-filter robots)",
-                    },
-                    {
-                        "name": "at_mobiles",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated phone numbers to @-mention",
-                    },
-                    {
-                        "name": "at_user_ids",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated DingTalk user-ids to @-mention",
-                    },
-                    {
-                        "name": "at_all",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Mention everyone in the group",
-                    },
-                ],
-                "example": "cos app gateway-dingtalk send 'build green'",
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -302,20 +224,6 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound DingTalk messages need a callback URL "
-            "registered on the robot side. Use ``send <text>`` for "
-            "outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     url, url_err = _env_or_credential("COS_DINGTALK_WEBHOOK_URL", "dingtalk_webhook_url")
     secret, _ = _env_or_credential("COS_DINGTALK_SECRET", "dingtalk_secret")
@@ -331,8 +239,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         markdown = False
@@ -342,8 +248,21 @@ def run(command: str, args):
         at_user_ids: list[str] = []
         at_all = False
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=("title", "keyword", "at-mobiles", "at-user-ids"),
+                bool_flags=("markdown", "at-all"),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            markdown = parsed["markdown"]
+            title = parsed["title"]
+            keyword = parsed["keyword"]
+            at_mobiles = _split_csv(parsed["at-mobiles"])
+            at_user_ids = _split_csv(parsed["at-user-ids"])
+            at_all = parsed["at-all"]
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             markdown = bool(args.get("markdown", False))
@@ -367,8 +286,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

@@ -501,35 +501,22 @@ def _pids_matching(binary_basename):
 
 
 # ---------------------------------------------------------------------------
-# CLI argument parsing helpers
-# ---------------------------------------------------------------------------
-
-
-def _parse_flag_int(args, flag, default):
-    """Extract ``--flag N`` from ``args``. Returns ``(value, remaining)``
-    or ``(None, args)`` on a parse error."""
-    remaining = []
-    it = iter(args)
-    value = default
-    for arg in it:
-        if arg == flag:
-            try:
-                value = int(next(it))
-            except (StopIteration, ValueError):
-                return None, args
-        else:
-            remaining.append(arg)
-    return value, remaining
-
-
-# ---------------------------------------------------------------------------
 # Operations
 # ---------------------------------------------------------------------------
 
 
 def cmd_list(args):
-    include_no_display = "--include-hidden" in args or "--include-no-display" in args
-    include_hidden = "--include-hidden" in args
+    from canonical_argv import parse_canonical_argv
+    try:
+        _, options = parse_canonical_argv(
+            args, bool_flags={"include-hidden", "include-no-display"}
+        )
+    except ValueError as error:
+        return {"error": str(error)}
+    include_no_display = options.get("include_hidden", False) or options.get(
+        "include_no_display", False
+    )
+    include_hidden = options.get("include_hidden", False)
     apps = _scan_apps(
         include_hidden=include_hidden, include_no_display=include_no_display
     )
@@ -538,10 +525,11 @@ def cmd_list(args):
 
 
 def cmd_find(args):
-    if not args:
-        return {"error": "missing query"}
-    limit, remaining = _parse_flag_int(args, "--limit", DEFAULT_FIND_LIMIT)
-    if limit is None:
+    from canonical_argv import parse_canonical_argv
+    try:
+        remaining, options = parse_canonical_argv(args, value_flags={"limit"})
+        limit = int(options.get("limit", DEFAULT_FIND_LIMIT))
+    except (ValueError, TypeError):
         return {"error": "invalid --limit value"}
     if not remaining:
         return {"error": "missing query"}
@@ -561,6 +549,11 @@ def cmd_find(args):
 
 
 def cmd_open(args):
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     if not args:
         return {"error": "missing app_id"}
     app_id = args[0]
@@ -601,13 +594,21 @@ def cmd_open(args):
 
 
 def cmd_recent(args):
-    limit, _ = _parse_flag_int(args, "--limit", DEFAULT_RECENT_LIMIT)
-    if limit is None:
+    from canonical_argv import parse_canonical_argv
+    try:
+        _, options = parse_canonical_argv(args, value_flags={"limit"})
+        limit = int(options.get("limit", DEFAULT_RECENT_LIMIT))
+    except (ValueError, TypeError):
         return {"error": "invalid --limit value"}
     return {"recent": _read_recent(max(limit, 0))}
 
 
 def cmd_is_running(args):
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     if not args:
         return {"error": "missing app_id"}
     app_id = args[0]
@@ -635,105 +636,8 @@ def cmd_is_running(args):
 # ---------------------------------------------------------------------------
 
 
-def _schema():
-    return {
-        "list": {
-            "description": "Enumerate every installed desktop app (.desktop entry).",
-            "parameters": [
-                {
-                    "name": "--include-no-display",
-                    "type": "boolean",
-                    "required": False,
-                    "kind": "flag",
-                    "default": False,
-                    "description": "Include entries marked NoDisplay=true (helpers, autostart entries).",
-                },
-                {
-                    "name": "--include-hidden",
-                    "type": "boolean",
-                    "required": False,
-                    "kind": "flag",
-                    "default": False,
-                    "description": "Include entries marked Hidden=true (almost never useful).",
-                },
-            ],
-            "example": "cos app launcher list",
-        },
-        "find": {
-            "description": "Fuzzy-search installed apps by name, keyword, or AppID.",
-            "parameters": [
-                {
-                    "name": "query",
-                    "type": "string",
-                    "required": True,
-                    "kind": "positional",
-                    "description": "Search term (e.g. `files`, `terminal`, `firefox`).",
-                },
-                {
-                    "name": "--limit",
-                    "type": "integer",
-                    "required": False,
-                    "kind": "flag",
-                    "default": DEFAULT_FIND_LIMIT,
-                    "description": "Maximum number of matches to return.",
-                },
-            ],
-            "example": "cos app launcher find files",
-        },
-        "open": {
-            "description": "Launch a desktop app by its freedesktop AppID.",
-            "parameters": [
-                {
-                    "name": "app_id",
-                    "type": "string",
-                    "required": True,
-                    "kind": "positional",
-                    "description": "The AppID — `.desktop` filename without extension (e.g. com.clawos.Files).",
-                },
-                {
-                    "name": "uri_or_path",
-                    "type": "string",
-                    "required": False,
-                    "kind": "positional",
-                    "description": "Optional URIs/paths to pass to the app via Exec= field-code substitution.",
-                },
-            ],
-            "example": "cos app launcher open com.clawos.Files",
-        },
-        "recent": {
-            "description": "List desktop apps the agent has recently launched.",
-            "parameters": [
-                {
-                    "name": "--limit",
-                    "type": "integer",
-                    "required": False,
-                    "kind": "flag",
-                    "default": DEFAULT_RECENT_LIMIT,
-                    "description": "Maximum number of distinct AppIDs to return.",
-                },
-            ],
-            "example": "cos app launcher recent --limit 5",
-        },
-        "is-running": {
-            "description": "Check whether a desktop app's process is alive.",
-            "parameters": [
-                {
-                    "name": "app_id",
-                    "type": "string",
-                    "required": True,
-                    "kind": "positional",
-                    "description": "The AppID to look up.",
-                },
-            ],
-            "example": "cos app launcher is-running com.clawos.Files",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     handlers = {
         "list": cmd_list,
         "find": cmd_find,

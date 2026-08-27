@@ -14,19 +14,66 @@
       "monthly_units": 100000
     },
     "safety": "standard",
-    "origins": ["trusted"]
+    "origins": [
+      "trusted"
+    ]
   },
   "operations": {
     "send": {
-      "label": { "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)" },
+      "label": {
+        "en": "Send an email (--to, --subject, --body, --provider smtp|gmail|outlook)"
+      },
       "args": [
-        { "name": "provider", "kind": "name", "required": true }
+        {
+          "name": "provider",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "choices": ["smtp", "gmail", "outlook"],
+          "trusted_resolver": "email-provider"
+        },
+        {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
+          "name": "to",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "subject",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "body",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "cc",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the SMTP server or provider API to deliver the message." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "host"
+          },
+          "why": {
+            "en": "Open a network connection to the SMTP server or provider API to deliver the message."
+          }
         },
         {
           "verb": "secret.read",
@@ -34,30 +81,83 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "smtp": { "kind": "name", "value": "default/SMTP_PASSWORD" },
-              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
-              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+              "smtp": {
+                "kind": "name",
+                "value": "default/SMTP_PASSWORD"
+              },
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
-          "why": { "en": "Read only the credential for the selected provider." }
+          "why": {
+            "en": "Read only the credential for the provider selected before dispatch."
+          }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "email" } },
-          "why": { "en": "Remember the sent message so the agent can recall it later." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "email"
+            }
+          },
+          "why": {
+            "en": "Remember the sent message so the agent can recall it later."
+          }
         }
       ]
     },
     "search": {
-      "label": { "en": "Search emails (--query, --max-results, --provider gmail|outlook)" },
+      "label": {
+        "en": "Search emails (--query, --max-results, --provider gmail|outlook)"
+      },
       "args": [
-        { "name": "provider", "kind": "name", "required": true }
+        {
+          "name": "provider",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "choices": ["gmail", "outlook"],
+          "trusted_resolver": "email-provider"
+        },
+        {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
+          "name": "query",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "max-results",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 10
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Call the provider's API to search your mailbox." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "host"
+          },
+          "why": {
+            "en": "Call the provider's API to search your mailbox."
+          }
         },
         {
           "verb": "secret.read",
@@ -65,24 +165,67 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
-              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
-          "why": { "en": "Read only the credential for the selected provider." }
+          "why": {
+            "en": "Read only the credential for the provider selected before dispatch."
+          }
         }
       ]
     },
     "list": {
-      "label": { "en": "List recent emails (--max-results, --unread, --provider gmail|outlook)" },
+      "label": {
+        "en": "List recent emails (--max-results, --unread, --provider gmail|outlook)"
+      },
       "args": [
-        { "name": "provider", "kind": "name", "required": true }
+        {
+          "name": "provider",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "choices": ["gmail", "outlook"],
+          "trusted_resolver": "email-provider"
+        },
+        {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
+          "name": "max-results",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 10
+        },
+        {
+          "name": "unread",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Call the provider's API to list recent messages." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "host"
+          },
+          "why": {
+            "en": "Call the provider's API to list recent messages."
+          }
         },
         {
           "verb": "secret.read",
@@ -90,24 +233,59 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
-              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
-          "why": { "en": "Read only the credential for the selected provider." }
+          "why": {
+            "en": "Read only the credential for the provider selected before dispatch."
+          }
         }
       ]
     },
     "read": {
-      "label": { "en": "Read a specific email by ID (--id, --provider gmail|outlook)" },
+      "label": {
+        "en": "Read a specific email by ID (--id, --provider gmail|outlook)"
+      },
       "args": [
-        { "name": "provider", "kind": "name", "required": true }
+        {
+          "name": "provider",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "choices": ["gmail", "outlook"],
+          "trusted_resolver": "email-provider"
+        },
+        {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
+          "name": "id",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Call the provider's API to fetch the message body." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "host"
+          },
+          "why": {
+            "en": "Call the provider's API to fetch the message body."
+          }
         },
         {
           "verb": "secret.read",
@@ -115,21 +293,51 @@
             "kind": "from-arg-map",
             "arg": "provider",
             "values": {
-              "gmail": { "kind": "name", "value": "default/GOOGLE_ACCESS_TOKEN" },
-              "outlook": { "kind": "name", "value": "default/MICROSOFT_ACCESS_TOKEN" }
+              "gmail": {
+                "kind": "name",
+                "value": "default/GOOGLE_ACCESS_TOKEN"
+              },
+              "outlook": {
+                "kind": "name",
+                "value": "default/MICROSOFT_ACCESS_TOKEN"
+              }
             }
           },
-          "why": { "en": "Read only the credential for the selected provider." }
+          "why": {
+            "en": "Read only the credential for the provider selected before dispatch."
+          }
         }
       ]
     },
     "draft": {
-      "label": { "en": "Draft an email reply via the AI gate (--context, --style formal|casual|short). Does NOT send." },
+      "label": {
+        "en": "Draft an email reply via the AI gate (--context, --style formal|casual|short). Does NOT send."
+      },
       "needs": [
         {
           "verb": "ai.chat",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send your context to a model so it can draft an email reply for you." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send your context to a model so it can draft an email reply for you."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "context",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "style",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "formal",
+          "choices": ["formal", "casual", "short"]
         }
       ]
     }

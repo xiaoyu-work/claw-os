@@ -234,6 +234,26 @@ def test_packaged_readers_share_authorized_descriptor_contract(
         assert "secret" not in result["content"]
 
 
+def test_canonical_inline_flag_and_delimited_text_reach_handler(monkeypatch, doc_app):
+    monkeypatch.setattr(
+        doc_app.sys,
+        "stdin",
+        types.SimpleNamespace(
+            isatty=lambda: False,
+            read=lambda: "piped input must not replace positional text",
+        ),
+    )
+    monkeypatch.setattr(doc_app, "_ai_call", lambda **kwargs: kwargs)
+
+    result = doc_app.run(
+        "rewrite",
+        ["--instruction=--urgent", "--", "--file"],
+    )
+
+    assert result["text"] == "--file"
+    assert result["source"] is None
+
+
 def test_real_packaged_readers_survive_symlink_swap(
     tmp_path,
     monkeypatch,

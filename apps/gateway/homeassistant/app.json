@@ -23,6 +23,12 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

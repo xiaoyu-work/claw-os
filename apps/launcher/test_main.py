@@ -474,13 +474,6 @@ class TestRunDispatch(unittest.TestCase):
         result = main.run("totally-not-a-verb", [])
         self.assertIn("error", result)
 
-    def test_schema_returns_dict(self):
-        schema = main.run("__schema__", [])
-        self.assertIsInstance(schema, dict)
-        for op in ("list", "find", "open", "recent", "is-running"):
-            self.assertIn(op, schema)
-            self.assertIn("parameters", schema[op])
-
     def test_open_without_app_id_returns_error(self):
         # No policy.require is called yet (missing-arg check is first).
         result = main.run("open", [])
@@ -489,6 +482,11 @@ class TestRunDispatch(unittest.TestCase):
 
     def test_find_without_query_returns_error(self):
         self.assertIn("error", main.run("find", []))
+
+    def test_find_preserves_delimited_option_shaped_query(self):
+        with mock.patch.object(main, "_scan_apps", return_value={}):
+            result = main.run("find", ["--", "--limit"])
+        self.assertEqual(result["query"], "--limit")
 
     def test_is_running_without_app_id_returns_error(self):
         self.assertIn("error", main.run("is-running", []))

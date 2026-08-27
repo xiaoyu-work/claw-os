@@ -68,8 +68,8 @@ def _broker(action, device=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -88,44 +88,3 @@ def run(command, args):
     else:
         policy.require("sys.mount", path=device)
     return _broker(command, device)
-
-
-def _schema():
-    device_parameter = {
-        "name": "device",
-        "type": "string",
-        "kind": "positional",
-        "required": True,
-        "description": "Canonical block-device path returned by status, such as /dev/sdb1",
-    }
-    return {
-        "status": {
-            "description": "List block devices, filesystems, mountpoints, and providers",
-            "parameters": [],
-        },
-        "health": {
-            "description": "Read SMART, filesystem metadata, and recent kernel storage errors",
-            "parameters": [device_parameter],
-            "example": "cos app storage-manager health /dev/sdb",
-        },
-        "check": {
-            "description": "Run a bounded read-only checker on an unmounted filesystem",
-            "parameters": [device_parameter],
-            "example": "cos app storage-manager check /dev/sdb1",
-        },
-        "mount": {
-            "description": "Mount a filesystem through UDisks2 as the requesting user",
-            "parameters": [device_parameter],
-            "example": "cos app storage-manager mount /dev/sdb1",
-        },
-        "unmount": {
-            "description": "Unmount a non-critical filesystem through UDisks2",
-            "parameters": [device_parameter],
-            "example": "cos app storage-manager unmount /dev/sdb1",
-        },
-        "eject": {
-            "description": "Eject optical media or safely power off a removable drive",
-            "parameters": [device_parameter],
-            "example": "cos app storage-manager eject /dev/sdb",
-        },
-    }

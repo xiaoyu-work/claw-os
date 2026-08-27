@@ -74,8 +74,8 @@ def _mime(value):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"primary", "confirm"})
     primary, values = _options(args)
     if command in {"status", "types"}:
         if values:
@@ -112,13 +112,3 @@ def run(command, args):
         policy.require("clipboard.write", name="selection")
         return _broker(command, primary=primary, confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect clipboard provider and MIME types", "parameters": []},
-        "types": {"description": "List offered clipboard MIME types", "parameters": []},
-        "read": {"description": "Read clipboard text or base64 bytes", "parameters": []},
-        "write": {"description": "Write clipboard bytes from a source file", "parameters": []},
-        "clear": {"description": "Clear a clipboard selection", "parameters": []},
-    }

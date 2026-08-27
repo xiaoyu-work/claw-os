@@ -153,6 +153,23 @@ def test_provider_unknown_value():
     assert "unknown provider" in result["error"]
 
 
+def test_canonical_inline_provider_and_delimited_query_reach_handler():
+    with (
+        mock.patch.object(
+            search_main, "_pick_provider", return_value=("brave", {"key": "test"})
+        ),
+        mock.patch.object(
+            search_main,
+            "_brave_web",
+            side_effect=lambda query, _limit, _config: {"query": query, "results": []},
+        ),
+        mock.patch.object(search_main, "_remember_search"),
+        mock.patch.object(search_main.policy, "require"),
+    ):
+        result = run("web", ["--provider=brave", "--", "--provider"])
+    assert result["query"] == "--provider"
+
+
 def test_provider_explicit_not_configured():
     """Requesting a provider that isn't configured returns a clear error."""
     _clear_credentials()

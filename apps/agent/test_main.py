@@ -41,6 +41,15 @@ class AgentLauncherTests(unittest.TestCase):
             ]
         )
 
+    def test_overlay_consumes_canonical_inline_and_false_arguments(self):
+        with mock.patch.object(main, "_exec_native", return_value={"ok": True}) as execute:
+            result = main.run(
+                "overlay",
+                ["--voice=false", "--query=--urgent"],
+            )
+        self.assertEqual(result, {"ok": True})
+        execute.assert_called_once_with(["--overlay", "--query", "--urgent"])
+
     def test_native_launch_requires_ready_bridge(self):
         with (
             mock.patch.object(main, "_find_native_ui", return_value="/usr/bin/cos-agent-ui"),
@@ -51,9 +60,7 @@ class AgentLauncherTests(unittest.TestCase):
         self.assertEqual(result["error"], "cos-agent-bridge is not ready")
         execv.assert_not_called()
 
-    def test_schema_documents_context_argument(self):
-        parameters = main._schema()["overlay"]["parameters"]
-        self.assertIn("--context", [parameter["name"] for parameter in parameters])
+    def test_manifest_documents_context_argument(self):
         with open(os.path.join(os.path.dirname(__file__), "app.json"), encoding="utf-8") as file:
             manifest = json.load(file)
         args = manifest["operations"]["overlay"]["args"]

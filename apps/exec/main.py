@@ -42,22 +42,6 @@ EXT_TO_LANG = {
 }
 
 
-def _parse_timeout(args):
-    """Extract --timeout N from args, return (timeout, remaining_args)."""
-    timeout = DEFAULT_TIMEOUT
-    remaining = []
-    it = iter(args)
-    for arg in it:
-        if arg == "--timeout":
-            try:
-                timeout = int(next(it))
-            except (StopIteration, ValueError):
-                return None, args, "invalid or missing --timeout value"
-        else:
-            remaining.append(arg)
-    return timeout, remaining, None
-
-
 def _drain_bounded(stream, cap):
     """Read all bytes from ``stream`` but keep at most ``cap`` of them.
 
@@ -191,23 +175,15 @@ def cmd_run(args):
       ``capture_output=True`` because that buffers the full stream
       in memory); per-stream cap is HARD_OUTPUT_CAP (8 MiB).
     """
-    timeout, args, err = _parse_timeout(args)
-    if err:
-        return {"error": err}
-
-    shell = False
-    filtered_args = []
-    for arg in args:
-        if arg == "--shell":
-            shell = True
-        elif arg.startswith("--shell="):
-            value = arg.split("=", 1)[1].strip().lower()
-            if value not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
-                return {"error": f"invalid --shell value: {value}"}
-            shell = value in {"1", "true", "yes", "on"}
-        else:
-            filtered_args.append(arg)
-    args = filtered_args
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, options = parse_canonical_argv(
+            args, value_flags={"timeout"}, bool_flags={"shell"}
+        )
+        timeout = int(options.get("timeout", DEFAULT_TIMEOUT))
+    except (ValueError, TypeError) as error:
+        return {"error": str(error)}
+    shell = options.get("shell", False)
 
     if not args:
         return {"error": "no command specified"}
@@ -262,28 +238,16 @@ def cmd_script(args):
     name=<basename>``). Inline-code mode still requires a wild
     ``proc.spawn`` because the code itself has no identity.
     """
-    timeout, args, err = _parse_timeout(args)
-    if err:
-        return {"error": err}
-
-    lang = None
-    file_path = None
-    remaining = []
-
-    it = iter(args)
-    for arg in it:
-        if arg == "--lang":
-            try:
-                lang = next(it)
-            except StopIteration:
-                return {"error": "missing --lang value"}
-        elif arg == "--file":
-            try:
-                file_path = next(it)
-            except StopIteration:
-                return {"error": "missing --file value"}
-        else:
-            remaining.append(arg)
+    from canonical_argv import parse_canonical_argv
+    try:
+        remaining, options = parse_canonical_argv(
+            args, value_flags={"timeout", "lang", "file"}
+        )
+        timeout = int(options.get("timeout", DEFAULT_TIMEOUT))
+    except (ValueError, TypeError) as error:
+        return {"error": str(error)}
+    lang = options.get("lang")
+    file_path = options.get("file")
 
     if file_path:
         if not os.path.isfile(file_path):
@@ -349,6 +313,11 @@ def cmd_script(args):
 
 def cmd_which(args):
     """Check if a command exists on the system."""
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     if not args:
         return {"error": "no command name specified"}
     name = args[0]
@@ -393,6 +362,11 @@ def _with_registry_lock(fn):
 
 def cmd_start(args):
     """Run a command in the background."""
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     if not args:
         return {"error": "no command specified"}
 
@@ -473,6 +447,11 @@ def cmd_stop(args):
     ``wild=True`` so a grant for stopping one PID doesn't authorise
     signalling arbitrary processes the kernel can see.
     """
+    from canonical_argv import parse_canonical_argv
+    try:
+        args, _ = parse_canonical_argv(args)
+    except ValueError as error:
+        return {"error": str(error)}
     if not args:
         return {"error": "no PID specified"}
     try:
@@ -526,60 +505,8 @@ def cmd_ps(args):
     return {"processes": processes}
 
 
-def _schema():
-    return {
-        "run": {
-            "description": "Run a command with optional timeout and shell mode",
-            "parameters": [
-                {"name": "command", "type": "string", "required": True, "description": "Command and arguments to execute", "kind": "positional"},
-                {"name": "--timeout", "type": "integer", "required": False, "description": "Timeout in seconds", "kind": "flag", "default": 300},
-                {"name": "--shell", "type": "boolean", "required": False, "description": "Run via /bin/bash -c (enables shell features)", "kind": "flag", "default": False},
-            ],
-            "example": "cos app exec run ls -la --timeout 30",
-        },
-        "script": {
-            "description": "Run an inline script or script file in a specified language",
-            "parameters": [
-                {"name": "code", "type": "string", "required": False, "description": "Inline script code (if --file not used)", "kind": "positional"},
-                {"name": "--lang", "type": "string", "required": False, "description": "Language: python, bash, or node", "kind": "flag", "default": "bash"},
-                {"name": "--file", "type": "string", "required": False, "description": "Path to a script file to execute", "kind": "flag"},
-                {"name": "--timeout", "type": "integer", "required": False, "description": "Timeout in seconds", "kind": "flag", "default": 300},
-            ],
-            "example": "cos app exec script --lang python 'print(1+1)'",
-        },
-        "which": {
-            "description": "Check if a command exists on the system",
-            "parameters": [
-                {"name": "name", "type": "string", "required": True, "description": "Command name to look up", "kind": "positional"},
-            ],
-            "example": "cos app exec which python3",
-        },
-        "start": {
-            "description": "Run a command in the background",
-            "parameters": [
-                {"name": "command", "type": "string", "required": True, "description": "Command and arguments to run in background", "kind": "positional"},
-            ],
-            "example": "cos app exec start python3 server.py",
-        },
-        "stop": {
-            "description": "Stop a background process by PID",
-            "parameters": [
-                {"name": "pid", "type": "integer", "required": True, "description": "Process ID to stop", "kind": "positional"},
-            ],
-            "example": "cos app exec stop 12345",
-        },
-        "ps": {
-            "description": "List running background processes",
-            "parameters": [],
-            "example": "cos app exec ps",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     handlers = {
         "run": cmd_run,
         "script": cmd_script,

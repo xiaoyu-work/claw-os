@@ -56,8 +56,8 @@ def _broker(action, source=None, limit=None, pid=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -66,20 +66,26 @@ def run(command, args):
     if command == "recent":
         source = None
         limit = 100
-        if args:
-            if args[0].isdigit():
-                limit = int(args[0])
-            elif args[0] in SOURCES:
-                source = args[0]
-                if len(args) > 1:
-                    try:
-                        limit = int(args[1])
-                    except ValueError:
-                        return {"error": "event limit must be an integer"}
+        positionals = []
+        index = 0
+        while index < len(args):
+            if args[index] == "--source" and index + 1 < len(args):
+                source = args[index + 1]
+                index += 2
             else:
-                return {"error": f"unknown event source: {args[0]}"}
-        if len(args) > (2 if source else 1) or not 1 <= limit <= 1000:
-            return {"error": "recent accepts [source] [limit], with limit 1..1000"}
+                positionals.append(args[index])
+                index += 1
+        if source is not None and source not in SOURCES:
+            return {"error": f"unknown event source: {source}"}
+        if len(positionals) > 1:
+            return {"error": "recent accepts [limit] [--source SOURCE]"}
+        if positionals:
+            try:
+                limit = int(positionals[0])
+            except ValueError:
+                return {"error": "event limit must be an integer"}
+        if not 1 <= limit <= 1000:
+            return {"error": "recent limit must be 1..1000"}
         policy.require("sys.events", name="observe")
         return _broker(command, source=source, limit=limit)
     if command == "watch-pid":
@@ -94,11 +100,3 @@ def run(command, args):
         policy.require("sys.events", name="observe")
         return _broker(command, pid=pid)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect event watcher status", "parameters": []},
-        "recent": {"description": "Read recent events, optionally filtered by source", "parameters": []},
-        "watch-pid": {"description": "Emit a persistent event when a PID exits", "parameters": []},
-    }

@@ -169,6 +169,8 @@ pub struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Localizedtext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
@@ -180,11 +182,59 @@ pub struct Arg {
     pub name: String,
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<Needcondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeatable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional_alias: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_from: Option<Argdefaultbinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_resolver: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Localizedtext>,
+}
+
+/// positionalArg
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Positionalarg {
+}
+
+/// optionalPositionalGap
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Optionalpositionalgap {
+}
+
+/// optionalPositional
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Optionalpositional {
+}
+
+/// defaultedPositional
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Defaultedpositional {
+}
+
+/// argDefaultBinding
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Argdefaultbinding {
+    pub arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prefix: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fallback: Option<String>,
 }
 
 /// need
@@ -193,7 +243,18 @@ pub struct Arg {
 pub struct Need {
     pub verb: String,
     pub scope: Scopebinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<Needcondition>,
     pub why: Localizedtext,
+}
+
+/// needCondition
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Needcondition {
+    pub kind: String,
+    pub arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
 }
 
 /// scopeBinding
@@ -205,6 +266,12 @@ pub struct Scopebinding {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wild_when: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
 }

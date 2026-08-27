@@ -42,20 +42,15 @@ def _read_stdin_or_file(args):
       - On failure: ``text`` is ``None``, ``source`` is ``None``,
         ``instruction_or_err`` is an error ``dict``.
     """
-    file_path = None
-    instruction = None
-    rest = []
-    i = 0
-    while i < len(args):
-        if args[i] == "--file" and i + 1 < len(args):
-            file_path = args[i + 1]
-            i += 2
-        elif args[i] == "--instruction" and i + 1 < len(args):
-            instruction = args[i + 1]
-            i += 2
-        else:
-            rest.append(args[i])
-            i += 1
+    from canonical_argv import parse_canonical_argv
+    try:
+        rest, options = parse_canonical_argv(
+            args, value_flags={"file", "instruction"}
+        )
+    except ValueError as error:
+        return None, None, {"error": str(error)}
+    file_path = options.get("file")
+    instruction = options.get("instruction")
 
     if file_path:
         read_result = cmd_read([file_path])
@@ -63,11 +58,14 @@ def _read_stdin_or_file(args):
             return None, None, read_result
         text = read_result.get("content", "") if isinstance(read_result, dict) else ""
         return text, file_path, instruction
-    # Fall back to stdin (used by Edit / Term piping a buffer).
-    if not sys.stdin.isatty():
-        return sys.stdin.read(), "<stdin>", instruction
     if rest:
         return " ".join(rest), None, instruction
+    # Fall back to explicitly forwarded stdin only when no positional text
+    # was supplied. A closed stdin reads as empty and is not valid content.
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read()
+        if piped:
+            return piped, "<stdin>", instruction
     return None, None, {"error": "no input — supply --file PATH or pipe text on stdin"}
 
 
@@ -637,59 +635,11 @@ def cmd_convert(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "read": {
-            "description": "Read a document and return structured text (supports txt, md, json, csv, yaml, pdf, docx, xlsx, pptx)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
-            ],
-            "example": "cos app doc read /workspace/report.pdf",
-        },
-        "info": {
-            "description": "Get document metadata (format, size, readability)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
-            ],
-            "example": "cos app doc info /workspace/report.pdf",
-        },
-        "convert": {
-            "description": "Convert between document formats (JSON to CSV, CSV to JSON)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the source file", "kind": "positional"},
-                {"name": "--to", "type": "string", "required": True, "description": "Target format (e.g. csv, json)", "kind": "flag"},
-            ],
-            "example": "cos app doc convert /workspace/data.json --to csv",
-        },
-        "summarize": {
-            "description": "Summarize a document into 5 short bullet lines via the AI gate. Reads from --file or stdin.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to summarise (or omit and pipe via stdin)", "kind": "flag"},
-            ],
-            "example": "cos app doc summarize --file /workspace/report.pdf",
-        },
-        "explain": {
-            "description": "Explain the supplied content (via --file or stdin) in plain prose under 200 words.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to explain (or pipe via stdin)", "kind": "flag"},
-            ],
-            "example": "echo 'fn foo()...' | cos app doc explain",
-        },
-        "rewrite": {
-            "description": "Rewrite the supplied content per --instruction. Returns rewritten text only.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to read (or pipe via stdin)", "kind": "flag"},
-                {"name": "--instruction", "type": "string", "required": False, "description": "Rewrite instruction (e.g. 'make it more formal')", "kind": "flag"},
-            ],
-            "example": "cos app doc rewrite --file note.md --instruction 'translate to English'",
-        },
-    }
-
-
 def run(command, args):
     """Called by cos router."""
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    if command not in {"summarize", "explain", "rewrite"}:
+        args = normalize_canonical_argv(args)
     commands = {
         "read": cmd_read,
         "info": cmd_info,

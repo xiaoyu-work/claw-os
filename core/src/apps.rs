@@ -143,6 +143,7 @@ pub fn operation_schema(operation: &Operation) -> Value {
     json!({
         "description": operation.summary.current(),
         "parameters": parameters,
+        "stdin": operation.stdin,
     })
 }
 
@@ -150,15 +151,38 @@ fn arg_schema(arg: &Arg) -> Value {
     let value_type = match arg.kind {
         ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
         ArgKind::Number => "number",
+        ArgKind::Integer => "integer",
         ArgKind::Bool => "boolean",
     };
     let mut schema = json!({
         "name": arg.name,
-        "type": value_type,
+        "type": if arg.repeatable { "array" } else { value_type },
         "required": arg.required,
+        "repeatable": arg.repeatable,
         "description": arg.label.current(),
-        "kind": "positional",
+        "kind": arg.effective_binding().as_str(),
+        "binding": arg.effective_binding().as_str(),
     });
+    if let Some(required_when) = &arg.required_when {
+        schema["required_when"] =
+            serde_json::to_value(required_when).expect("NeedCondition serializes");
+    }
+    if arg.repeatable {
+        schema["items"] = json!({"type": value_type});
+    }
+    if !arg.aliases.is_empty() {
+        schema["aliases"] = serde_json::json!(arg.aliases);
+    }
+    if arg.positional_alias {
+        schema["positional_alias"] = serde_json::Value::Bool(true);
+    }
+    if !arg.choices.is_empty() {
+        if arg.repeatable {
+            schema["items"]["enum"] = serde_json::Value::Array(arg.choices.clone());
+        } else {
+            schema["enum"] = serde_json::Value::Array(arg.choices.clone());
+        }
+    }
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();
     }

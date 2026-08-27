@@ -71,7 +71,7 @@ def _build_download_parser():
     p = argparse.ArgumentParser(prog="cos net download", add_help=False)
     p.add_argument("url")
     p.add_argument("output", nargs="?")
-    p.add_argument("--output", dest="output_option", default=None)
+    p.add_argument("--output", dest="output_alias", default=None)
     return p
 
 
@@ -136,7 +136,9 @@ def cmd_download(args):
     parser = _build_download_parser()
     opts = parser.parse_args(args)
 
-    output_path = opts.output_option if opts.output_option is not None else opts.output
+    if opts.output is not None and opts.output_alias is not None:
+        return {"error": "download output was supplied by both positional and --output forms"}
+    output_path = opts.output_alias if opts.output_alias is not None else opts.output
     if output_path is None:
         raise ValueError("download output default was not bound by the app bridge")
     # ``realpath`` so the kernel's fs.write check sees the actual
@@ -209,34 +211,8 @@ def cmd_download(args):
                 pass
 
 
-def _schema():
-    return {
-        "fetch": {
-            "description": "Make an HTTP request and return the response",
-            "parameters": [
-                {"name": "url", "type": "string", "required": True, "description": "URL to fetch", "kind": "positional"},
-                {"name": "--method", "type": "string", "required": False, "description": "HTTP method: GET, POST, PUT, DELETE", "kind": "flag", "default": "GET"},
-                {"name": "--data", "type": "string", "required": False, "description": "Request body data", "kind": "flag"},
-                {"name": "--header", "type": "string", "required": False, "description": "Request header in 'Key: Value' format (can be repeated)", "kind": "flag"},
-                {"name": "--timeout", "type": "integer", "required": False, "description": "Request timeout in seconds", "kind": "flag", "default": 30},
-            ],
-            "example": "cos app net fetch https://api.example.com/data --method POST --data '{\"key\": \"value\"}' --header 'Authorization: Bearer token'",
-        },
-        "download": {
-            "description": "Download a file from a URL",
-            "parameters": [
-                {"name": "url", "type": "string", "required": True, "description": "URL to download from", "kind": "positional"},
-                {"name": "--output", "type": "string", "required": False, "description": "Output file path (defaults to $COS_HOME/<filename>)", "kind": "flag"},
-            ],
-            "example": "cos app net download https://example.com/file.zip --output /workspace/file.zip",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     handlers = {
         "fetch": cmd_fetch,
         "download": cmd_download,

@@ -191,40 +191,10 @@ def _cmd_overlay(args):
     return _exec_native(argv)
 
 
-def _schema():
-    return {
-        "open": {
-            "description": "Open the ClawOS Agent window (native libcosmic UI)",
-            "parameters": [],
-            "example": "cos app agent open",
-        },
-        "overlay": {
-            "description": "Open the Spotlight-style Super+A quick-summon overlay",
-            "parameters": [
-                {"name": "--voice", "type": "boolean", "required": False,
-                 "description": "Auto-arm the microphone on open", "kind": "flag",
-                 "default": False},
-                {"name": "--query", "type": "string", "required": False,
-                 "description": "Pre-fill the prompt and submit it immediately",
-                 "kind": "value"},
-                {"name": "--context", "type": "string", "required": False,
-                 "description": "Attach invisible one-shot app context",
-                 "kind": "value"},
-            ],
-            "example": "cos app agent overlay --query 'find my budget spreadsheet'",
-        },
-        "url": {
-            "description": "Return the authenticated local cos-agent-bridge endpoint",
-            "parameters": [],
-            "example": "cos app agent url",
-        },
-    }
-
-
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"voice"})
     handlers = {
         "open": _cmd_open,
         "overlay": _cmd_overlay,
@@ -243,9 +213,6 @@ def main():
             "error": "usage: cos app agent <open|overlay|url>",
             "commands": ["open", "overlay", "url"],
         }))
-        return
-    if argv[0] in ("--schema", "-h", "--help"):
-        print(json.dumps(_schema(), indent=2))
         return
     cmd, rest = argv[0], argv[1:]
     result = run(cmd, rest)

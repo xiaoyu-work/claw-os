@@ -47,79 +47,13 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "larksuite"
 USER_AGENT = "ClawOSLark/0.1.0"
 SOFT_LEN = 30000  # Lark messages cap around 30 KB
 DEFAULT_TITLE = "ClawOS notice"
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Lark / Feishu (飞书) custom-bot gateway. ``send`` posts a "
-            "text, post (rich-text), or interactive-card message to a "
-            "custom-bot webhook URL with optional HMAC-SHA256 sign."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-larksuite start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-larksuite stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL and optional secret are configured",
-                "parameters": [],
-                "example": "cos app gateway-larksuite status",
-            },
-            "send": {
-                "description": "Send a text, post (rich-text), or card message",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~30000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "post",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as msg_type=post (rich-text)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Post title (only used with --post; defaults to first line)",
-                    },
-                    {
-                        "name": "card",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send a fully-formed interactive card (use --card-json for body)",
-                    },
-                    {
-                        "name": "card_json",
-                        "type": "string",
-                        "required": False,
-                        "description": "Raw JSON card body (only used with --card)",
-                    },
-                ],
-                "example": "cos app gateway-larksuite send 'build green'",
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -270,20 +204,6 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound Lark messages need an event subscription "
-            "(Open Platform → Event Subscriptions). Use ``send <text>`` "
-            "for outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     url, url_err = _env_or_credential("COS_LARK_WEBHOOK_URL", "lark_webhook_url")
     secret, _ = _env_or_credential("COS_LARK_SECRET", "lark_secret")
@@ -299,8 +219,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         post = False
@@ -308,8 +226,19 @@ def run(command: str, args):
         card = False
         card_json = None
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=("title", "card-json"),
+                bool_flags=("post", "card"),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            post = parsed["post"]
+            title = parsed["title"]
+            card = parsed["card"]
+            card_json = parsed["card-json"]
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             post = bool(args.get("post", False))
@@ -332,8 +261,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

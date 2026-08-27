@@ -50,8 +50,8 @@ def _broker(action, accuracy):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command not in {"locate", "timezone"}:
         return {"error": f"unknown command: {command}"}
     if len(args) > 1:
@@ -61,24 +61,3 @@ def run(command, args):
         return {"error": "accuracy must be country|city|neighborhood|street|exact"}
     policy.require("device.location", wild=True)
     return _broker(command, accuracy)
-
-
-def _schema():
-    return {
-        command: {
-            "description": description,
-            "parameters": [
-                {
-                    "name": "accuracy",
-                    "type": "string",
-                    "required": False,
-                    "enum": sorted(ACCURACIES),
-                    "default": "city",
-                }
-            ],
-        }
-        for command, description in {
-            "locate": "Request a GeoClue location fix",
-            "timezone": "Suggest nearby IANA timezones from a GeoClue fix",
-        }.items()
-    }

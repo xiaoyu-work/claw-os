@@ -46,12 +46,7 @@ pub(crate) fn authorize_http_url(
 }
 
 fn authorize_kernel_scope(url: &Url) -> Result<(), ObscuraNetError> {
-    let host = normalized_host(url)?;
-    let scope = match url.port() {
-        Some(port) if host.contains(':') => format!("[{host}]:{port}"),
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_string(),
-    };
+    let scope = effective_host_scope(url)?;
     let output = Command::new(cos_binary())
         .args(["__policy", "check", "net.dial", "--host", &scope])
         .output()
@@ -69,6 +64,18 @@ fn authorize_kernel_scope(url: &Url) -> Result<(), ObscuraNetError> {
         return Err(ObscuraNetError::Blocked(scope));
     }
     Ok(())
+}
+
+pub fn effective_host_scope(url: &Url) -> Result<String, ObscuraNetError> {
+    let host = normalized_host(url)?;
+    let port = url.port_or_known_default().ok_or_else(|| {
+        ObscuraNetError::Network(format!("URL scheme '{}' has no known port", url.scheme()))
+    })?;
+    if host.contains(':') {
+        Ok(format!("[{host}]:{port}"))
+    } else {
+        Ok(format!("{host}:{port}"))
+    }
 }
 
 fn normalized_host(url: &Url) -> Result<String, ObscuraNetError> {
@@ -108,6 +115,7 @@ fn reject_private_ip(ip: IpAddr, host: &str) -> Result<(), ObscuraNetError> {
                 || (octets[0] == 192 && octets[1] == 88 && octets[2] == 99)
                 || (octets[0] == 198 && (octets[1] & 0b1111_1110) == 18)
         }
+
         IpAddr::V6(ip) => {
             ip.is_loopback()
                 || ip.is_multicast()
@@ -125,4 +133,12 @@ fn reject_private_ip(ip: IpAddr, host: &str) -> Result<(), ObscuraNetError> {
         return Err(ObscuraNetError::Blocked(format!("{host} -> {ip}")));
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/url_policy.rs"
+    ));
 }

@@ -26,11 +26,13 @@
 //!
 //! Every `tools/call` the kernel forwards to an app server is gated:
 //!
-//! 1. [`Manifest::resolve_session_tool_needs`] turns the manifest's
-//!    `needs[]` plus the call's arguments into concrete [`Cap`]s.
-//! 2. [`crate::caps::require`] checks each. A denial short-circuits
+//! 1. [`Manifest::resolve_session_tool_args`] validates the call and
+//!    materializes every declared default.
+//! 2. [`Manifest::resolve_session_tool_needs`] turns the manifest's
+//!    `needs[]` plus those effective arguments into concrete [`Cap`]s.
+//! 3. [`crate::caps::require`] checks each. A denial short-circuits
 //!    before the app server sees the call.
-//! 3. On both allow and deny the kernel emits one
+//! 4. On both allow and deny the kernel emits one
 //!    [`LlmRunRecord`] to `ai.jsonl` with `provider="app:<id>"` and
 //!    `model="tool:<tool_name>"`, matching the `cos ai tool` audit
 //!    shape. App-internal calls that re-enter the kernel (e.g. the
@@ -784,17 +786,34 @@ fn registry_name_for(app_id: &str, tool_name: &str) -> String {
 }
 
 fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
-    use crate::caps::manifest::ArgKind;
+    use crate::caps::manifest::{ArgKind, NeedCondition};
     let mut properties = serde_json::Map::new();
     let mut required: Vec<String> = Vec::new();
+    let mut conditional = Vec::new();
     for a in args {
         let json_type = match a.kind {
             ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
             ArgKind::Number => "number",
+            ArgKind::Integer => "integer",
             ArgKind::Bool => "boolean",
         };
         let mut prop = serde_json::Map::new();
-        prop.insert("type".to_string(), Value::String(json_type.to_string()));
+        if a.repeatable {
+            prop.insert("type".to_string(), Value::String("array".to_string()));
+            let mut items = serde_json::Map::from_iter([(
+                "type".to_string(),
+                Value::String(json_type.to_string()),
+            )]);
+            if !a.choices.is_empty() {
+                items.insert("enum".to_string(), Value::Array(a.choices.clone()));
+            }
+            prop.insert("items".to_string(), Value::Object(items));
+        } else {
+            prop.insert("type".to_string(), Value::String(json_type.to_string()));
+            if !a.choices.is_empty() {
+                prop.insert("enum".to_string(), Value::Array(a.choices.clone()));
+            }
+        }
         if a.label.has_english() {
             prop.insert(
                 "description".to_string(),
@@ -808,6 +827,25 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
         if a.required {
             required.push(a.name.clone());
         }
+        if let Some(condition) = &a.required_when {
+            let condition = match condition {
+                NeedCondition::ArgPresent { arg } => json!({"required":[arg]}),
+                NeedCondition::ArgEquals { arg, value } => {
+                    json!({"properties":{arg:{"const":value}},"required":[arg]})
+                }
+                NeedCondition::ArgNotEquals { arg, value } => {
+                    json!({
+                        "required":[arg],
+                        "not":{"properties":{arg:{"const":value}},"required":[arg]}
+                    })
+                }
+            };
+            conditional.push(json!({
+                "if": condition,
+                "then": {"required":[a.name]},
+                "else": {"not":{"required":[a.name]}}
+            }));
+        }
     }
     let mut schema = serde_json::Map::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
@@ -817,6 +855,9 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
             "required".to_string(),
             Value::Array(required.into_iter().map(Value::String).collect()),
         );
+    }
+    if !conditional.is_empty() {
+        schema.insert("allOf".to_string(), Value::Array(conditional));
     }
     schema.insert("additionalProperties".to_string(), Value::Bool(false));
     Value::Object(schema)
@@ -838,29 +879,33 @@ impl Tool for AppSessionTool {
 
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
-        let args_map = json_to_arg_map(&input);
-
-        // 1) Cap gate. resolve_session_tool_needs is cheap; manifest
-        // is held in Arc and not re-parsed.
-        let caps = match self
+        let supplied_args = json_to_arg_map(&input);
+        let paths = match crate::bridge::launcher_path_context() {
+            Ok(paths) => paths,
+            Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
+        };
+        let effective = match self
             .manifest
-            .resolve_session_tool_needs(&self.manifest_tool_name, &args_map)
+            .resolve_session_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
         {
-            Ok(c) => c,
-            Err(e) => {
-                let msg = format!("cap resolution failed: {e}");
+            Ok(effective) => effective,
+            Err(error) => {
+                let message = format!("argument resolution failed: {error}");
                 emit_audit(
                     &self.app_id,
                     &self.manifest_tool_name,
                     "",
                     "denied",
-                    Some(&msg),
-                    Some(&msg),
+                    Some(&message),
+                    Some(&message),
                     started.elapsed(),
                 );
-                return ToolResult::err(msg);
+                return ToolResult::err(message);
             }
         };
+
+        let args_map = effective.values;
+        let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
 
         for cap in &caps {
             if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
@@ -913,10 +958,10 @@ impl Tool for AppSessionTool {
         };
 
         // 3) Forward tools/call.
-        let arguments = match input {
-            Value::Null => None,
-            Value::Object(ref m) if m.is_empty() => None,
-            other => Some(other),
+        let arguments = if args_map.is_empty() {
+            None
+        } else {
+            Some(Value::Object(args_map.clone().into_iter().collect()))
         };
         let call = client.call_tool(self.manifest_tool_name.clone(), arguments);
         let res = match timeout(self.timeout, call).await {
@@ -992,6 +1037,8 @@ impl Tool for AppSessionTool {
 }
 
 fn json_to_arg_map(input: &Value) -> BTreeMap<String, Value> {
+    // MCP protocol metadata lives in the tools/call envelope. The arguments
+    // object contains only manifest-declared values and is validated strictly.
     match input {
         Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         _ => BTreeMap::new(),

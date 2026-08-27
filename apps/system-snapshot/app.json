@@ -1,36 +1,132 @@
 {
   "id": "system-snapshot",
   "version": "0.1.0",
-  "name": {"en": "System Recovery"},
-  "summary": {"en": "Create and restore full-system recovery points using Snapper, Btrfs, or LVM"},
+  "name": {
+    "en": "System Recovery"
+  },
+  "summary": {
+    "en": "Create and restore full-system recovery points using Snapper, Btrfs, or LVM"
+  },
   "icon": "🛟",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "Inspect snapshot support"},
-      "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "system-snapshots"}}, "why": {"en": "Detect the root filesystem and available snapshot backend."}}]
+      "label": {
+        "en": "Inspect snapshot support"
+      },
+      "needs": [
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "system-snapshots"
+            }
+          },
+          "why": {
+            "en": "Detect the root filesystem and available snapshot backend."
+          }
+        }
+      ],
+      "args": []
     },
     "list": {
-      "label": {"en": "List system recovery points"},
-      "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "system-snapshots"}}, "why": {"en": "Read Claw-managed snapshot metadata."}}]
+      "label": {
+        "en": "List system recovery points"
+      },
+      "needs": [
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "system-snapshots"
+            }
+          },
+          "why": {
+            "en": "Read Claw-managed snapshot metadata."
+          }
+        }
+      ],
+      "args": []
     },
     "create": {
-      "label": {"en": "Create a system recovery point"},
-      "args": [{"name": "description", "kind": "text", "required": false}],
-      "needs": [{"verb": "sys.snapshot", "scope": {"kind": "wild"}, "why": {"en": "Capture the current root filesystem state."}}]
+      "label": {
+        "en": "Create a system recovery point"
+      },
+      "args": [
+        {
+          "name": "description",
+          "kind": "text",
+          "required": false
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.snapshot",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Capture the current root filesystem state."
+          }
+        }
+      ]
     },
     "delete": {
-      "label": {"en": "Delete a system recovery point"},
-      "args": [{"name": "id", "kind": "name", "required": true}],
-      "needs": [{"verb": "sys.snapshot", "scope": {"kind": "wild"}, "why": {"en": "Delete this managed recovery point."}}]
+      "label": {
+        "en": "Delete a system recovery point"
+      },
+      "args": [
+        {
+          "name": "id",
+          "kind": "name",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.snapshot",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Delete this managed recovery point."
+          }
+        }
+      ]
     },
     "rollback": {
-      "label": {"en": "Schedule a system rollback"},
+      "label": {
+        "en": "Schedule a system rollback"
+      },
       "args": [
-        {"name": "id", "kind": "name", "required": true},
-        {"name": "--confirm", "kind": "bool", "required": true}
+        {
+          "name": "id",
+          "kind": "name",
+          "required": true
+        },
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag",
+          "choices": [true]
+        }
       ],
-      "needs": [{"verb": "sys.snapshot", "scope": {"kind": "wild"}, "why": {"en": "Schedule the root filesystem to return to this recovery point."}}]
+      "needs": [
+        {
+          "verb": "sys.snapshot",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Schedule the root filesystem to return to this recovery point."
+          }
+        }
+      ]
     }
   }
 }

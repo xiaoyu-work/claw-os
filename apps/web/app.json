@@ -14,84 +14,292 @@
       "monthly_units": 200000
     },
     "safety": "strict",
-    "origins": ["external-content"]
+    "origins": [
+      "external-content"
+    ]
   },
   "operations": {
     "read": {
-      "label": { "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)" },
+      "label": {
+        "en": "Fetch URL, return {url, title, text, links} (or raw HTML / arbitrary --eval result)"
+      },
       "args": [
-        { "name": "url", "kind": "text", "required": true }
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "selector",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "wait",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 30
+        },
+        {
+          "name": "max-length",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 50000
+        },
+        {
+          "name": "html",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        },
+        {
+          "name": "eval",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "user-agent",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the URL you asked to load." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
+          },
+          "why": {
+            "en": "Open a network connection to the URL you asked to load."
+          }
         }
       ]
     },
     "scrape": {
-      "label": { "en": "Fetch many URLs in parallel" },
+      "label": {
+        "en": "Fetch many URLs in parallel"
+      },
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open network connections to each URL you asked to load." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "urls",
+            "transform": "url-host"
+          },
+          "why": {
+            "en": "Open network connections to each URL you asked to load."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "urls",
+          "kind": "text",
+          "required": true,
+          "repeatable": true
+        },
+        {
+          "name": "eval",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "concurrency",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 10
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 60
+        },
+        {
+          "name": "format",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "default": "json"
         }
       ]
     },
     "screenshot": {
-      "label": { "en": "Capture a screenshot of a URL (shells out to chromium)" },
+      "label": {
+        "en": "Capture a screenshot of a URL (shells out to chromium)"
+      },
       "args": [
-        { "name": "url",    "kind": "text", "required": true },
-        { "name": "output", "kind": "path", "required": true }
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "output",
+          "kind": "path",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "width",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 1280
+        },
+        {
+          "name": "height",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 720
+        },
+        {
+          "name": "full-page",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 60
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the URL you asked to capture." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
+          },
+          "why": {
+            "en": "Open a network connection to the URL you asked to capture."
+          }
         },
         {
           "verb": "fs.write",
-          "scope": { "kind": "from-arg", "arg": "output" },
-          "why": { "en": "Save the screenshot to the path you specified." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "output"
+          },
+          "why": {
+            "en": "Save the screenshot to the path you specified."
+          }
         }
       ]
     },
     "submit": {
-      "label": { "en": "Submit form data (POST) via urllib" },
+      "label": {
+        "en": "Submit form data (POST) via urllib"
+      },
       "args": [
-        { "name": "url", "kind": "text", "required": true }
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "data",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "method",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "default": "POST"
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 30
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "POST to the URL you asked to submit data to." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
+          },
+          "why": {
+            "en": "POST to the URL you asked to submit data to."
+          }
         }
       ]
     },
     "summarize": {
-      "label": { "en": "Fetch a URL and return a 3-line AI summary" },
+      "label": {
+        "en": "Fetch a URL and return a 3-line AI summary"
+      },
       "args": [
-        { "name": "url", "kind": "text", "required": true }
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the URL so its text can be fetched." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
+          },
+          "why": {
+            "en": "Open a network connection to the URL so its text can be fetched."
+          }
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the fetched page text to a model so it can be summarised for you." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the fetched page text to a model so it can be summarised for you."
+          }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "web" } },
-          "why": { "en": "Remember the page summary so the agent can recall it later." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "web"
+            }
+          },
+          "why": {
+            "en": "Remember the page summary so the agent can recall it later."
+          }
         }
       ]
     }

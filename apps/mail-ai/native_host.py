@@ -130,8 +130,6 @@ def _args_to_argv(args: Dict[str, Any]) -> List[str]:
 
 
 def _dispatch(verb: str, args: Dict[str, Any]) -> Dict[str, Any]:
-    if verb == "__schema__":
-        return mail_ai.run("__schema__", [])
     if verb not in mail_ai.HANDLERS:
         return {"error": f"unknown verb: {verb}"}
     argv = _args_to_argv(args or {})
@@ -176,11 +174,16 @@ def main() -> int:
 if __name__ == "__main__":
     if "--probe" in sys.argv:
         # Diagnostic helper invoked by tools/install-mail-ai.sh: prints
-        # the schema as one JSON document so the operator can sanity-
-        # check that the host loads and verbs are wired up.
+        # the wired handler names so the operator can sanity-check that
+        # the host loads without maintaining a second operation schema.
         try:
-            schema = _dispatch("__schema__", {})
-            print(json.dumps({"ok": True, "schema": schema}, indent=2, ensure_ascii=False))
+            print(
+                json.dumps(
+                    {"ok": True, "verbs": sorted(mail_ai.HANDLERS)},
+                    indent=2,
+                    ensure_ascii=False,
+                )
+            )
             sys.exit(0)
         except Exception as exc:
             print(json.dumps({"ok": False, "error": str(exc)}, indent=2))

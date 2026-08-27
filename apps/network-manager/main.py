@@ -56,8 +56,8 @@ def _broker(action, target=None, state=None, credential=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command in READ_ACTIONS:
         if args:
             return {"error": f"{command} takes no arguments"}
@@ -86,19 +86,3 @@ def run(command, args):
         policy.require("net.manage", name="wifi" if command == "wifi-toggle" else "airplane")
         return _broker(command, None, args[0])
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect NetworkManager connectivity and radio state", "parameters": []},
-        "wifi-list": {"description": "List nearby Wi-Fi networks", "parameters": []},
-        "connection-list": {"description": "List saved and active connection profiles", "parameters": []},
-        "vpn-list": {"description": "List VPN and WireGuard profiles", "parameters": []},
-        "wifi-connect": {"description": "Connect to a Wi-Fi network", "parameters": [{"name": "ssid", "type": "string", "required": True, "kind": "positional"}, {"name": "credential", "type": "string", "required": False, "kind": "positional", "description": "Stored credential in namespace/name form"}]},
-        "wifi-disconnect": {"description": "Disconnect a network device", "parameters": [{"name": "device", "type": "string", "required": True, "kind": "positional"}]},
-        "wifi-forget": {"description": "Delete a saved connection", "parameters": [{"name": "connection", "type": "string", "required": True, "kind": "positional"}]},
-        "wifi-toggle": {"description": "Turn Wi-Fi on or off", "parameters": [{"name": "state", "type": "string", "required": True, "kind": "positional"}]},
-        "airplane": {"description": "Turn all radios off or on", "parameters": [{"name": "state", "type": "string", "required": True, "kind": "positional"}]},
-        "vpn-up": {"description": "Activate a VPN profile", "parameters": [{"name": "profile", "type": "string", "required": True, "kind": "positional"}]},
-        "vpn-down": {"description": "Deactivate a VPN profile", "parameters": [{"name": "profile", "type": "string", "required": True, "kind": "positional"}]}
-    }

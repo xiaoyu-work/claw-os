@@ -37,73 +37,12 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "teams"
 USER_AGENT = "ClawOSTeams/0.1.0"
 SOFT_LEN = 28000  # Adaptive Card text fields tolerate ~28k
-
-
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Microsoft Teams gateway via Incoming Webhook. ``send`` posts "
-            "an Adaptive Card v1.5 by default; ``--legacy`` sends a "
-            "MessageCard v1 fallback for the legacy connector."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-teams start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-teams stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL is configured",
-                "parameters": [],
-                "example": "cos app gateway-teams status",
-            },
-            "send": {
-                "description": "Send a text message to the channel the webhook is bound to",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "Informational only (Teams webhook channel is implicit); empty is fine",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 28000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional card title",
-                    },
-                    {
-                        "name": "legacy",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send legacy MessageCard v1 instead of Adaptive Card",
-                    },
-                ],
-                "example": "cos app gateway-teams send '' 'hello'",
-            },
-        },
-    }
 
 
 def _load_credential(name: str) -> tuple[str | None, str | None]:
@@ -249,20 +188,6 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound Teams messages need a Bot Framework / Azure Bot "
-            "registration (not a webhook). Use ``send '' <text>`` for "
-            "outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     url, err = _load_webhook_url()
     return {
@@ -276,18 +201,25 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""
         title = ""
         legacy = False
         if isinstance(args, list):
-            if len(args) >= 2:
-                recipient, text = str(args[0]), str(args[1])
-            elif len(args) == 1:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                positional_aliases=("recipient",),
+                value_flags=("recipient", "title"),
+                bool_flags=("legacy",),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            recipient = parsed["recipient"] or ""
+            title = parsed["title"] or ""
+            legacy = parsed["legacy"]
         elif isinstance(args, dict):
             recipient = str(args.get("recipient", "") or "")
             text = str(args.get("text", "") or "")
@@ -300,8 +232,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

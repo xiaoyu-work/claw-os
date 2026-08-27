@@ -138,6 +138,7 @@ export interface Localizedtext {
 export interface Operation {
   label: Localizedtext;
   summary?: Localizedtext;
+  stdin?: boolean;
   args?: Arg[];
   needs?: Need[];
 }
@@ -147,10 +148,52 @@ export interface Operation {
  */
 export interface Arg {
   name: string;
-  kind: "path" | "host" | "name" | "text" | "number" | "bool";
+  kind: "path" | "host" | "name" | "text" | "number" | "integer" | "bool";
+  binding?: "positional" | "flag";
   required?: boolean;
+  required_when?: Needcondition;
+  repeatable?: boolean;
+  aliases?: string[];
+  positional_alias?: boolean;
+  choices?: unknown[];
   default?: unknown;
+  default_from?: Argdefaultbinding;
+  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider" | "ntfy-server";
   label?: Localizedtext;
+}
+
+/**
+ * positionalArg.
+ */
+export interface Positionalarg {
+}
+
+/**
+ * optionalPositionalGap.
+ */
+export interface Optionalpositionalgap {
+}
+
+/**
+ * optionalPositional.
+ */
+export interface Optionalpositional {
+}
+
+/**
+ * defaultedPositional.
+ */
+export interface Defaultedpositional {
+}
+
+/**
+ * argDefaultBinding.
+ */
+export interface Argdefaultbinding {
+  arg: string;
+  transform?: "identity" | "url-path-basename";
+  prefix?: string;
+  fallback?: string;
 }
 
 /**
@@ -158,9 +201,19 @@ export interface Arg {
  * A single capability request: verb + scope binding + human reason.
  */
 export interface Need {
-  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.service" | "sys.package" | "sys.mount" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "clipboard.read" | "clipboard.write" | "device.audio" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "desktop.launch" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
+  verb: "fs.read" | "fs.write" | "fs.delete" | "fs.exec" | "fs.watch" | "fs.meta" | "net.dial" | "net.listen" | "net.raw" | "net.resolve" | "net.manage" | "net.firewall" | "proc.spawn" | "proc.signal" | "proc.observe" | "sys.observe" | "sys.crash" | "sys.container" | "sys.config" | "sys.events" | "sys.identity" | "sys.security" | "sys.storage" | "sys.service" | "sys.package" | "sys.mount" | "sys.snapshot" | "sys.time" | "sys.power" | "sys.kernel" | "secret.read" | "secret.write" | "secret.grant" | "agent.spawn" | "agent.invoke" | "agent.observe" | "agent.delegate" | "data.kv.read" | "data.kv.write" | "data.kv.delete" | "data.db.read" | "data.db.write" | "data.log.read" | "data.log.write" | "data.inbox.read" | "data.inbox.write" | "data.backup" | "memory.write" | "memory.read" | "ipc.publish" | "ipc.subscribe" | "ipc.invoke" | "ui.notify" | "ui.prompt" | "ui.window" | "ui.input" | "ui.accessibility" | "clipboard.read" | "clipboard.write" | "device.audio" | "device.bluetooth" | "device.media-route" | "device.printer" | "device.display" | "device.camera" | "device.microphone" | "device.location" | "device.sensor" | "device.usb" | "time.cron" | "time.delay" | "ai.chat" | "ai.chat.untrusted" | "ai.embed" | "ai.image.generate" | "ai.image.analyze" | "ai.audio.tts" | "ai.audio.stt" | "ai.vision.analyze" | "ai.video.generate" | "ai.video.analyze" | "ai.bypass" | "desktop.launch" | "desktop.window" | "browser.tabs.read" | "browser.nav" | "browser.dom.read" | "browser.dom.write" | "browser.input.secret" | "browser.eval";
   scope: Scopebinding;
+  when?: Needcondition;
   why: Localizedtext;
+}
+
+/**
+ * needCondition.
+ */
+export interface Needcondition {
+  kind: "arg-present" | "arg-equals" | "arg-not-equals";
+  arg: string;
+  value?: unknown;
 }
 
 /**
@@ -170,8 +223,11 @@ export interface Need {
  * an explicit wildcard (no implicit '*').
  */
 export interface Scopebinding {
-  kind: "from-arg" | "fixed" | "wild";
+  kind: "from-arg" | "from-arg-map" | "from-arg-or-wild" | "fixed" | "wild";
   arg?: string;
+  transform?: "identity" | "parent" | "url-host";
+  values?: Record<string, unknown>;
+  wild_when?: string;
   scope?: Scope;
 }
 

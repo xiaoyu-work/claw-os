@@ -34,6 +34,37 @@ fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
+/// Return whether argv resolves to an installed manifest operation that opts
+/// into caller stdin. Management, help, schema, and desktop routes never read
+/// stdin eagerly.
+pub fn app_operation_accepts_stdin(args: &[String]) -> bool {
+    app_operation_accepts_stdin_in(args, &apps_dir())
+}
+
+fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
+    if args.first().map(String::as_str) != Some("app") || args.len() < 3 {
+        return false;
+    }
+    let app_id = &args[1];
+    if matches!(
+        app_id.as_str(),
+        "lint" | "tool" | "install" | "create" | "consent"
+    ) {
+        return false;
+    }
+    if app_commands::schema_requested(&args[3..]) {
+        return false;
+    }
+    apps::find(root, app_id)
+        .and_then(|app| {
+            app.manifest
+                .operations
+                .get(&args[2])
+                .map(|operation| operation.stdin)
+        })
+        .unwrap_or(false)
+}
+
 fn data_dir() -> String {
     crate::paths::data_dir().to_string_lossy().into_owned()
 }
@@ -204,6 +235,17 @@ fn audit_path() -> PathBuf {
 
 /// Main dispatch: parse CLI args and route to the appropriate handler.
 pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
+    dispatch_with_stdin(args, None)
+}
+
+/// Dispatch a top-level CLI invocation with explicitly supplied stdin bytes.
+///
+/// Internal callers use [`dispatch`] and therefore cannot accidentally pass a
+/// control pipe or service stdin through to an App.
+pub fn dispatch_with_stdin(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
     if args.is_empty() {
         return show_overview();
     }
@@ -1275,7 +1317,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 
     // "app" namespace → route to declared app runtimes
     if name == "app" {
-        return dispatch_app(&args[1..]);
+        return dispatch_app(&args[1..], stdin_data);
     }
 
     // Built-in OS primitives
@@ -1313,6 +1355,7 @@ fn run_app_command(
     command: &str,
     args: &[String],
     app: &apps::App,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let start = Instant::now();
     let audit = audit_path();
@@ -1331,7 +1374,8 @@ fn run_app_command(
         }
     }
 
-    let result = bridge::run_app(&app.dir, command, args, &data, &apps);
+    let result =
+        bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
 
     match result {
         Ok(output) => {

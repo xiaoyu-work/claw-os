@@ -15,21 +15,76 @@
       },
       "args": [
         {
-          "name": "topic",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "topic",
+          "kind": "name",
+          "required": false,
+          "binding": "flag",
+          "positional_alias": true
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "priority",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "tags",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "click",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "server",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "ntfy-server"
+        },
+        {
+          "name": "bearer",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "basic",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "markdown",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
         }
       ],
       "needs": [
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "server",
+            "transform": "url-host"
           },
           "why": {
             "en": "Connect to the remote gateway service to perform the send operation."
@@ -72,6 +127,11 @@
           },
           "why": {
             "en": "Read the configured ntfy_token secret required by this gateway."
+          },
+          "when": {
+            "kind": "arg-not-equals",
+            "arg": "server",
+            "value": "https://ntfy.sh/"
           }
         },
         {
@@ -93,7 +153,15 @@
       "label": {
         "en": "Show gateway configuration and status"
       },
-      "args": [],
+      "args": [
+        {
+          "name": "server",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "ntfy-server"
+        }
+      ],
       "needs": [
         {
           "verb": "secret.read",

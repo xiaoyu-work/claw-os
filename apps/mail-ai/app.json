@@ -16,7 +16,9 @@
       "monthly_units": 500000
     },
     "safety": "strict",
-    "origins": ["external-content"]
+    "origins": [
+      "external-content"
+    ]
   },
   "operations": {
     "summarize": {
@@ -26,13 +28,54 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the email body to a model and get back a structured summary." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the email body to a model and get back a structured summary."
+          }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "mail-ai" } },
-          "why": { "en": "Remember the email summary so the agent can recall it later." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "mail-ai"
+            }
+          },
+          "why": {
+            "en": "Remember the email summary so the agent can recall it later."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "subject",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "from",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "body",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "lang",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "en"
         }
       ]
     },
@@ -43,8 +86,48 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the thread context to a model and get back three reply drafts." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the thread context to a model and get back three reply drafts."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "subject",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "from",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "thread",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "my-intent",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "lang",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "en"
         }
       ]
     },
@@ -55,8 +138,56 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the intent and current draft to a model and get back a completion." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the intent and current draft to a model and get back a completion."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "subject",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "to",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "draft",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "intent",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "style",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "formal",
+          "choices": ["formal", "casual", "short"]
+        },
+        {
+          "name": "lang",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "en"
         }
       ]
     },
@@ -67,8 +198,26 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the source text and target language to a model for translation." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the source text and target language to a model for translation."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "target",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
         }
       ]
     },
@@ -79,13 +228,55 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the sender / subject / snippet to a model and get back a category + tags." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the sender / subject / snippet to a model and get back a category + tags."
+          }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "mail-ai" } },
-          "why": { "en": "Remember high-priority triage decisions so the agent can recall what mattered." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "mail-ai"
+            }
+          },
+          "why": {
+            "en": "Remember high-priority triage decisions so the agent can recall what mattered."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "subject",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "from",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "snippet",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": ""
+        },
+        {
+          "name": "has-attachments",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
         }
       ]
     },
@@ -96,13 +287,41 @@
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the question and surrounding messages to a model for a grounded answer." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the question and surrounding messages to a model for a grounded answer."
+          }
+        }
+      ],
+      "args": [
+        {
+          "name": "question",
+          "kind": "text",
+          "required": true,
+          "binding": "flag"
+        },
+        {
+          "name": "context-json",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "[]"
+        },
+        {
+          "name": "lang",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "en"
         }
       ]
     }
   },
   "dependencies": {
-    "binaries": ["thunderbird"]
+    "binaries": [
+      "thunderbird"
+    ]
   }
 }
