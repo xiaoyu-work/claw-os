@@ -27,6 +27,7 @@
 
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::future::Future;
 use std::hash::BuildHasher;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -409,6 +410,56 @@ pub async fn ensure_copilot_token(
     }
     let fresh = exchange_for_copilot_token(github_token).await?;
     store_cached(fingerprint, fresh.clone());
+    Ok(fresh)
+}
+
+/// Replace a short-lived Copilot token rejected by the API.
+///
+/// The long-lived GitHub credential is never removed here. Refreshes are
+/// serialized with ordinary cache fills, and a concurrent caller that already
+/// replaced `rejected_token` wins so only one exchange is needed.
+pub async fn refresh_rejected_copilot_token(
+    github_token: &str,
+    rejected_token: &CopilotToken,
+) -> Result<CopilotToken, CopilotAuthError> {
+    refresh_rejected_copilot_token_with(github_token, rejected_token, |token| async move {
+        exchange_for_copilot_token(&token).await
+    })
+    .await
+}
+
+async fn refresh_rejected_copilot_token_with<F, Fut>(
+    github_token: &str,
+    rejected_token: &CopilotToken,
+    exchange: F,
+) -> Result<CopilotToken, CopilotAuthError>
+where
+    F: FnOnce(String) -> Fut,
+    Fut: Future<Output = Result<CopilotToken, CopilotAuthError>>,
+{
+    let github_fingerprint = token_fingerprint(github_token);
+    let exchange_lock = exchange_lock_for(github_fingerprint);
+    let _exchange_guard = exchange_lock.lock().await;
+
+    let rejected_fingerprint = token_fingerprint(&rejected_token.bearer);
+    let catalog_lock = model_catalog_lock_for(rejected_fingerprint);
+    let _catalog_guard = catalog_lock.lock().await;
+    if let Ok(mut catalogs) = model_catalog_cache().lock() {
+        catalogs.remove(&rejected_fingerprint);
+    }
+    drop(_catalog_guard);
+
+    if let Ok(mut tokens) = cache().lock() {
+        if let Some(current) = tokens.get(&github_fingerprint) {
+            if current.bearer != rejected_token.bearer {
+                return Ok(current.clone());
+            }
+        }
+        tokens.remove(&github_fingerprint);
+    }
+
+    let fresh = exchange(github_token.to_string()).await?;
+    store_cached(github_fingerprint, fresh.clone());
     Ok(fresh)
 }
 

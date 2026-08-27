@@ -219,3 +219,101 @@ async fn exchange_lock_is_per_fingerprint() {
     assert!(started.elapsed() < std::time::Duration::from_millis(50));
     drop(g);
 }
+
+#[tokio::test]
+async fn rejected_token_refresh_invalidates_token_and_model_catalog_once() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let github_token = "github_issue_17_refresh_once";
+    let rejected = CopilotToken {
+        bearer: "copilot_issue_17_rejected".into(),
+        base_url: "https://api.individual.githubcopilot.com".into(),
+        expires_at_unix: u64::MAX,
+    };
+    let fresh = CopilotToken {
+        bearer: "copilot_issue_17_fresh".into(),
+        base_url: "https://api.business.githubcopilot.com".into(),
+        expires_at_unix: u64::MAX,
+    };
+    store_cached(token_fingerprint(github_token), rejected.clone());
+    let rejected_fingerprint = token_fingerprint(&rejected.bearer);
+    store_model_catalog(
+        rejected_fingerprint,
+        Arc::new(vec![model(serde_json::json!({"id": "stale-model"}))]),
+    );
+
+    let exchanges = Arc::new(AtomicUsize::new(0));
+    let exchanges_for_call = exchanges.clone();
+    let fresh_for_call = fresh.clone();
+    let actual = refresh_rejected_copilot_token_with(
+        github_token,
+        &rejected,
+        move |seen_github_token| async move {
+            assert_eq!(seen_github_token, github_token);
+            exchanges_for_call.fetch_add(1, Ordering::SeqCst);
+            Ok(fresh_for_call)
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(actual.bearer, fresh.bearer);
+    assert_eq!(exchanges.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        lookup_cached(token_fingerprint(github_token))
+            .unwrap()
+            .bearer,
+        fresh.bearer
+    );
+    assert!(
+        lookup_model_catalog(rejected_fingerprint).is_none(),
+        "the catalogue belongs to the rejected short-lived token"
+    );
+}
+
+#[tokio::test]
+async fn rejected_token_refresh_preserves_concurrent_replacement() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let github_token = "github_issue_17_concurrent_replacement";
+    let rejected = CopilotToken {
+        bearer: "copilot_issue_17_old".into(),
+        base_url: "https://api.individual.githubcopilot.com".into(),
+        expires_at_unix: u64::MAX,
+    };
+    let replacement = CopilotToken {
+        bearer: "copilot_issue_17_already_refreshed".into(),
+        base_url: "https://api.business.githubcopilot.com".into(),
+        expires_at_unix: u64::MAX,
+    };
+    let rejected_fingerprint = token_fingerprint(&rejected.bearer);
+    let replacement_fingerprint = token_fingerprint(&replacement.bearer);
+    store_model_catalog(
+        rejected_fingerprint,
+        Arc::new(vec![model(serde_json::json!({"id": "stale-model"}))]),
+    );
+    store_model_catalog(
+        replacement_fingerprint,
+        Arc::new(vec![model(serde_json::json!({"id": "fresh-model"}))]),
+    );
+    store_cached(token_fingerprint(github_token), replacement.clone());
+
+    let exchanges = Arc::new(AtomicUsize::new(0));
+    let exchanges_for_call = exchanges.clone();
+    let fallback = replacement.clone();
+    let actual =
+        refresh_rejected_copilot_token_with(github_token, &rejected, move |_| async move {
+            exchanges_for_call.fetch_add(1, Ordering::SeqCst);
+            Ok(fallback)
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(actual.bearer, replacement.bearer);
+    assert_eq!(exchanges.load(Ordering::SeqCst), 0);
+    assert!(lookup_model_catalog(rejected_fingerprint).is_none());
+    assert!(
+        lookup_model_catalog(replacement_fingerprint).is_some(),
+        "only the rejected token's catalogue should be invalidated"
+    );
+}

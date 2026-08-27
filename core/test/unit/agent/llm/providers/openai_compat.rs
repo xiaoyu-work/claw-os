@@ -1139,6 +1139,393 @@ fn request_json_body(request: &[u8]) -> serde_json::Value {
     serde_json::from_slice(&request[body_start..]).expect("HTTP request body is JSON")
 }
 
+#[derive(Clone, Copy)]
+struct MockReply {
+    status_line: &'static str,
+    content_type: &'static str,
+    body: &'static str,
+}
+
+async fn spawn_sequence_mock(
+    replies: Vec<MockReply>,
+) -> (String, tokio::task::JoinHandle<Vec<Vec<u8>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let url = format!("http://{addr}");
+
+    let handle = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let mut requests = Vec::with_capacity(replies.len());
+        for reply in replies {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut request = Vec::with_capacity(4096);
+            let mut buffer = [0u8; 4096];
+            let mut header_end = None;
+            let mut content_length = 0usize;
+            loop {
+                let read = socket.read(&mut buffer).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                request.extend_from_slice(&buffer[..read]);
+                if header_end.is_none() {
+                    if let Some(position) =
+                        request.windows(4).position(|window| window == b"\r\n\r\n")
+                    {
+                        header_end = Some(position + 4);
+                        let headers = std::str::from_utf8(&request[..position]).unwrap_or_default();
+                        for line in headers.split("\r\n") {
+                            if let Some(value) =
+                                line.to_ascii_lowercase().strip_prefix("content-length:")
+                            {
+                                content_length = value.trim().parse().unwrap_or_default();
+                            }
+                        }
+                    }
+                }
+                if header_end.is_some_and(|start| request.len() - start >= content_length) {
+                    break;
+                }
+            }
+
+            let response = format!(
+                "{}\r\nContent-Type: {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                reply.status_line,
+                reply.content_type,
+                reply.body.len(),
+                reply.body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+            socket.shutdown().await.unwrap();
+            requests.push(request);
+        }
+        requests
+    });
+    (url, handle)
+}
+
+fn request_header(request: &[u8], name: &str) -> Option<String> {
+    let header_end = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")?;
+    std::str::from_utf8(&request[..header_end])
+        .ok()?
+        .split("\r\n")
+        .skip(1)
+        .filter_map(|line| line.split_once(':'))
+        .find_map(|(header_name, value)| {
+            header_name
+                .eq_ignore_ascii_case(name)
+                .then(|| value.trim().to_string())
+        })
+}
+
+struct FakeCopilotAuthSource {
+    initial: crate::agent::llm::providers::copilot_auth::CopilotToken,
+    refreshed: crate::agent::llm::providers::copilot_auth::CopilotToken,
+    reject_first_model_call: bool,
+    ensure_calls: std::sync::atomic::AtomicUsize,
+    refresh_calls: std::sync::atomic::AtomicUsize,
+    model_calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait]
+impl CopilotAuthSource for FakeCopilotAuthSource {
+    async fn ensure_token(
+        &self,
+        github_token: &str,
+    ) -> CopilotAuthResult<crate::agent::llm::providers::copilot_auth::CopilotToken> {
+        assert_eq!(github_token, "github-long-lived");
+        self.ensure_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.initial.clone())
+    }
+
+    async fn refresh_rejected_token(
+        &self,
+        github_token: &str,
+        rejected_token: &crate::agent::llm::providers::copilot_auth::CopilotToken,
+    ) -> CopilotAuthResult<crate::agent::llm::providers::copilot_auth::CopilotToken> {
+        assert_eq!(github_token, "github-long-lived");
+        assert_eq!(rejected_token.bearer, self.initial.bearer);
+        self.refresh_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.refreshed.clone())
+    }
+
+    async fn wire_api_for_model(
+        &self,
+        _token: &crate::agent::llm::providers::copilot_auth::CopilotToken,
+        model: &str,
+    ) -> CopilotAuthResult<crate::agent::llm::providers::copilot_auth::CopilotWireApi> {
+        assert_eq!(model, "gpt-4o-mini");
+        let call = self
+            .model_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self.reject_first_model_call && call == 0 {
+            return Err(
+                crate::agent::llm::providers::copilot_auth::CopilotAuthError::Http {
+                    status: 401,
+                    body: "expired exchanged token".into(),
+                },
+            );
+        }
+        Ok(crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions)
+    }
+}
+
+fn copilot_provider_for_retry_test(
+    base_url: &str,
+    reject_first_model_call: bool,
+) -> (
+    OpenAICompatProvider,
+    Arc<crate::agent::llm::credential_pool::Pool>,
+    Arc<FakeCopilotAuthSource>,
+) {
+    use crate::agent::llm::credential_pool::{Pool, PoolEntry, SelectionStrategy};
+
+    let pool = Arc::new(
+        Pool::from_entries(
+            "copilot-issue-17",
+            vec![PoolEntry::inline("github-long-lived")],
+            SelectionStrategy::Sticky,
+        )
+        .unwrap(),
+    );
+    let source = Arc::new(FakeCopilotAuthSource {
+        initial: crate::agent::llm::providers::copilot_auth::CopilotToken {
+            bearer: "copilot-rejected".into(),
+            base_url: base_url.into(),
+            expires_at_unix: u64::MAX,
+        },
+        refreshed: crate::agent::llm::providers::copilot_auth::CopilotToken {
+            bearer: "copilot-refreshed".into(),
+            base_url: base_url.into(),
+            expires_at_unix: u64::MAX,
+        },
+        reject_first_model_call,
+        ensure_calls: std::sync::atomic::AtomicUsize::new(0),
+        refresh_calls: std::sync::atomic::AtomicUsize::new(0),
+        model_calls: std::sync::atomic::AtomicUsize::new(0),
+    });
+    let config = OpenAICompatConfig {
+        alias: "copilot".into(),
+        base_url: base_url.into(),
+        api_key: None,
+        model: "gpt-4o-mini".into(),
+        extra_headers: std::collections::HashMap::new(),
+        request_timeout: std::time::Duration::from_secs(5),
+        pool: Some(pool.clone()),
+    };
+    (
+        OpenAICompatProvider::new_with_copilot_auth_source(config, source.clone()),
+        pool,
+        source,
+    )
+}
+
+fn assert_copilot_retry_bearers(requests: &[Vec<u8>]) {
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        request_header(&requests[0], "authorization").as_deref(),
+        Some("Bearer copilot-rejected")
+    );
+    assert_eq!(
+        request_header(&requests[1], "authorization").as_deref(),
+        Some("Bearer copilot-refreshed")
+    );
+}
+
+fn assert_single_pool_success(pool: &crate::agent::llm::credential_pool::Pool) {
+    let stats = pool.stats();
+    assert_eq!(stats[0].successes, 1);
+    assert_eq!(stats[0].failures, 0);
+    assert!(stats[0].cooldown_remaining_ms.is_none());
+}
+
+fn assert_single_pool_auth_failure(pool: &crate::agent::llm::credential_pool::Pool) {
+    use crate::agent::llm::credential_pool::FailureClass;
+
+    let stats = pool.stats();
+    assert_eq!(stats[0].successes, 0);
+    assert_eq!(stats[0].failures, 1);
+    assert_eq!(
+        stats[0].last_failure_class,
+        Some(FailureClass::CooldownWorthy)
+    );
+    assert!(stats[0].cooldown_remaining_ms.is_some());
+}
+
+#[tokio::test]
+async fn copilot_chat_retries_rejected_exchanged_token_without_cooling_github_credential() {
+    let (base_url, server) = spawn_sequence_mock(vec![
+        MockReply {
+            status_line: "HTTP/1.1 401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"expired exchanged token"}}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 200 OK",
+            content_type: "application/json",
+            body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}"#,
+        },
+    ])
+    .await;
+    let (provider, pool, source) = copilot_provider_for_retry_test(&base_url, false);
+
+    let response = provider.chat(req_text("hello")).await.unwrap();
+    assert!(matches!(
+        response.content.first(),
+        Some(ContentBlock::Text { text }) if text == "ok"
+    ));
+    let requests = server.await.unwrap();
+    assert_copilot_retry_bearers(&requests);
+    assert_eq!(
+        source
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_single_pool_success(&pool);
+}
+
+#[tokio::test]
+async fn copilot_chat_persistent_auth_failure_retries_once_and_cools_github_credential() {
+    let (base_url, server) = spawn_sequence_mock(vec![
+        MockReply {
+            status_line: "HTTP/1.1 401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"expired exchanged token"}}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"not authorized"}}"#,
+        },
+    ])
+    .await;
+    let (provider, pool, source) = copilot_provider_for_retry_test(&base_url, false);
+
+    let error = provider.chat(req_text("hello")).await.unwrap_err();
+    assert!(matches!(error, LlmError::Auth));
+    let requests = server.await.unwrap();
+    assert_copilot_retry_bearers(&requests);
+    assert_eq!(
+        source
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_single_pool_auth_failure(&pool);
+}
+
+#[tokio::test]
+async fn copilot_stream_retries_rejected_exchanged_token_without_cooling_github_credential() {
+    use futures_util::StreamExt;
+
+    let (base_url, server) = spawn_sequence_mock(vec![
+        MockReply {
+            status_line: "HTTP/1.1 403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"expired exchanged token"}}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 200 OK",
+            content_type: "text/event-stream",
+            body: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n",
+                "data: [DONE]\n\n"
+            ),
+        },
+    ])
+    .await;
+    let (provider, pool, source) = copilot_provider_for_retry_test(&base_url, false);
+
+    let events: Vec<_> = provider
+        .chat_stream(req_text("hello"))
+        .await
+        .unwrap()
+        .collect()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done {
+            finish: FinishReason::Stop,
+            ..
+        }))
+    ));
+    let requests = server.await.unwrap();
+    assert_copilot_retry_bearers(&requests);
+    assert_eq!(
+        source
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_single_pool_success(&pool);
+}
+
+#[tokio::test]
+async fn copilot_stream_persistent_auth_failure_retries_once() {
+    let (base_url, server) = spawn_sequence_mock(vec![
+        MockReply {
+            status_line: "HTTP/1.1 403 Forbidden",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"expired exchanged token"}}"#,
+        },
+        MockReply {
+            status_line: "HTTP/1.1 401 Unauthorized",
+            content_type: "application/json",
+            body: r#"{"error":{"message":"still unauthorized"}}"#,
+        },
+    ])
+    .await;
+    let (provider, pool, source) = copilot_provider_for_retry_test(&base_url, false);
+
+    let result = provider.chat_stream(req_text("hello")).await;
+    assert!(matches!(result, Err(LlmError::Auth)));
+    let requests = server.await.unwrap();
+    assert_copilot_retry_bearers(&requests);
+    assert_eq!(
+        source
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_single_pool_auth_failure(&pool);
+}
+
+#[tokio::test]
+async fn copilot_model_catalog_auth_rejection_refreshes_before_request() {
+    let (base_url, server) = spawn_sequence_mock(vec![MockReply {
+        status_line: "HTTP/1.1 200 OK",
+        content_type: "application/json",
+        body: r#"{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}]}"#,
+    }])
+    .await;
+    let (provider, pool, source) = copilot_provider_for_retry_test(&base_url, true);
+
+    provider.chat(req_text("hello")).await.unwrap();
+    let requests = server.await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        request_header(&requests[0], "authorization").as_deref(),
+        Some("Bearer copilot-refreshed")
+    );
+    assert_eq!(
+        source
+            .refresh_calls
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    assert_eq!(
+        source.model_calls.load(std::sync::atomic::Ordering::SeqCst),
+        2
+    );
+    assert_single_pool_success(&pool);
+}
+
 #[tokio::test]
 async fn official_openai_stream_serializes_usage_option_and_reports_usage() {
     use futures_util::StreamExt;

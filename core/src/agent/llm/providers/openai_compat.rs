@@ -260,12 +260,70 @@ impl OpenAICompatConfig {
 pub struct OpenAICompatProvider {
     cfg: OpenAICompatConfig,
     client: reqwest::Client,
+    copilot_auth: Arc<dyn CopilotAuthSource>,
 }
 
 struct RequestTarget {
     bearer: Option<String>,
     endpoint_url: String,
     wire_api: super::copilot_auth::CopilotWireApi,
+    copilot: Option<CopilotRequestAuth>,
+}
+
+struct CopilotRequestAuth {
+    github_token: String,
+    token: super::copilot_auth::CopilotToken,
+    refresh_used: bool,
+}
+
+type CopilotAuthResult<T> = std::result::Result<T, super::copilot_auth::CopilotAuthError>;
+
+#[async_trait]
+trait CopilotAuthSource: Send + Sync {
+    async fn ensure_token(
+        &self,
+        github_token: &str,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotToken>;
+
+    async fn refresh_rejected_token(
+        &self,
+        github_token: &str,
+        rejected_token: &super::copilot_auth::CopilotToken,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotToken>;
+
+    async fn wire_api_for_model(
+        &self,
+        token: &super::copilot_auth::CopilotToken,
+        model: &str,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi>;
+}
+
+struct LiveCopilotAuthSource;
+
+#[async_trait]
+impl CopilotAuthSource for LiveCopilotAuthSource {
+    async fn ensure_token(
+        &self,
+        github_token: &str,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
+        super::copilot_auth::ensure_copilot_token(github_token).await
+    }
+
+    async fn refresh_rejected_token(
+        &self,
+        github_token: &str,
+        rejected_token: &super::copilot_auth::CopilotToken,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
+        super::copilot_auth::refresh_rejected_copilot_token(github_token, rejected_token).await
+    }
+
+    async fn wire_api_for_model(
+        &self,
+        token: &super::copilot_auth::CopilotToken,
+        model: &str,
+    ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi> {
+        super::copilot_auth::wire_api_for_model(token, model).await
+    }
 }
 
 impl OpenAICompatProvider {
@@ -282,7 +340,21 @@ impl OpenAICompatProvider {
             builder = builder.timeout(cfg.request_timeout);
         }
         let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        Self {
+            cfg,
+            client,
+            copilot_auth: Arc::new(LiveCopilotAuthSource),
+        }
+    }
+
+    #[cfg(test)]
+    fn new_with_copilot_auth_source(
+        cfg: OpenAICompatConfig,
+        copilot_auth: Arc<dyn CopilotAuthSource>,
+    ) -> Self {
+        let mut provider = Self::new(cfg);
+        provider.copilot_auth = copilot_auth;
+        provider
     }
 
     /// Convenience constructor that pulls everything from `AgentConfig`.
@@ -346,17 +418,14 @@ impl OpenAICompatProvider {
                     )
                 })?,
             };
-            let token = super::copilot_auth::ensure_copilot_token(&github_token)
+            let token = self
+                .copilot_auth
+                .ensure_token(&github_token)
                 .await
                 .map_err(map_copilot_error)?;
-            let wire_api = super::copilot_auth::wire_api_for_model(&token, &self.cfg.model)
-                .await
-                .map_err(map_copilot_error)?;
-            return Ok(RequestTarget {
-                bearer: Some(token.bearer),
-                endpoint_url: endpoint_for_wire_api(&token.base_url, wire_api),
-                wire_api,
-            });
+            return self
+                .copilot_request_target(github_token, token, false)
+                .await;
         }
 
         Ok(RequestTarget {
@@ -365,7 +434,65 @@ impl OpenAICompatProvider {
                 .or_else(|| self.cfg.api_key.clone()),
             endpoint_url: self.endpoint(),
             wire_api: super::copilot_auth::CopilotWireApi::ChatCompletions,
+            copilot: None,
         })
+    }
+
+    async fn copilot_request_target(
+        &self,
+        github_token: String,
+        mut token: super::copilot_auth::CopilotToken,
+        mut refresh_used: bool,
+    ) -> Result<RequestTarget> {
+        loop {
+            match self
+                .copilot_auth
+                .wire_api_for_model(&token, &self.cfg.model)
+                .await
+            {
+                Ok(wire_api) => {
+                    return Ok(RequestTarget {
+                        bearer: Some(token.bearer.clone()),
+                        endpoint_url: endpoint_for_wire_api(&token.base_url, wire_api),
+                        wire_api,
+                        copilot: Some(CopilotRequestAuth {
+                            github_token,
+                            token,
+                            refresh_used,
+                        }),
+                    });
+                }
+                Err(error) if copilot_api_rejected_token(&error) && !refresh_used => {
+                    token = self
+                        .copilot_auth
+                        .refresh_rejected_token(&github_token, &token)
+                        .await
+                        .map_err(map_copilot_error)?;
+                    refresh_used = true;
+                }
+                Err(error) => return Err(map_copilot_error(error)),
+            }
+        }
+    }
+
+    async fn refresh_request_target(
+        &self,
+        target: &RequestTarget,
+    ) -> Result<Option<RequestTarget>> {
+        let Some(auth) = target.copilot.as_ref() else {
+            return Ok(None);
+        };
+        if auth.refresh_used {
+            return Ok(None);
+        }
+        let token = self
+            .copilot_auth
+            .refresh_rejected_token(&auth.github_token, &auth.token)
+            .await
+            .map_err(map_copilot_error)?;
+        self.copilot_request_target(auth.github_token.clone(), token, true)
+            .await
+            .map(Some)
     }
 }
 
@@ -408,6 +535,16 @@ fn map_copilot_error(error: super::copilot_auth::CopilotAuthError) -> LlmError {
         CopilotAuthError::UnexpectedBody(message) => LlmError::UpstreamMalformed(message),
         CopilotAuthError::NotAuthorized(message) => LlmError::NotConfigured(message),
     }
+}
+
+fn copilot_api_rejected_token(error: &super::copilot_auth::CopilotAuthError) -> bool {
+    matches!(
+        error,
+        super::copilot_auth::CopilotAuthError::Http {
+            status: 401 | 403,
+            ..
+        }
+    )
 }
 
 fn pool_failure_class(error: &LlmError) -> crate::agent::llm::credential_pool::FailureClass {
@@ -544,10 +681,8 @@ impl Provider for OpenAICompatProvider {
                     .into(),
             ));
         }
-        // Acquire a key for this call. Pool path takes priority; on
-        // empty pool fall through to single-key. Lease holds the
-        // snapshotted value so concurrent cooldown bumps don't
-        // invalidate it.
+        // A declared pool is authoritative. Its lease snapshots the value so
+        // concurrent cooldown updates do not invalidate this call.
         let lease = if let Some(pool) = &self.cfg.pool {
             match pool.acquire() {
                 Ok(l) => Some(l),
@@ -559,7 +694,7 @@ impl Provider for OpenAICompatProvider {
 
         let vision_request = request_has_image(&request);
         let initiator = copilot_initiator(&request);
-        let target = match self.request_target(lease.as_ref()).await {
+        let mut target = match self.request_target(lease.as_ref()).await {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
@@ -568,109 +703,132 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match build_wire_request_body(
-            &request,
-            &self.cfg.model,
-            false,
-            target.wire_api,
-            compatibility_for_alias(&self.cfg.alias),
-        ) {
-            Ok(body) => body,
-            Err(error) => {
-                if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+
+        loop {
+            let body = match build_wire_request_body(
+                &request,
+                &self.cfg.model,
+                false,
+                target.wire_api,
+                compatibility_for_alias(&self.cfg.alias),
+            ) {
+                Ok(body) => body,
+                Err(error) => {
+                    if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
+                        pool.report_failure(lease, pool_failure_class(&error));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
-            }
-        };
+            };
 
-        let mut http = self
-            .client
-            .post(&target.endpoint_url)
-            .header("Content-Type", "application/json")
-            .json(&body);
+            let mut http = self
+                .client
+                .post(&target.endpoint_url)
+                .header("Content-Type", "application/json")
+                .json(&body);
 
-        if let Some(key) = target.bearer.as_deref() {
-            if alias_uses_api_key_header(&self.cfg.alias) {
-                http = http.header("api-key", key);
-            } else {
-                http = http.bearer_auth(key);
-            }
-        }
-        // Copilot's API rejects requests without these two headers
-        // (and uses them for telemetry + entitlement gating). They
-        // must come AFTER `extra_headers` is applied so a user's
-        // `agent.extra_headers` cannot accidentally clobber them.
-        for (k, v) in &self.cfg.extra_headers {
-            http = http.header(k.as_str(), v.as_str());
-        }
-        if alias_is_copilot(&self.cfg.alias) {
-            http = with_copilot_headers(http, vision_request, initiator);
-        }
-
-        let send_result = http.send().await;
-        let resp = match send_result {
-            Ok(r) => r,
-            Err(e) => {
-                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
-                        l,
-                        crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+            if let Some(key) = target.bearer.as_deref() {
+                if alias_uses_api_key_header(&self.cfg.alias) {
+                    http = http.header("api-key", key);
+                } else {
+                    http = http.bearer_auth(key);
                 }
-                return Err(LlmError::Transport(e));
             }
-        };
-        let status = resp.status();
-        // SECURITY: cap the response body so a hostile upstream can't
-        // OOM us with a multi-GiB blob (HIGH-5).
-        let bytes = match crate::agent::llm::read_body_capped(
-            resp,
-            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-        )
-        .await
-        {
-            Ok(b) => b,
-            Err(e) => {
-                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    let cls = match &e {
-                        LlmError::UpstreamMalformed(_) => {
-                            crate::agent::llm::credential_pool::FailureClass::Transient
+            // Copilot's API rejects requests without these two headers
+            // (and uses them for telemetry + entitlement gating). They
+            // must come AFTER `extra_headers` is applied so a user's
+            // `agent.extra_headers` cannot accidentally clobber them.
+            for (k, v) in &self.cfg.extra_headers {
+                http = http.header(k.as_str(), v.as_str());
+            }
+            if alias_is_copilot(&self.cfg.alias) {
+                http = with_copilot_headers(http, vision_request, initiator);
+            }
+
+            let resp = match http.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                        pool.report_failure(
+                            l,
+                            crate::agent::llm::error_classifier::classify_network_error(),
+                        );
+                    }
+                    return Err(LlmError::Transport(e));
+                }
+            };
+            let status = resp.status();
+            // SECURITY: cap the response body so a hostile upstream can't
+            // OOM us with a multi-GiB blob (HIGH-5).
+            let body_result = crate::agent::llm::read_body_capped(
+                resp,
+                crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+            )
+            .await;
+
+            if !status.is_success() && matches!(status.as_u16(), 401 | 403) {
+                match self.refresh_request_target(&target).await {
+                    Ok(Some(refreshed)) => {
+                        target = refreshed;
+                        continue;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                            pool.report_failure(l, pool_failure_class(&error));
                         }
-                        _ => crate::agent::llm::error_classifier::classify_network_error(),
-                    };
+                        return Err(error);
+                    }
+                }
+            }
+
+            let bytes = match body_result {
+                Ok(b) => b,
+                Err(_) if target.copilot.is_some() && matches!(status.as_u16(), 401 | 403) => {
+                    bytes::Bytes::new()
+                }
+                Err(e) => {
+                    if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                        let cls = match &e {
+                            LlmError::UpstreamMalformed(_) => {
+                                crate::agent::llm::credential_pool::FailureClass::Transient
+                            }
+                            _ => crate::agent::llm::error_classifier::classify_network_error(),
+                        };
+                        pool.report_failure(l, cls);
+                    }
+                    return Err(e);
+                }
+            };
+
+            if !status.is_success() {
+                let err = wire::classify_http_error(status, &bytes);
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                    let cls =
+                        crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
                     pool.report_failure(l, cls);
                 }
-                return Err(e);
+                return Err(err);
             }
-        };
 
-        if !status.is_success() {
-            let err = wire::classify_http_error(status, &bytes);
-            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+            let result = match target.wire_api {
+                super::copilot_auth::CopilotWireApi::ChatCompletions => {
+                    serde_json::from_slice::<wire::Response>(&bytes)
+                        .map_err(|e| LlmError::Parse(e.to_string()))
+                        .and_then(|parsed| wire::response_to_chat(parsed, &self.cfg.model))
+                }
+                super::copilot_auth::CopilotWireApi::Responses => {
+                    responses_wire::response_from_slice(&bytes, &self.cfg.model)
+                }
+            };
+            if result.is_ok() {
+                if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                    pool.report_success(l);
+                }
             }
-            return Err(err);
+            return result;
         }
-
-        let result = match target.wire_api {
-            super::copilot_auth::CopilotWireApi::ChatCompletions => {
-                serde_json::from_slice::<wire::Response>(&bytes)
-                    .map_err(|e| LlmError::Parse(e.to_string()))
-                    .and_then(|parsed| wire::response_to_chat(parsed, &self.cfg.model))
-            }
-            super::copilot_auth::CopilotWireApi::Responses => {
-                responses_wire::response_from_slice(&bytes, &self.cfg.model)
-            }
-        };
-        if result.is_ok() {
-            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_success(l);
-            }
-        }
-        result
     }
 
     async fn chat_stream(
@@ -700,7 +858,7 @@ impl Provider for OpenAICompatProvider {
 
         let vision_request = request_has_image(&request);
         let initiator = copilot_initiator(&request);
-        let target = match self.request_target(lease.as_ref()).await {
+        let mut target = match self.request_target(lease.as_ref()).await {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
@@ -709,97 +867,114 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match build_wire_request_body(
-            &request,
-            &self.cfg.model,
-            true,
-            target.wire_api,
-            compatibility_for_alias(&self.cfg.alias),
-        ) {
-            Ok(body) => body,
-            Err(error) => {
-                if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+
+        loop {
+            let body = match build_wire_request_body(
+                &request,
+                &self.cfg.model,
+                true,
+                target.wire_api,
+                compatibility_for_alias(&self.cfg.alias),
+            ) {
+                Ok(body) => body,
+                Err(error) => {
+                    if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
+                        pool.report_failure(lease, pool_failure_class(&error));
+                    }
+                    return Err(error);
                 }
-                return Err(error);
+            };
+
+            let mut http = self
+                .client
+                .post(&target.endpoint_url)
+                .header("Content-Type", "application/json")
+                .header("Accept", "text/event-stream")
+                .json(&body);
+
+            if let Some(key) = target.bearer.as_deref() {
+                if alias_uses_api_key_header(&self.cfg.alias) {
+                    http = http.header("api-key", key);
+                } else {
+                    http = http.bearer_auth(key);
+                }
             }
-        };
-
-        let mut http = self
-            .client
-            .post(&target.endpoint_url)
-            .header("Content-Type", "application/json")
-            .header("Accept", "text/event-stream")
-            .json(&body);
-
-        if let Some(key) = target.bearer.as_deref() {
-            if alias_uses_api_key_header(&self.cfg.alias) {
-                http = http.header("api-key", key);
-            } else {
-                http = http.bearer_auth(key);
+            for (k, v) in &self.cfg.extra_headers {
+                http = http.header(k.as_str(), v.as_str());
             }
-        }
-        for (k, v) in &self.cfg.extra_headers {
-            http = http.header(k.as_str(), v.as_str());
-        }
-        if alias_is_copilot(&self.cfg.alias) {
-            http = with_copilot_headers(http, vision_request, initiator);
-        }
+            if alias_is_copilot(&self.cfg.alias) {
+                http = with_copilot_headers(http, vision_request, initiator);
+            }
 
-        let resp = match http.send().await {
-            Ok(r) => r,
-            Err(e) => {
+            let resp = match http.send().await {
+                Ok(r) => r,
+                Err(e) => {
+                    if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                        pool.report_failure(
+                            l,
+                            crate::agent::llm::error_classifier::classify_network_error(),
+                        );
+                    }
+                    return Err(LlmError::Transport(e));
+                }
+            };
+
+            let status = resp.status();
+            if !status.is_success() {
+                // Reuse the body cap so an error response can't OOM us
+                // either.
+                let bytes = crate::agent::llm::read_body_capped(
+                    resp,
+                    crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
+                )
+                .await
+                .unwrap_or_default();
+                if matches!(status.as_u16(), 401 | 403) {
+                    match self.refresh_request_target(&target).await {
+                        Ok(Some(refreshed)) => {
+                            target = refreshed;
+                            continue;
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
+                                pool.report_failure(l, pool_failure_class(&error));
+                            }
+                            return Err(error);
+                        }
+                    }
+                }
+                let err = wire::classify_http_error(status, &bytes);
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
-                        l,
-                        crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    let body_str = std::str::from_utf8(&bytes).unwrap_or("");
+                    let cls =
+                        crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
+                    pool.report_failure(l, cls);
                 }
-                return Err(LlmError::Transport(e));
+                return Err(err);
             }
-        };
 
-        let status = resp.status();
-        if !status.is_success() {
-            // Reuse the body cap so an error response can't OOM us
-            // either.
-            let bytes = crate::agent::llm::read_body_capped(
-                resp,
-                crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-            )
-            .await
-            .unwrap_or_default();
-            let err = wire::classify_http_error(status, &bytes);
-            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                let body_str = std::str::from_utf8(&bytes).unwrap_or("");
-                let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
-            }
-            return Err(err);
-        }
-
-        // MEDIUM-9 / streaming success accounting: credit the lease
-        // only when the body's `[DONE]` event lands, not here on
-        // headers. Pass the lease into the stream so it can call
-        // report_success / report_failure at the right boundary.
-        let bytes_stream = resp.bytes_stream();
-        let model = self.cfg.model.clone();
-        match target.wire_api {
-            super::copilot_auth::CopilotWireApi::ChatCompletions => {
-                Ok(
+            // MEDIUM-9 / streaming success accounting: credit the lease
+            // only when the body's `[DONE]` event lands, not here on
+            // headers. Pass the lease into the stream so it can call
+            // report_success / report_failure at the right boundary.
+            let bytes_stream = resp.bytes_stream();
+            let model = self.cfg.model.clone();
+            return match target.wire_api {
+                super::copilot_auth::CopilotWireApi::ChatCompletions => Ok(
                     wire::OpenAiStream::new(bytes_stream, model, self.cfg.pool.clone(), lease)
                         .boxed(),
-                )
-            }
-            super::copilot_auth::CopilotWireApi::Responses => {
-                Ok(responses_wire::ResponsesStream::new(
-                    bytes_stream,
-                    model,
-                    self.cfg.pool.clone(),
-                    lease,
-                )
-                .boxed())
-            }
+                ),
+                super::copilot_auth::CopilotWireApi::Responses => {
+                    Ok(responses_wire::ResponsesStream::new(
+                        bytes_stream,
+                        model,
+                        self.cfg.pool.clone(),
+                        lease,
+                    )
+                    .boxed())
+                }
+            };
         }
     }
 }
