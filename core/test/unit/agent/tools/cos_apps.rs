@@ -76,6 +76,22 @@ fn register_all_picks_up_every_manifest_on_disk() {
 }
 
 #[test]
+fn register_default_exposes_only_progressive_app_gateways() {
+    let _g = env_lock();
+    let tmp = write_two_demo_apps();
+    with_apps_dir(&tmp, || {
+        let mut registry = ToolRegistry::new();
+        register_default(&mut registry);
+
+        assert_eq!(registry.len(), 2);
+        assert!(registry.get("cos_app_catalog").is_some());
+        assert!(registry.get("cos_app_run").is_some());
+        assert!(registry.get("cos_app_fs").is_none());
+        assert!(registry.get("cos_app_notify").is_none());
+    });
+}
+
+#[test]
 fn rebuilt_registry_uses_fresh_owned_manifest_metadata() {
     let _g = env_lock();
     let tmp = write_two_demo_apps();

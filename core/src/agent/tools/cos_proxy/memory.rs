@@ -7,9 +7,8 @@
 //! - `list`                      → list all `.md` notes in the store
 //! - `delete  {name}`            → delete a note (idempotent)
 //!
-//! Files live under `data_dir/agent/notes/` (see `crate::paths`). MEMORY.md
-//! and USER.md are also injected into the system prompt automatically by
-//! `agent::prompt::build_system_prompt`.
+//! Files live under `data_dir/agent/notes/` (see `crate::paths`). New sessions
+//! snapshot MEMORY.md and USER.md into their canonical system prompt.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -55,8 +54,9 @@ impl Tool for CosMemoryTool {
         "Read/write the agent's persistent notes (MEMORY.md, USER.md, and any \
          user-named .md note). MEMORY.md is your own working memory across \
          conversations; USER.md captures persistent preferences about the user. \
-         Both are auto-injected into your system prompt every turn — write to \
-         them when you learn something durable."
+         New sessions snapshot both into their system prompt. Write durable \
+         facts for future sessions; read a note explicitly if this session \
+         needs a newly written value immediately."
     }
 
     fn input_schema(&self) -> Value {

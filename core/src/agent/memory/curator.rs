@@ -14,8 +14,8 @@
 //!   4. Filter by minimum confidence + dedupe against what's already
 //!      in `MEMORY.md`.
 //!   5. Append survivors to a `## Curated facts (auto)` section in
-//!      `MEMORY.md`. The agent will pick them up on the next turn
-//!      via the prompt builder's automatic notes injection.
+//!      `MEMORY.md`. New sessions pick them up in their frozen prompt snapshot;
+//!      the current session retains the source conversation already in context.
 //!   6. Update a curation log so we don't re-extract from already-
 //!      seen messages on the next run.
 //!

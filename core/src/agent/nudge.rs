@@ -1,10 +1,8 @@
 //! Periodic "nudge" reminders surfaced to the agent.
 //!
-//! The runtime checks [`NudgeStore::due`] each turn (or on
-//! schedule) and prepends any due reminders into the system
-//! prompt, so the agent is gently reminded of follow-ups,
-//! deferred tasks, or user-supplied prompts at the right
-//! cadence.
+//! The runtime checks [`NudgeStore::due`] each turn (or on schedule) and adds
+//! due reminders to request-local user context. Nudges therefore remain timely
+//! without invalidating the session's frozen canonical system prompt.
 //!
 //! Storage is JSON on-disk (one file in the agent state
 //! directory). Library-only; the runtime decides how to surface

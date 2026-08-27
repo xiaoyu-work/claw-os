@@ -151,8 +151,8 @@ pub struct AgentConfig {
     pub request_timeout: u64,
 
     /// Enable provider-backed conversation compression. When the
-    /// estimated total token count of the running conversation exceeds
-    /// `compress_trigger_tokens`, the head of the message list is
+    /// estimated total token count of the system prompt, visible tool schemas,
+    /// and running conversation exceeds `compress_trigger_tokens`, the head is
     /// summarised by the same provider and replaced with a single
     /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
     /// Defaults to `true` — long-running sessions on a system-level

@@ -1,13 +1,11 @@
 //! cos *apps* proxy tools — bridge cos's Python apps into the
 //! agent's tool registry.
 //!
-//! Every directory under `$COS_APPS_DIR` (default `/usr/lib/cos/apps`)
-//! that holds a valid `app.json` becomes one tool named
-//! `cos_app_<id>`. The manifest is the single source of truth: the
-//! tool's description is built from `name + summary + operation
-//! labels`, and the `command` enum is the list of declared
-//! operation keys. **No app list is hardcoded** — installing a new
-//! app and restarting the agent is enough to expose it.
+//! The default registry exposes two progressive-disclosure gateways:
+//! [`CosAppCatalog`] discovers installed apps and [`CosAppRun`] invokes one
+//! after discovery. This keeps dozens of per-app schemas out of every model
+//! request. Typed `cos_app_<id>` proxies remain available through
+//! [`register_all`] for explicit compatibility/testing surfaces.
 //!
 //! Naming: the LLM-facing tool is `cos_app_<id>` (e.g.
 //! `cos_app_fs`) so the namespace stays distinct from the
@@ -279,10 +277,9 @@ impl Tool for CosAppTool {
 // Live catalog + generic runner
 // ---------------------------------------------------------------------------
 //
-// The `APPS` table above ships only the apps the kernel author knew about
-// at build time. To let the agent discover *any* installed app — including
-// third-party packages added after the agent started — we expose two
-// extra tools that re-scan `$COS_APPS_DIR` on every call:
+// To let the agent discover any installed app — including third-party
+// packages added after the agent started — these tools re-scan
+// `$COS_APPS_DIR` on every call:
 //
 //   * `cos_app_catalog` — list / search / show installed apps using their
 //     manifest. Read-only; bypasses the `agent.invoke` capability gate
@@ -291,10 +288,8 @@ impl Tool for CosAppTool {
 //     app, guarded by `agent.invoke:name=<app>` exactly like the
 //     hand-rolled `cos_app_<name>` proxies.
 //
-// The hand-rolled proxies are kept for the 10 well-known apps because
-// they advertise a typed `enum` of valid commands which the model picks
-// up more reliably than a free-form `command` string. The two generic
-// tools are the long-tail fallback.
+// Typed proxies are opt-in through `register_all`; the production default uses
+// only these two gateways so app growth does not grow every request schema.
 
 pub struct CosAppCatalog;
 
@@ -547,15 +542,13 @@ impl Tool for CosAppRun {
     }
 
     fn description(&self) -> &str {
-        "Invoke any verb on any installed Claw OS app. Generic counterpart \
-         to the hand-rolled `cos_app_<name>` proxies — use this when the \
-         target app does not have a dedicated proxy, or when you want to \
-         dispatch dynamically. Discover apps and their verbs via \
-         `cos_app_catalog`. Subject to the same coarse capability gate as \
-         the typed proxies (`agent.invoke:name=<app>`); fine-grained \
-         per-arg checks (`fs.read` on a specific path, etc.) still fire \
-         inside the target app. Pass `command=\"__schema__\"` to read the \
-         app's per-verb parameter schema without invoking anything."
+        "Invoke any verb on any installed Claw OS app. Discover unfamiliar \
+         apps and their verbs with `cos_app_catalog`, then pass the app id, \
+         command, and CLI-style args here. Subject to the coarse \
+         `agent.invoke:name=<app>` capability gate; fine-grained per-arg \
+         checks (`fs.read` on a specific path, etc.) still fire inside the \
+         target app. Pass `command=\"__schema__\"` to read the app's per-verb \
+         parameter schema without invoking anything."
     }
 
     fn input_schema(&self) -> Value {
@@ -666,21 +659,27 @@ fn is_valid_app_id(s: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
 }
 
-/// Register one [`CosAppTool`] per app discovered under `$COS_APPS_DIR`,
-/// plus the always-on [`CosAppCatalog`] / [`CosAppRun`] generics.
+/// Register the compact production-default app surface.
 ///
-/// Discovery happens *here*, at registry construction time, so the
-/// set of typed `cos_app_<id>` tools reflects what was on disk when
-/// the agent started. For apps installed after that point — and for
-/// long-tail apps the LLM might want to introspect — the dynamic
-/// `cos_app_catalog` / `cos_app_run` pair re-scans on every call.
+/// App count does not affect the model schema: unfamiliar apps are discovered
+/// with `cos_app_catalog` and invoked through `cos_app_run`.
+pub fn register_default(registry: &mut ToolRegistry) {
+    registry.register(Arc::new(CosAppCatalog));
+    registry.register(Arc::new(CosAppRun));
+}
+
+/// Register one typed [`CosAppTool`] per discovered app plus the generic
+/// progressive-disclosure gateways.
+///
+/// This is retained for explicit compatibility and schema tests. Normal agent
+/// construction uses [`register_default`] to avoid paying for every manifest
+/// on every provider request.
 pub fn register_all(registry: &mut ToolRegistry) {
     let apps = crate::apps::discover(&apps_root());
     for app in apps.values() {
         registry.register(Arc::new(CosAppTool::from_manifest(&app.manifest)));
     }
-    registry.register(Arc::new(CosAppCatalog));
-    registry.register(Arc::new(CosAppRun));
+    register_default(registry);
 }
 
 /// Tool name prefix: every app proxy starts with this.

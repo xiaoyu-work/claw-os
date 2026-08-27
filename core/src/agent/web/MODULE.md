@@ -10,6 +10,8 @@ web UI.
 - Authenticate local browser/desktop requests.
 - Map HTTP routes to agent/session/setup operations.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
+- Reuse frozen session prompts and configured history compression through the
+  shared runtime.
 - Serve built UI assets without exposing credentials.
 
 ## Key Files

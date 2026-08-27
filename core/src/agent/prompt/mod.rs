@@ -1,22 +1,17 @@
-//! System prompt assembly + MEMORY.md / USER.md / due-nudge injection.
+//! Canonical system prompt assembly plus request-local context.
 //!
 //! Composition (in order):
 //!   1. Built-in scaffold — defines the agent's role and tool conventions.
 //!   2. Metadata-only catalogue of installed Agent Skills. Full skill
 //!      instructions and resources remain behind the `cos_skill` tool.
-//!   3. Auto-injected `MEMORY.md` and `USER.md` from
-//!      [`crate::agent::memory::notes::NotesStore::system_default`]. Both
-//!      files are read every time so updates by the model (via
-//!      `cos_memory`) take effect on the next turn.
-//!   4. Auto-injected due reminders from the periodic-nudge store at
-//!      [`crate::paths::agent_nudges_path`]. Surfaces as a
-//!      `<DUE_NUDGES>` block when at least one nudge is due (epoch
-//!      seconds <= now). Empty-store / missing-file is silent.
-//!   5. Optional explicit file from `extra_path` (overrides via
+//!   3. A session-start snapshot of `MEMORY.md` and `USER.md` from
+//!      [`crate::agent::memory::notes::NotesStore::system_default`].
+//!   4. Optional explicit file from `extra_path` (overrides via
 //!      `AgentConfig::system_prompt_path`).
 //!
-//! All injection is best-effort: missing or unreadable files are silently
-//! skipped. The agent must remain operable when nothing exists.
+//! The canonical prompt is frozen for a persisted session. Due reminders and
+//! transient application data are request-local user context so they cannot
+//! invalidate the session's stable system prefix.
 
 pub mod caching;
 
@@ -24,7 +19,6 @@ use std::fs;
 use std::path::Path;
 
 use crate::agent::memory::notes::NotesStore;
-use crate::agent::nudge::{now_epoch_s, NudgeStore};
 
 /// A single chunk of content that was auto-injected into the system
 /// prompt at build time. Callers that own a `MemoryDb` handle should
@@ -49,6 +43,14 @@ pub const INJECTED_SOURCE_MEMORY_NOTES: &str = "memory_notes";
 pub const INJECTED_SOURCE_DUE_NUDGES: &str = "due_nudges";
 pub const INJECTED_SOURCE_PROMPT_EXTRA: &str = "prompt_extra";
 pub const INJECTED_SOURCE_SKILLS_CATALOG: &str = "skills_catalog";
+pub const INJECTED_SOURCE_TRANSIENT_APP_CONTEXT: &str = "transient_app_context";
+
+/// Bump when canonical prompt semantics or safety guidance change.
+///
+/// Stored prompts with an older version are rebuilt once. A newer stored
+/// version always wins over an older concurrently running binary, preventing
+/// an upgrade from being silently downgraded.
+pub const CANONICAL_PROMPT_VERSION: u32 = 1;
 
 const SYSTEM_SCAFFOLD: &str = "You are Claw, the system-level agent distributed by the Claw OS project. You may run either inside a full ClawOS installation or as the `claw-os-agent` package installed on another Linux distribution such as Ubuntu. You are not an ordinary app; you operate through native `cos` system primitives.
 
@@ -63,7 +65,8 @@ You operate at two levels:
 
 Tool conventions:
 - Each `cos_*` tool takes `{ \"command\": \"<subcommand>\", \"args\": [\"<positional or flag>\", ...] }`. The `command` value is one of the enum entries listed in the tool's input_schema. The `args` array is exactly what the user would type after `cos <primitive> <command>` on the CLI.
-- To open a graphical application (Files, Editor, Browser, Terminal, Settings, …) use `cos_app_launcher` — call `find` to resolve a user-spoken name to a freedesktop AppID, then `open` to launch. Never spawn GUI binaries through `cos_app_exec`: the launcher path is gated by the `desktop.launch` capability, honours the user's installed `.desktop` entries (including locale and visibility rules), and detaches the window from the agent's session.
+- To open a graphical application (Files, Editor, Browser, Terminal, Settings, …), use `cos_app_run` with `app=\"launcher\"`: call `find` to resolve a user-spoken name to a freedesktop AppID, then `open` to launch. Never start GUI binaries through `app=\"exec\"`: the launcher path is gated by the `desktop.launch` capability, honours the user's installed `.desktop` entries (including locale and visibility rules), and detaches the window from the agent's session.
+- Installed apps use progressive disclosure. Call `cos_app_catalog search` or `show` when you do not know an app id or verb, then invoke it through `cos_app_run`. Do not guess unavailable `cos_app_<id>` tool names.
 - Destructive operations are gated by the cos `policy` engine. If a primitive returns a policy denial, surface it to the user — do not try to bypass it.
 - If a tool errors, read the message carefully, decide whether to retry, change approach, or report back. Never silently re-run a failed destructive command.
 - If a bundled App returns `auth_required: true` with `setup.agent_action` requesting `cos_oauth_login` for `google` or `microsoft`, call that tool once to start the trusted browser authorization instead of handing the user a terminal command. After it reports `authorized: true`, retry the original App operation once.
@@ -90,15 +93,15 @@ pub fn build_system_prompt(extra_path: Option<&Path>) -> String {
 }
 
 /// Like [`build_system_prompt_for`] but also returns the list of
-/// auto-injected segments (memory notes, due nudges, extra-file
+/// canonical variable segments (memory notes, Skill catalogue, extra-file
 /// content) so the caller can log them as `injected` rows in the
 /// session memory DB. Enforces the "model-visible means logged"
 /// invariant: every returned segment appears verbatim inside the
 /// returned prompt string.
 ///
 /// The scaffold itself is *not* returned as a segment — it is code,
-/// changes only with a release, and would otherwise flood the log
-/// on every turn. Only per-turn variable content is captured.
+/// changes only with a release. Variable content is captured once when the
+/// session snapshot is frozen rather than repeated on every turn.
 pub fn build_system_prompt_traced(
     extra_path: Option<&Path>,
     query: Option<&str>,
@@ -125,22 +128,6 @@ pub fn build_system_prompt_traced(
         });
     }
 
-    let store = NudgeStore::new(crate::paths::agent_nudges_path());
-    let due = store.due(now_epoch_s());
-    if !due.is_empty() {
-        let mut block = String::from("<DUE_NUDGES>\n");
-        for n in &due {
-            block.push_str(&format!("- [{}] {}\n", n.id, n.message));
-        }
-        block.push_str("</DUE_NUDGES>");
-        out.push_str("\n\n---\n\n");
-        out.push_str(&block);
-        segments.push(InjectedSegment {
-            source: INJECTED_SOURCE_DUE_NUDGES,
-            content: block,
-        });
-    }
-
     if let Some(p) = extra_path {
         const MAX_PROMPT_EXTRA_BYTES: u64 = 256 * 1024;
         let meta = fs::metadata(p).ok();
@@ -161,6 +148,31 @@ pub fn build_system_prompt_traced(
     }
 
     (out, segments)
+}
+
+/// Build dynamic context that applies only to the current user request.
+///
+/// These segments are appended to the request-local user message by the
+/// runtime and logged as `injected` rows, but never mutate the session's
+/// frozen canonical system prompt.
+pub fn build_turn_context_segments() -> Vec<InjectedSegment> {
+    use crate::agent::nudge::{now_epoch_s, NudgeStore};
+
+    let store = NudgeStore::new(crate::paths::agent_nudges_path());
+    let due = store.due(now_epoch_s());
+    if due.is_empty() {
+        return Vec::new();
+    }
+
+    let mut block = String::from("<DUE_NUDGES>\n");
+    for n in &due {
+        block.push_str(&format!("- [{}] {}\n", n.id, n.message));
+    }
+    block.push_str("</DUE_NUDGES>");
+    vec![InjectedSegment {
+        source: INJECTED_SOURCE_DUE_NUDGES,
+        content: block,
+    }]
 }
 
 fn append_skill_catalog(

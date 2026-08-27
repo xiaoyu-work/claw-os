@@ -2525,8 +2525,9 @@ fn redact_cmd(args: &[String]) -> Result<Value, String> {
 
 /// `cos agent prompt [show|build] [--extra <path>] [--raw]`
 ///
-/// Inspect the system prompt the agent sends with every chat
-/// request. The prompt is composed by
+/// Inspect the canonical system-prompt candidate frozen for a new session.
+/// Existing sessions restore their persisted snapshot instead of rebuilding.
+/// The candidate is composed by
 /// [`crate::agent::prompt::build_system_prompt`] and includes:
 ///
 ///   1. Built-in scaffold (immutable in this binary).
@@ -2534,19 +2535,17 @@ fn redact_cmd(args: &[String]) -> Result<Value, String> {
 ///   3. `MEMORY.md` and `USER.md` from the system notes store
 ///      (auto-loaded; capped per-file via
 ///      [`crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT`]).
-///   4. Due nudges from the nudge store.
-///   5. Optional override file content from `--extra <path>`.
+///   4. Optional override file content from `--extra <path>`.
 ///
 /// Useful for: debugging "why did the model behave this way?",
 /// previewing a new MEMORY.md entry before committing, computing a
-/// rough token budget for the system block, or capturing the prompt
-/// to share in a bug report.
+/// rough token budget for a new session, or capturing the candidate
+/// to share in a bug report. Due nudges are reported separately because
+/// they are request-local context, not part of the frozen prompt.
 ///
 /// `--raw` returns the prompt as a single JSON string in the
 /// `prompt` field (default). Without `--raw` the response also
-/// includes a section breakdown (char counts of scaffold vs notes
-/// vs nudges vs extra) so callers can see *why* the prompt is the
-/// size it is.
+/// includes a size breakdown and the currently due request-local context.
 fn prompt_cmd(args: &[String]) -> Result<Value, String> {
     use std::path::PathBuf;
 
@@ -2580,10 +2579,23 @@ fn prompt_cmd(args: &[String]) -> Result<Value, String> {
     }
     let extra_ref = extra.as_deref();
     let prompt = crate::agent::prompt::build_system_prompt(extra_ref);
+    let turn_context = crate::agent::prompt::build_turn_context_segments();
+    let turn_context_chars: usize = turn_context
+        .iter()
+        .map(|segment| segment.content.chars().count())
+        .sum();
+    let turn_context_sources: Vec<&str> =
+        turn_context.iter().map(|segment| segment.source).collect();
     if raw {
         Ok(json!({
             "prompt": prompt,
             "chars": prompt.chars().count(),
+            "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
+            "scope": "new-session-candidate",
+            "turn_context": turn_context.iter().map(|segment| json!({
+                "source": segment.source,
+                "content": segment.content,
+            })).collect::<Vec<_>>(),
         }))
     } else {
         // Crude size breakdown: rebuild each piece in isolation by
@@ -2607,6 +2619,10 @@ fn prompt_cmd(args: &[String]) -> Result<Value, String> {
             "extra_path": extra.as_ref().map(|p| p.display().to_string()),
             "extra_chars": extra_chars,
             "approx_tokens": total_chars / 4,
+            "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
+            "scope": "new-session-candidate",
+            "turn_context_chars": turn_context_chars,
+            "turn_context_sources": turn_context_sources,
         }))
     }
 }

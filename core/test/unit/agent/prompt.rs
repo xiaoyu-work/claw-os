@@ -36,25 +36,29 @@ fn scaffold_is_returned_when_no_extra() {
 
 #[test]
 fn scaffold_steers_gui_launches_through_launcher() {
-    // GUI-app launches must route through `cos_app_launcher`
-    // (the cap-gated AppID launcher), not `cos_app_exec`. The
-    // scaffold has to spell this out: without it the model picks
-    // `exec start cosmic-files` for "open the file manager",
-    // bypassing `desktop.launch` and the user's installed
-    // `.desktop` entries.
+    // GUI launches route through the generic app gateway's launcher app, not
+    // the exec app. Typed per-app proxies are intentionally absent by default.
     let p = build_system_prompt(None);
     assert!(
-        p.contains("cos_app_launcher"),
-        "scaffold should mention the launcher tool"
+        p.contains("`cos_app_run` with `app=\"launcher\"`"),
+        "scaffold should route launch discovery through the generic app runner"
     );
     assert!(
-        p.contains("cos_app_exec"),
-        "scaffold should explicitly contrast with cos_app_exec"
+        p.contains("Never start GUI binaries through `app=\"exec\"`"),
+        "scaffold should explicitly contrast with the exec app"
     );
     assert!(
         p.contains("desktop.launch"),
         "scaffold should name the cap that gates the launcher path"
     );
+}
+
+#[test]
+fn scaffold_explains_progressive_app_disclosure() {
+    let prompt = build_system_prompt(None);
+    assert!(prompt.contains("`cos_app_catalog search`"));
+    assert!(prompt.contains("then invoke it through `cos_app_run`"));
+    assert!(prompt.contains("Do not guess unavailable `cos_app_<id>` tool names"));
 }
 
 #[test]
@@ -94,11 +98,33 @@ fn missing_extra_file_is_silent() {
 
 #[test]
 fn no_due_nudges_means_no_due_block() {
-    // Without writing any nudges to the data dir, the
-    // DUE_NUDGES block must be absent. (NudgeStore returns
-    // Vec::new() for missing or unparseable files.)
-    let p = build_system_prompt(None);
-    assert!(!p.contains("<DUE_NUDGES>"));
+    assert!(build_turn_context_segments().is_empty());
+}
+
+#[test]
+fn due_nudges_are_request_local_not_canonical_system_prompt() {
+    let data = tempfile::tempdir().unwrap();
+    let _data_guard = EnvVarGuard::set("COS_DATA_DIR", data.path());
+    let _user_data_guard = EnvVarGuard::set("COS_USER_DATA_DIR", data.path());
+    let store = crate::agent::nudge::NudgeStore::new(crate::paths::agent_nudges_path());
+    store
+        .add(crate::agent::nudge::Nudge {
+            id: "due-now".into(),
+            message: "check the backup".into(),
+            due_at_epoch_s: 0,
+            repeat_secs: None,
+            tag: None,
+            last_fired_epoch_s: None,
+        })
+        .unwrap();
+
+    let canonical = build_system_prompt(None);
+    let turn_segments = build_turn_context_segments();
+
+    assert!(!canonical.contains("check the backup"));
+    assert_eq!(turn_segments.len(), 1);
+    assert_eq!(turn_segments[0].source, INJECTED_SOURCE_DUE_NUDGES);
+    assert!(turn_segments[0].content.contains("check the backup"));
 }
 
 #[test]

@@ -20,6 +20,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
+use sha2::{Digest, Sha256};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
 
@@ -42,6 +43,13 @@ pub struct MessageRow {
     pub role: String,
     pub content: String,
     pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSystemPrompt {
+    pub prompt: String,
+    pub newly_frozen: bool,
+    pub version: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -161,6 +169,19 @@ CREATE TABLE IF NOT EXISTS session_titles (
     title       TEXT NOT NULL,
     ts_ms       INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS system_prompts (
+    hash        TEXT PRIMARY KEY,
+    prompt      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_system_prompts (
+    session_id     TEXT PRIMARY KEY,
+    prompt_hash    TEXT NOT NULL,
+    prompt_version INTEGER NOT NULL,
+    ts_ms          INTEGER NOT NULL,
+    FOREIGN KEY(prompt_hash) REFERENCES system_prompts(hash) ON DELETE RESTRICT
+);
 "#;
 
 #[derive(Debug, Clone)]
@@ -266,6 +287,99 @@ impl MemoryDb {
     ) -> Result<i64, MemoryError> {
         let body = format!("[{source}]\n{content}");
         self.record_message_at(session_id, INJECTED_ROLE, &body, current_ts_ms())
+    }
+
+    /// Return the canonical system prompt frozen for `session_id`.
+    ///
+    /// The complete prompt is stored in a content-addressed table and sessions
+    /// hold only its hash, so sessions with identical prompts share one blob.
+    pub fn system_prompt_for(
+        &self,
+        session_id: &str,
+        minimum_version: u32,
+    ) -> Result<Option<String>, MemoryError> {
+        let conn = self.lock_conn()?;
+        conn.query_row(
+            "SELECT p.prompt
+             FROM session_system_prompts AS s
+             JOIN system_prompts AS p ON p.hash = s.prompt_hash
+             WHERE s.session_id = ? AND s.prompt_version >= ?",
+            params![session_id, minimum_version],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(MemoryError::from)
+    }
+
+    /// Freeze the first canonical system prompt for a session.
+    ///
+    /// Concurrent callers use first-writer-wins semantics. The losing caller
+    /// receives the already-frozen prompt rather than its candidate, ensuring
+    /// every process sends byte-identical system instructions for the session.
+    pub fn freeze_system_prompt(
+        &self,
+        session_id: &str,
+        prompt: &str,
+        prompt_version: u32,
+    ) -> Result<SessionSystemPrompt, MemoryError> {
+        if session_id.trim().is_empty() {
+            return Err(MemoryError::Poisoned(
+                "cannot freeze a system prompt without a session id".to_string(),
+            ));
+        }
+
+        let hash = system_prompt_hash(prompt);
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT OR IGNORE INTO system_prompts(hash, prompt) VALUES (?, ?)",
+            params![hash, prompt],
+        )?;
+        let stored_for_hash: String = tx.query_row(
+            "SELECT prompt FROM system_prompts WHERE hash = ?",
+            params![hash],
+            |row| row.get(0),
+        )?;
+        if stored_for_hash != prompt {
+            return Err(MemoryError::Poisoned(
+                "system prompt hash collision detected".to_string(),
+            ));
+        }
+
+        let newly_frozen = tx.execute(
+            "INSERT INTO session_system_prompts(
+                 session_id, prompt_hash, prompt_version, ts_ms
+             ) VALUES (?, ?, ?, ?)
+             ON CONFLICT(session_id) DO UPDATE SET
+                 prompt_hash = excluded.prompt_hash,
+                 prompt_version = excluded.prompt_version,
+                 ts_ms = excluded.ts_ms
+             WHERE session_system_prompts.prompt_version < excluded.prompt_version",
+            params![session_id, hash, prompt_version, current_ts_ms()],
+        )? == 1;
+        let (frozen, frozen_version): (String, u32) = tx.query_row(
+            "SELECT p.prompt, s.prompt_version
+             FROM session_system_prompts AS s
+             JOIN system_prompts AS p ON p.hash = s.prompt_hash
+             WHERE s.session_id = ?",
+            params![session_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        tx.execute(
+            "DELETE FROM system_prompts
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_system_prompts AS s
+                 WHERE s.prompt_hash = system_prompts.hash
+             )",
+            [],
+        )?;
+        tx.commit()?;
+
+        Ok(SessionSystemPrompt {
+            prompt: frozen,
+            newly_frozen,
+            version: frozen_version,
+        })
     }
 
     /// Most recent `limit` messages for `session_id`, oldest first.
@@ -412,11 +526,25 @@ impl MemoryDb {
     /// the `messages_ad` trigger. Returns rows deleted.
     #[allow(dead_code)]
     pub fn clear_session(&self, session_id: &str) -> Result<usize, MemoryError> {
-        let conn = self.lock_conn()?;
-        let n = conn.execute(
+        let mut conn = self.lock_conn()?;
+        let tx = conn.transaction()?;
+        let n = tx.execute(
             "DELETE FROM messages WHERE session_id = ?",
             params![session_id],
         )?;
+        tx.execute(
+            "DELETE FROM session_system_prompts WHERE session_id = ?",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM system_prompts
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_system_prompts AS s
+                 WHERE s.prompt_hash = system_prompts.hash
+             )",
+            [],
+        )?;
+        tx.commit()?;
         Ok(n)
     }
 
@@ -454,6 +582,19 @@ impl MemoryDb {
         let titles_deleted = tx.execute(
             "DELETE FROM session_titles
              WHERE session_id NOT IN (SELECT DISTINCT session_id FROM messages)",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM session_system_prompts
+             WHERE session_id NOT IN (SELECT DISTINCT session_id FROM messages)",
+            [],
+        )?;
+        tx.execute(
+            "DELETE FROM system_prompts
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_system_prompts AS s
+                 WHERE s.prompt_hash = system_prompts.hash
+             )",
             [],
         )?;
         tx.commit()?;
@@ -786,6 +927,10 @@ fn current_ts_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+fn system_prompt_hash(prompt: &str) -> String {
+    hex::encode(Sha256::digest(prompt.as_bytes()))
 }
 
 fn default_path() -> PathBuf {

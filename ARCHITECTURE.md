@@ -175,11 +175,15 @@ CLI / web UI / bridge
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
   -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
   -> runtime::loop_
-  -> traced system prompt + metadata-only Skill catalogue + persisted conversation
+  -> restore the session's versioned content-addressed system prompt,
+     or build + freeze it once with the metadata-only Skill catalogue
+  -> append due reminders / transient App data to the current request only
+  -> load persisted conversation and compress when the configured budget requires it
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
-  -> tool registry / guardrails / hooks
+  -> compact tool registry / guardrails / hooks
+     (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
   -> parallel-safe or serial tool execution
   -> tool results appended to conversation
   -> repeat until final response or max_turns
@@ -192,7 +196,10 @@ CLI / web UI / bridge
 authorization, execution ordering, hooks, and conversation history meet.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
-session memory, audit records, and evidence verifier.
+session memory, audit records, and evidence verifier. Canonical prompt snapshots
+live in content-addressed memory tables and are restored byte-for-byte across
+continuations. Dynamic due/App context is logged separately as injected audit
+data and never becomes user-authored history.
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
@@ -290,7 +297,8 @@ packages or entered through model chat.
 /usr/lib/cos/skills (read-only trusted vendor Skills)
   + per-user data/agent/skills (user-installed Skills)
   -> layered loader; built-in ids cannot be silently shadowed
-  -> metadata-only catalogue injected into and recorded with the system prompt
+  -> metadata-only catalogue captured and recorded when a session freezes its
+     canonical system prompt
   -> cos_skill read: disclose one matching SKILL.md instruction body
   -> cos_skill resource: disclose one explicitly requested child resource
   -> normal tool trajectory, session logging, and Skill usage record

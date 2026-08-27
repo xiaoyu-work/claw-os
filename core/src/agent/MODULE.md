@@ -9,7 +9,8 @@ surfaces.
 ## Responsibilities
 
 - Configure providers and credentials without storing secret values in config.
-- Build traced system prompts and persist all model-visible context.
+- Freeze versioned, content-addressed system prompts per session and trace
+  request-local model context separately.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Attach built-in, app, and MCP tools to one guarded registry.
@@ -26,7 +27,7 @@ surfaces.
 | `setup/copilot.rs` | Copilot OAuth device flow and live model discovery |
 | `setup/media.rs` | TTS/STT/image/embedding specs, wizards, status, and probes |
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
-| `runtime/loop_.rs` | Multi-turn orchestration and persistence |
+| `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
@@ -36,7 +37,7 @@ surfaces.
 | `tools/registry.rs` | Tool exposure and dispatch lookup |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
-| `memory/sqlite_fts.rs` | Durable message/session memory and FTS |
+| `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
 | `prompt/` | System prompt composition, tracing, caching |
 | `safety/` | Redaction, file/tool safety, and external-data controls |
 | `web/` | Authenticated local agent API and UI |

@@ -631,6 +631,12 @@ fn prompt_show_default_includes_size_breakdown() {
     assert!(v.get("scaffold_chars").is_some());
     assert!(v.get("approx_tokens").is_some());
     assert!(v.get("extra_path").is_some()); // null when not provided
+    assert_eq!(v["scope"], "new-session-candidate");
+    assert_eq!(
+        v["prompt_version"],
+        crate::agent::prompt::CANONICAL_PROMPT_VERSION
+    );
+    assert!(v.get("turn_context_sources").is_some());
 }
 
 #[test]
@@ -639,6 +645,7 @@ fn prompt_raw_omits_size_breakdown() {
     assert!(v.get("prompt").is_some());
     assert!(v.get("scaffold_chars").is_none());
     assert!(v.get("extra_path").is_none());
+    assert!(v.get("turn_context").is_some());
 }
 
 #[test]

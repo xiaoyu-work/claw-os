@@ -5,8 +5,10 @@
 //! file-locked; writes are atomic (tmp + rename) via [`crate::filelock`].
 //!
 //! Two integration points:
-//! - The system prompt builder (`agent/prompt`) injects `MEMORY.md` and
-//!   `USER.md` automatically at every turn so the model always has them.
+//! - The system prompt builder (`agent/prompt`) snapshots `MEMORY.md` and
+//!   `USER.md` when a persisted session freezes its canonical prompt. Writes
+//!   become automatic context in new sessions; the current session already
+//!   retains the conversation that produced them and can read them explicitly.
 //! - The `cos_memory` LLM tool exposes read / write / append / list so the
 //!   model itself can update its own memory after a task. (Auto-curator
 //!   in Phase 8 will do this for the model.)
@@ -197,8 +199,8 @@ impl NotesStore {
     }
 }
 
-/// Marker that pins a `MEMORY.md` entry to the always-on tier — it is
-/// injected every turn regardless of relevance. Case-insensitive.
+/// Marker that pins a `MEMORY.md` entry to the always-on tier whenever a
+/// session prompt snapshot is assembled. Case-insensitive.
 pub const ALWAYS_TAG: &str = "[always]";
 
 /// Drop curated entries that a later entry supersedes.

@@ -449,10 +449,12 @@ can hold a stateful Session with, alongside its built-in tools.
 
 ### 12.1 Why a second surface
 
-`cos_app_<id>` (§4 + §10) gives the kernel agent a one-shot proxy into
-an App's CLI verbs. Every call is a fresh `bridge::run_python_app`
-spawn; the App has no way to keep state between calls or to run a
-background task while the agent does something else.
+`cos_app_run` gives the kernel agent a one-shot gateway into an App's CLI
+verbs. The model discovers app ids and operations through `cos_app_catalog`,
+then dispatches through the generic runner so installing more Apps does not
+add one schema per App to every model request. Every call is a fresh
+`bridge::run_python_app` spawn; the App has no way to keep state between calls
+or to run a background task while the agent does something else.
 
 For a real multi-step task — "scan the calendar, then for every busy
 day pull the doc, then summarise" — the agent needs:
@@ -586,12 +588,14 @@ needs → call interleaved tools across multiple Apps → close.
 
 | Surface | Stateful? | Strict schema? | Authored in |
 | --- | --- | --- | --- |
-| `cos_app_<id>` (§4) | No — fresh spawn per call | No — CLI string args | App `main.py` `operations[]` |
-| `cos_app_run` (§4) | No | No | Generic |
+| `cos_app_catalog` + `cos_app_run` | No — fresh spawn per call | No — CLI string args, manifest discovered on demand | App `main.py` `operations[]` |
+| Typed `cos_app_<id>` compatibility proxy | No | Command enum only; not in the default registry | App manifest, explicit internal registration |
 | `app_<id>__<tool>` (§12) | Yes — long-lived server | Yes — JSON Schema | App `server.py` (Python) or the App's own binary (Rust) + manifest `session.tools[]` |
 
-The old `cos_app_<id>` proxies stay. Session tools are additive — Apps
-can ship either, both, or neither.
+The default registry keeps App count out of the provider schema through the
+catalog/run pair. Typed compatibility proxies remain constructible for
+specialized callers and tests. Session tools are additive and appear only for
+Apps that declare a stateful session surface.
 
 ### 12.8 Rust SDK: `crates/cos-mcp-serve`
 

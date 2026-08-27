@@ -8,6 +8,7 @@ results, and curates durable notes from completed work.
 ## Responsibilities
 
 - Store sessions, messages, prompt injections, and searchable text.
+- Freeze content-addressed canonical system prompts per session.
 - Provide FTS and semantic recall behind stable interfaces.
 - Curate notes with crash-safe run bracketing.
 - Redact sensitive model-visible memory where required.

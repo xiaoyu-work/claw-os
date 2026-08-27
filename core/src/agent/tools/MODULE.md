@@ -7,7 +7,7 @@ which tool calls are exposed and executed.
 
 ## Responsibilities
 
-- Register built-in, `cos` proxy, app, memory, browser, and MCP tools.
+- Register built-in, `cos` proxy, progressive app, memory, browser, and MCP tools.
 - Let an attended local system Agent initiate trusted account authorization
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
@@ -22,7 +22,7 @@ which tool calls are exposed and executed.
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
-| `cos_apps.rs`, `cos_apps_session.rs` | App tool discovery/session calls |
+| `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |
 | `mcp/` | MCP attachment and proxy tools |
 | `memory.rs`, `recall.rs` | Agent memory tools |
 

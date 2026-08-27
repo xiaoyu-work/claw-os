@@ -85,6 +85,44 @@ fn recent_isolates_by_session() {
 }
 
 #[test]
+fn system_prompt_freeze_is_content_addressed_and_first_writer_wins() {
+    let db = db();
+    let first = db.freeze_system_prompt("s1", "stable prompt", 1).unwrap();
+    assert!(first.newly_frozen);
+    assert_eq!(first.prompt, "stable prompt");
+    assert_eq!(first.version, 1);
+
+    let losing = db.freeze_system_prompt("s1", "changed prompt", 1).unwrap();
+    assert!(!losing.newly_frozen);
+    assert_eq!(losing.prompt, "stable prompt");
+
+    let shared = db.freeze_system_prompt("s2", "stable prompt", 1).unwrap();
+    assert!(shared.newly_frozen);
+    let conn = db.lock_conn().unwrap();
+    let prompts: i64 = conn
+        .query_row("SELECT COUNT(*) FROM system_prompts", [], |row| row.get(0))
+        .unwrap();
+    let refs: i64 = conn
+        .query_row("SELECT COUNT(*) FROM session_system_prompts", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(prompts, 1, "identical prompts should share one blob");
+    assert_eq!(refs, 2);
+
+    drop(conn);
+    let upgraded = db.freeze_system_prompt("s1", "upgraded prompt", 2).unwrap();
+    assert!(upgraded.newly_frozen);
+    assert_eq!(upgraded.prompt, "upgraded prompt");
+    assert_eq!(upgraded.version, 2);
+    let stale_writer = db.freeze_system_prompt("s1", "stale prompt", 1).unwrap();
+    assert!(!stale_writer.newly_frozen);
+    assert_eq!(stale_writer.prompt, "upgraded prompt");
+    assert_eq!(stale_writer.version, 2);
+    assert!(db.system_prompt_for("s1", 3).unwrap().is_none());
+}
+
+#[test]
 fn search_finds_substring_match_via_fts() {
     let db = db();
     db.record_message("s", "user", "I love pineapples on pizza")
@@ -168,6 +206,29 @@ fn clear_session_removes_rows_and_fts() {
 }
 
 #[test]
+fn clear_session_reclaims_only_unreferenced_system_prompts() {
+    let db = db();
+    db.record_message("s1", "user", "one").unwrap();
+    db.record_message("s2", "user", "two").unwrap();
+    db.freeze_system_prompt("s1", "shared", 1).unwrap();
+    db.freeze_system_prompt("s2", "shared", 1).unwrap();
+
+    db.clear_session("s1").unwrap();
+    assert!(db.system_prompt_for("s1", 1).unwrap().is_none());
+    assert_eq!(
+        db.system_prompt_for("s2", 1).unwrap().as_deref(),
+        Some("shared")
+    );
+
+    db.clear_session("s2").unwrap();
+    let conn = db.lock_conn().unwrap();
+    let prompts: i64 = conn
+        .query_row("SELECT COUNT(*) FROM system_prompts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(prompts, 0);
+}
+
+#[test]
 fn purge_older_than_ms_drops_only_below_cutoff() {
     let db = db();
     db.record_message_at("a", "user", "ancient", 100).unwrap();
@@ -200,6 +261,23 @@ fn purge_older_than_ms_drops_orphaned_titles() {
         db.title_for("new").unwrap().as_deref(),
         Some("New"),
         "non-orphaned title must be preserved"
+    );
+}
+
+#[test]
+fn purge_older_than_ms_reclaims_only_emptied_session_prompts() {
+    let db = db();
+    db.record_message_at("old", "user", "x", 100).unwrap();
+    db.freeze_system_prompt("old", "old prompt", 1).unwrap();
+    db.record_message_at("new", "user", "y", 5000).unwrap();
+    db.freeze_system_prompt("new", "new prompt", 1).unwrap();
+
+    db.purge_older_than_ms(1000).unwrap();
+
+    assert!(db.system_prompt_for("old", 1).unwrap().is_none());
+    assert_eq!(
+        db.system_prompt_for("new", 1).unwrap().as_deref(),
+        Some("new prompt")
     );
 }
 

@@ -2,13 +2,11 @@
 //! doesn't run out of context window on long conversations.
 //!
 //! Phase 5's first compressor implementation is **provider-backed
-//! summarisation**: when the estimated token count of the messages
-//! exceeds a configured trigger, the head (older messages) is rendered
-//! as a compact transcript, fed to a Provider as a single summarisation
-//! request, and the resulting summary becomes a single user-role
-//! message that replaces the head. The tail (most recent messages) is
-//! preserved verbatim so the agent doesn't lose its current task or
-//! immediate context.
+//! summarisation**: when the estimated request cost (system prompt, fixed tool
+//! schemas, and messages) exceeds a configured trigger, the head (older
+//! messages) is rendered as a compact transcript, fed to a Provider as a
+//! single summarisation request, and the resulting summary replaces the head.
+//! The tail is preserved verbatim so the agent doesn't lose its current task.
 //!
 //! Why this approach (vs. drop-oldest, RAG retrieval, or chunked
 //! summary):
@@ -51,7 +49,7 @@ use async_trait::async_trait;
 
 use crate::agent::llm::{
     types::{ContentBlock, FinishReason, Role, ToolChoice},
-    ChatRequest, Message, Provider,
+    ChatRequest, Message, Provider, Tool as LlmTool,
 };
 
 /// Default total context budget in tokens. Mirrors a conservative
@@ -144,6 +142,21 @@ pub fn estimate_total_tokens(system: Option<&str>, messages: &[Message]) -> u32 
         total = total.saturating_add(estimate_message_tokens(m));
     }
     total
+}
+
+/// Estimate the fixed token cost of model-visible tool definitions.
+///
+/// Provider requests resend each tool's name, description, and JSON Schema.
+/// This overhead consumes the same context window as messages and must reduce
+/// the history budget even though the compressor never summarizes tools.
+pub fn estimate_tools_tokens(tools: &[LlmTool]) -> u32 {
+    tools.iter().fold(0u32, |total, tool| {
+        total
+            .saturating_add(estimate_text_tokens(&tool.name))
+            .saturating_add(estimate_text_tokens(&tool.description))
+            .saturating_add(estimate_text_tokens(&tool.input_schema.to_string()))
+            .saturating_add(8)
+    })
 }
 
 /// Behaviour contract for context compressors. The trait is async

@@ -74,6 +74,24 @@ fn estimate_total_sums_system_and_messages() {
 }
 
 #[test]
+fn estimate_tools_counts_name_description_schema_and_framing() {
+    let tools = vec![LlmTool {
+        name: "lookup".into(),
+        description: "find a record".into(),
+        input_schema: serde_json::json!({
+            "type": "object",
+            "properties": {"query": {"type": "string"}}
+        }),
+    }];
+
+    let estimated = estimate_tools_tokens(&tools);
+
+    assert!(estimated > 8);
+    assert!(estimated >= estimate_text_tokens("lookup"));
+    assert!(estimated >= estimate_text_tokens("find a record"));
+}
+
+#[test]
 fn should_compress_false_when_below_trigger() {
     let mut cfg = CompressorConfig::default();
     cfg.trigger_tokens = 10_000;

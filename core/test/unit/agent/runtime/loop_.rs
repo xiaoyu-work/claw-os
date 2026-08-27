@@ -420,14 +420,25 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
     .unwrap();
 
     let request = mock.last_request().expect("provider request");
-    assert!(request
+    assert!(!request
         .system
         .as_deref()
         .is_some_and(|system| system.contains("/private/example.txt")));
-    assert!(request
-        .system
-        .as_deref()
-        .is_some_and(|system| system.contains("<untrusted_app_context>")));
+    let request_texts: Vec<&str> = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(request_texts
+        .iter()
+        .any(|text| text.contains("/private/example.txt")));
+    assert!(request_texts
+        .iter()
+        .any(|text| text.contains("<untrusted_app_context>")));
     assert!(request
         .messages
         .iter()
@@ -438,9 +449,177 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
         ))));
     let rows = db.recent(sid, 20).unwrap();
     assert!(rows.iter().any(|row| row.content == "visible question"));
-    assert!(rows
+    assert!(rows.iter().any(|row| {
+        row.role == crate::agent::memory::sqlite_fts::INJECTED_ROLE
+            && row
+                .content
+                .starts_with("[transient_app_context]\n<untrusted_app_context>")
+    }));
+    let replayable = db.recent_replayable(sid, 20).unwrap();
+    assert!(replayable
         .iter()
         .all(|row| !row.content.contains("/private/example.txt")));
+}
+
+#[tokio::test]
+async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "frozen-system-prompt";
+    let extra_dir = tempfile::tempdir().unwrap();
+    let extra_path = extra_dir.path().join("prompt.md");
+    std::fs::write(&extra_path, "FIRST_SYSTEM_VERSION").unwrap();
+    let mut cfg = cfg();
+    cfg.system_prompt_path = Some(extra_path.to_string_lossy().into_owned());
+
+    let first = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    first.push_response(MockResponse::Text("first answer".into()));
+    ask_with_stream_continuation(
+        first,
+        &cfg,
+        "first prompt",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+    let frozen = db
+        .system_prompt_for(sid, crate::agent::prompt::CANONICAL_PROMPT_VERSION)
+        .unwrap()
+        .expect("first turn should freeze a system prompt");
+    assert!(frozen.contains("FIRST_SYSTEM_VERSION"));
+
+    std::fs::write(&extra_path, "SECOND_SYSTEM_VERSION").unwrap();
+    let second = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    second.push_response(MockResponse::Text("second answer".into()));
+    ask_with_stream_continuation(
+        second.clone(),
+        &cfg,
+        "second prompt",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+
+    let request = second.last_request().expect("second provider request");
+    assert_eq!(request.system.as_deref(), Some(frozen.as_str()));
+    assert!(!request
+        .system
+        .as_deref()
+        .unwrap_or_default()
+        .contains("SECOND_SYSTEM_VERSION"));
+    let prompt_extra_rows = db
+        .recent(sid, 100)
+        .unwrap()
+        .into_iter()
+        .filter(|row| {
+            row.role == crate::agent::memory::sqlite_fts::INJECTED_ROLE
+                && row.content.starts_with("[prompt_extra]\n")
+        })
+        .count();
+    assert_eq!(prompt_extra_rows, 1);
+}
+
+#[tokio::test]
+async fn streaming_continuation_honors_configured_compression() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "streaming-compression";
+    for index in 0..6 {
+        db.record_message(
+            sid,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("long historical message {index} {}", "x".repeat(200)),
+        )
+        .unwrap();
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text("compressed history".into()));
+    mock.push_response(MockResponse::Text("actual answer".into()));
+
+    let result = ask_with_stream_continuation(
+        mock.clone(),
+        &cfg,
+        "new prompt",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.answer, "actual answer");
+    let request = mock.last_request().expect("main provider request");
+    assert!(request.messages.iter().any(|message| {
+        message.content.iter().any(|block| matches!(
+            block,
+            crate::agent::llm::ContentBlock::Text { text }
+                if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
+                    && text.contains("compressed history")
+        ))
+    }));
+}
+
+#[tokio::test]
+async fn non_streaming_continuation_honors_configured_compression() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "non-streaming-compression";
+    for index in 0..6 {
+        db.record_message(
+            sid,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("long historical message {index} {}", "x".repeat(200)),
+        )
+        .unwrap();
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text("compressed history".into()));
+    mock.push_response(MockResponse::Text("actual answer".into()));
+
+    let result = ask_with_memory_continuation(
+        mock.clone(),
+        &cfg,
+        "new prompt",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.answer, "actual answer");
+    let request = mock.last_request().expect("main provider request");
+    assert!(request.messages.iter().any(|message| {
+        message.content.iter().any(|block| matches!(
+            block,
+            crate::agent::llm::ContentBlock::Text { text }
+                if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
+                    && text.contains("compressed history")
+        ))
+    }));
 }
 
 fn cfg() -> AgentConfig {
@@ -610,7 +789,7 @@ async fn ask_with_memory_records_user_and_assistant_messages() {
     assert_eq!(result.session_id, sid);
 
     // User prompt + assistant reply both recorded.
-    let recent = db.recent(sid, 10).unwrap();
+    let recent = db.recent_replayable(sid, 10).unwrap();
     assert_eq!(recent.len(), 2);
     assert_eq!(recent[0].role, "user");
     assert!(recent[0].content.contains("2 + 2"));
@@ -713,7 +892,7 @@ async fn ask_with_memory_redacts_secrets_in_user_prompt_when_enabled() {
     .await
     .unwrap();
 
-    let recent = db.recent(sid, 10).unwrap();
+    let recent = db.recent_replayable(sid, 10).unwrap();
     let user_row = &recent[0];
     assert_eq!(user_row.role, "user");
     // Original secrets must be gone.
@@ -864,7 +1043,7 @@ async fn ask_with_memory_records_tool_results() {
         .unwrap();
 
     // Should be: user + assistant(tool_use) + user(tool_result) + assistant(final)
-    let recent = db.recent(sid, 10).unwrap();
+    let recent = db.recent_replayable(sid, 10).unwrap();
     assert_eq!(recent.len(), 4);
     assert!(recent[1].content.contains("[tool_use:echo]"));
     assert!(recent[2].content.contains("[tool_result]"));
@@ -998,7 +1177,7 @@ fn compressor_from_cfg_returns_none_when_disabled() {
     let mut c = cfg();
     c.compress_enabled = false;
     let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
-    assert!(compressor_from_cfg(prov, &c).is_none());
+    assert!(compressor_from_cfg(prov, &c, &builtin_only_registry()).is_none());
 }
 
 #[test]
@@ -1010,7 +1189,8 @@ fn compressor_from_cfg_returns_some_when_enabled() {
     c.compress_keep_tail_tokens = 200;
     c.compress_summary_max_tokens = 64;
     let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
-    let comp = compressor_from_cfg(prov, &c).expect("expected compressor");
+    let comp =
+        compressor_from_cfg(prov, &c, &builtin_only_registry()).expect("expected compressor");
     // The trait object can't expose config, but we can prove it
     // exists and `should_compress` is wired.
     assert!(!comp.should_compress(None, &[]));

@@ -8,6 +8,8 @@ through model turns, tools, hooks, progress, and final records.
 ## Responsibilities
 
 - Build and run bounded multi-turn loops.
+- Restore or freeze one versioned canonical system prompt per persisted session.
+- Keep due reminders and application context request-local.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
 - Run lifecycle hooks and progress/heartbeat reporting.
