@@ -5,6 +5,7 @@ git
 ripgrep
 python3
 python3-pip
+python3-idna
 curl
 ca-certificates
 sqlite3

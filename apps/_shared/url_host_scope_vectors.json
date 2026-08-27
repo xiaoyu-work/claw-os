@@ -8,12 +8,36 @@
     "scope": "xn--bcher-kva.example:443"
   },
   {
+    "url": "https://exam­ple.com/path",
+    "scope": "example.com:443"
+  },
+  {
     "url": "https://faß.de/path",
     "scope": "xn--fa-hia.de:443"
   },
   {
     "url": "https://例え。テスト/path",
     "scope": "xn--r8jz45g.xn--zckzah:443"
+  },
+  {
+    "url": "https://l·l.cat/path",
+    "scope": "xn--ll-0ea.cat:443"
+  },
+  {
+    "url": "https://שלום.example/path",
+    "scope": "xn--9dbne9b.example:443"
+  },
+  {
+    "url": "https://a\u200cb.com/path",
+    "error": true
+  },
+  {
+    "url": "https://abcא.example/path",
+    "error": true
+  },
+  {
+    "url": "https://☃.example/path",
+    "error": true
   },
   {
     "url": "https://XN--BCHER-KVA.EXAMPLE:8443/path",

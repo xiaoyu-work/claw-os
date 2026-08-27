@@ -19,6 +19,9 @@ invoked.
   checks include the same effective port as manifest `url-host` authority,
   including redirects, IDNA domains, legacy IPv4 forms, and bracketed IPv6.
   Rust and Python parity is defined by `_shared/url_host_scope_vectors.json`.
+  Domain processing uses the packaged `idna >= 3.3, < 4` UTS-46 API and fails
+  closed when that dependency is absent, unsupported, or rejects the input;
+  core pairs WHATWG URL parsing with the pinned strict IDNA2008 validator.
 - Declare destructive confirmation booleans as required with `choices: [true]`;
   omission and explicit false must fail before authority is resolved.
 - Use `required_when` for conditional confirmation requirements; it references

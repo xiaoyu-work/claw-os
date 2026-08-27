@@ -293,7 +293,11 @@ Declare it in `operations.<op>.needs[]`:
   port. App-side URL checks must derive the identical scope; HTTP clients use
   `_shared.safe_http.host_scope`, including for every redirect hop. The shared
   `_shared/url_host_scope_vectors.json` corpus locks Rust and Python behavior
-  for IDNA/punycode domains, legacy IPv4 forms, IPv6 compression, and ports.
+  for UTS-46 ignored/mapped/contextual/rejected input, IDNA/punycode domains,
+  legacy IPv4 forms, IPv6 compression, and ports. Production images provide
+  `idna >= 3.3, < 4`; missing or unsupported versions fail closed. Core pairs
+  its WHATWG parser with a pinned strict IDNA2008 validator for the same
+  rejection behavior.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a

@@ -4,12 +4,24 @@ import ipaddress
 import http.client
 import socket
 import ssl
-import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
 
 from cos_runtime import policy
+
+try:
+    import idna
+except ImportError as error:  # pragma: no cover - exercised by packaging checks
+    idna = None
+    _IDNA_ERROR = error
+else:
+    _IDNA_ERROR = None
+    _IDNA_VERSION = tuple(int(part) for part in idna.__version__.split(".")[:2])
+    if not (3, 3) <= _IDNA_VERSION < (4, 0):
+        _IDNA_ERROR = RuntimeError(
+            f"idna >= 3.3, < 4 is required; found {idna.__version__}"
+        )
 
 REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_REDIRECTS = 10
@@ -64,30 +76,57 @@ def _canonical_ipv4(host):
 
 
 def _canonical_domain(host):
-    host = unicodedata.normalize("NFKC", host).translate(
-        str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
-    )
-    labels = host.split(".")
-    canonical = []
-    for label in labels:
-        normalized = unicodedata.normalize("NFC", label).lower()
-        if not normalized:
-            canonical.append("")
-        elif normalized.isascii():
-            canonical.append(normalized)
-        else:
-            canonical.append("xn--" + normalized.encode("punycode").decode("ascii"))
-    return ".".join(canonical)
+    if _IDNA_ERROR is not None:
+        raise RuntimeError(
+            "standards-conformant URL host validation requires idna >= 3.3, < 4"
+        ) from _IDNA_ERROR
+    try:
+        return idna.encode(
+            host,
+            uts46=True,
+            std3_rules=True,
+            transitional=False,
+        ).decode("ascii")
+    except idna.IDNAError as error:
+        raise ValueError(f"URL host is not valid UTS-46: {error}") from None
 
 
 def canonical_host(host):
     """Canonicalize a URL hostname with the WHATWG forms used by Rust url."""
+    if _IDNA_ERROR is not None:
+        raise RuntimeError(
+            "standards-conformant URL host validation requires idna >= 3.3, < 4"
+        ) from _IDNA_ERROR
     if ":" in host:
         return ipaddress.IPv6Address(host).compressed
     ipv4 = _canonical_ipv4(host)
     if ipv4 is not None:
         return ipv4
     return _canonical_domain(host)
+
+
+def canonical_url(parsed):
+    """Serialize a parsed URL with the canonical host used for authority."""
+    host = canonical_host(parsed.hostname)
+    authority = f"[{host}]" if ":" in host else host
+    if parsed.port is not None:
+        authority = f"{authority}:{parsed.port}"
+    return urllib.parse.urlunparse(parsed._replace(netloc=authority))
+
+
+def _canonical_request(request, parsed):
+    url = canonical_url(parsed)
+    headers = {
+        key: value
+        for key, value in request.header_items()
+        if key.lower() != "host"
+    }
+    return urllib.request.Request(
+        url,
+        data=request.data,
+        headers=headers,
+        method=request.get_method(),
+    )
 
 
 def host_scope(parsed):
@@ -235,11 +274,13 @@ def open_url(
     current = request
     redirects = []
     for hop in range(max_redirects + 1):
+        parsed = parse_url(current.full_url)
+        current = _canonical_request(current, parsed)
         if hop == 0 and initial_authorized:
-            parsed = parse_url(current.full_url)
             addresses = resolve_public(parsed)
         else:
-            _, addresses = validate_and_authorize(current.full_url)
+            policy.require("net.dial", host=host_scope(parsed))
+            addresses = resolve_public(parsed)
         try:
             response = _open_pinned(current, timeout, addresses)
             if response.geturl() != current.full_url:

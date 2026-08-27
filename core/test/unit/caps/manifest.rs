@@ -572,14 +572,20 @@ fn python_and_rust_share_url_host_scope_vectors() {
     .unwrap();
     for vector in vectors {
         let url = vector["url"].as_str().unwrap();
-        let expected = vector["scope"].as_str().unwrap();
-        let resolved = manifest
-            .resolve_needs(
-                "fetch",
-                &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
-            )
-            .unwrap();
-        assert_eq!(resolved[0][0].scope, Scope::host(expected), "{url}");
+        let resolved = manifest.resolve_needs(
+            "fetch",
+            &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+        );
+        if vector["error"].as_bool().unwrap_or(false) {
+            assert!(resolved.is_err(), "accepted {url}");
+        } else {
+            let expected = vector["scope"].as_str().unwrap();
+            assert_eq!(
+                resolved.unwrap()[0][0].scope,
+                Scope::host(expected),
+                "{url}"
+            );
+        }
     }
 }
 

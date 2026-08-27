@@ -28,7 +28,7 @@ import urllib.request
 # of the cos-browser child's environment.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.env_scrub import scrub_env  # noqa: E402
-from _shared.safe_http import host_scope, open_url, parse_url  # noqa: E402
+from _shared.safe_http import canonical_url, host_scope, open_url, parse_url  # noqa: E402
 
 from claw_os_sdk import ai  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
@@ -148,7 +148,7 @@ def _parse_args(args, flags):
 def _normalize_url(url):
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    return url
+    return canonical_url(parse_url(url))
 
 
 def _host_of(url):

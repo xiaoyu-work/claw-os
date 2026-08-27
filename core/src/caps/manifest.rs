@@ -2421,10 +2421,30 @@ fn scopes_from_arg_value(
                 &normalized
             };
             let explicit_port = explicit_url_port(raw);
+            let raw_host = raw_url_hostname(raw)?;
+            let strict_domain = if raw_host.contains(':') {
+                None
+            } else {
+                Some(
+                    idna_2008::Config::default()
+                        .use_std3_ascii_rules(true)
+                        .transitional_processing(false)
+                        .use_idna_2008_rules(true)
+                        .verify_dns_length(true)
+                        .to_ascii(raw_host)
+                        .ok()?,
+                )
+            };
             let parsed = url::Url::parse(raw).ok()?;
             let host = parsed.host()?;
             let rendered = match host {
-                url::Host::Domain(host) => host.to_string(),
+                url::Host::Domain(host) => {
+                    let strict = strict_domain?;
+                    if strict != host {
+                        return None;
+                    }
+                    strict
+                }
                 url::Host::Ipv4(host) => host.to_string(),
                 url::Host::Ipv6(host) => format!("[{host}]"),
             };
@@ -2471,6 +2491,24 @@ fn explicit_url_port(raw: &str) -> Option<u16> {
         authority.rsplit_once(':')?.1
     };
     port.parse().ok()
+}
+
+fn raw_url_hostname(raw: &str) -> Option<&str> {
+    let authority = raw
+        .split_once("://")?
+        .1
+        .split(['/', '?', '#'])
+        .next()?
+        .rsplit('@')
+        .next()?;
+    if let Some(bracketed) = authority.strip_prefix('[') {
+        return bracketed.split_once(']').map(|(host, _)| host);
+    }
+    if explicit_url_port(raw).is_some() {
+        authority.rsplit_once(':').map(|(host, _)| host)
+    } else {
+        Some(authority)
+    }
 }
 
 fn mapped_scopes(
