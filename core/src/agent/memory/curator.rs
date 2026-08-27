@@ -517,12 +517,16 @@ Rules:
        {claw_agent,cos_agent,system_agent}.deployment_state -> claw_os.installation
        installed/install_status/installation_state -> installation
        installed_version/package_version/version_number -> version
+       desired_version/version_preference -> preferred_version
   3. Preferences, profile facts, demonstrated skills, and reusable
      resolutions are durable. A resolution records what broke and why or
      what fixed it; merely spending today debugging something is not durable.
+     A preference for a version must use `preferred_version`; labeling the
+     live `version` slot as a preference does not make it durable.
   4. Current OS, package/tool versions, installation state, process/service
-     state, memory size, and sensor availability are observations. Mark them
-     lifetime="observed"; ttl_days is optional and policy-bounded.
+     state, memory size, and sensor availability are observations regardless
+     of category. Mark them lifetime="observed"; ttl_days is optional and
+     policy-bounded. Omit an observation unless a user source message supports it.
   5. Never emit current task/session state. Never emit procedures, command
      sequences, runbooks, or imperative workflows: those belong in Skills.
   6. Confidence is your honest estimate (0.0-1.0). Below 0.5, omit
@@ -778,18 +782,32 @@ pub fn looks_secret(text: &str) -> bool {
     // positive as secrets. Real base64-ish tokens — JWTs, API keys —
     // never embed `/` inside the secret material at this length;
     // even base64-url uses `_` / `-` rather than `/`.
-    let mut run = 0usize;
+    let mut run = String::new();
     for c in text.chars() {
         if c.is_ascii_alphanumeric() || c == '+' || c == '_' || c == '-' || c == '=' {
-            run += 1;
-            if run >= 24 {
+            run.push(c);
+        } else {
+            if secret_like_run(&run) {
                 return true;
             }
-        } else {
-            run = 0;
+            run.clear();
         }
     }
-    false
+    secret_like_run(&run)
+}
+
+fn secret_like_run(run: &str) -> bool {
+    run.len() >= 24 && !looks_like_uuid(run)
+}
+
+fn looks_like_uuid(value: &str) -> bool {
+    if value.len() != 36 {
+        return false;
+    }
+    value.char_indices().all(|(index, c)| match index {
+        8 | 13 | 18 | 23 => c == '-',
+        _ => c.is_ascii_hexdigit(),
+    })
 }
 
 /// Check every model-controlled fact field and the body selected for
@@ -802,6 +820,10 @@ fn fact_looks_secret(fact: &ExtractedFact) -> bool {
         || fact.attribute.as_deref().is_some_and(looks_secret)
         || fact.value.as_deref().is_some_and(looks_secret)
         || fact.observed_at.as_deref().is_some_and(looks_secret)
+        || fact
+            .source_session_id
+            .as_deref()
+            .is_some_and(looks_secret)
         || looks_secret(&fact.body())
 }
 
@@ -866,20 +888,23 @@ pub fn render_fact_line(fact: &ExtractedFact, today: &str) -> String {
         );
     }
 
-    let observed_at = fact.observed_at.as_deref().unwrap_or(today);
+    let observed_at = fact.observed_at.as_deref().unwrap_or("unknown");
     let mut metadata = vec![format!("observed_at={observed_at}")];
     if let Some(ttl_days) = fact.ttl_days {
         metadata.push(format!("ttl={ttl_days}d"));
     }
-    if let Some(source_session) = fact.source_session_id.as_deref() {
-        metadata.push(format!(
-            "source_session={}",
-            sanitize_metadata_value(source_session)
-        ));
-    }
-    if let Some(source_message_id) = fact.source_message_id {
-        metadata.push(format!("source_message={source_message_id}"));
-    }
+    let source_session = fact
+        .source_session_id
+        .as_deref()
+        .map(sanitize_metadata_value)
+        .unwrap_or_else(|| "unknown".to_string());
+    metadata.push(format!("source_session:{source_session}"));
+    metadata.push(format!(
+        "source_message:{}",
+        fact.source_message_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    ));
     metadata.push(format!("conf={:.2}", fact.confidence));
     if let Some(lifetime) = fact.lifetime {
         metadata.push(format!("lifetime={}", lifetime.as_str()));
@@ -906,13 +931,28 @@ fn sanitize_metadata_value(value: &str) -> String {
         .collect()
 }
 
+fn normalize_provenance_session_id(value: &str) -> String {
+    let trimmed = value.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.chars().count() <= 128
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'));
+    if valid && !looks_secret(trimmed) {
+        trimmed.to_string()
+    } else {
+        "redacted".to_string()
+    }
+}
+
 /// Render a fact only after its normalized model-controlled fields and
 /// fallback date are free of secret-like content.
 fn render_persistable_fact_line(fact: &ExtractedFact, today: &str) -> Option<String> {
     if fact_looks_secret(fact) || looks_secret(today) {
         return None;
     }
-    Some(render_fact_line(fact, today))
+    let line = render_fact_line(fact, today);
+    (!looks_secret(&line)).then_some(line)
 }
 
 const SECTION_HEADER: &str = "## Curated facts (auto)";
@@ -942,6 +982,70 @@ fn append_lines_to_section(memory_md: &str, new_lines: &[String]) -> String {
         out.push('\n');
     }
     out
+}
+
+fn dedupe_against_current_memory(
+    mut facts: Vec<ExtractedFact>,
+    memory_md: &str,
+) -> Vec<ExtractedFact> {
+    let existing_bodies = existing_curated_lines(memory_md);
+    let current = current_structured_values(memory_md);
+    let already: Vec<String> = existing_bodies
+        .iter()
+        .map(|body| body.to_ascii_lowercase())
+        .collect();
+
+    facts.retain(|fact| match (fact.key(), &fact.value) {
+        (Some(key), Some(value)) => current.get(&key).is_none_or(|current| {
+            let unchanged = current.value.eq_ignore_ascii_case(value.trim());
+            let needs_governed_observation = fact.lifetime == Some(FactLifetime::Observed)
+                && current.lifetime != Some(FactLifetime::Observed);
+            !unchanged || needs_governed_observation
+        }),
+        _ => !already.contains(&fact.body().to_ascii_lowercase()),
+    });
+
+    let mut seen_keys = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for fact in facts.into_iter().rev() {
+        if let Some(key) = fact.key() {
+            if !seen_keys.insert(key) {
+                continue;
+            }
+        }
+        deduped.push(fact);
+    }
+    deduped.reverse();
+    deduped
+}
+
+fn append_facts_locked(
+    notes: &NotesStore,
+    candidates: Vec<ExtractedFact>,
+    today: &str,
+) -> Result<Vec<ExtractedFact>, String> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut added = Vec::new();
+    notes.update(MEMORY_FILE, |current| {
+        let existing = current.unwrap_or_default();
+        let survivors = dedupe_against_current_memory(candidates, &existing);
+        let mut lines = Vec::with_capacity(survivors.len());
+        for fact in survivors {
+            if let Some(line) = render_persistable_fact_line(&fact, today) {
+                added.push(fact);
+                lines.push(line);
+            }
+        }
+        if lines.is_empty() {
+            existing
+        } else {
+            append_lines_to_section(&existing, &lines)
+        }
+    })?;
+    Ok(added)
 }
 
 fn today_yyyymmdd() -> String {
@@ -984,31 +1088,27 @@ fn normalize_fact_for_persistence(
         fact.ttl_days,
     )?;
 
-    let source = fact
-        .source_message_id
-        .and_then(|id| {
-            messages
-                .iter()
-                .find(|message| message.id == id && message.role == "user")
-        })
-        .or_else(|| messages.iter().rev().find(|message| message.role == "user"))
-        .or_else(|| messages.last());
-
-    let source_date = source
-        .and_then(|message| ontology::date_from_unix_ms(message.ts_ms))
-        .unwrap_or_else(|| today.to_string());
+    let source = fact.source_message_id.and_then(|id| {
+        messages
+            .iter()
+            .find(|message| message.id == id && message.role == "user")
+    });
+    if governed.lifetime == FactLifetime::Observed && source.is_none() {
+        return None;
+    }
     let today_days = ontology::date_to_epoch_days(today);
-    let observed_at = fact
-        .observed_at
-        .as_deref()
-        .filter(|date| {
-            let Some(days) = ontology::date_to_epoch_days(date) else {
-                return false;
-            };
-            today_days.is_some_and(|today| days <= today)
-        })
-        .unwrap_or(&source_date)
-        .to_string();
+    let observed_at = source
+        .and_then(|message| ontology::date_from_unix_ms(message.ts_ms))
+        .map(|source_date| {
+            let source_is_future = ontology::date_to_epoch_days(&source_date)
+                .zip(today_days)
+                .is_some_and(|(source, today)| source > today);
+            if source_is_future {
+                today.to_string()
+            } else {
+                source_date
+            }
+        });
 
     let mut normalized = fact.clone();
     normalized.entity = Some(governed.slot.entity);
@@ -1016,8 +1116,8 @@ fn normalize_fact_for_persistence(
     normalized.value = Some(governed.slot.value);
     normalized.lifetime = Some(governed.lifetime);
     normalized.ttl_days = governed.ttl_days;
-    normalized.observed_at = Some(observed_at);
-    normalized.source_session_id = Some(session_id.to_string());
+    normalized.observed_at = observed_at;
+    normalized.source_session_id = Some(normalize_provenance_session_id(session_id));
     normalized.source_message_id = source.map(|message| message.id);
     Some(normalized)
 }
@@ -1173,7 +1273,7 @@ impl MemoryCurator {
         // Normalize before the secret check is considered complete. We check
         // both forms so normalization can neither hide a secret from the raw
         // model output nor introduce an unchecked persisted representation.
-        let mut survivors: Vec<ExtractedFact> = proposed
+        let survivors: Vec<ExtractedFact> = proposed
             .iter()
             .filter(|f| f.confidence >= self.config.min_confidence)
             .filter(|f| !fact_looks_secret(f))
@@ -1183,69 +1283,15 @@ impl MemoryCurator {
             })
             .collect();
 
-        // Dedupe against existing MEMORY.md curated entries.
-        //
-        // Append-only: a *changed* value for a known key is not a
-        // duplicate, it is a correction, and it gets appended so the
-        // chain records the transition. Only an unchanged restatement is
-        // dropped. Unstructured facts fall back to exact text match.
-        let existing = match self.notes.read(MEMORY_FILE) {
-            Ok(v) => v.unwrap_or_default(),
-            Err(e) => {
-                let err = CurationError::Notes(e);
+        // Final read, dedupe, and append happen under one exclusive lock.
+        // The LLM call remains outside the lock, but a concurrent curator or
+        // note updater cannot land between the final read and atomic rename.
+        let added = match append_facts_locked(&self.notes, survivors, &today) {
+            Ok(added) => added,
+            Err(error) => {
+                let err = CurationError::Notes(error);
                 record_failure(&err);
                 return Err(err);
-            }
-        };
-        let existing_bodies = existing_curated_lines(&existing);
-        let current = current_structured_values(&existing);
-        let already: Vec<String> = existing_bodies
-            .iter()
-            .map(|s| s.to_ascii_lowercase())
-            .collect();
-        survivors.retain(|f| match (f.key(), &f.value) {
-            (Some(k), Some(v)) => current
-                .get(&k)
-                .is_none_or(|current| !current.eq_ignore_ascii_case(v.trim())),
-            _ => !already.contains(&f.body().to_ascii_lowercase()),
-        });
-
-        // Two facts in one batch can claim the same slot; keep the last,
-        // which is the later state within this transcript.
-        let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut deduped: Vec<ExtractedFact> = Vec::new();
-        for f in survivors.into_iter().rev() {
-            if let Some(k) = f.key() {
-                if !seen_keys.insert(k) {
-                    continue;
-                }
-            }
-            deduped.push(f);
-        }
-        deduped.reverse();
-        let survivors = deduped;
-
-        let added = if survivors.is_empty() {
-            Vec::new()
-        } else {
-            let mut added = Vec::with_capacity(survivors.len());
-            let mut lines = Vec::with_capacity(survivors.len());
-            for fact in survivors {
-                if let Some(line) = render_persistable_fact_line(&fact, &today) {
-                    added.push(fact);
-                    lines.push(line);
-                }
-            }
-            if lines.is_empty() {
-                added
-            } else {
-                let next = append_lines_to_section(&existing, &lines);
-                if let Err(e) = self.notes.write(MEMORY_FILE, &next) {
-                    let err = CurationError::Notes(e);
-                    record_failure(&err);
-                    return Err(err);
-                }
-                added
             }
         };
 

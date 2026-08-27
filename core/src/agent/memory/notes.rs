@@ -90,6 +90,19 @@ impl NotesStore {
         filelock::write_locked(&p, content)
     }
 
+    /// Read-modify-write a note while holding one exclusive lock.
+    pub(crate) fn update<F>(&self, name: &str, transform: F) -> Result<(), String>
+    where
+        F: FnOnce(Option<String>) -> String,
+    {
+        self.ensure_dir()?;
+        let p = self.path_of(name)?;
+        filelock::update_locked::<_, std::convert::Infallible>(&p, |current| {
+            Ok(transform(current))
+        })
+        .map_err(|error| error.to_string())
+    }
+
     /// Append a line to a note (creates the file if missing).
     pub fn append(&self, name: &str, line: &str) -> Result<(), String> {
         self.ensure_dir()?;
@@ -225,9 +238,15 @@ fn project_chain_tails(content: &str) -> String {
     project_chain_tails_at(content, current_epoch_days())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CurrentStructuredValue {
+    pub value: String,
+    pub lifetime: Option<FactLifetime>,
+}
+
 pub(crate) fn current_structured_values(
     content: &str,
-) -> std::collections::HashMap<String, String> {
+) -> std::collections::HashMap<String, CurrentStructuredValue> {
     projection_at(content, current_epoch_days()).current
 }
 
@@ -269,7 +288,7 @@ struct CuratedMetadata {
 struct Projection {
     structured_indices: std::collections::HashSet<usize>,
     keep: std::collections::HashSet<usize>,
-    current: std::collections::HashMap<String, String>,
+    current: std::collections::HashMap<String, CurrentStructuredValue>,
 }
 
 fn projection_at(content: &str, now_days: u64) -> Projection {
@@ -320,7 +339,15 @@ fn projection_at(content: &str, now_days: u64) -> Projection {
     let current = keep
         .iter()
         .filter_map(|index| by_index.get(index))
-        .map(|entry| (entry.key.clone(), entry.value.clone()))
+        .map(|entry| {
+            (
+                entry.key.clone(),
+                CurrentStructuredValue {
+                    value: entry.value.clone(),
+                    lifetime: entry.metadata.effective_lifetime(),
+                },
+            )
+        })
         .collect();
 
     Projection {
@@ -334,7 +361,6 @@ fn parse_curated_entry(index: usize, line: &str) -> Option<CuratedEntry> {
     let trimmed = line.trim();
     let rest = trimmed.strip_prefix("- [")?;
     let close = rest.find("] ")?;
-    let category = &rest[..close];
     let after = &rest[close + 2..];
     let (body, metadata) = match after.rsplit_once(" _(") {
         Some((body, metadata)) if metadata.ends_with(")_") => (
@@ -345,7 +371,7 @@ fn parse_curated_entry(index: usize, line: &str) -> Option<CuratedEntry> {
     };
     let (key, value) = ontology::split_structured_body(body)?;
     let (entity, attribute) = key.split_once('.')?;
-    let slot = ontology::normalize_slot(category, entity, attribute, &value)?;
+    let slot = ontology::normalize_slot(entity, attribute, &value)?;
     Some(CuratedEntry {
         index,
         key: slot.key(),
@@ -359,7 +385,7 @@ fn parse_curated_entry(index: usize, line: &str) -> Option<CuratedEntry> {
 fn parse_curated_metadata(metadata: &str) -> CuratedMetadata {
     let mut out = CuratedMetadata::default();
     for field in metadata.split(',').map(str::trim) {
-        let Some((key, value)) = field.split_once('=') else {
+        let Some((key, value)) = field.split_once('=').or_else(|| field.split_once(':')) else {
             continue;
         };
         match key.trim() {
@@ -379,12 +405,16 @@ fn parse_curated_metadata(metadata: &str) -> CuratedMetadata {
 }
 
 impl CuratedMetadata {
+    fn effective_lifetime(&self) -> Option<FactLifetime> {
+        self.lifetime
+            .or_else(|| self.ttl_days.map(|_| FactLifetime::Observed))
+    }
+
     fn is_excluded(&self, now_days: u64) -> bool {
-        match self.lifetime {
+        match self.effective_lifetime() {
             Some(FactLifetime::Session | FactLifetime::Procedure) => true,
             Some(FactLifetime::Durable) => false,
             Some(FactLifetime::Observed) => self.is_expired_observation(now_days),
-            None if self.ttl_days.is_some() => self.is_expired_observation(now_days),
             None => false,
         }
     }

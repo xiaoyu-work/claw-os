@@ -80,7 +80,7 @@ pub fn normalize_fact(
     declared_lifetime: Option<FactLifetime>,
     requested_ttl_days: Option<u32>,
 ) -> Option<GovernedFact> {
-    let slot = normalize_slot(category, entity, attribute, value)?;
+    let slot = normalize_slot(entity, attribute, value)?;
     let lifetime = classify_lifetime(category, &slot, declared_lifetime);
     let ttl_days = (lifetime == FactLifetime::Observed).then(|| {
         requested_ttl_days
@@ -98,13 +98,7 @@ pub fn normalize_fact(
 ///
 /// Prompt projection uses this for both new governed lines and legacy lines.
 /// Legacy lines intentionally retain their old no-expiry behavior.
-pub fn normalize_slot(
-    category: &str,
-    entity: &str,
-    attribute: &str,
-    value: &str,
-) -> Option<CanonicalSlot> {
-    let category = normalize_identifier(category).unwrap_or_else(|| "unknown".to_string());
+pub fn normalize_slot(entity: &str, attribute: &str, value: &str) -> Option<CanonicalSlot> {
     let entity = canonical_entity(&normalize_identifier(entity)?).to_string();
     let mut attribute = normalize_identifier(attribute)?;
     let mut value = collapse_whitespace(value);
@@ -113,10 +107,6 @@ pub fn normalize_slot(
     }
 
     attribute = canonical_attribute(&entity, &attribute).to_string();
-
-    if category == "preference" && attribute == "version" {
-        attribute = "preferred_version".to_string();
-    }
 
     let installation = canonical_installation_value(&value);
     if attribute == "version" {
@@ -279,6 +269,7 @@ fn canonical_attribute<'a>(entity: &str, attribute: &'a str) -> &'a str {
         | "install_status"
         | "installation_status"
         | "installation_state" => "installation",
+        "desired_version" | "version_preference" => "preferred_version",
         "installed_version" | "package_version" | "release_version" | "version_number" => "version",
         other => other,
     }
@@ -314,11 +305,8 @@ fn classify_lifetime(
 ) -> FactLifetime {
     let category = normalize_identifier(category).unwrap_or_else(|| "unknown".to_string());
 
-    if matches!(
-        declared,
-        Some(FactLifetime::Session | FactLifetime::Procedure)
-    ) {
-        return declared.expect("matched Some");
+    if let Some(lifetime @ (FactLifetime::Session | FactLifetime::Procedure)) = declared {
+        return lifetime;
     }
     if matches!(
         category.as_str(),
@@ -336,14 +324,14 @@ fn classify_lifetime(
     if is_procedure_slot(slot) {
         return FactLifetime::Procedure;
     }
+    if is_live_state(slot) && !is_explicit_preference_slot(slot) {
+        return FactLifetime::Observed;
+    }
     if matches!(
         category.as_str(),
         "preference" | "pref" | "identity" | "id" | "skill" | "skills" | "resolution" | "fix"
     ) {
         return FactLifetime::Durable;
-    }
-    if is_live_state(slot) {
-        return FactLifetime::Observed;
     }
     if category == "environment" || category == "env" {
         return if is_durable_convention(slot) {
@@ -368,6 +356,10 @@ fn is_procedure_slot(slot: &CanonicalSlot) -> bool {
         slot.attribute.as_str(),
         "commands" | "instructions" | "procedure" | "runbook" | "steps" | "workflow"
     )
+}
+
+fn is_explicit_preference_slot(slot: &CanonicalSlot) -> bool {
+    slot.attribute == "preference" || slot.attribute.starts_with("preferred_")
 }
 
 fn is_live_state(slot: &CanonicalSlot) -> bool {

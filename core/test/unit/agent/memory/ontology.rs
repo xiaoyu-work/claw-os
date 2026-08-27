@@ -66,6 +66,37 @@ fn lifetime_policy_keeps_durable_knowledge_and_bounds_live_state() {
     assert_eq!(preference.lifetime, FactLifetime::Durable);
     assert_eq!(preference.ttl_days, None);
 
+    let mislabeled_live_state = normalize_fact(
+        "preference",
+        "python",
+        "version",
+        "3.13.1",
+        Some(FactLifetime::Durable),
+        None,
+    )
+    .unwrap();
+    assert_eq!(mislabeled_live_state.slot.key(), "python.version");
+    assert_eq!(mislabeled_live_state.lifetime, FactLifetime::Observed);
+    assert_eq!(
+        mislabeled_live_state.ttl_days,
+        Some(DEFAULT_OBSERVED_TTL_DAYS)
+    );
+
+    let explicit_version_preference = normalize_fact(
+        "preference",
+        "python",
+        "preferred_version",
+        "3.13",
+        Some(FactLifetime::Durable),
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        explicit_version_preference.slot.key(),
+        "python.preferred_version"
+    );
+    assert_eq!(explicit_version_preference.lifetime, FactLifetime::Durable);
+
     let resolution = normalize_fact(
         "resolution",
         "postgres",

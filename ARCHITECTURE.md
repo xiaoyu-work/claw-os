@@ -97,10 +97,12 @@ Curated `MEMORY.md` facts are an append-only history, not a live inventory.
 Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
 aliases, classifies durable knowledge versus observed environment state, bounds
 observation TTLs, and rejects session state or procedures. Each new fact records
-source session/message provenance and confidence. Prompt assembly leaves the
-human-editable file untouched while projecting canonical chain tails, suppressing
-installation/version contradictions by append order, and excluding expired observations;
-the complete history remains inspectable through the memory tool.
+validated source session/message provenance (or an explicit unknown/redacted
+marker) and confidence. The curator performs its final reread, dedupe, and append
+under one file lock. Prompt assembly leaves the human-editable file untouched
+while projecting canonical chain tails, suppressing installation/version
+contradictions by append order, and excluding expired observations; the complete
+history remains inspectable through the memory tool.
 
 Semantic primitives have a one-way dependency boundary: `claw-embed` owns
 embedding, extraction, chunking, walking, and storage contracts;

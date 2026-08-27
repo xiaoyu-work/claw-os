@@ -12,6 +12,8 @@ results, and curates durable notes from completed work.
 - Provide FTS and semantic recall behind stable interfaces.
 - Curate canonical, append-only facts with provenance and crash-safe run
   bracketing.
+- Serialize the curator's final reread, dedupe, and append so concurrent
+  writers cannot discard intervening note changes.
 - Classify durable knowledge, expiring observations, session state, and
   procedure/Skill candidates before persistence.
 - Project only current non-expired, non-conflicting fact tails into prompts
