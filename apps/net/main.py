@@ -5,7 +5,6 @@ import json
 import os
 import tempfile
 import urllib.error
-import urllib.parse
 import urllib.request
 import sys
 
@@ -71,7 +70,8 @@ def _build_fetch_parser():
 def _build_download_parser():
     p = argparse.ArgumentParser(prog="cos net download", add_help=False)
     p.add_argument("url")
-    p.add_argument("--output", default=None)
+    p.add_argument("output", nargs="?")
+    p.add_argument("--output", dest="output_option", default=None)
     return p
 
 
@@ -136,10 +136,9 @@ def cmd_download(args):
     parser = _build_download_parser()
     opts = parser.parse_args(args)
 
-    output_path = opts.output
+    output_path = opts.output_option if opts.output_option is not None else opts.output
     if output_path is None:
-        filename = os.path.basename(urllib.parse.urlparse(opts.url).path) or "download"
-        output_path = os.path.join(os.environ.get("COS_HOME") or os.environ.get("HOME") or "/root", filename)
+        raise ValueError("download output default was not bound by the app bridge")
     # ``realpath`` so the kernel's fs.write check sees the actual
     # destination after symlink resolution; ``abspath`` alone would
     # let a symlink in the output dir redirect the write to a path

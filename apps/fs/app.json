@@ -17,7 +17,7 @@
       "label": { "en": "List files", "zh-CN": "列出文件" },
       "summary": { "en": "Show the names of files inside a folder." },
       "args": [
-        { "name": "path", "kind": "path", "required": false }
+        { "name": "path", "kind": "path", "required": false, "default": "." }
       ],
       "needs": [
         {
@@ -96,7 +96,7 @@
       "label": { "en": "Search files", "zh-CN": "搜索文件" },
       "args": [
         { "name": "query", "kind": "text", "required": true },
-        { "name": "path",  "kind": "path", "required": false }
+        { "name": "path",  "kind": "path", "required": false, "default": "/workspace" }
       ],
       "needs": [
         {

@@ -162,5 +162,13 @@ fn arg_schema(arg: &Arg) -> Value {
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();
     }
+    if let Some(default_from) = &arg.default_from {
+        schema["default_from"] = json!(default_from);
+    }
     schema
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/apps.rs"));
 }

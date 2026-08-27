@@ -96,6 +96,7 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Name,
             required: true,
             default: None,
+            default_from: None,
             label: LocalizedText::default(),
         },
         Arg {
@@ -103,6 +104,7 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Number,
             required: false,
             default: Some(serde_json::json!(60)),
+            default_from: None,
             label: LocalizedText::default(),
         },
     ];

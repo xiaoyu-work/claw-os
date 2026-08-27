@@ -187,6 +187,131 @@ fn resolve_needs_substitutes_runtime_arg_value() {
 }
 
 #[test]
+fn resolve_needs_uses_literal_arg_default() {
+    let manifest = parse(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "search": {
+                  "label": "Search",
+                  "args": [
+                    {"name": "query", "kind": "text", "required": true},
+                    {"name": "path", "kind": "path", "default": "/workspace"}
+                  ],
+                  "needs": [
+                    {"verb": "fs.read",
+                     "scope": {"kind":"from-arg","arg":"path"},
+                     "why": "Search the default workspace."}
+                  ]
+                }
+              }
+            }"#,
+    );
+    let mut args = BTreeMap::new();
+    args.insert("query".to_string(), serde_json::json!("needle"));
+
+    let caps = manifest.resolve_needs("search", &args).unwrap();
+
+    assert_eq!(caps.len(), 1);
+    assert_eq!(caps[0].verb, Verb::FS_READ);
+    assert_eq!(caps[0].scope, Scope::path("/workspace"));
+}
+
+#[test]
+fn resolve_needs_uses_validated_default_binding() {
+    let manifest = parse(
+        r#"{
+              "id": "net",
+              "version": "0.1",
+              "name": "Network",
+              "operations": {
+                "download": {
+                  "label": "Download",
+                  "args": [
+                    {"name": "url", "kind": "text", "required": true},
+                    {"name": "output", "kind": "path",
+                     "default_from": {
+                       "arg": "url",
+                       "transform": "url-path-basename",
+                       "prefix": "~/",
+                       "fallback": "download"
+                     }}
+                  ],
+                  "needs": [
+                    {"verb": "fs.write",
+                     "scope": {"kind":"from-arg","arg":"output"},
+                     "why": "Write the downloaded file."}
+                  ]
+                }
+              }
+            }"#,
+    );
+    let mut args = BTreeMap::new();
+    args.insert(
+        "url".to_string(),
+        serde_json::json!("https://example.com/releases/archive.tar?download=1"),
+    );
+
+    let caps = manifest.resolve_needs("download", &args).unwrap();
+
+    assert_eq!(caps[0].scope, Scope::path("~/archive.tar"));
+
+    args.insert(
+        "url".to_string(),
+        serde_json::json!("https://example.com/releases/"),
+    );
+    let fallback = manifest.resolve_needs("download", &args).unwrap();
+    assert_eq!(fallback[0].scope, Scope::path("~/download"));
+}
+
+#[test]
+fn invalid_arg_defaults_are_rejected() {
+    let wrong_type = Manifest::from_json(
+        r#"{
+              "id": "fs",
+              "version": "0.1",
+              "name": "Files",
+              "operations": {
+                "ls": {
+                  "label": "List",
+                  "args": [{"name": "path", "kind": "path", "default": 42}]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        wrong_type,
+        ManifestError::ArgDefaultInvalid { .. }
+    ));
+
+    let forward_reference = Manifest::from_json(
+        r#"{
+              "id": "net",
+              "version": "0.1",
+              "name": "Network",
+              "operations": {
+                "download": {
+                  "label": "Download",
+                  "args": [
+                    {"name": "output", "kind": "path",
+                     "default_from": {"arg": "url"}},
+                    {"name": "url", "kind": "text", "required": true}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        forward_reference,
+        ManifestError::ArgDefaultInvalid { .. }
+    ));
+}
+
+#[test]
 fn resolve_needs_with_fixed_scope() {
     let m = parse(
         r#"{

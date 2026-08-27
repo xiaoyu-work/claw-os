@@ -199,9 +199,9 @@ parent traversal, symlinks, hidden files, and oversized resources are rejected.
 ```text
 apps/<id>/app.json
   -> core app discovery and manifest validation
-  -> operation schema / capability derivation
+  -> operation schema / validated default binding / capability derivation
   -> app session registration
-  -> declared Python / Node / shell / binary entrypoint
+  -> declared Python / Node / shell / binary entrypoint with effective args
   -> policy-enforced SDK/runtime calls
   -> structured result
 ```

@@ -81,7 +81,9 @@ def _save_meta(directory, meta):
 
 
 def cmd_ls(args):
-    path = _abs(args[0]) if args else os.getcwd()
+    if not args:
+        raise Exception("ls path default was not bound by the app bridge")
+    path = _abs(args[0])
     policy.require("fs.read", path=path)
     if not os.path.isdir(path):
         return {"error": f"not a directory: {path}"}
@@ -306,8 +308,10 @@ def cmd_stat(args):
 def cmd_search(args):
     if not args:
         raise Exception("search requires a query argument")
+    if len(args) < 2:
+        raise Exception("search path default was not bound by the app bridge")
     query = args[0]
-    search_path = _abs(args[1]) if len(args) > 1 else WORKSPACE
+    search_path = _abs(args[1])
     policy.require("fs.read", path=search_path)
     if not os.path.exists(search_path):
         return {"error": f"path not found: {search_path}"}

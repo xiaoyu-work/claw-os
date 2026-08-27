@@ -5,6 +5,8 @@ import stat
 import urllib.error
 from unittest import mock
 
+import pytest
+
 from test_support import load_local_module
 
 
@@ -115,6 +117,30 @@ def test_exact_size_limit_is_successful(tmp_path):
     assert result["bytes"] == 4
     assert destination.read_bytes() == b"1234"
     _assert_only_destination(tmp_path, destination)
+
+
+def test_download_accepts_bridge_bound_positional_output(tmp_path):
+    destination = tmp_path / "bound.bin"
+    response = _Response(b"bound")
+
+    with mock.patch.object(main.policy, "require") as require, mock.patch.object(
+        main,
+        "open_url",
+        return_value=(response, "https://example.com/file", []),
+    ):
+        result = main.cmd_download(
+            ["https://example.com/file", os.fspath(destination)]
+        )
+
+    resolved = os.path.realpath(destination)
+    require.assert_called_once_with("fs.write", path=resolved)
+    assert result["path"] == resolved
+    assert destination.read_bytes() == b"bound"
+
+
+def test_download_requires_bridge_bound_output():
+    with pytest.raises(ValueError, match="not bound"):
+        main.cmd_download(["https://example.com/file"])
 
 
 def test_fsync_failure_removes_temporary_file_without_replacing(tmp_path):

@@ -142,7 +142,22 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     // ~256 KB of payload — comfortably over the 64KB pipe buffer.
     std::fs::write(
         tmp.join("main.py"),
-        "def run(command, args):\n    return {\"data\": \"x\" * 262144}\n",
+        "def run(command, args):\n    return {\"data\": \"x\" * 262144, \"args\": args}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.join("app.json"),
+        r#"{
+              "id": "x",
+              "version": "0",
+              "name": "X",
+              "operations": {
+                "noop": {
+                  "label": "Noop",
+                  "args": [{"name": "path", "kind": "path", "default": "."}]
+                }
+              }
+            }"#,
     )
     .unwrap();
     let state = tempfile::tempdir().unwrap();
@@ -178,6 +193,159 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
         out.len()
     );
     assert!(out.contains("\"data\""), "json missing data field");
+    let payload: serde_json::Value = serde_json::from_str(&out).unwrap();
+    assert_eq!(
+        payload["args"][0],
+        std::env::current_dir()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
+fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
+    let _env = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let manifest = Manifest::from_json(
+        r#"{
+              "id": "defaults",
+              "version": "0.1",
+              "name": "Defaults",
+              "operations": {
+                "ls": {
+                  "label": "List",
+                  "args": [{"name": "path", "kind": "path", "default": "."}],
+                  "needs": [
+                    {"verb": "fs.read",
+                     "scope": {"kind": "from-arg", "arg": "path"},
+                     "why": "List the current directory."}
+                  ]
+                },
+                "search": {
+                  "label": "Search",
+                  "args": [
+                    {"name": "query", "kind": "text", "required": true},
+                    {"name": "path", "kind": "path", "default": "/workspace"}
+                  ],
+                  "needs": [
+                    {"verb": "fs.read",
+                     "scope": {"kind": "from-arg", "arg": "path"},
+                     "why": "Search the workspace."}
+                  ]
+                },
+                "download": {
+                  "label": "Download",
+                  "args": [
+                    {"name": "url", "kind": "text", "required": true},
+                    {"name": "output", "kind": "path",
+                     "default_from": {
+                       "arg": "url",
+                       "transform": "url-path-basename",
+                       "prefix": "~/",
+                       "fallback": "download"
+                     }}
+                  ],
+                  "needs": [
+                    {"verb": "fs.write",
+                     "scope": {"kind": "from-arg", "arg": "output"},
+                     "why": "Save the download."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap();
+
+    let current_dir = std::env::current_dir().unwrap().canonicalize().unwrap();
+    let ls = bind_operation_args(&manifest.operations["ls"], &[]).unwrap();
+    assert_eq!(ls.argv, vec![current_dir.to_string_lossy()]);
+    let mut ls_parent = CapSet::new();
+    ls_parent.insert(Cap::new(
+        Verb::FS_READ,
+        Scope::path(current_dir.to_string_lossy()),
+    ));
+    let ls_caps =
+        constrained_operation_caps(&ls_parent, true, &manifest.operations["ls"], &ls.values)
+            .unwrap();
+    assert!(ls_caps.covers(&Cap::new(
+        Verb::FS_READ,
+        Scope::path(current_dir.to_string_lossy()),
+    )));
+
+    let search =
+        bind_operation_args(&manifest.operations["search"], &["needle".to_string()]).unwrap();
+    assert_eq!(search.argv, vec!["needle", "/workspace"]);
+    assert!(bind_operation_args(&manifest.operations["search"], &[])
+        .unwrap_err()
+        .contains("required operation arg `query`"));
+    let mut search_parent = CapSet::new();
+    search_parent.insert(Cap::new(Verb::FS_READ, Scope::path("/workspace")));
+    let search_caps = constrained_operation_caps(
+        &search_parent,
+        true,
+        &manifest.operations["search"],
+        &search.values,
+    )
+    .unwrap();
+    assert!(search_caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/workspace"))));
+
+    let url = "https://example.com/releases/artifact.bin?download=1".to_string();
+    let download =
+        bind_operation_args(&manifest.operations["download"], std::slice::from_ref(&url)).unwrap();
+    let default_output = home.path().join("artifact.bin");
+    assert_eq!(
+        download.argv,
+        vec![url.clone(), default_output.to_string_lossy().into_owned()]
+    );
+    let mut download_parent = CapSet::new();
+    download_parent.insert(Cap::new(
+        Verb::FS_WRITE,
+        Scope::path(default_output.to_string_lossy()),
+    ));
+    let download_caps = constrained_operation_caps(
+        &download_parent,
+        true,
+        &manifest.operations["download"],
+        &download.values,
+    )
+    .unwrap();
+    assert!(download_caps.covers(&Cap::new(
+        Verb::FS_WRITE,
+        Scope::path(default_output.to_string_lossy()),
+    )));
+
+    let explicit_output = home.path().join("chosen.bin");
+    let explicit_args = vec![
+        url,
+        "--output".to_string(),
+        explicit_output.to_string_lossy().into_owned(),
+    ];
+    let explicit = bind_operation_args(&manifest.operations["download"], &explicit_args).unwrap();
+    assert_eq!(explicit.argv, explicit_args);
+    let mut explicit_parent = CapSet::new();
+    explicit_parent.insert(Cap::new(
+        Verb::FS_WRITE,
+        Scope::path(explicit_output.to_string_lossy()),
+    ));
+    let explicit_caps = constrained_operation_caps(
+        &explicit_parent,
+        true,
+        &manifest.operations["download"],
+        &explicit.values,
+    )
+    .unwrap();
+    assert!(explicit_caps.covers(&Cap::new(
+        Verb::FS_WRITE,
+        Scope::path(explicit_output.to_string_lossy()),
+    )));
+    assert!(!explicit_caps.covers(&Cap::new(
+        Verb::FS_WRITE,
+        Scope::path(default_output.to_string_lossy()),
+    )));
 }

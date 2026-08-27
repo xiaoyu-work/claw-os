@@ -103,10 +103,38 @@ The bridge calls `mod.run(command, args)` exactly once per invocation
 
 * `command` is a **string** — the operation name, such as `"say"`.
 * `args` is a **list of strings**, not a dict — every CLI token after
-  the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`).
-  Apps parse their own flags; see
+  the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`),
+  followed by any manifest defaults the bridge resolved. Apps parse their
+  own flags; see
   [`apps/notify/main.py:46-99`](../apps/notify/main.py) for the
   conventional positional-vs-flag style.
+
+An optional operation argument may declare a literal `default` matching its
+`kind`. If its default depends on an earlier string argument, use
+`default_from`:
+
+```jsonc
+{
+  "name": "output",
+  "kind": "path",
+  "required": false,
+  "default_from": {
+    "arg": "url",
+    "transform": "url-path-basename",
+    "prefix": "~/",
+    "fallback": "download"
+  }
+}
+```
+
+The supported transforms are `identity` and `url-path-basename`.
+`url-path-basename` requires a text source, path destination, and safe
+single-component fallback. `default_from` is limited to one-shot operations.
+Defaulted arguments must be optional and follow every required argument.
+The bridge validates and resolves defaults, converts path values to the same
+absolute path used for capability derivation, and appends omitted values as
+positional strings in declaration order. The handler must consume that value
+rather than recompute a separate default.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.

@@ -166,7 +166,7 @@ impl AppIdentitySession {
         app_id: &str,
         operation: &str,
         args: &[String],
-    ) -> Result<Self, String> {
+    ) -> Result<(Self, Vec<String>), String> {
         if operation == "__schema__" {
             return Err(
                 "App schema is generated from app.json and does not execute App code".to_string(),
@@ -180,22 +180,26 @@ impl AppIdentitySession {
                 "nested App launches are not supported by the trusted launcher".to_string(),
             );
         }
-        let caps = match (operation, manifest.as_ref()) {
-            (_, None) => CapSet::new(),
+        let (caps, effective_args) = match (operation, manifest.as_ref()) {
+            (_, None) => (CapSet::new(), args.to_vec()),
             (_, Some(manifest)) => {
                 let operation = manifest.operations.get(operation).ok_or_else(|| {
                     format!("app `{app_id}` manifest has no operation `{operation}`")
                 })?;
-                constrained_operation_caps(&parent_caps, false, operation, args)?
+                let bound = bind_operation_args(operation, args)?;
+                let caps =
+                    constrained_operation_caps(&parent_caps, false, operation, &bound.values)?;
+                (caps, bound.argv)
             }
         };
-        Self::register(
+        let session = Self::register(
             parent,
             parent_caps,
             app_id,
             &format!("cos app {app_id} {operation}"),
             caps,
-        )
+        )?;
+        Ok((session, effective_args))
     }
 
     /// Register a GUI identity with the constrained union of all operation needs.
@@ -552,9 +556,8 @@ fn constrained_operation_caps(
     parent: &CapSet,
     parent_is_app: bool,
     operation: &Operation,
-    args: &[String],
+    values: &BTreeMap<String, serde_json::Value>,
 ) -> Result<CapSet, String> {
-    let values = parse_operation_args(operation, args);
     let mut caps = CapSet::new();
     for need in &operation.needs {
         let requested = match &need.scope {
@@ -631,7 +634,46 @@ fn constrained_operation_caps(
     Ok(caps)
 }
 
-fn parse_operation_args(
+#[derive(Debug)]
+struct BoundOperationArgs {
+    values: BTreeMap<String, serde_json::Value>,
+    argv: Vec<String>,
+}
+
+fn bind_operation_args(
+    operation: &Operation,
+    args: &[String],
+) -> Result<BoundOperationArgs, String> {
+    let mut values = parse_supplied_operation_args(operation, args);
+    for declaration in &operation.args {
+        if declaration.required && !values.contains_key(&declaration.name) {
+            return Err(format!(
+                "required operation arg `{}` was not supplied",
+                declaration.name
+            ));
+        }
+    }
+    let defaulted = operation
+        .apply_arg_defaults(&mut values)
+        .map_err(|error| format!("resolve operation defaults: {error}"))?;
+    normalize_path_args(operation, &mut values)?;
+
+    let mut argv = args.to_vec();
+    for name in defaulted {
+        let value = values
+            .get(&name)
+            .ok_or_else(|| format!("resolved default for `{name}` is missing"))?;
+        argv.push(arg_value_to_string(value)?);
+    }
+    for declaration in &operation.args {
+        if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
+            values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
+        }
+    }
+    Ok(BoundOperationArgs { values, argv })
+}
+
+fn parse_supplied_operation_args(
     operation: &Operation,
     args: &[String],
 ) -> BTreeMap<String, serde_json::Value> {
@@ -685,23 +727,75 @@ fn parse_operation_args(
             continue;
         }
         if decl.kind == ArgKind::Bool {
-            values.insert(
-                decl.name.clone(),
-                decl.default
-                    .clone()
-                    .unwrap_or(serde_json::Value::Bool(false)),
-            );
             continue;
         }
         if let Some(raw) = positional.next() {
             if let Some(value) = parse_arg_value(decl.kind, Some(&raw)) {
                 values.insert(decl.name.clone(), value);
             }
-        } else if let Some(default) = &decl.default {
-            values.insert(decl.name.clone(), default.clone());
         }
     }
     values
+}
+
+fn normalize_path_args(
+    operation: &Operation,
+    values: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    for declaration in &operation.args {
+        if declaration.kind != ArgKind::Path {
+            continue;
+        }
+        let Some(value) = values
+            .get(&declaration.name)
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        let absolute = absolute_app_path(value)?;
+        values.insert(
+            declaration.name.clone(),
+            serde_json::Value::String(absolute),
+        );
+    }
+    Ok(())
+}
+
+fn absolute_app_path(value: &str) -> Result<String, String> {
+    let path = if value == "~" {
+        effective_app_home()
+    } else if let Some(rest) = value.strip_prefix("~/") {
+        effective_app_home().join(rest)
+    } else {
+        std::path::PathBuf::from(value)
+    };
+    let absolute = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|error| format!("resolve current directory for path arg: {error}"))?
+            .join(path)
+    };
+    let resolved = absolute.canonicalize().unwrap_or(absolute);
+    resolved
+        .to_str()
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "resolved path arg is not valid UTF-8".to_string())
+}
+
+fn effective_app_home() -> std::path::PathBuf {
+    crate::paths::current_home_override()
+        .or_else(|| std::env::var_os("HOME").map(std::path::PathBuf::from))
+        .unwrap_or_else(|| std::path::PathBuf::from("/root"))
+}
+
+fn arg_value_to_string(value: &serde_json::Value) -> Result<String, String> {
+    match value {
+        serde_json::Value::String(value) => Ok(value.clone()),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        serde_json::Value::Bool(value) => Ok(value.to_string()),
+        _ => Err("manifest defaults must be strings, numbers, or booleans".to_string()),
+    }
 }
 
 fn match_arg_name<'a>(operation: &'a Operation, raw: &str) -> Option<&'a str> {
@@ -1043,12 +1137,12 @@ pub fn run_python_app(
         return Err(format!("app has no main.py at {}", main_py.display()));
     }
 
-    let wrapper = python_wrapper(&main_py, command, args, data_dir, apps_dir)?;
-
     let python = if cfg!(windows) { "python" } else { "python3" };
 
     let app_id = manifest_app_id(app_dir)?;
-    let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let (mut app_session, effective_args) =
+        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
 
     let mut command = app_command(python);
     reset_app_environment(&mut command, false);
@@ -1190,9 +1284,6 @@ pub fn run_app(
         return Err(format!("app entry not found: {}", entry_path.display()));
     }
 
-    let args_json =
-        serde_json::to_string(args).map_err(|e| format!("failed to serialize args: {e}"))?;
-
     let mut cmd = match runtime {
         Runtime::Node => {
             let mut c = app_command("node");
@@ -1214,7 +1305,10 @@ pub fn run_app(
         Runtime::Python => unreachable!("python handled above"),
     };
     let app_id = manifest_app_id(app_dir)?;
-    let mut app_session = AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let (mut app_session, effective_args) =
+        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+    let args_json = serde_json::to_string(&effective_args)
+        .map_err(|e| format!("failed to serialize args: {e}"))?;
     reset_app_environment(&mut cmd, false);
 
     cmd.stdin(Stdio::null())

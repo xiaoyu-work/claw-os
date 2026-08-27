@@ -341,9 +341,38 @@ pub struct Arg {
     pub required: bool,
     #[serde(default)]
     pub default: Option<serde_json::Value>,
+    /// Derive an omitted value from another declared argument. The bridge
+    /// materializes the result before launching the App so capability
+    /// derivation and the handler consume the same value.
+    #[serde(default)]
+    pub default_from: Option<ArgDefaultBinding>,
     /// Human-readable help. Optional.
     #[serde(default)]
     pub label: LocalizedText,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArgDefaultBinding {
+    /// Previously declared argument used as the input value.
+    pub arg: String,
+    /// Optional deterministic transformation applied to the input.
+    #[serde(default)]
+    pub transform: ArgDefaultTransform,
+    /// Literal text prepended after transformation.
+    #[serde(default)]
+    pub prefix: String,
+    /// Replacement used when the transformation produces no safe value.
+    #[serde(default)]
+    pub fallback: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArgDefaultTransform {
+    #[default]
+    Identity,
+    UrlPathBasename,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -367,6 +396,97 @@ impl ArgKind {
     /// Returns true if values of this kind can populate a [`Scope`].
     pub fn binds_to_scope(self) -> bool {
         matches!(self, ArgKind::Path | ArgKind::Host | ArgKind::Name)
+    }
+
+    fn accepts_default(self, value: &serde_json::Value) -> bool {
+        match self {
+            ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => value.is_string(),
+            ArgKind::Number => value.is_number(),
+            ArgKind::Bool => value.is_boolean(),
+        }
+    }
+}
+
+impl Operation {
+    pub(crate) fn apply_arg_defaults(
+        &self,
+        values: &mut BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<String>, String> {
+        apply_arg_defaults(&self.args, values)
+    }
+}
+
+fn apply_arg_defaults(
+    declarations: &[Arg],
+    values: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<Vec<String>, String> {
+    let mut applied = Vec::new();
+    for declaration in declarations {
+        if values.contains_key(&declaration.name) {
+            continue;
+        }
+        let value = if let Some(default) = &declaration.default {
+            Some(default.clone())
+        } else if let Some(binding) = &declaration.default_from {
+            let source = values
+                .get(&binding.arg)
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| {
+                    format!(
+                        "arg `{}` default source `{}` was not supplied",
+                        declaration.name, binding.arg
+                    )
+                })?;
+            let transformed = match binding.transform {
+                ArgDefaultTransform::Identity => source.to_string(),
+                ArgDefaultTransform::UrlPathBasename => safe_url_path_basename(source)
+                    .or(binding.fallback.as_deref())
+                    .ok_or_else(|| {
+                        format!(
+                            "arg `{}` could not derive a safe URL path basename from `{}`",
+                            declaration.name, binding.arg
+                        )
+                    })?
+                    .to_string(),
+            };
+            Some(serde_json::Value::String(format!(
+                "{}{transformed}",
+                binding.prefix
+            )))
+        } else {
+            None
+        };
+        if let Some(value) = value {
+            values.insert(declaration.name.clone(), value);
+            applied.push(declaration.name.clone());
+        }
+    }
+    Ok(applied)
+}
+
+fn safe_url_path_basename(value: &str) -> Option<&str> {
+    let end = value
+        .find(['?', '#'])
+        .unwrap_or(value.len());
+    let without_suffix = &value[..end];
+    let path = if let Some(scheme) = without_suffix.find("://") {
+        let after_authority = &without_suffix[scheme + 3..];
+        after_authority
+            .find('/')
+            .map(|slash| &after_authority[slash..])
+            .unwrap_or("")
+    } else {
+        without_suffix
+    };
+    let basename = path.rsplit('/').next().unwrap_or("");
+    if basename.is_empty()
+        || matches!(basename, "." | "..")
+        || basename.contains('\\')
+        || basename.chars().any(char::is_control)
+    {
+        None
+    } else {
+        Some(basename)
     }
 }
 
@@ -566,6 +686,12 @@ pub enum ManifestError {
     InvalidOperationKey(String),
     #[error("operation `{op}`: arg `{arg}` declared twice")]
     DuplicateArg { op: String, arg: String },
+    #[error("operation `{op}`: arg `{arg}` default is invalid: {detail}")]
+    ArgDefaultInvalid {
+        op: String,
+        arg: String,
+        detail: String,
+    },
     #[error("operation `{op}`: need #{idx} references undeclared arg `{arg}`")]
     NeedRefsUndeclaredArg { op: String, idx: usize, arg: String },
     #[error(
@@ -625,6 +751,12 @@ pub enum ManifestError {
     SessionDuplicateTool { name: String },
     #[error("session tool `{tool}`: arg `{arg}` declared twice")]
     SessionDuplicateArg { tool: String, arg: String },
+    #[error("session tool `{tool}`: arg `{arg}` default is invalid: {detail}")]
+    SessionArgDefaultInvalid {
+        tool: String,
+        arg: String,
+        detail: String,
+    },
     #[error("session tool `{tool}`: need #{idx} references undeclared arg `{arg}`")]
     SessionNeedRefsUndeclaredArg {
         tool: String,
@@ -665,6 +797,129 @@ pub enum ManifestError {
     },
     #[error("manifest `desktop` block: {field}: {detail}")]
     DesktopInvalid { field: &'static str, detail: String },
+}
+
+fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
+    for (index, arg) in args.iter().enumerate() {
+        if arg.default.is_some() && arg.default_from.is_some() {
+            return Err((
+                arg.name.clone(),
+                "declare only one of `default` or `default_from`".to_string(),
+            ));
+        }
+        if arg.required && (arg.default.is_some() || arg.default_from.is_some()) {
+            return Err((
+                arg.name.clone(),
+                "required arguments cannot declare defaults".to_string(),
+            ));
+        }
+        if (arg.default.is_some() || arg.default_from.is_some())
+            && args[index + 1..].iter().any(|later| later.required)
+        {
+            return Err((
+                arg.name.clone(),
+                "defaulted arguments must follow all required arguments".to_string(),
+            ));
+        }
+        if let Some(default) = &arg.default {
+            if !arg.kind.accepts_default(default) {
+                return Err((
+                    arg.name.clone(),
+                    format!("value does not match arg kind `{:?}`", arg.kind),
+                ));
+            }
+        }
+        let Some(binding) = &arg.default_from else {
+            continue;
+        };
+        let Some((source_index, source)) = args
+            .iter()
+            .enumerate()
+            .find(|(_, candidate)| candidate.name == binding.arg)
+        else {
+            return Err((
+                arg.name.clone(),
+                format!("references undeclared arg `{}`", binding.arg),
+            ));
+        };
+        if source_index >= index {
+            return Err((
+                arg.name.clone(),
+                format!(
+                    "source `{}` must be declared before the defaulted arg",
+                    binding.arg
+                ),
+            ));
+        }
+        if !matches!(
+            source.kind,
+            ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text
+        ) {
+            return Err((
+                arg.name.clone(),
+                format!("source `{}` must be a string arg", binding.arg),
+            ));
+        }
+        if !matches!(
+            arg.kind,
+            ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text
+        ) {
+            return Err((
+                arg.name.clone(),
+                "`default_from` can only populate a string arg".to_string(),
+            ));
+        }
+        if !binding.prefix.is_empty() && arg.kind != ArgKind::Path {
+            return Err((
+                arg.name.clone(),
+                "`prefix` is only supported for path defaults".to_string(),
+            ));
+        }
+        if binding.prefix.chars().any(char::is_control) {
+            return Err((
+                arg.name.clone(),
+                "`prefix` must not contain control characters".to_string(),
+            ));
+        }
+        match binding.transform {
+            ArgDefaultTransform::Identity => {
+                if binding.fallback.is_some() {
+                    return Err((
+                        arg.name.clone(),
+                        "`fallback` requires a transform that can produce no value".to_string(),
+                    ));
+                }
+            }
+            ArgDefaultTransform::UrlPathBasename => {
+                if source.kind != ArgKind::Text || arg.kind != ArgKind::Path {
+                    return Err((
+                        arg.name.clone(),
+                        "`url-path-basename` requires a text source and path destination"
+                            .to_string(),
+                    ));
+                }
+                if !binding
+                    .fallback
+                    .as_deref()
+                    .is_some_and(is_safe_default_leaf)
+                {
+                    return Err((
+                        arg.name.clone(),
+                        "`url-path-basename` requires a safe single-component fallback".to_string(),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn is_safe_default_leaf(value: &str) -> bool {
+    !value.is_empty()
+        && !matches!(value, "." | "..")
+        && !value.contains('/')
+        && !value.contains('\\')
+        && !value.chars().any(char::is_control)
 }
 
 impl Manifest {
@@ -747,6 +1002,13 @@ impl Manifest {
                         arg: arg.name.clone(),
                     });
                 }
+            }
+            if let Err((arg, detail)) = validate_arg_defaults(&op.args) {
+                return Err(ManifestError::ArgDefaultInvalid {
+                    op: op_name.clone(),
+                    arg,
+                    detail,
+                });
             }
             // Needs must reference declared args and use compatible kinds.
             for (idx, need) in op.needs.iter().enumerate() {
@@ -875,6 +1137,25 @@ impl Manifest {
                             arg: arg.name.clone(),
                         });
                     }
+                }
+                if let Err((arg, detail)) = validate_arg_defaults(&tool.args) {
+                    return Err(ManifestError::SessionArgDefaultInvalid {
+                        tool: tool.name.clone(),
+                        arg,
+                        detail,
+                    });
+                }
+                if let Some(arg) = tool
+                    .args
+                    .iter()
+                    .find(|arg| arg.default_from.is_some())
+                {
+                    return Err(ManifestError::SessionArgDefaultInvalid {
+                        tool: tool.name.clone(),
+                        arg: arg.name.clone(),
+                        detail: "`default_from` is only supported for one-shot operations"
+                            .to_string(),
+                    });
                 }
                 for (idx, need) in tool.needs.iter().enumerate() {
                     need.why
@@ -1040,6 +1321,13 @@ impl Manifest {
                 op: op_name.to_string(),
                 idx: 0,
                 detail: "unknown operation".into(),
+            })?;
+        let mut args = args.clone();
+        op.apply_arg_defaults(&mut args)
+            .map_err(|detail| ManifestError::NeedInvalid {
+                op: op_name.to_string(),
+                idx: 0,
+                detail,
             })?;
         let mut out = Vec::with_capacity(op.needs.len());
         for (idx, need) in op.needs.iter().enumerate() {

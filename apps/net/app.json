@@ -27,7 +27,17 @@
       "label": { "en": "Download file from URL" },
       "args": [
         { "name": "url",    "kind": "text", "required": true },
-        { "name": "output", "kind": "path", "required": false }
+        {
+          "name": "output",
+          "kind": "path",
+          "required": false,
+          "default_from": {
+            "arg": "url",
+            "transform": "url-path-basename",
+            "prefix": "~/",
+            "fallback": "download"
+          }
+        }
       ],
       "needs": [
         {

@@ -5,6 +5,7 @@ import os
 import pathlib
 import tempfile
 import unittest
+from unittest import mock
 
 # Adjust path so we can import the module. We add the app dir (so
 # `import main` works), the SDK src dir (so `from claw_os_sdk import
@@ -41,10 +42,40 @@ fs_main = load_local_module(
 MAX_READ_BYTES = fs_main.MAX_READ_BYTES
 MAX_READ_BYTES_BINARY = fs_main.MAX_READ_BYTES_BINARY
 cmd_copy = fs_main.cmd_copy
+cmd_ls = fs_main.cmd_ls
 cmd_move = fs_main.cmd_move
 cmd_read = fs_main.cmd_read
 cmd_read_bytes = fs_main.cmd_read_bytes
 cmd_rename = fs_main.cmd_rename
+cmd_search = fs_main.cmd_search
+
+
+class TestBoundDefaultPaths(unittest.TestCase):
+    def test_ls_uses_bridge_bound_path_exactly(self):
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(
+            fs_main.policy, "require"
+        ) as require:
+            result = cmd_ls([directory])
+
+        resolved = os.path.realpath(directory)
+        require.assert_called_once_with("fs.read", path=resolved)
+        self.assertEqual(result["path"], resolved)
+
+    def test_search_uses_bridge_bound_path_exactly(self):
+        missing = "/workspace/claw-fs-missing-search-root"
+        with mock.patch.object(
+            fs_main.policy, "require"
+        ) as require, mock.patch.object(fs_main.os.path, "exists", return_value=False):
+            result = cmd_search(["needle", missing])
+
+        require.assert_called_once_with("fs.read", path=os.path.realpath(missing))
+        self.assertIn("error", result)
+
+    def test_handlers_do_not_keep_independent_path_defaults(self):
+        with self.assertRaisesRegex(Exception, "not bound"):
+            cmd_ls([])
+        with self.assertRaisesRegex(Exception, "not bound"):
+            cmd_search(["needle"])
 
 
 class TestCmdReadTruncation(unittest.TestCase):
