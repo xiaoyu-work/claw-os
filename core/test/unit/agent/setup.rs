@@ -25,6 +25,72 @@ fn env_lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|e| e.into_inner())
 }
 
+struct EnvVarGuard {
+    name: &'static str,
+    previous: Option<std::ffi::OsString>,
+}
+
+impl EnvVarGuard {
+    fn set(name: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::set_var(name, value);
+        Self { name, previous }
+    }
+
+    fn remove(name: &'static str) -> Self {
+        let previous = std::env::var_os(name);
+        std::env::remove_var(name);
+        Self { name, previous }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        match self.previous.take() {
+            Some(value) => std::env::set_var(self.name, value),
+            None => std::env::remove_var(self.name),
+        }
+    }
+}
+
+struct CredentialTestEnv {
+    root: std::path::PathBuf,
+    _credentials_dir: EnvVarGuard,
+    _root_key: EnvVarGuard,
+    _permissions: EnvVarGuard,
+    _session: EnvVarGuard,
+}
+
+impl CredentialTestEnv {
+    fn new(label: &str) -> Self {
+        let root = std::env::current_dir()
+            .expect("current directory")
+            .join("target")
+            .join("credential-tests")
+            .join(format!("{label}-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&root).expect("create credential test directory");
+        let credentials_dir = root.join("credentials");
+        let root_key = root.join("credential-root.key");
+        Self {
+            _credentials_dir: EnvVarGuard::set("COS_CREDENTIALS_DIR", &credentials_dir),
+            _root_key: EnvVarGuard::set("COS_CREDENTIAL_ROOT_KEY_PATH", &root_key),
+            _permissions: EnvVarGuard::set("COS_PERMS_MODE", "permissive"),
+            _session: EnvVarGuard::remove("COS_SESSION"),
+            root,
+        }
+    }
+
+    fn credentials_dir(&self) -> std::path::PathBuf {
+        self.root.join("credentials")
+    }
+}
+
+impl Drop for CredentialTestEnv {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.root).ok();
+    }
+}
+
 #[test]
 fn is_ready_blocks_on_mock_provider() {
     let err = is_ready(&mock_cfg()).unwrap_err();
@@ -110,6 +176,136 @@ fn is_ready_passes_when_env_credential_present() {
     std::env::set_var(env_name, "sk-fake");
     assert!(is_ready(&cfg).is_ok());
     std::env::remove_var(env_name);
+}
+
+#[test]
+fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
+    let _g = env_lock();
+    let _store = CredentialTestEnv::new("blank-provider-key");
+    let credential_name = format!("blank-key-{}", uuid::Uuid::new_v4().simple());
+    crate::credential::run(
+        "store",
+        &[
+            credential_name.clone(),
+            " \t\r\n ".into(),
+            "--namespace".into(),
+            "agent".into(),
+        ],
+    )
+    .expect("store blank credential");
+
+    const ENV_NAME: &str = "__COS_TEST_BLANK_STORED_KEY_FALLBACK__";
+    let _env = EnvVarGuard::set(ENV_NAME, "  env-fallback-key  ");
+    let mut cfg = mock_cfg();
+    cfg.api_key_credential = Some(credential_name);
+    cfg.api_key_env = Some(ENV_NAME.into());
+
+    for (provider, model) in [
+        ("openai", "gpt-test"),
+        ("anthropic", "claude-test"),
+        ("gemini", "gemini-test"),
+    ] {
+        cfg.provider = provider.into();
+        cfg.model = model.into();
+        let built = llm::registry::build(provider, model, &cfg)
+            .unwrap_or_else(|error| panic!("{provider} construction failed: {error}"));
+        assert!(built.is_configured(), "{provider} did not use env fallback");
+        assert!(is_ready(&cfg).is_ok(), "{provider} was not ready");
+        let source = resolved_key_source(&cfg)
+            .expect("resolve key source")
+            .expect("key source");
+        assert_eq!(source.kind, "env");
+        assert_eq!(source.name, ENV_NAME);
+    }
+
+    let key = llm::providers::openai_compat::resolve_api_key(
+        cfg.api_key_credential.as_deref(),
+        cfg.api_key_env.as_deref(),
+    )
+    .expect("resolve key")
+    .expect("fallback key");
+    assert_eq!(key, "env-fallback-key");
+
+    crate::credential::run(
+        "store",
+        &[
+            cfg.api_key_credential.clone().expect("credential name"),
+            "  stored-key  \n".into(),
+            "--namespace".into(),
+            "agent".into(),
+        ],
+    )
+    .expect("replace credential with non-blank value");
+    let key = llm::providers::openai_compat::resolve_api_key(
+        cfg.api_key_credential.as_deref(),
+        cfg.api_key_env.as_deref(),
+    )
+    .expect("resolve stored key")
+    .expect("stored key");
+    assert_eq!(key, "stored-key");
+    let source = resolved_key_source(&cfg)
+        .expect("resolve stored key source")
+        .expect("stored key source");
+    assert_eq!(source.kind, "credential");
+}
+
+#[test]
+fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
+    let _g = env_lock();
+    let store = CredentialTestEnv::new("corrupt-provider-key");
+    let credential_name = format!("corrupt-key-{}", uuid::Uuid::new_v4().simple());
+    let agent_dir = store.credentials_dir().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("create agent credential directory");
+    std::fs::write(
+        agent_dir.join(format!("{credential_name}.json")),
+        "{ definitely not valid credential json",
+    )
+    .expect("write corrupt credential");
+
+    const ENV_NAME: &str = "__COS_TEST_CORRUPT_STORED_KEY_FALLBACK__";
+    const ENV_VALUE: &str = "env-key-must-not-leak";
+    let _env = EnvVarGuard::set(ENV_NAME, ENV_VALUE);
+    let mut cfg = mock_cfg();
+    cfg.api_key_credential = Some(credential_name.clone());
+    cfg.api_key_env = Some(ENV_NAME.into());
+
+    for (provider, model) in [
+        ("openai", "gpt-test"),
+        ("anthropic", "claude-test"),
+        ("gemini", "gemini-test"),
+    ] {
+        cfg.provider = provider.into();
+        cfg.model = model.into();
+        let error = match llm::registry::build(provider, model, &cfg) {
+            Ok(_) => panic!("{provider} construction ignored corrupt credential"),
+            Err(error) => error,
+        };
+        match &error {
+            llm::LlmError::CredentialStore {
+                credential,
+                message,
+            } => {
+                assert_eq!(credential, &credential_name);
+                assert!(message.contains("parse"));
+            }
+            other => panic!("expected typed credential-store error, got {other:?}"),
+        }
+        let display = error.to_string();
+        assert!(display.contains("cos credential revoke"));
+        assert!(!display.contains(ENV_VALUE));
+
+        let readiness = is_ready(&cfg).expect_err("corrupt credential must block readiness");
+        let payload: serde_json::Value =
+            serde_json::from_str(&readiness).expect("structured readiness error");
+        assert_eq!(payload["kind"], "credential_store");
+        assert_eq!(payload["provider"], provider);
+        assert_eq!(payload["credential"], credential_name);
+        assert_eq!(payload["namespace"], "agent");
+        assert!(payload["fix"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("cos credential revoke")));
+        assert!(!readiness.contains(ENV_VALUE));
+    }
 }
 
 #[test]
