@@ -13,6 +13,12 @@ impl CosOauthLoginTool {
     }
 }
 
+impl Default for CosOauthLoginTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[async_trait]
 impl Tool for CosOauthLoginTool {
     fn name(&self) -> &str {
