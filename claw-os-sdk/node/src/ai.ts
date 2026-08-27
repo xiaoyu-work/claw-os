@@ -285,6 +285,9 @@ function dispatch(a: DispatchArgs): AiResponse {
 }
 
 function raiseForError(env: Record<string, unknown>): never {
+  const code = String(env["code"] ?? "").toUpperCase();
+  if (code === "BUDGET_EXCEEDED") throw new AiBudgetExceeded(env);
+  if (code === "SAFETY_VIOLATION") throw new AiSafetyViolation(env);
   const msg = String(env["error"] ?? "").toLowerCase();
   if (msg.includes("budget") && (msg.includes("exceed") || msg.includes("over"))) {
     throw new AiBudgetExceeded(env);

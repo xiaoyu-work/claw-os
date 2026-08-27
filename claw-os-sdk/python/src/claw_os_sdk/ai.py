@@ -491,6 +491,11 @@ def _parse_response(env: Any) -> AiResponse:
 
 
 def _raise_for_error(env: Mapping[str, Any]) -> None:
+    code = str(env.get("code") or "").upper()
+    if code == "BUDGET_EXCEEDED":
+        raise AiBudgetExceeded(env)
+    if code == "SAFETY_VIOLATION":
+        raise AiSafetyViolation(env)
     msg = (env.get("error") or "").lower()
     if "budget" in msg and ("exceed" in msg or "over" in msg):
         raise AiBudgetExceeded(env)

@@ -80,6 +80,8 @@ func TestChatErrorClassification(t *testing.T) {
 	}{
 		{`{"error": "monthly budget exceeded"}`, "budget"},
 		{`{"error": "prompt injection detected"}`, "safety"},
+		{`{"error": "opaque", "code": "budget_exceeded"}`, "budget"},
+		{`{"error": "opaque", "code": "SaFeTy_ViOlAtIoN"}`, "safety"},
 		{`{"error": "capability denied"}`, "denied"},
 	}
 	for _, c := range cases {

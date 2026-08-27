@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -117,6 +118,10 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 	decoder.UseNumber()
 	if err := decoder.Decode(&env); err != nil {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned non-JSON output: %s", label, truncate(text, 200))}
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned trailing JSON data", label)}
 	}
 	return &cosOutcome{Envelope: env, Status: status}, nil
 }

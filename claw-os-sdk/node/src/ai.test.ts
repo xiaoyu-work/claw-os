@@ -79,6 +79,26 @@ test("generic error envelope maps to AiDenied", () => {
   );
 });
 
+test("stable error code precedes opaque legacy message", () => {
+  const budget = installFakeCos(
+    JSON.stringify({ error: "opaque", code: "budget_exceeded" }),
+    1,
+  );
+  assert.throws(
+    () => withCos(budget, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
+    ai.AiBudgetExceeded,
+  );
+
+  const safety = installFakeCos(
+    JSON.stringify({ error: "opaque", code: "SaFeTy_ViOlAtIoN" }),
+    1,
+  );
+  assert.throws(
+    () => withCos(safety, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
+    ai.AiSafetyViolation,
+  );
+});
+
 test("malformed tool call rejects the entire response", () => {
   const payload = JSON.parse(OK_CHAT) as Record<string, unknown>;
   payload.tool_calls = [{ id: "c1", input: {} }];

@@ -102,6 +102,21 @@ func TestCosCallJSONNonJSON(t *testing.T) {
 	})
 }
 
+func TestCosCallJSONRejectsTrailingData(t *testing.T) {
+	for _, body := range []string{
+		`{"ok":true} {"second":true}`,
+		`{"ok":true} trailing`,
+	} {
+		bin, _ := fakeCos(t, body, 0)
+		withCos(t, bin, nil, func() {
+			_, err := cosCallJSON("test", []string{"x"})
+			if _, ok := err.(*UnavailableError); !ok {
+				t.Fatalf("body %q: expected UnavailableError, got %T %v", body, err, err)
+			}
+		})
+	}
+}
+
 func TestCosCallJSONPreservesScalarRootForWireValidation(t *testing.T) {
 	bin, _ := fakeCos(t, "null", 0)
 	withCos(t, bin, nil, func() {

@@ -179,7 +179,15 @@ class App:
         """
         reader = _wrap_stdin_for_bounded_lines(sys.stdin)
         while True:
-            line, overflowed = _read_bounded_line(reader, MAX_LINE_BYTES)
+            try:
+                line, overflowed = _read_bounded_line(reader, MAX_LINE_BYTES)
+            except UnicodeDecodeError as error:
+                self._send_error(
+                    None,
+                    ERR_PARSE,
+                    f"frame is not valid UTF-8: {error}",
+                )
+                continue
             if not line and not overflowed:
                 # EOF — stop the serve loop.
                 return
@@ -200,7 +208,7 @@ class App:
     def _handle_line(self, line: str) -> None:
         try:
             msg = decode_wire_json(line)
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError, RecursionError) as e:
             # Parse errors get a null-id response per JSON-RPC.
             self._send_error(None, ERR_PARSE, f"parse error: {e}")
             return
@@ -487,7 +495,7 @@ def _read_bounded_line(reader: Any, limit: int) -> tuple[str, bool]:
     )
     if byte_length <= limit and (terminated or len(chunk) < limit + 2):
         if binary:
-            return content.decode("utf-8", errors="replace"), False
+            return content.decode("utf-8"), False
         return content, False
 
     # The retained allocation is bounded by limit + 2. Discard the

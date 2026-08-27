@@ -316,6 +316,19 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
                 self.assertIsNone(out[0]["id"])
 
+    def test_deeply_nested_json_is_parse_error_not_process_crash(self) -> None:
+        nested = "[" * 2000 + "0" + "]" * 2000
+        out = _drive_raw(serve.App(name="kv"), nested)
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(out[0]["id"])
+
+    def test_lone_surrogate_id_is_safely_escaped_and_round_trips(self) -> None:
+        out = _drive_raw(
+            serve.App(name="kv"),
+            r'{"jsonrpc":"2.0","id":"\ud800","method":"ping"}',
+        )
+        self.assertEqual(out[0]["id"], "\ud800")
+
     def test_primitive_params_are_invalid_before_notification_suppression(self) -> None:
         out = _drive(
             serve.App(name="kv"),
@@ -549,6 +562,31 @@ class FrameValidationTests(unittest.TestCase):
                 line, overflowed = serve._read_bounded_line(reader, limit)
                 self.assertEqual(line, followup)
                 self.assertFalse(overflowed)
+
+    def test_invalid_utf8_emits_one_parse_error_and_keeps_frame_sync(self) -> None:
+        followup = b'{"jsonrpc":"2.0","id":10,"method":"ping"}\n'
+
+        class BinaryInput:
+            def __init__(self, data: bytes) -> None:
+                self.buffer = io.BytesIO(data)
+
+        app = serve.App(name="kv")
+        real_stdin, real_stdout = sys.stdin, sys.stdout
+        sys.stdin = BinaryInput(b"\xff\n" + followup)
+        sys.stdout = io.StringIO()
+        try:
+            app.serve()
+            sys.stdout.seek(0)
+            output = sys.stdout.read()
+        finally:
+            sys.stdin, sys.stdout = real_stdin, real_stdout
+
+        frames = [decode_wire_json(line) for line in output.splitlines()]
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(frames[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(frames[0]["id"])
+        self.assertEqual(frames[1]["id"], 10)
+        self.assertEqual(frames[1]["result"], {})
 
 
 if __name__ == "__main__":

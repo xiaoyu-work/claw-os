@@ -136,6 +136,9 @@ pub fn read_bytes(path: impl AsRef<str>) -> Result<Vec<u8>, BridgeError> {
         verb: "read_bytes".into(),
         message: format!("bridge: invalid base64 in read_bytes response: {e}"),
         code: None,
+        payload: Box::new(serde_json::json!({
+            "error": format!("bridge: invalid base64 in read_bytes response: {e}")
+        })),
     })
 }
 

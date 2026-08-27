@@ -297,14 +297,9 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
     let value = match cos_call_json("ai", "chat", argv) {
         Ok(value) => value,
         Err(BridgeError::AppError {
-            message,
-            code,
+            payload,
             ..
         }) => {
-            let mut payload = serde_json::json!({ "error": &message });
-            if let Some(code) = code {
-                payload["code"] = serde_json::Value::String(code);
-            }
             let message = payload["error"].as_str().unwrap_or("AI request denied");
             return Err(classify_ai_error(message, &payload));
         }

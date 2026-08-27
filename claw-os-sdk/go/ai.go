@@ -310,6 +310,13 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 }
 
 func classifyError(env map[string]any) error {
+	code := strings.ToUpper(asString(env["code"]))
+	switch code {
+	case "BUDGET_EXCEEDED":
+		return &AiBudgetExceededError{Payload: env}
+	case "SAFETY_VIOLATION":
+		return &AiSafetyViolationError{Payload: env}
+	}
 	msg := strings.ToLower(asString(env["error"]))
 	if strings.Contains(msg, "budget") && (strings.Contains(msg, "exceed") || strings.Contains(msg, "over")) {
 		return &AiBudgetExceededError{Payload: env}

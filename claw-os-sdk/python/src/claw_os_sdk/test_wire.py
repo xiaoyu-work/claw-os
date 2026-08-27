@@ -295,7 +295,42 @@ class WireValidationTests(unittest.TestCase):
         )
         with self.assertRaises(ai.AiUnavailable) as raised:
             ai._parse_response(decode_wire_json(invalid_units))
-        self.assertIn("WIRE_TYPE", str(raised.exception))
+        self.assertIn("WIRE_MAXIMUM", str(raised.exception))
+
+    def test_huge_wire_decimal_integer_classification_is_lexical(self) -> None:
+        huge_exponent = "999999999999999999999999"
+        template = json.dumps(_valid_ai())
+
+        zero = decode_wire_json(
+            template.replace('"units": 3', f'"units": 0e{huge_exponent}')
+        )
+        validate_ai(zero)
+        self.assertEqual(ai._parse_response(zero).usage.units, 0)
+
+        nonzero = decode_wire_json(
+            template.replace('"units": 3', f'"units": 1e{huge_exponent}')
+        )
+        with self.assertRaises(WireDecodeError) as raised:
+            validate_ai(nonzero)
+        self.assertEqual(raised.exception.code, WIRE_MAXIMUM)
+        self.assertEqual(raised.exception.path, "$.usage.units")
+
+    def test_wire_decimal_rejects_invalid_or_injectable_lexemes(self) -> None:
+        for lexeme in ("NaN", "Infinity", "01", "0} , \"injected\": true, {"):
+            with self.subTest(lexeme=lexeme):
+                with self.assertRaises(ValueError):
+                    WireDecimal(lexeme)
+
+        forged = object.__new__(WireDecimal)
+        object.__setattr__(forged, "lexeme", "NaN")
+        with self.assertRaises(ValueError):
+            encode_wire_json(forged)
+
+    def test_stable_error_code_precedes_opaque_message(self) -> None:
+        with self.assertRaises(ai.AiBudgetExceeded):
+            ai._raise_for_error({"error": "opaque", "code": "budget_exceeded"})
+        with self.assertRaises(ai.AiSafetyViolation):
+            ai._raise_for_error({"error": "opaque", "code": "SaFeTy_ViOlAtIoN"})
 
 
 if __name__ == "__main__":

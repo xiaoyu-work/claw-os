@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 
@@ -371,6 +372,90 @@ class WireDecimal:
     """Compact exact JSON number lexeme outside Decimal operating bounds."""
     lexeme: str
 
+    def __post_init__(self) -> None:
+        _validate_wire_decimal_lexeme(self.lexeme)
+
+_JSON_NUMBER_RE = re.compile(
+    r"^(?P<sign>-?)(?P<integer>0|[1-9][0-9]*)(?:\.(?P<fraction>[0-9]+))?(?:[eE](?P<exponent>[+-]?[0-9]+))?$"
+)
+_MAX_MATERIALIZED_INTEGER_DIGITS = 1024
+
+def _validate_wire_decimal_lexeme(lexeme: str) -> re.Match[str]:
+    match = _JSON_NUMBER_RE.fullmatch(lexeme)
+    if match is None:
+        raise ValueError(f"invalid finite JSON number lexeme: {lexeme!r}")
+    return match
+
+@dataclass(frozen=True)
+class _ExactInteger:
+    value: int | None
+    overflow: int = 0
+
+def _integer_from_parts(
+    negative: bool,
+    digits: str,
+    fraction_len: int,
+    exponent_text: str,
+) -> _ExactInteger | None:
+    digits = digits.lstrip("0")
+    if not digits:
+        return _ExactInteger(0)
+    exponent_digits = exponent_text.lstrip("+-").lstrip("0") or "0"
+    if len(exponent_digits) > 18:
+        exponent = -(10**19) if exponent_text.startswith("-") else 10**19
+    else:
+        exponent = int(exponent_text)
+    decimal_places = fraction_len - exponent
+    if decimal_places <= 0:
+        zeros = -decimal_places
+        if len(digits) + zeros > _MAX_MATERIALIZED_INTEGER_DIGITS:
+            return _ExactInteger(None, -1 if negative else 1)
+        integer = int(digits + ("0" * zeros))
+    else:
+        if decimal_places > len(digits):
+            return None
+        tail = digits[len(digits) - decimal_places:]
+        if any(char != "0" for char in tail):
+            return None
+        retained = digits[:len(digits) - decimal_places]
+        integer = int(retained or "0")
+    return _ExactInteger(-integer if negative else integer)
+
+def _exact_integer(value: Any) -> _ExactInteger | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return _ExactInteger(value)
+    if isinstance(value, float):
+        if not math.isfinite(value) or not value.is_integer():
+            return None
+        return _ExactInteger(int(value))
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            return None
+        parts = value.as_tuple()
+        digits = "".join(str(digit) for digit in parts.digits) or "0"
+        return _integer_from_parts(bool(parts.sign), digits, 0, str(parts.exponent))
+    if isinstance(value, WireDecimal):
+        match = _validate_wire_decimal_lexeme(value.lexeme)
+        integer = match.group("integer")
+        fraction = match.group("fraction") or ""
+        return _integer_from_parts(
+            match.group("sign") == "-",
+            integer + fraction,
+            len(fraction),
+            match.group("exponent") or "0",
+        )
+    return None
+
+def _compare_exact_integers(left: _ExactInteger, right: _ExactInteger) -> int:
+    if left.overflow != right.overflow:
+        return -1 if left.overflow < right.overflow else 1
+    if left.overflow:
+        return 0
+    assert left.value is not None and right.value is not None
+    return (left.value > right.value) - (left.value < right.value)
+
 WireJsonValue: TypeAlias = Union[
     None, bool, str, int, float, Decimal, WireDecimal,
     List["WireJsonValue"], Dict[str, "WireJsonValue"],
@@ -416,7 +501,7 @@ def encode_wire_json(value: Any) -> str:
         if isinstance(item, bool):
             return "true" if item else "false"
         if isinstance(item, str):
-            return json.dumps(item, ensure_ascii=False)
+            return json.dumps(item, ensure_ascii=True)
         if isinstance(item, int):
             return str(item)
         if isinstance(item, Decimal):
@@ -424,6 +509,7 @@ def encode_wire_json(value: Any) -> str:
                 raise ValueError("wire decimal must be finite")
             return str(item)
         if isinstance(item, WireDecimal):
+            _validate_wire_decimal_lexeme(item.lexeme)
             return item.lexeme
         if isinstance(item, float):
             return json.dumps(item, allow_nan=False)
@@ -434,7 +520,7 @@ def encode_wire_json(value: Any) -> str:
             for key, child in item.items():
                 if not isinstance(key, str):
                     raise TypeError("wire JSON object keys must be strings")
-                fields.append(json.dumps(key, ensure_ascii=False) + ":" + encode(child))
+                fields.append(json.dumps(key, ensure_ascii=True) + ":" + encode(child))
             return "{" + ",".join(fields) + "}"
         raise TypeError(f"unsupported wire JSON value: {type(item).__name__}")
     return encode(value)
@@ -446,34 +532,16 @@ def _wire_decimal(value: Any) -> Decimal | None:
         return Decimal(value)
     if isinstance(value, Decimal):
         return value if value.is_finite() else None
-    if isinstance(value, WireDecimal):
-        try:
-            number = Decimal(value.lexeme)
-            return number if number.is_finite() else None
-        except (InvalidOperation, ValueError):
-            return None
     if isinstance(value, float) and math.isfinite(value):
         return Decimal(str(value))
     return None
 
-def _is_wire_integer(number: Decimal | None) -> bool:
-    if number is None:
-        return False
-    try:
-        return number == number.to_integral_value()
-    except InvalidOperation:
-        return False
-
 def wire_integer_to_int(value: Any) -> int:
     """Convert a previously validated mathematical integer exactly."""
-    number = _wire_decimal(value)
-    try:
-        integral = number is not None and number == number.to_integral_value()
-    except InvalidOperation:
-        integral = False
-    if not integral:
+    integer = _exact_integer(value)
+    if integer is None or integer.value is None:
         raise ValueError("wire value is not an exact integer")
-    return int(number)
+    return integer.value
 
 def _wire_error(code: str, schema: str, path: str, reason: str) -> WireDecodeError:
     return WireDecodeError(code, schema, path, reason)
@@ -505,13 +573,14 @@ def _validate_wire_schema(
             raise _wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape")
         return
     number = _wire_decimal(value)
+    integer = _exact_integer(value)
     expected = rule.get("type")
     valid = {
         "object": isinstance(value, Mapping),
         "array": isinstance(value, list),
         "string": isinstance(value, str),
-        "integer": _is_wire_integer(number),
-        "number": number is not None,
+        "integer": integer is not None,
+        "number": number is not None or isinstance(value, WireDecimal),
         "boolean": isinstance(value, bool),
         "null": value is None,
     }
@@ -519,22 +588,27 @@ def _validate_wire_schema(
         raise _wire_error(WIRE_TYPE, schema_name, path, f"expected {expected}")
     if "const" in rule:
         expected_const = rule["const"]
-        expected_number = _wire_decimal(expected_const)
-        if (number is not None and expected_number is not None and number != expected_number) or (
-            (number is None or expected_number is None) and value != expected_const
-        ):
+        expected_integer = _exact_integer(expected_const)
+        if integer is not None and expected_integer is not None:
+            equal = _compare_exact_integers(integer, expected_integer) == 0
+        else:
+            expected_number = _wire_decimal(expected_const)
+            equal = number is not None and expected_number is not None and number == expected_number
+            if number is None or expected_number is None:
+                equal = value == expected_const
+        if not equal:
             raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")
     allowed = rule.get("enum")
     if isinstance(allowed, list) and value not in allowed:
         raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")
-    if number is not None:
+    if integer is not None:
         minimum = rule.get("minimum")
-        minimum_number = _wire_decimal(minimum)
-        if minimum_number is not None and number < minimum_number:
+        minimum_integer = _exact_integer(minimum)
+        if minimum_integer is not None and _compare_exact_integers(integer, minimum_integer) < 0:
             raise _wire_error(WIRE_MINIMUM, schema_name, path, f"must be >= {minimum}")
         maximum = rule.get("maximum")
-        maximum_number = _wire_decimal(maximum)
-        if maximum_number is not None and number > maximum_number:
+        maximum_integer = _exact_integer(maximum)
+        if maximum_integer is not None and _compare_exact_integers(integer, maximum_integer) > 0:
             raise _wire_error(WIRE_MAXIMUM, schema_name, path, f"must be <= {maximum}")
     if isinstance(value, Mapping):
         required = rule.get("required", [])

@@ -75,6 +75,7 @@ pub enum BridgeError {
         verb: String,
         message: String,
         code: Option<String>,
+        payload: Box<serde_json::Value>,
     },
 
     /// The subprocess exited non-zero but stdout didn't parse as a
@@ -234,6 +235,7 @@ where
                     .get("code")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
+                payload: Box::new(parsed.clone()),
             });
         }
 
@@ -363,6 +365,7 @@ where
                 .get("code")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
+            payload: Box::new(parsed.clone()),
         });
     }
 

@@ -64,17 +64,14 @@ fn cos_tool_json(
         Err(BridgeError::AppError {
             message,
             code,
+            payload,
             ..
         }) => {
-            let mut payload = serde_json::json!({ "error": &message });
-            if let Some(code) = code.clone() {
-                payload["code"] = serde_json::Value::String(code);
-            }
             Err(ToolError::Denied {
                 name: name.to_string(),
                 message,
                 code,
-                payload,
+                payload: *payload,
             })
         }
         Err(error) => Err(ToolError::Bridge(error)),
