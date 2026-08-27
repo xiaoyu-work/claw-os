@@ -5,9 +5,39 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::path::{Path, PathBuf};
+use std::{
+    future::Future,
+    io,
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
+use tokio::time::timeout;
+
+const CLAWD_CONNECT_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAWD_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAWD_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
+const CLAWD_READ_TIMEOUT: Duration = Duration::from_secs(2);
+
+#[derive(Debug, Clone, Copy)]
+struct ClawdTimeouts {
+    connect: Duration,
+    write: Duration,
+    flush: Duration,
+    read: Duration,
+}
+
+impl Default for ClawdTimeouts {
+    fn default() -> Self {
+        Self {
+            connect: CLAWD_CONNECT_TIMEOUT,
+            write: CLAWD_WRITE_TIMEOUT,
+            flush: CLAWD_FLUSH_TIMEOUT,
+            read: CLAWD_READ_TIMEOUT,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
@@ -165,9 +195,30 @@ struct ClawdError {
 
 async fn clawd_request(command: &str, params: Value) -> Result<Value, LoadError> {
     let socket = clawd_socket_path();
-    let stream = UnixStream::connect(&socket)
-        .await
-        .map_err(|e| LoadError(format!("connect clawd {}: {e}", socket.display())))?;
+    clawd_request_at(&socket, command, params, ClawdTimeouts::default()).await
+}
+
+async fn clawd_request_at(
+    socket: &Path,
+    command: &str,
+    params: Value,
+    timeouts: ClawdTimeouts,
+) -> Result<Value, LoadError> {
+    let stream = io_with_timeout(
+        timeouts.connect,
+        format!("connect clawd {}", socket.display()),
+        UnixStream::connect(socket),
+    )
+    .await?;
+    clawd_request_on_stream(stream, command, params, timeouts).await
+}
+
+async fn clawd_request_on_stream(
+    stream: UnixStream,
+    command: &str,
+    params: Value,
+    timeouts: ClawdTimeouts,
+) -> Result<Value, LoadError> {
     let (reader, mut writer) = stream.into_split();
     let mut lines = BufReader::new(reader).lines();
 
@@ -179,20 +230,26 @@ async fn clawd_request(command: &str, params: Value) -> Result<Value, LoadError>
     let mut line = serde_json::to_vec(&request)
         .map_err(|e| LoadError(format!("encode clawd request {command}: {e}")))?;
     line.push(b'\n');
-    writer
-        .write_all(&line)
-        .await
-        .map_err(|e| LoadError(format!("write clawd request {command}: {e}")))?;
-    writer
-        .flush()
-        .await
-        .map_err(|e| LoadError(format!("flush clawd request {command}: {e}")))?;
+    io_with_timeout(
+        timeouts.write,
+        format!("write clawd request {command}"),
+        writer.write_all(&line),
+    )
+    .await?;
+    io_with_timeout(
+        timeouts.flush,
+        format!("flush clawd request {command}"),
+        writer.flush(),
+    )
+    .await?;
 
-    let line = lines
-        .next_line()
-        .await
-        .map_err(|e| LoadError(format!("read clawd response {command}: {e}")))?
-        .ok_or_else(|| LoadError(format!("clawd closed before responding to {command}")))?;
+    let line = io_with_timeout(
+        timeouts.read,
+        format!("read clawd response {command}"),
+        lines.next_line(),
+    )
+    .await?
+    .ok_or_else(|| LoadError(format!("clawd closed before responding to {command}")))?;
     let response: ClawdResponse = serde_json::from_str(&line)
         .map_err(|e| LoadError(format!("decode clawd response {command}: {e}")))?;
     if response.ok {
@@ -207,6 +264,24 @@ async fn clawd_request(command: &str, params: Value) -> Result<Value, LoadError>
     }
 }
 
+async fn io_with_timeout<T, F>(
+    duration: Duration,
+    operation: String,
+    future: F,
+) -> Result<T, LoadError>
+where
+    F: Future<Output = io::Result<T>>,
+{
+    match timeout(duration, future).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(LoadError(format!("{operation}: {error}"))),
+        Err(_) => Err(LoadError(format!(
+            "{operation} timed out after {} ms",
+            duration.as_millis()
+        ))),
+    }
+}
+
 fn clawd_socket_path() -> PathBuf {
     if let Some(path) = std::env::var_os("COS_CLAWD_SOCKET") {
         return PathBuf::from(path);
@@ -218,4 +293,9 @@ fn runtime_dir() -> PathBuf {
     std::env::var_os("COS_RUNTIME_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new("/run/cos").to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/queue.rs"));
 }

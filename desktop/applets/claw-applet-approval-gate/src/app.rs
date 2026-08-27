@@ -18,7 +18,14 @@ use cosmic::{
         text,
     },
 };
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{
+    future::Future,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 pub fn run() -> cosmic::iced::Result {
     cosmic::applet::run::<ApprovalGate>(())
@@ -30,6 +37,7 @@ struct ApprovalGate {
     popup: Option<window::Id>,
     pending: Vec<Request>,
     last_error: Option<String>,
+    refresh_state: RefreshState,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +52,38 @@ enum Message {
     Resolved,
 }
 
+#[derive(Debug, Clone, Default)]
+struct RefreshState {
+    in_flight: Arc<AtomicBool>,
+}
+
+impl RefreshState {
+    fn try_start(&self) -> Option<RefreshPermit> {
+        self.in_flight
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .ok()
+            .map(|_| RefreshPermit {
+                in_flight: Arc::clone(&self.in_flight),
+            })
+    }
+
+    #[cfg(test)]
+    fn is_in_flight(&self) -> bool {
+        self.in_flight.load(Ordering::Acquire)
+    }
+}
+
+struct RefreshPermit {
+    in_flight: Arc<AtomicBool>,
+}
+
+impl Drop for RefreshPermit {
+    fn drop(&mut self) {
+        // The task owns this permit, so cancellation clears the flag too.
+        self.in_flight.store(false, Ordering::Release);
+    }
+}
+
 impl cosmic::Application for ApprovalGate {
     type Message = Message;
     type Executor = cosmic::SingleThreadExecutor;
@@ -55,7 +95,8 @@ impl cosmic::Application for ApprovalGate {
             core,
             ..Default::default()
         };
-        (app, refresh_task())
+        let task = refresh_task(&app.refresh_state);
+        (app, task)
     }
 
     fn core(&self) -> &cosmic::app::Core {
@@ -77,7 +118,7 @@ impl cosmic::Application for ApprovalGate {
 
     fn update(&mut self, message: Message) -> app::Task<Message> {
         match message {
-            Message::Tick => refresh_task(),
+            Message::Tick => refresh_task(&self.refresh_state),
             Message::Refreshed(rows) => {
                 let count_changed = rows.len() != self.pending.len();
                 self.pending = rows;
@@ -134,7 +175,7 @@ impl cosmic::Application for ApprovalGate {
                     Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
                 })
             }
-            Message::Resolved => refresh_task(),
+            Message::Resolved => refresh_task(&self.refresh_state),
         }
     }
 
@@ -314,9 +355,29 @@ fn relative_time(then: u64) -> String {
     }
 }
 
-fn refresh_task() -> app::Task<Message> {
-    Task::perform(async { queue::load_pending().await }, |res| match res {
-        Ok(rows) => cosmic::Action::App(Message::Refreshed(rows)),
-        Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
-    })
+fn refresh_task(refresh_state: &RefreshState) -> app::Task<Message> {
+    let Some(permit) = refresh_state.try_start() else {
+        return Task::none();
+    };
+    Task::perform(
+        run_refresh(permit, queue::load_pending()),
+        |res| match res {
+            Ok(rows) => cosmic::Action::App(Message::Refreshed(rows)),
+            Err(e) => cosmic::Action::App(Message::LoadFailed(e.0)),
+        },
+    )
+}
+
+async fn run_refresh<T, F>(permit: RefreshPermit, future: F) -> T
+where
+    F: Future<Output = T>,
+{
+    let result = future.await;
+    drop(permit);
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/app.rs"));
 }
