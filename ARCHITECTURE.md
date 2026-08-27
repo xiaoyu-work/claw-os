@@ -92,6 +92,11 @@ Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
 approvals, and privileged actions cannot bypass the recording path.
 
+Semantic primitives have a one-way dependency boundary: `claw-embed` owns
+embedding, extraction, chunking, walking, and storage contracts;
+`claw-semantic` depends on those contracts and owns only filesystem daemon
+lifecycle, configuration, service orchestration, and user-facing commands.
+
 ### Build and distribution
 
 - Rootfs features are reusable capability units.

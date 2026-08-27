@@ -12,11 +12,11 @@
 //! All output is JSON (stable, consumable by apps/docs/main.py).
 
 use anyhow::{Context, Result};
-use claw_semantic::{
-    chunk::chunks_for, Config, Embedder, Extractor, MemoryStore, StubEmbedder, TextExtractor,
-    VectorStore,
-};
 use clap::{Parser, Subcommand};
+use claw_semantic::{
+    chunk::chunks_for, Config, EmbedRequest, Embedder, Extractor, MemoryStore, StubEmbedder,
+    TextExtractor, VectorStore,
+};
 
 #[derive(Parser)]
 #[command(name = "claw-semantic", version, about)]
@@ -36,7 +36,8 @@ enum Cmd {
     Reindex,
 }
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load_or_default()?;
     let store = MemoryStore::open(MemoryStore::default_path())?;
@@ -58,7 +59,16 @@ fn main() -> Result<()> {
             println!("{}", serde_json::to_string_pretty(&out)?);
         }
         Cmd::Search { query, k } => {
-            let qvec = embedder.embed(std::slice::from_ref(&query))?.pop().unwrap_or_default();
+            let response = embedder
+                .embed(EmbedRequest {
+                    inputs: vec![query.clone()],
+                })
+                .await?;
+            let qvec = response
+                .embeddings
+                .into_iter()
+                .next()
+                .context("stub embedder returned no query embedding")?;
             let hits = store.search(&qvec, k)?;
             let out = serde_json::json!({
                 "query": query,
@@ -104,9 +114,9 @@ fn main() -> Result<()> {
                     skipped += 1;
                     continue;
                 }
-                let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-                let vecs = embedder.embed(&texts)?;
-                store.upsert(&abs, &chunks, &vecs)?;
+                let inputs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+                let response = embedder.embed(EmbedRequest { inputs }).await?;
+                store.upsert(&abs, &chunks, &response.embeddings)?;
                 indexed += 1;
             }
             let stats = store.stats()?;

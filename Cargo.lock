@@ -568,6 +568,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dirs",
  "notify",
  "rusqlite",
  "serde",
@@ -596,12 +597,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "claw-embed",
  "dirs",
- "notify",
  "serde",
  "serde_json",
- "sha2",
- "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",

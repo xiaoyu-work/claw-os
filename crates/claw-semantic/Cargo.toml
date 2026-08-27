@@ -20,15 +20,11 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+claw-embed = { path = "../claw-embed" }
 clap = { workspace = true, features = ["env"] }
-notify = "6"
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 dirs = "5"
-sha2 = "0.10"
-
-[dev-dependencies]
-tempfile = "3.27"

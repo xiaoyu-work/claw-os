@@ -8,15 +8,16 @@
 
 use anyhow::{Context, Result};
 use claw_semantic::{
-    chunk::chunks_for, watch::FsEvent, Config, Embedder, Extractor, MemoryStore, StubEmbedder,
-    TextExtractor, VectorStore,
+    chunk::chunks_for, watch::FsEvent, Config, EmbedRequest, Embedder, Extractor, MemoryStore,
+    StubEmbedder, TextExtractor, VectorStore,
 };
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{info, warn};
 
-fn main() -> Result<()> {
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -27,8 +28,7 @@ fn main() -> Result<()> {
     let cfg = Config::load_or_default().context("loading config")?;
     info!(?cfg, "starting claw-semantic-daemon");
 
-    let store: Arc<dyn VectorStore> =
-        Arc::new(MemoryStore::open(MemoryStore::default_path())?);
+    let store: Arc<dyn VectorStore> = Arc::new(MemoryStore::open(MemoryStore::default_path())?);
     let embedder: Arc<dyn Embedder> = Arc::new(StubEmbedder);
     let extractors: Vec<Box<dyn Extractor>> = vec![Box::new(TextExtractor)];
 
@@ -38,7 +38,7 @@ fn main() -> Result<()> {
     let files = claw_semantic::watch::walk(&cfg.topdirs);
     info!(n = files.len(), "files found, indexing");
     for p in files {
-        if let Err(e) = index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref()) {
+        if let Err(e) = index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref()).await {
             warn!(path = %p.display(), error = %e, "index failed, continuing");
         }
     }
@@ -48,8 +48,8 @@ fn main() -> Result<()> {
     // Phase 1: subscribe to live events. Real coalescing / debouncing
     // comes in Phase 2 (right now we redo the file on every Modify
     // notification, which can fire many times during a save).
-    let watcher = claw_semantic::watch::Watcher::spawn(cfg.topdirs.clone())
-        .context("starting fs watcher")?;
+    let watcher =
+        claw_semantic::watch::Watcher::spawn(cfg.topdirs.clone()).context("starting fs watcher")?;
     info!("watching for changes");
     loop {
         let Some(ev) = watcher.recv_with_timeout(Duration::from_secs(60)) else {
@@ -61,7 +61,7 @@ fn main() -> Result<()> {
                     continue;
                 }
                 if let Err(e) =
-                    index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref())
+                    index_file(&p, &cfg, embedder.as_ref(), &extractors, store.as_ref()).await
                 {
                     warn!(path = %p.display(), error = %e, "index failed");
                 }
@@ -76,7 +76,7 @@ fn main() -> Result<()> {
     }
 }
 
-fn index_file(
+async fn index_file(
     path: &Path,
     cfg: &Config,
     embedder: &dyn Embedder,
@@ -109,8 +109,8 @@ fn index_file(
     if chunks.is_empty() {
         return Ok(());
     }
-    let texts: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
-    let vecs = embedder.embed(&texts)?;
-    store.upsert(&abs, &chunks, &vecs)?;
+    let inputs: Vec<String> = chunks.iter().map(|c| c.text.clone()).collect();
+    let response = embedder.embed(EmbedRequest { inputs }).await?;
+    store.upsert(&abs, &chunks, &response.embeddings)?;
     Ok(())
 }
