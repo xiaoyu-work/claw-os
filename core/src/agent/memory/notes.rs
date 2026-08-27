@@ -16,8 +16,11 @@
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::filelock;
+
+use super::ontology::{self, FactLifetime};
 
 /// Canonical file name for the agent's working memory.
 pub const MEMORY_FILE: &str = "MEMORY.md";
@@ -87,6 +90,19 @@ impl NotesStore {
         filelock::write_locked(&p, content)
     }
 
+    /// Read-modify-write a note while holding one exclusive lock.
+    pub(crate) fn update<F>(&self, name: &str, transform: F) -> Result<(), String>
+    where
+        F: FnOnce(Option<String>) -> String,
+    {
+        self.ensure_dir()?;
+        let p = self.path_of(name)?;
+        filelock::update_locked::<_, std::convert::Infallible>(&p, |current| {
+            Ok(transform(current))
+        })
+        .map_err(|error| error.to_string())
+    }
+
     /// Append a line to a note (creates the file if missing).
     pub fn append(&self, name: &str, line: &str) -> Result<(), String> {
         self.ensure_dir()?;
@@ -146,12 +162,11 @@ impl NotesStore {
     /// - **USER.md** — always-on in full (persona / preferences), capped.
     /// - **MEMORY.md** headings, prose, and any line containing
     ///   [`ALWAYS_TAG`] (case-insensitive) — always-on.
-    /// - Other MEMORY.md bullet entries — *contextual*: under budget every
-    ///   entry is kept (byte-identical to the old wholesale behaviour, so
-    ///   the common case is unchanged and risk-free); over budget only the
-    ///   entries most relevant to `query` are kept (or, when `query` is
-    ///   `None`, the earliest entries), with a marker noting how many were
-    ///   dropped. The full file remains available via `cos_memory read`.
+    /// - Other current MEMORY.md bullet entries — *contextual*: under budget
+    ///   every projected entry is kept; over budget only the entries most
+    ///   relevant to `query` are kept (or, when `query` is `None`, the
+    ///   earliest entries), with a marker noting how many were dropped. The
+    ///   full append-only file remains available via `cos_memory read`.
     ///
     /// Replacing blind truncation with relevance selection means a large,
     /// long-lived `MEMORY.md` no longer silently drops potentially-relevant
@@ -169,10 +184,10 @@ impl NotesStore {
                     continue;
                 }
                 // USER.md is the always-on persona tier: keep it whole
-                // (capped). MEMORY.md is append-only, so project chain
-                // tails first — otherwise a superseded value and its
-                // replacement both reach the model — then rank what is
-                // left against the budget.
+                // (capped). MEMORY.md is append-only, so project the
+                // canonical current view first — otherwise aliases,
+                // contradictions, expired observations, or corrected values
+                // could reach the model together — then rank what remains.
                 let selected = if name == &MEMORY_FILE {
                     let tails = project_chain_tails(trimmed);
                     select_memory_for_prompt(tails.trim(), query, cap_chars)
@@ -203,43 +218,47 @@ impl NotesStore {
 /// session prompt snapshot is assembled. Case-insensitive.
 pub const ALWAYS_TAG: &str = "[always]";
 
-/// Drop curated entries that a later entry supersedes.
+/// Project the current governed view of curated entries.
 ///
 /// `MEMORY.md` is append-only: when a fact changes, the new value is
 /// appended rather than overwriting the old one, so the file keeps the
 /// whole history (`editor.name = vim` … later … `editor.name = helix`).
-/// That is right for storage and wrong for the prompt — injecting both
-/// puts two contradictory facts in front of the model at once.
+/// Aliases are canonicalized for comparison, volatile observations expire,
+/// and cross-slot contradictions such as `tool.installation = not_found`
+/// versus `tool.version = 1.2.3` are resolved by append order.
 ///
-/// So the file is the store and this is the view: for each structured
-/// key, only the last (tail) entry is projected. Superseded entries stay
-/// on disk and remain readable via `cos_memory read MEMORY.md`.
+/// The file is the store and this is the view: only the newest current,
+/// non-conflicting tail is projected. Superseded and expired entries stay on
+/// disk and remain readable via `cos_memory read MEMORY.md`.
 ///
 /// Unstructured lines have no key and are always kept — we cannot tell
 /// whether two prose sentences describe the same slot, which is exactly
 /// why facts are structured now.
 fn project_chain_tails(content: &str) -> String {
-    use std::collections::HashMap;
+    project_chain_tails_at(content, current_epoch_days())
+}
 
-    let lines: Vec<&str> = content.lines().collect();
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CurrentStructuredValue {
+    pub value: String,
+    pub lifetime: Option<FactLifetime>,
+}
 
-    // Last line index per key wins.
-    let mut tail_of: HashMap<String, usize> = HashMap::new();
-    for (i, line) in lines.iter().enumerate() {
-        if let Some(key) = curated_key(line) {
-            tail_of.insert(key, i);
-        }
-    }
-    if tail_of.is_empty() {
+pub(crate) fn current_structured_values(
+    content: &str,
+) -> std::collections::HashMap<String, CurrentStructuredValue> {
+    projection_at(content, current_epoch_days()).current
+}
+
+fn project_chain_tails_at(content: &str, now_days: u64) -> String {
+    let projection = projection_at(content, now_days);
+    if projection.structured_indices.is_empty() {
         return content.to_string();
     }
 
     let mut out = String::new();
-    for (i, line) in lines.iter().enumerate() {
-        let superseded = curated_key(line)
-            .and_then(|k| tail_of.get(&k).copied())
-            .is_some_and(|tail| tail != i);
-        if superseded {
+    for (index, line) in content.lines().enumerate() {
+        if projection.structured_indices.contains(&index) && !projection.keep.contains(&index) {
             continue;
         }
         out.push_str(line);
@@ -248,17 +267,175 @@ fn project_chain_tails(content: &str) -> String {
     out
 }
 
-/// The `entity.attribute` key of a curated bullet, if it has one.
-///
-/// Recognises the shape `render_fact_line` writes:
-/// `- [category] entity.attribute = value _(date, conf N)_`
-fn curated_key(line: &str) -> Option<String> {
+#[derive(Debug)]
+struct CuratedEntry {
+    index: usize,
+    key: String,
+    entity: String,
+    attribute: String,
+    value: String,
+    metadata: CuratedMetadata,
+}
+
+#[derive(Debug, Default)]
+struct CuratedMetadata {
+    lifetime: Option<FactLifetime>,
+    observed_at_days: Option<u64>,
+    ttl_days: Option<u32>,
+}
+
+#[derive(Debug, Default)]
+struct Projection {
+    structured_indices: std::collections::HashSet<usize>,
+    keep: std::collections::HashSet<usize>,
+    current: std::collections::HashMap<String, CurrentStructuredValue>,
+}
+
+fn projection_at(content: &str, now_days: u64) -> Projection {
+    use std::collections::{HashMap, HashSet};
+
+    let entries: Vec<CuratedEntry> = content
+        .lines()
+        .enumerate()
+        .filter_map(|(index, line)| parse_curated_entry(index, line))
+        .collect();
+
+    let structured_indices = entries.iter().map(|entry| entry.index).collect();
+    let mut tail_by_key: HashMap<&str, usize> = HashMap::new();
+    for entry in &entries {
+        tail_by_key.insert(&entry.key, entry.index);
+    }
+    let mut keep: HashSet<usize> = tail_by_key.values().copied().collect();
+
+    // A version proves presence. A later explicit not-found observation proves
+    // absence. Whichever was appended later supersedes the contradictory
+    // cross-slot fact, while both remain in the raw history.
+    let mut absent_installation: HashMap<&str, usize> = HashMap::new();
+    let mut versions: HashMap<&str, usize> = HashMap::new();
+    for entry in &entries {
+        if !keep.contains(&entry.index) {
+            continue;
+        }
+        if entry.attribute == "installation" && ontology::installation_is_absent(&entry.value) {
+            absent_installation.insert(&entry.entity, entry.index);
+        } else if entry.attribute == "version" {
+            versions.insert(&entry.entity, entry.index);
+        }
+    }
+    for (entity, installation_index) in absent_installation {
+        if let Some(version_index) = versions.get(entity).copied() {
+            keep.remove(&installation_index.min(version_index));
+        }
+    }
+
+    let by_index: HashMap<usize, &CuratedEntry> =
+        entries.iter().map(|entry| (entry.index, entry)).collect();
+    keep.retain(|index| {
+        by_index
+            .get(index)
+            .is_some_and(|entry| !entry.metadata.is_excluded(now_days))
+    });
+
+    let current = keep
+        .iter()
+        .filter_map(|index| by_index.get(index))
+        .map(|entry| {
+            (
+                entry.key.clone(),
+                CurrentStructuredValue {
+                    value: entry.value.clone(),
+                    lifetime: entry.metadata.effective_lifetime(),
+                },
+            )
+        })
+        .collect();
+
+    Projection {
+        structured_indices,
+        keep,
+        current,
+    }
+}
+
+fn parse_curated_entry(index: usize, line: &str) -> Option<CuratedEntry> {
     let trimmed = line.trim();
     let rest = trimmed.strip_prefix("- [")?;
     let close = rest.find("] ")?;
     let after = &rest[close + 2..];
-    let body = after.split(" _(").next().unwrap_or(after).trim();
-    super::curator::split_curated_body(body).map(|(k, _)| k)
+    let (body, metadata) = match after.rsplit_once(" _(") {
+        Some((body, metadata)) if metadata.ends_with(")_") => (
+            body.trim(),
+            parse_curated_metadata(metadata.strip_suffix(")_").unwrap_or(metadata)),
+        ),
+        _ => (after.trim(), CuratedMetadata::default()),
+    };
+    let (key, value) = ontology::split_structured_body(body)?;
+    let (entity, attribute) = key.split_once('.')?;
+    let slot = ontology::normalize_slot(entity, attribute, &value)?;
+    Some(CuratedEntry {
+        index,
+        key: slot.key(),
+        entity: slot.entity,
+        attribute: slot.attribute,
+        value: slot.value,
+        metadata,
+    })
+}
+
+fn parse_curated_metadata(metadata: &str) -> CuratedMetadata {
+    let mut out = CuratedMetadata::default();
+    for field in metadata.split(',').map(str::trim) {
+        let Some((key, value)) = field.split_once('=').or_else(|| field.split_once(':')) else {
+            continue;
+        };
+        match key.trim() {
+            "lifetime" => out.lifetime = FactLifetime::parse(value),
+            "observed_at" => out.observed_at_days = ontology::date_to_epoch_days(value),
+            "ttl" | "ttl_days" => {
+                out.ttl_days = value
+                    .trim()
+                    .trim_end_matches(['d', 'D'])
+                    .parse::<u32>()
+                    .ok()
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+impl CuratedMetadata {
+    fn effective_lifetime(&self) -> Option<FactLifetime> {
+        self.lifetime
+            .or_else(|| self.ttl_days.map(|_| FactLifetime::Observed))
+    }
+
+    fn is_excluded(&self, now_days: u64) -> bool {
+        match self.effective_lifetime() {
+            Some(FactLifetime::Session | FactLifetime::Procedure) => true,
+            Some(FactLifetime::Durable) => false,
+            Some(FactLifetime::Observed) => self.is_expired_observation(now_days),
+            None => false,
+        }
+    }
+
+    fn is_expired_observation(&self, now_days: u64) -> bool {
+        let Some(observed_at) = self.observed_at_days else {
+            return true;
+        };
+        let ttl_days = self
+            .ttl_days
+            .unwrap_or(ontology::DEFAULT_OBSERVED_TTL_DAYS)
+            .clamp(1, ontology::MAX_OBSERVED_TTL_DAYS);
+        now_days >= observed_at.saturating_add(u64::from(ttl_days))
+    }
+}
+
+fn current_epoch_days() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() / 86_400)
+        .unwrap_or(0)
 }
 
 /// Is this line a contextual bullet entry (rankable / droppable), as

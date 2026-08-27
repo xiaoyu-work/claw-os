@@ -11,9 +11,10 @@
 //!      category + confidence + free-text.
 //!   3. Parse the tags out of the response (forgivingly — we don't
 //!      require perfect JSON).
-//!   4. Filter by minimum confidence + dedupe against what's already
-//!      in `MEMORY.md`.
-//!   5. Append survivors to a `## Curated facts (auto)` section in
+//!   4. Normalize structured slots, classify their lifetime, attach
+//!      provenance, then apply confidence + secret filtering.
+//!   5. Dedupe against the current non-expired projection and append
+//!      survivors to a `## Curated facts (auto)` section in
 //!      `MEMORY.md`. New sessions pick them up in their frozen prompt snapshot;
 //!      the current session retains the source conversation already in context.
 //!   6. Update a curation log so we don't re-extract from already-
@@ -56,6 +57,7 @@
 //!
 //!   * Short-term task details ("user is debugging the X feature
 //!     today") — those belong in session memory, not durable notes.
+//!   * Procedures and runbooks — those belong in Skills.
 //!   * Secrets, credentials, tokens — flagged for the model to skip
 //!     and *also* filtered post-hoc by [`looks_secret`].
 //!   * Information that's already in `MEMORY.md` — deduped at write
@@ -69,7 +71,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 
 use crate::agent::llm::auxiliary::AuxiliaryClient;
-use crate::agent::memory::notes::{NotesStore, MEMORY_FILE};
+use crate::agent::memory::notes::{current_structured_values, NotesStore, MEMORY_FILE};
+use crate::agent::memory::ontology::{self, FactLifetime};
 use crate::agent::memory::sqlite_fts::{MemoryDb, MessageRow};
 
 // =====================================================================
@@ -160,6 +163,19 @@ pub struct ExtractedFact {
     pub attribute: Option<String>,
     /// The property's value (`helix`, `us-west-2`).
     pub value: Option<String>,
+    /// Model-declared lifetime before policy, then canonical lifetime after
+    /// normalization.
+    pub lifetime: Option<FactLifetime>,
+    /// Date on which the source message observed the fact (`YYYY-MM-DD`).
+    pub observed_at: Option<String>,
+    /// Bounded expiry for volatile observations.
+    pub ttl_days: Option<u32>,
+    /// Session containing the source message. Assigned by the curator, never
+    /// trusted from model output.
+    pub source_session_id: Option<String>,
+    /// Message cited by the model and validated against the transcript, or the
+    /// latest user message when the citation is absent or invalid.
+    pub source_message_id: Option<i64>,
 }
 
 impl ExtractedFact {
@@ -198,8 +214,8 @@ pub struct CurationOutcome {
     pub last_message_id: Option<i64>,
     /// Facts the LLM proposed.
     pub facts_proposed: Vec<ExtractedFact>,
-    /// Facts that survived confidence/secret/dedupe filtering and
-    /// were actually written to MEMORY.md.
+    /// Facts that survived normalization, lifetime, confidence, secret, and
+    /// dedupe filtering and were actually written to MEMORY.md.
     pub facts_added: Vec<ExtractedFact>,
     /// True when the run was skipped because no new messages arrived
     /// since the last curation pass.
@@ -468,24 +484,25 @@ const MAX_RETAINED_RUNS: usize = 256;
 // LLM prompting
 // =====================================================================
 
-const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a careful note-taker that distills *durable user facts*
+const DEFAULT_SYSTEM_PROMPT: &str = r#"You are a careful note-taker that distills durable knowledge
 from a conversation between a user and an AI agent.
 
 Output format: zero or more `<fact>` tags, one per line:
 
-    <fact category="<category>" entity="<entity>" attribute="<attribute>" value="<value>" confidence="<0.0-1.0>">free text</fact>
+    <fact category="<category>" entity="<entity>" attribute="<attribute>" value="<value>" lifetime="<durable|observed>" ttl_days="<optional integer>" source_message_id="<user message id>" confidence="<0.0-1.0>">free text</fact>
 
 Categories you may use:
   - preference   — preferences, likes / dislikes, working style
   - identity     — names, roles, affiliations, languages spoken
-  - environment  — operating system, tooling, hardware, locations
+  - environment  — stable conventions or observed system/tool state
   - skill        — technical or domain expertise the user has shown
   - resolution   — a problem that was diagnosed and fixed
 
 Structure every fact as entity + attribute + value:
 
-    <fact category="preference" entity="editor" attribute="name" value="helix" confidence="0.9">User switched to helix</fact>
-    <fact category="resolution" entity="postgres" attribute="cause" value="connection pool exhausted" confidence="0.8">Staging DB dropped connections because the pool was too small</fact>
+    <fact category="preference" entity="editor" attribute="name" value="helix" lifetime="durable" source_message_id="42" confidence="0.9">User switched to helix</fact>
+    <fact category="environment" entity="python" attribute="version" value="3.13.1" lifetime="observed" ttl_days="30" source_message_id="47" confidence="0.9">Python 3.13.1 was observed</fact>
+    <fact category="resolution" entity="postgres" attribute="cause" value="connection pool exhausted" lifetime="durable" source_message_id="51" confidence="0.8">Staging DB dropped connections because the pool was too small</fact>
 
 This matters: two facts sharing entity+attribute are treated as
 successive states of the same thing, so a later one supersedes an
@@ -493,19 +510,32 @@ earlier one. `editor/name` lets "helix" replace "vim"; free text does
 not. Reuse the *same* entity and attribute names for the same slot.
 
 Rules:
-  1. Only emit facts that will *still be true next month* (durable),
-     not short-term task state ("user is currently debugging X").
-     Exception: `resolution` facts. A problem that was diagnosed and
-     fixed stays useful even though the debugging session does not —
-     record what broke, why, and what fixed it. "Spent today debugging
-     X" is still noise; "X failed because of Y, fixed by Z" is not.
-  2. Confidence is your honest estimate (0.0-1.0). Below 0.5, omit
+  1. Always provide entity, attribute, value, lifetime, and the id of the
+     user message that supports the fact.
+  2. Use these canonical aliases:
+       operating_system.{name,distribution,base_distribution} -> os.distribution
+       {claw_agent,cos_agent,system_agent}.deployment_state -> claw_os.installation
+       installed/install_status/installation_state -> installation
+       installed_version/package_version/version_number -> version
+       desired_version/version_preference -> preferred_version
+  3. Preferences, profile facts, demonstrated skills, and reusable
+     resolutions are durable. A resolution records what broke and why or
+     what fixed it; merely spending today debugging something is not durable.
+     A preference for a version must use `preferred_version`; labeling the
+     live `version` slot as a preference does not make it durable.
+  4. Current OS, package/tool versions, installation state, process/service
+     state, memory size, and sensor availability are observations regardless
+     of category. Mark them lifetime="observed"; ttl_days is optional and
+     policy-bounded. Omit an observation unless a user source message supports it.
+  5. Never emit current task/session state. Never emit procedures, command
+     sequences, runbooks, or imperative workflows: those belong in Skills.
+  6. Confidence is your honest estimate (0.0-1.0). Below 0.5, omit
      the fact entirely — better silent than wrong.
-  3. NEVER emit secrets, API keys, tokens, passwords, or anything
+  7. NEVER emit secrets, API keys, tokens, passwords, or anything
      that looks like a credential. If you see one in the transcript,
      skip the surrounding fact entirely.
-  4. Keep each fact to one short, declarative sentence ≤ 200 chars.
-  5. If the conversation reveals nothing durable, emit no tags.
+  8. Keep each fact to one short, declarative sentence ≤ 200 chars.
+  9. If the conversation reveals nothing eligible, emit no tags.
      An empty response is the correct answer most of the time.
 
 Do not write any prose outside the `<fact>` tags. No preamble, no
@@ -532,6 +562,8 @@ pub fn format_transcript(messages: &[MessageRow], per_msg_cap: usize) -> String 
         };
         buf.push('[');
         buf.push_str(&m.role);
+        buf.push_str(" message_id=");
+        buf.push_str(&m.id.to_string());
         buf.push_str("] ");
         buf.push_str(&body);
         buf.push_str("\n\n");
@@ -579,12 +611,22 @@ pub fn parse_facts(llm_output: &str) -> Vec<ExtractedFact> {
         let mut entity: Option<String> = None;
         let mut attribute: Option<String> = None;
         let mut value: Option<String> = None;
+        let mut lifetime: Option<FactLifetime> = None;
+        let mut observed_at: Option<String> = None;
+        let mut ttl_days: Option<u32> = None;
+        let mut source_message_id: Option<i64> = None;
         for (k, v) in parse_attrs(attrs) {
             match k.as_str() {
                 "category" => category = FactCategory::parse(&v),
                 "entity" => entity = non_empty(v),
                 "attribute" | "attr" => attribute = non_empty(v),
                 "value" | "val" => value = non_empty(v),
+                "lifetime" => lifetime = FactLifetime::parse(&v),
+                "observed_at" | "observed" => observed_at = non_empty(v),
+                "ttl" | "ttl_days" => ttl_days = parse_ttl_days(&v),
+                "source_message_id" | "message_id" | "source" => {
+                    source_message_id = v.trim().parse::<i64>().ok()
+                }
                 "confidence" => {
                     if let Ok(n) = v.parse::<f32>() {
                         if n.is_finite() {
@@ -603,6 +645,11 @@ pub fn parse_facts(llm_output: &str) -> Vec<ExtractedFact> {
             entity,
             attribute,
             value,
+            lifetime,
+            observed_at,
+            ttl_days,
+            source_session_id: None,
+            source_message_id,
         });
     }
     out
@@ -618,6 +665,14 @@ fn non_empty(s: String) -> Option<String> {
     } else {
         Some(t.to_string())
     }
+}
+
+fn parse_ttl_days(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .trim_end_matches(['d', 'D'])
+        .parse::<u32>()
+        .ok()
 }
 
 fn parse_attrs(attrs: &str) -> Vec<(String, String)> {
@@ -711,6 +766,7 @@ pub fn looks_secret(text: &str) -> bool {
         "password",
         "passwd",
         "token",
+        "credential",
         "bearer ",
         "ssh-rsa",
         "ssh-ed25519",
@@ -726,18 +782,32 @@ pub fn looks_secret(text: &str) -> bool {
     // positive as secrets. Real base64-ish tokens — JWTs, API keys —
     // never embed `/` inside the secret material at this length;
     // even base64-url uses `_` / `-` rather than `/`.
-    let mut run = 0usize;
+    let mut run = String::new();
     for c in text.chars() {
         if c.is_ascii_alphanumeric() || c == '+' || c == '_' || c == '-' || c == '=' {
-            run += 1;
-            if run >= 24 {
+            run.push(c);
+        } else {
+            if secret_like_run(&run) {
                 return true;
             }
-        } else {
-            run = 0;
+            run.clear();
         }
     }
-    false
+    secret_like_run(&run)
+}
+
+fn secret_like_run(run: &str) -> bool {
+    run.len() >= 24
+}
+
+fn looks_like_uuid(value: &str) -> bool {
+    if value.len() != 36 {
+        return false;
+    }
+    value.char_indices().all(|(index, c)| match index {
+        8 | 13 | 18 | 23 => c == '-',
+        _ => c.is_ascii_hexdigit(),
+    })
 }
 
 /// Check every model-controlled fact field and the body selected for
@@ -749,6 +819,11 @@ fn fact_looks_secret(fact: &ExtractedFact) -> bool {
         || fact.entity.as_deref().is_some_and(looks_secret)
         || fact.attribute.as_deref().is_some_and(looks_secret)
         || fact.value.as_deref().is_some_and(looks_secret)
+        || fact.observed_at.as_deref().is_some_and(looks_secret)
+        || fact
+            .source_session_id
+            .as_deref()
+            .is_some_and(|source| !looks_like_uuid(source) && looks_secret(source))
         || looks_secret(&fact.body())
 }
 
@@ -780,22 +855,11 @@ fn existing_curated_lines(memory_md: &str) -> Vec<String> {
 /// Shared with prompt assembly, which must recognise the same shape to
 /// project only chain tails.
 pub fn split_curated_body(body: &str) -> Option<(String, String)> {
-    let (lhs, rhs) = body.split_once(" = ")?;
-    let key = lhs.trim();
-    // A key is `entity.attribute`: one dot, neither side blank, and no
-    // whitespace — whitespace means this is prose that happens to
-    // contain an equals sign, not a structured slot.
-    if key.is_empty() || key.contains(char::is_whitespace) {
-        return None;
-    }
-    let (e, a) = key.split_once('.')?;
-    if e.is_empty() || a.is_empty() || a.contains('.') {
-        return None;
-    }
-    Some((key.to_ascii_lowercase(), rhs.trim().to_string()))
+    ontology::split_structured_body(body)
 }
 
 /// The most recent value recorded for each structured key.
+#[cfg(test)]
 fn latest_values(existing: &[String]) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     for body in existing {
@@ -810,22 +874,94 @@ fn latest_values(existing: &[String]) -> std::collections::HashMap<String, Strin
 
 /// Format a single fact as a MEMORY.md line.
 pub fn render_fact_line(fact: &ExtractedFact, today: &str) -> String {
+    if fact.lifetime.is_none()
+        && fact.observed_at.is_none()
+        && fact.ttl_days.is_none()
+        && fact.source_session_id.is_none()
+        && fact.source_message_id.is_none()
+    {
+        return format!(
+            "- [{}] {} _({today}, conf {:.2})_",
+            fact.category.as_str(),
+            fact.body(),
+            fact.confidence
+        );
+    }
+
+    let observed_at = fact.observed_at.as_deref().unwrap_or("unknown");
+    let mut metadata = vec![format!("observed_at={observed_at}")];
+    if let Some(ttl_days) = fact.ttl_days {
+        metadata.push(format!("ttl={ttl_days}d"));
+    }
+    let source_session = fact
+        .source_session_id
+        .as_deref()
+        .map(sanitize_metadata_value)
+        .unwrap_or_else(|| "unknown".to_string());
+    metadata.push(format!("source_session:{source_session}"));
+    metadata.push(format!(
+        "source_message:{}",
+        fact.source_message_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    ));
+    metadata.push(format!("conf={:.2}", fact.confidence));
+    if let Some(lifetime) = fact.lifetime {
+        metadata.push(format!("lifetime={}", lifetime.as_str()));
+    }
     format!(
-        "- [{}] {} _({today}, conf {:.2})_",
+        "- [{}] {} _({})_",
         fact.category.as_str(),
         fact.body(),
-        fact.confidence
+        metadata.join(", ")
     )
 }
 
-/// Render a fact only when both its source fields and its final on-disk
-/// representation are free of secret-like content.
+fn sanitize_metadata_value(value: &str) -> String {
+    value
+        .chars()
+        .take(128)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+fn normalize_provenance_session_id(value: &str) -> String {
+    let trimmed = value.trim();
+    let valid = !trimmed.is_empty()
+        && trimmed.chars().count() <= 128
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'));
+    if valid && (looks_like_uuid(trimmed) || !looks_secret(trimmed)) {
+        trimmed.to_string()
+    } else {
+        "redacted".to_string()
+    }
+}
+
+/// Render a fact only after its normalized model-controlled fields and
+/// fallback date are free of secret-like content.
 fn render_persistable_fact_line(fact: &ExtractedFact, today: &str) -> Option<String> {
-    if fact_looks_secret(fact) {
+    if fact_looks_secret(fact) || looks_secret(today) {
         return None;
     }
     let line = render_fact_line(fact, today);
-    (!looks_secret(&line)).then_some(line)
+    let mut validation_fact = fact.clone();
+    if validation_fact
+        .source_session_id
+        .as_deref()
+        .is_some_and(looks_like_uuid)
+    {
+        validation_fact.source_session_id = Some("trusted-session-uuid".to_string());
+    }
+    let validation_line = render_fact_line(&validation_fact, today);
+    (!looks_secret(&validation_line)).then_some(line)
 }
 
 const SECTION_HEADER: &str = "## Curated facts (auto)";
@@ -857,20 +993,81 @@ fn append_lines_to_section(memory_md: &str, new_lines: &[String]) -> String {
     out
 }
 
+fn dedupe_against_current_memory(
+    mut facts: Vec<ExtractedFact>,
+    memory_md: &str,
+) -> Vec<ExtractedFact> {
+    let existing_bodies = existing_curated_lines(memory_md);
+    let current = current_structured_values(memory_md);
+    let already: Vec<String> = existing_bodies
+        .iter()
+        .map(|body| body.to_ascii_lowercase())
+        .collect();
+
+    facts.retain(|fact| match (fact.key(), &fact.value) {
+        (Some(key), Some(value)) => current.get(&key).is_none_or(|current| {
+            let unchanged = current.value.eq_ignore_ascii_case(value.trim());
+            let needs_governed_observation = fact.lifetime == Some(FactLifetime::Observed)
+                && current.lifetime != Some(FactLifetime::Observed);
+            !unchanged || needs_governed_observation
+        }),
+        _ => !already.contains(&fact.body().to_ascii_lowercase()),
+    });
+
+    let mut seen_keys = std::collections::HashSet::new();
+    let mut deduped = Vec::new();
+    for fact in facts.into_iter().rev() {
+        if let Some(key) = fact.key() {
+            if !seen_keys.insert(key) {
+                continue;
+            }
+        }
+        deduped.push(fact);
+    }
+    deduped.reverse();
+    deduped
+}
+
+fn append_facts_locked(
+    notes: &NotesStore,
+    candidates: Vec<ExtractedFact>,
+    today: &str,
+) -> Result<Vec<ExtractedFact>, String> {
+    if candidates.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut added = Vec::new();
+    notes.update(MEMORY_FILE, |current| {
+        let existing = current.unwrap_or_default();
+        let survivors = dedupe_against_current_memory(candidates, &existing);
+        let mut lines = Vec::with_capacity(survivors.len());
+        for fact in survivors {
+            if let Some(line) = render_persistable_fact_line(&fact, today) {
+                added.push(fact);
+                lines.push(line);
+            }
+        }
+        if lines.is_empty() {
+            existing
+        } else {
+            append_lines_to_section(&existing, &lines)
+        }
+    })?;
+    Ok(added)
+}
+
 fn today_yyyymmdd() -> String {
-    // Lightweight date stamp. We only need date precision (not
-    // time of day) for human readability of the audit trail.
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let days = secs / 86_400;
-    let (y, m, d) = days_to_ymd(days as i64);
-    format!("{y:04}-{m:02}-{d:02}")
+    ontology::date_from_unix_s(secs)
 }
 
 // Civil date helper — same epoch math used elsewhere in cos
 // (e.g. trace timestamping). 1970-01-01 + N days.
+#[cfg(test)]
 fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     let z = days_since_epoch + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
@@ -883,6 +1080,55 @@ fn days_to_ymd(days_since_epoch: i64) -> (i32, u32, u32) {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let y = if m <= 2 { y + 1 } else { y };
     (y, m, d)
+}
+
+fn normalize_fact_for_persistence(
+    fact: &ExtractedFact,
+    session_id: &str,
+    messages: &[MessageRow],
+    today: &str,
+) -> Option<ExtractedFact> {
+    let governed = ontology::normalize_fact(
+        fact.category.as_str(),
+        fact.entity.as_deref()?,
+        fact.attribute.as_deref()?,
+        fact.value.as_deref()?,
+        fact.lifetime,
+        fact.ttl_days,
+    )?;
+
+    let source = fact.source_message_id.and_then(|id| {
+        messages
+            .iter()
+            .find(|message| message.id == id && message.role == "user")
+    });
+    if governed.lifetime == FactLifetime::Observed && source.is_none() {
+        return None;
+    }
+    let today_days = ontology::date_to_epoch_days(today);
+    let observed_at = source
+        .and_then(|message| ontology::date_from_unix_ms(message.ts_ms))
+        .map(|source_date| {
+            let source_is_future = ontology::date_to_epoch_days(&source_date)
+                .zip(today_days)
+                .is_some_and(|(source, today)| source > today);
+            if source_is_future {
+                today.to_string()
+            } else {
+                source_date
+            }
+        });
+
+    let mut normalized = fact.clone();
+    normalized.entity = Some(governed.slot.entity);
+    normalized.attribute = Some(governed.slot.attribute);
+    normalized.value = Some(governed.slot.value);
+    normalized.lifetime = Some(governed.lifetime);
+    normalized.ttl_days = governed.ttl_days;
+    normalized.observed_at = observed_at;
+    normalized.source_session_id = Some(normalize_provenance_session_id(session_id));
+    normalized.source_message_id = source.map(|message| message.id);
+    Some(normalized)
 }
 
 // =====================================================================
@@ -1031,77 +1277,30 @@ impl MemoryCurator {
         let mut proposed = parse_facts(&raw);
         proposed.truncate(self.config.max_facts_per_run);
 
-        // Confidence + secret filter. Filter before dedupe so a rejected
-        // structured fact cannot displace a safe fact for the same key.
-        let mut survivors: Vec<ExtractedFact> = proposed
+        let today = today_yyyymmdd();
+
+        // Normalize before the secret check is considered complete. We check
+        // both forms so normalization can neither hide a secret from the raw
+        // model output nor introduce an unchecked persisted representation.
+        let survivors: Vec<ExtractedFact> = proposed
             .iter()
             .filter(|f| f.confidence >= self.config.min_confidence)
             .filter(|f| !fact_looks_secret(f))
-            .cloned()
+            .filter_map(|f| normalize_fact_for_persistence(f, session_id, &messages, &today))
+            .filter(|f| {
+                f.lifetime.is_some_and(FactLifetime::is_memory_eligible) && !fact_looks_secret(f)
+            })
             .collect();
 
-        // Dedupe against existing MEMORY.md curated entries.
-        //
-        // Append-only: a *changed* value for a known key is not a
-        // duplicate, it is a correction, and it gets appended so the
-        // chain records the transition. Only an unchanged restatement is
-        // dropped. Unstructured facts fall back to exact text match.
-        let existing = match self.notes.read(MEMORY_FILE) {
-            Ok(v) => v.unwrap_or_default(),
-            Err(e) => {
-                let err = CurationError::Notes(e);
+        // Final read, dedupe, and append happen under one exclusive lock.
+        // The LLM call remains outside the lock, but a concurrent curator or
+        // note updater cannot land between the final read and atomic rename.
+        let added = match append_facts_locked(&self.notes, survivors, &today) {
+            Ok(added) => added,
+            Err(error) => {
+                let err = CurationError::Notes(error);
                 record_failure(&err);
                 return Err(err);
-            }
-        };
-        let existing_bodies = existing_curated_lines(&existing);
-        let current = latest_values(&existing_bodies);
-        let already: Vec<String> = existing_bodies
-            .iter()
-            .map(|s| s.to_ascii_lowercase())
-            .collect();
-        survivors.retain(|f| match (f.key(), &f.value) {
-            (Some(k), Some(v)) => current.get(&k).map(|cur| cur.as_str()) != Some(v.trim()),
-            _ => !already.contains(&f.body().to_ascii_lowercase()),
-        });
-
-        // Two facts in one batch can claim the same slot; keep the last,
-        // which is the later state within this transcript.
-        let mut seen_keys: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut deduped: Vec<ExtractedFact> = Vec::new();
-        for f in survivors.into_iter().rev() {
-            if let Some(k) = f.key() {
-                if !seen_keys.insert(k) {
-                    continue;
-                }
-            }
-            deduped.push(f);
-        }
-        deduped.reverse();
-        let survivors = deduped;
-
-        let added = if survivors.is_empty() {
-            Vec::new()
-        } else {
-            let today = today_yyyymmdd();
-            let mut added = Vec::with_capacity(survivors.len());
-            let mut lines = Vec::with_capacity(survivors.len());
-            for fact in survivors {
-                if let Some(line) = render_persistable_fact_line(&fact, &today) {
-                    added.push(fact);
-                    lines.push(line);
-                }
-            }
-            if lines.is_empty() {
-                added
-            } else {
-                let next = append_lines_to_section(&existing, &lines);
-                if let Err(e) = self.notes.write(MEMORY_FILE, &next) {
-                    let err = CurationError::Notes(e);
-                    record_failure(&err);
-                    return Err(err);
-                }
-                added
             }
         };
 

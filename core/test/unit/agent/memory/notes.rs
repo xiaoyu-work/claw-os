@@ -305,6 +305,74 @@
     }
 
     #[test]
+    fn project_chain_tails_merges_canonical_aliases_without_rewriting_history() {
+        let content = "\
+## Curated facts (auto)
+- [environment] operating_system.name = Ubuntu _(2026-01-01, conf 0.90)_
+- [environment] os.base_distribution = Debian _(2026-02-01, conf 0.95)_
+";
+        let out = project_chain_tails(content);
+        assert!(!out.contains("operating_system.name = Ubuntu"));
+        assert!(out.contains("os.base_distribution = Debian"));
+        assert!(content.contains("operating_system.name = Ubuntu"));
+    }
+
+    #[test]
+    fn version_and_not_found_conflict_projects_only_the_newest_observation() {
+        let version_then_missing = "\
+## Curated facts (auto)
+- [environment] python.version = 3.13.1 _(2026-01-01, conf 0.90)_
+- [environment] python.installation = not_found _(2026-01-02, conf 0.95)_
+";
+        let out = project_chain_tails(version_then_missing);
+        assert!(!out.contains("python.version"));
+        assert!(out.contains("python.installation = not_found"));
+
+        let missing_then_version = "\
+## Curated facts (auto)
+- [environment] python.installation = missing _(2026-01-01, conf 0.90)_
+- [environment] python.version = 3.13.1 _(2026-01-02, conf 0.95)_
+";
+        let out = project_chain_tails(missing_then_version);
+        assert!(!out.contains("python.installation"));
+        assert!(out.contains("python.version = 3.13.1"));
+    }
+
+    #[test]
+    fn expired_observations_are_excluded_without_resurrecting_superseded_state() {
+        let content = "\
+## Curated facts (auto)
+- [environment] python.version = 3.12 _(observed_at=2026-01-01, ttl=90d, source_session=s1, source_message=1, conf=0.90, lifetime=observed)_
+- [environment] python.version = 3.13 _(observed_at=2026-02-01, ttl=7d, source_session=s2, source_message=2, conf=0.95, lifetime=observed)_
+- [preference] editor.name = helix _(observed_at=2026-01-01, source_session=s1, source_message=1, conf=0.95, lifetime=durable)_
+";
+        let now = crate::agent::memory::ontology::date_to_epoch_days("2026-02-10").unwrap();
+        let out = project_chain_tails_at(content, now);
+        assert!(!out.contains("python.version = 3.12"));
+        assert!(!out.contains("python.version = 3.13"));
+        assert!(out.contains("editor.name = helix"));
+        assert!(content.contains("python.version = 3.12"));
+        assert!(content.contains("python.version = 3.13"));
+    }
+
+    #[test]
+    fn malformed_observed_metadata_fails_closed_but_legacy_lines_stay_visible() {
+        let content = "\
+# hand-written memory
+Keep this prose editable.
+
+## Curated facts (auto)
+- [environment] node.version = 24 _(ttl=30d, conf=0.90, lifetime=observed)_
+- [environment] shell.name = bash _(2025-01-01, conf 0.90)_
+";
+        let now = crate::agent::memory::ontology::date_to_epoch_days("2026-02-10").unwrap();
+        let out = project_chain_tails_at(content, now);
+        assert!(!out.contains("node.version = 24"));
+        assert!(out.contains("shell.name = bash"));
+        assert!(out.contains("Keep this prose editable."));
+    }
+
+    #[test]
     fn assemble_for_prompt_hides_superseded_facts() {
         // The end-to-end guarantee: a superseded value must never reach
         // the model, even though it is still on disk.
@@ -335,6 +403,31 @@
         // But the file itself still has the full history.
         let raw = store.read(MEMORY_FILE).unwrap().unwrap();
         assert!(raw.contains("vim"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn assemble_for_prompt_hides_expired_observation_but_raw_read_keeps_it() {
+        let dir = tmpdir("assemble-expired");
+        let store = NotesStore::at(&dir);
+        store
+            .write(
+                MEMORY_FILE,
+                "\
+## Curated facts (auto)
+- [environment] ripgrep.version = 13.0 _(observed_at=2000-01-01, ttl=30d, source_session=old, source_message=1, conf=0.90, lifetime=observed)_
+- [resolution] ripgrep_search.cause = wrong glob _(observed_at=2000-01-01, source_session=old, source_message=2, conf=0.95, lifetime=durable)_
+",
+            )
+            .unwrap();
+
+        let assembled = store.assemble_for_prompt().unwrap();
+        assert!(!assembled.contains("ripgrep.version = 13.0"));
+        assert!(assembled.contains("ripgrep_search.cause = wrong glob"));
+
+        let raw = store.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(raw.contains("ripgrep.version = 13.0"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

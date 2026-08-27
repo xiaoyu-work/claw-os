@@ -101,6 +101,22 @@
         assert_eq!(out[1].text, "b");
     }
 
+    #[test]
+    fn parse_facts_reads_governance_attributes_and_ignores_malformed_values() {
+        let out = parse_facts(
+            r#"<fact category="environment" entity="python" attribute="version" value="3.13" lifetime="observed" observed_at="2026-08-01" ttl_days="14d" source_message_id="42" confidence="0.9">Python version</fact>
+<fact category="environment" entity="node" attribute="version" value="24" lifetime="forever-ish" ttl_days="many" source_message_id="nope" confidence="0.9">Node version</fact>"#,
+        );
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].lifetime, Some(FactLifetime::Observed));
+        assert_eq!(out[0].observed_at.as_deref(), Some("2026-08-01"));
+        assert_eq!(out[0].ttl_days, Some(14));
+        assert_eq!(out[0].source_message_id, Some(42));
+        assert_eq!(out[1].lifetime, None);
+        assert_eq!(out[1].ttl_days, None);
+        assert_eq!(out[1].source_message_id, None);
+    }
+
     // ---- looks_secret -------------------------------------------------
 
     #[test]
@@ -114,6 +130,7 @@
     #[test]
     fn looks_secret_flags_long_alphanumeric_runs() {
         assert!(looks_secret("user has token AKIAIOSFODNN7EXAMPLEKEYZ"));
+        assert!(looks_secret("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
@@ -132,6 +149,11 @@
             entity: Some("editor".to_string()),
             attribute: Some("name".to_string()),
             value: Some("helix".to_string()),
+            lifetime: None,
+            observed_at: None,
+            ttl_days: None,
+            source_session_id: None,
+            source_message_id: None,
         };
         assert!(!fact_looks_secret(&safe));
         assert!(render_persistable_fact_line(&safe, "2026-01-15").is_some());
@@ -153,9 +175,108 @@
         secret_value.value = Some("Bearer demo-credential".to_string());
         assert!(fact_looks_secret(&secret_value));
 
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let mut uuid_text = safe.clone();
+        uuid_text.text = uuid.to_string();
+        assert!(fact_looks_secret(&uuid_text));
+
+        let mut uuid_entity = safe.clone();
+        uuid_entity.entity = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_entity));
+
+        let mut uuid_attribute = safe.clone();
+        uuid_attribute.attribute = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_attribute));
+
+        let mut uuid_value = safe.clone();
+        uuid_value.value = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_value));
+
         let mut secret_category = safe;
         secret_category.category = FactCategory::Other("password".to_string());
         assert!(render_persistable_fact_line(&secret_category, "2026-01-15").is_none());
+    }
+
+    #[test]
+    fn normalized_representation_gets_a_final_secret_check() {
+        let raw = parse_facts(
+            r#"<fact category="preference" entity="abcdefghijkl mnopqrstuvwx" attribute="name" value="safe" confidence="0.9">safe</fact>"#,
+        )
+        .remove(0);
+        assert!(!fact_looks_secret(&raw));
+
+        let messages = vec![MessageRow {
+            id: 7,
+            session_id: "session-1".into(),
+            role: "user".into(),
+            content: "remember this".into(),
+            ts_ms: 1_700_000_000_000,
+        }];
+        let normalized =
+            normalize_fact_for_persistence(&raw, "session-1", &messages, "2026-08-27").unwrap();
+        assert_eq!(
+            normalized.entity.as_deref(),
+            Some("abcdefghijkl_mnopqrstuvwx")
+        );
+        assert!(fact_looks_secret(&normalized));
+    }
+
+    #[test]
+    fn provenance_ids_are_redacted_and_rendered_lines_are_rechecked() {
+        let raw = parse_facts(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" source_message_id="7" confidence="0.9">safe</fact>"#,
+        )
+        .remove(0);
+        let messages = vec![MessageRow {
+            id: 7,
+            session_id: "session-1".into(),
+            role: "user".into(),
+            content: "remember this".into(),
+            ts_ms: 1_700_000_000_000,
+        }];
+        let uuid_normalized = normalize_fact_for_persistence(
+            &raw,
+            "550e8400-e29b-41d4-a716-446655440000",
+            &messages,
+            "2026-08-27",
+        )
+        .unwrap();
+        assert!(render_persistable_fact_line(&uuid_normalized, "2026-08-27").is_some());
+
+        let normalized = normalize_fact_for_persistence(
+            &raw,
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456",
+            &messages,
+            "2026-08-27",
+        )
+        .unwrap();
+        assert_eq!(normalized.source_session_id.as_deref(), Some("redacted"));
+        let line = render_persistable_fact_line(&normalized, "2026-08-27").unwrap();
+        assert!(!line.contains("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"));
+        assert!(line.contains("source_session:redacted"));
+
+        let mut unsafe_fact = normalized;
+        unsafe_fact.source_session_id = Some("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456".into());
+        assert!(render_persistable_fact_line(&unsafe_fact, "2026-08-27").is_none());
+    }
+
+    #[test]
+    fn observed_fact_requires_a_valid_source_message() {
+        let raw = parse_facts(
+            r#"<fact category="environment" entity="python" attribute="version" value="3.13" source_message_id="999" confidence="0.9">version</fact>"#,
+        )
+        .remove(0);
+        let messages = vec![MessageRow {
+            id: 7,
+            session_id: "session-1".into(),
+            role: "user".into(),
+            content: "Python is installed".into(),
+            ts_ms: 1_700_000_000_000,
+        }];
+        assert!(
+            normalize_fact_for_persistence(&raw, "session-1", &messages, "2026-08-27")
+                .is_none()
+        );
     }
 
     // ---- existing_curated_lines / dedupe ------------------------------
@@ -185,6 +306,11 @@ other content
             entity: None,
             attribute: None,
             value: None,
+            lifetime: None,
+            observed_at: None,
+            ttl_days: None,
+            source_session_id: None,
+            source_message_id: None,
         };
         let line = render_fact_line(&fact, "2026-01-15");
         assert_eq!(
@@ -246,6 +372,14 @@ other content
     }
 
     #[test]
+    fn default_prompt_routes_procedures_to_skills() {
+        let prompt = default_system_prompt();
+        assert!(prompt.contains("those belong in Skills"));
+        assert!(prompt.contains("source_message_id"));
+        assert!(prompt.contains("os.distribution"));
+    }
+
+    #[test]
     fn split_curated_body_recognises_structured_entries() {
         assert_eq!(
             split_curated_body("editor.name = helix"),
@@ -267,6 +401,11 @@ other content
             entity: Some("editor".to_string()),
             attribute: Some("name".to_string()),
             value: Some("helix".to_string()),
+            lifetime: None,
+            observed_at: None,
+            ttl_days: None,
+            source_session_id: None,
+            source_message_id: None,
         };
         assert_eq!(
             render_fact_line(&fact, "2026-01-15"),
@@ -383,7 +522,7 @@ other content
             ts_ms: 0,
         }];
         let out = format_transcript(&rows, 100);
-        assert!(out.contains("[user] "));
+        assert!(out.contains("[user message_id=1] "));
         assert!(out.contains("…"));
         assert!(out.len() < 200, "got len {}", out.len());
     }
@@ -398,7 +537,7 @@ other content
             ts_ms: 0,
         }];
         let out = format_transcript(&rows, 100);
-        assert!(out.contains("[assistant] short"));
+        assert!(out.contains("[assistant message_id=1] short"));
         assert!(!out.contains("…"));
     }
 
@@ -429,8 +568,8 @@ other content
         let cfg = AgentConfig::default();
         let provider = MockProvider::new("mock-aux", &cfg);
         provider.push_response(MockResponse::Text(
-            r#"<fact category="preference" confidence="0.9">User prefers Rust over Go</fact>
-<fact category="environment" confidence="0.95">User runs Windows 11 with PowerShell</fact>"#
+            r#"<fact category="preference" entity="programming_language" attribute="preferred" value="Rust over Go" lifetime="durable" source_message_id="1" confidence="0.9">User prefers Rust over Go</fact>
+<fact category="environment" entity="operating_system" attribute="name" value="Windows 11" lifetime="observed" ttl_days="30" source_message_id="3" confidence="0.95">User runs Windows 11 with PowerShell</fact>"#
                 .to_string(),
         ));
         let provider: Arc<dyn Provider> = Arc::new(provider);
@@ -463,8 +602,11 @@ other content
 
         let mem = notes.read(MEMORY_FILE).unwrap().unwrap();
         assert!(mem.contains(SECTION_HEADER));
-        assert!(mem.contains("User prefers Rust over Go"));
-        assert!(mem.contains("User runs Windows 11 with PowerShell"));
+        assert!(mem.contains("programming_language.preferred = Rust over Go"));
+        assert!(mem.contains("os.distribution = Windows 11"));
+        assert!(mem.contains("source_session:sess-1"));
+        assert!(mem.contains("source_message:3"));
+        assert!(mem.contains("ttl=30d"));
 
         // Log persisted.
         let loaded = CurationLog::load(&log_path);
@@ -494,6 +636,7 @@ other content
 <fact category="environment" entity="secret-store" attribute="owner" value="local" confidence="0.95">Entity field should be filtered</fact>
 <fact category="environment" entity="service" attribute="access_token" value="configured" confidence="0.95">Attribute field should be filtered</fact>
 <fact category="environment" entity="editor" attribute="name" value="Bearer demo-credential" confidence="0.95">Value field should be filtered</fact>
+<fact category="identity" entity="machine" attribute="id" value="550e8400-e29b-41d4-a716-446655440000" confidence="0.95">UUID-shaped credential</fact>
 <fact category="password" entity="shell" attribute="name" value="fish" confidence="0.95">Rendered line should be filtered</fact>"#
                 .to_string(),
         ));
@@ -518,7 +661,7 @@ other content
 
         let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
 
-        assert_eq!(outcome.facts_proposed.len(), 5);
+        assert_eq!(outcome.facts_proposed.len(), 6);
         assert_eq!(outcome.facts_added.len(), 1);
         assert_eq!(outcome.facts_added[0].body(), "editor.name = helix");
 
@@ -528,12 +671,295 @@ other content
             "secret-store",
             "access_token",
             "demo-credential",
+            "550e8400-e29b-41d4-a716-446655440000",
             "[password]",
         ] {
             assert!(
                 !memory.contains(rejected),
                 "rejected field reached MEMORY.md: {rejected}"
             );
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_reobserves_equal_legacy_live_state_with_governance() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let provider = MockProvider::new("mock-aux", &AgentConfig::default());
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="environment" entity="os" attribute="base_distribution" value="Ubuntu" lifetime="observed" source_message_id="1" confidence="0.95">Ubuntu was observed</fact>"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        db.record_message("sess-alias", "user", "This machine runs Ubuntu")
+            .unwrap();
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-alias-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        notes
+            .write(
+                MEMORY_FILE,
+                "## Curated facts (auto)\n- [environment] operating_system.name = Ubuntu _(2025-12-31, conf 0.85)_\n",
+            )
+            .unwrap();
+
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+        let outcome = curator
+            .curate_session(&db, "sess-alias", false)
+            .await
+            .unwrap();
+
+        assert_eq!(outcome.facts_proposed.len(), 1);
+        assert_eq!(
+            outcome.facts_added.len(),
+            1,
+            "legacy live state needs a governed replacement"
+        );
+        let raw = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert_eq!(raw.matches("Ubuntu").count(), 2, "history must be additive");
+        assert!(raw.contains("os.distribution = Ubuntu"));
+        assert!(raw.contains("lifetime=observed"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_rejects_malformed_session_and_procedure_facts() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let provider = MockProvider::new("mock-aux", &AgentConfig::default());
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="preference" confidence="0.95">missing structured fields</fact>
+<fact category="task" entity="task" attribute="current_goal" value="finish issue" lifetime="session" confidence="0.95">task state</fact>
+<fact category="procedure" entity="release" attribute="steps" value="build then publish" lifetime="procedure" confidence="0.95">workflow</fact>
+<fact category="preference" entity="broken" attribute="name" value="unterminated" confidence="0.95">oops"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        db.record_message("sess-malformed", "user", "temporary instructions")
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-malformed-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+
+        let outcome = curator
+            .curate_session(&db, "sess-malformed", false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.facts_proposed.len(), 3);
+        assert!(outcome.facts_added.is_empty());
+        assert_eq!(notes.read(MEMORY_FILE).unwrap(), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_marks_invalid_source_provenance_unknown() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let provider = MockProvider::new("mock-aux", &AgentConfig::default());
+        provider.push_response(MockResponse::Text(
+            r#"<fact category="preference" entity="editor" attribute="name" value="helix" lifetime="durable" source_message_id="99999" confidence="0.95">Editor preference</fact>"#
+                .to_string(),
+        ));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        let _source_id = db
+            .record_message("sess-source", "user", "I prefer helix")
+            .unwrap();
+        db.record_message("sess-source", "assistant", "noted")
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-source-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+
+        let outcome = curator
+            .curate_session(&db, "sess-source", false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.facts_added.len(), 1);
+        let added = &outcome.facts_added[0];
+        assert_eq!(added.source_session_id.as_deref(), Some("sess-source"));
+        assert_eq!(added.source_message_id, None);
+        assert_eq!(added.observed_at, None);
+        assert_eq!(added.lifetime, Some(FactLifetime::Durable));
+
+        let memory = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(memory.contains("source_session:sess-source"));
+        assert!(memory.contains("source_message:unknown"));
+        assert!(memory.contains("observed_at=unknown"));
+        assert!(memory.contains("lifetime=durable"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn curate_session_derives_observed_at_from_valid_source_timestamp() {
+        use crate::agent::llm::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
+        use crate::agent::llm::Provider;
+        use crate::agent::memory::sqlite_fts::MemoryDb;
+        use crate::config::AgentConfig;
+        use std::sync::Arc;
+
+        let db = MemoryDb::open_in_memory().unwrap();
+        let source_id = db
+            .record_message_at(
+                "sess-observed",
+                "user",
+                "Python 3.13 is installed",
+                1_704_067_200_000,
+            )
+            .unwrap();
+
+        let provider = MockProvider::new("mock-aux", &AgentConfig::default());
+        provider.push_response(MockResponse::Text(format!(
+            r#"<fact category="preference" entity="python" attribute="version" value="3.13" lifetime="durable" observed_at="2099-01-01" source_message_id="{source_id}" confidence="0.95">Python version</fact>"#
+        )));
+        let provider: Arc<dyn Provider> = Arc::new(provider);
+        let aux = AuxiliaryClient::new(provider, AuxiliaryConfig::new("mock", "mock-aux"));
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-observed-at-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        let curator = MemoryCurator::new(aux, notes.clone(), dir.join("log.json"));
+
+        let outcome = curator
+            .curate_session(&db, "sess-observed", false)
+            .await
+            .unwrap();
+        assert_eq!(outcome.facts_added.len(), 1);
+        let added = &outcome.facts_added[0];
+        assert_eq!(added.lifetime, Some(FactLifetime::Observed));
+        assert_eq!(added.observed_at.as_deref(), Some("2024-01-01"));
+        assert_eq!(added.source_message_id, Some(source_id));
+
+        let memory = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(memory.contains("observed_at=2024-01-01"));
+        assert!(!memory.contains("2099-01-01"));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn concurrent_curator_appends_and_manual_update_preserve_every_entry() {
+        use std::sync::{Arc, Barrier};
+
+        let dir = std::env::temp_dir().join(format!(
+            "cos-curator-concurrent-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let notes = NotesStore::at(dir.join("notes"));
+        let writers = 8usize;
+        let barrier = Arc::new(Barrier::new(writers + 1));
+        let mut handles = Vec::new();
+
+        for index in 0..writers {
+            let notes = notes.clone();
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                let fact = ExtractedFact {
+                    category: FactCategory::Preference,
+                    text: format!("preference {index}"),
+                    confidence: 0.9,
+                    entity: Some(format!("editor_{index}")),
+                    attribute: Some("name".into()),
+                    value: Some(format!("value_{index}")),
+                    lifetime: Some(FactLifetime::Durable),
+                    observed_at: Some("2026-08-27".into()),
+                    ttl_days: None,
+                    source_session_id: Some(format!("session-{index}")),
+                    source_message_id: Some(index as i64 + 1),
+                };
+                barrier.wait();
+                append_facts_locked(&notes, vec![fact], "2026-08-27").unwrap();
+            }));
+        }
+
+        let manual_notes = notes.clone();
+        let manual_barrier = barrier.clone();
+        let manual = std::thread::spawn(move || {
+            manual_barrier.wait();
+            manual_notes
+                .update(MEMORY_FILE, |current| {
+                    let mut content = current.unwrap_or_default();
+                    content.push_str("# Manual edit\n");
+                    content
+                })
+                .unwrap();
+        });
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        manual.join().unwrap();
+
+        let memory = notes.read(MEMORY_FILE).unwrap().unwrap();
+        assert!(memory.contains("# Manual edit"));
+        for index in 0..writers {
+            assert!(memory.contains(&format!("editor_{index}.name = value_{index}")));
         }
 
         let _ = std::fs::remove_dir_all(&dir);

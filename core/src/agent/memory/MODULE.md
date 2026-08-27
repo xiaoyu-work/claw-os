@@ -10,7 +10,14 @@ results, and curates durable notes from completed work.
 - Store sessions, messages, prompt injections, and searchable text.
 - Freeze content-addressed canonical system prompts per session.
 - Provide FTS and semantic recall behind stable interfaces.
-- Curate notes with crash-safe run bracketing.
+- Curate canonical, append-only facts with provenance and crash-safe run
+  bracketing.
+- Serialize the curator's final reread, dedupe, and append so concurrent
+  writers cannot discard intervening note changes.
+- Classify durable knowledge, expiring observations, session state, and
+  procedure/Skill candidates before persistence.
+- Project only current non-expired, non-conflicting fact tails into prompts
+  while preserving the complete human-readable `MEMORY.md` history.
 - Redact sensitive model-visible memory where required.
 - Preserve schema, transaction, and recovery behavior.
 
@@ -21,7 +28,8 @@ results, and curates durable notes from completed work.
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
-| `notes.rs` | Durable note storage |
+| `ontology.rs` | Canonical aliases, lifetime policy, and TTL bounds |
+| `notes.rs` | Durable note storage and current-fact prompt projection |
 | `history.rs` | Conversation history queries |
 | `app_memory.rs` | App-scoped memory definition |
 
