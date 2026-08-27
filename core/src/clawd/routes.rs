@@ -748,9 +748,7 @@ routes! {
             ),
         ],
         run: |c| {
-            credentials::oauth_refresh(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            credentials::oauth_refresh(c.params, c.client).await
         },
     }
 
@@ -780,11 +778,7 @@ routes! {
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| {
-            accessibility::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
-        },
+        run: |c| accessibility::control(c.params, c.client).await,
     }
     SystemBackupControl {
         name: "system.backup.control",
@@ -1072,7 +1066,7 @@ routes! {
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| power::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| power::control(c.params, c.client).await,
     }
     SystemPrinterControl {
         name: "system.printer.control",
@@ -1115,7 +1109,7 @@ routes! {
             ("action", FieldRule::Token),
             ("unit", FieldRule::Identifier),
         ],
-        run: |c| systemd::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| systemd::control(c.params, c.client).await,
     }
     SystemServiceRestore {
         name: "system.service.restore",
@@ -1131,7 +1125,7 @@ routes! {
             ("active", FieldRule::Flag),
             ("enabled", FieldRule::Flag),
         ],
-        run: |c| systemd::restore(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| systemd::restore(c.params, c.client).await,
     }
     SystemSnapshotControl {
         name: "system.snapshot.control",

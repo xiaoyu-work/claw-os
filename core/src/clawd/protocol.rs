@@ -65,6 +65,24 @@ impl BrokerErrorKind {
 }
 
 impl BrokerError {
+    pub fn authorization(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Unauthorized,
+            message: message.into(),
+            data: None,
+            audit_class: Some("authorization_denied"),
+        }
+    }
+
+    pub fn execution(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Execution,
+            message: message.into(),
+            data: None,
+            audit_class: None,
+        }
+    }
+
     pub fn with_data(message: impl Into<String>, data: Value) -> Self {
         Self {
             kind: BrokerErrorKind::Execution,
@@ -113,12 +131,7 @@ impl BrokerError {
 
 impl From<String> for BrokerError {
     fn from(message: String) -> Self {
-        Self {
-            kind: BrokerErrorKind::Execution,
-            message,
-            data: None,
-            audit_class: None,
-        }
+        Self::execution(message)
     }
 }
 

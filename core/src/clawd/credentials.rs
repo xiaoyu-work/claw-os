@@ -3,18 +3,23 @@ use serde_json::{json, Value};
 use crate::caps::{Cap, Scope, Verb};
 
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
 
-pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client);
-        return Err("credential OAuth broker requires Linux".to_string());
+        return Err(BrokerError::unavailable(
+            "credential OAuth broker requires Linux",
+        ));
     }
 
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("credential OAuth broker requires root clawd".to_string());
+            return Err(BrokerError::unavailable(
+                "credential OAuth broker requires root clawd",
+            ));
         }
         let uid = client.require_uid()?;
         let gid = client
@@ -32,16 +37,17 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
             credential.as_str(),
             "GOOGLE_ACCESS_TOKEN" | "MICROSOFT_ACCESS_TOKEN"
         ) {
-            return Err(format!(
+            return Err(BrokerError::execution(format!(
                 "credential `{credential}` is not eligible for OAuth refresh"
-            ));
+            )));
         }
 
         crate::paths::with_user_override(uid, home, async move {
             authorize_session(&session_id, peer_pid, &namespace, &credential)?;
-            let _identity = FsIdentityGuard::enter(uid, gid)?;
+            let _identity = FsIdentityGuard::enter(uid, gid).map_err(BrokerError::execution)?;
             let result =
-                crate::credential::broker_refresh_access_token(&credential, &namespace)?;
+                crate::credential::broker_refresh_access_token(&credential, &namespace)
+                    .map_err(BrokerError::execution)?;
             Ok(json!({
                 "credential": credential,
                 "namespace": namespace,
@@ -98,20 +104,30 @@ fn authorize_session(
     peer_pid: u32,
     namespace: &str,
     credential: &str,
-) -> Result<(), String> {
+) -> Result<(), BrokerError> {
     let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("credential session not found: {session_id}"))?;
+        .ok_or_else(|| {
+            BrokerError::authorization(format!("credential session not found: {session_id}"))
+        })?;
     if session.pending_bind || session.pid == 0 {
-        return Err("credential session is not bound to a process".to_string());
+        return Err(BrokerError::authorization(
+            "credential session is not bound to a process",
+        ));
     }
     let expected_start = session
         .start_time_ticks
-        .ok_or_else(|| "credential session has no process identity".to_string())?;
+        .ok_or_else(|| {
+            BrokerError::authorization("credential session has no process identity")
+        })?;
     if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("credential session process identity is stale".to_string());
+        return Err(BrokerError::authorization(
+            "credential session process identity is stale",
+        ));
     }
     if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("credential request did not originate from the authorized session".to_string());
+        return Err(BrokerError::authorization(
+            "credential request did not originate from the authorized session",
+        ));
     }
     let requested = Cap::new(
         Verb::SECRET_READ,
@@ -120,13 +136,13 @@ fn authorize_session(
     let caps = session
         .caps
         .as_ref()
-        .ok_or_else(|| "credential session has no capabilities".to_string())?;
+        .ok_or_else(|| BrokerError::authorization("credential session has no capabilities"))?;
     if !caps.covers(&requested) {
-        return Err(format!(
+        return Err(BrokerError::authorization(format!(
             "credential session lacks {}:{}",
             requested.verb.as_str(),
             requested.scope
-        ));
+        )));
     }
     Ok(())
 }

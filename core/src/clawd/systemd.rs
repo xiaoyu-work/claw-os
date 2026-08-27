@@ -10,6 +10,7 @@ use crate::proc::SessionInfo;
 use crate::session::{Mutation, MutationRecord, SessionId};
 
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
 
 const SYSTEMCTL_TIMEOUT: Duration = Duration::from_secs(120);
 static SYSTEMD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
@@ -60,17 +61,21 @@ fn validate_restore_record(
     }
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client);
-        return Err("native systemd control requires Linux".to_string());
+        return Err(BrokerError::unavailable(
+            "native systemd control requires Linux",
+        ));
     }
 
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("native systemd control requires root clawd".to_string());
+            return Err(BrokerError::unavailable(
+                "native systemd control requires root clawd",
+            ));
         }
 
         let uid = client.require_uid()?;
@@ -92,6 +97,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             authorize_session(&session_id, peer_pid, &unit, verb, true)
         })
         .await?;
+        systemctl_path().map_err(backend_unavailable)?;
 
         if action == "status" {
             return Ok(json!({
@@ -105,9 +111,9 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             action.as_str(),
             "start" | "stop" | "restart" | "reload" | "enable" | "disable"
         ) {
-            return Err(format!(
+            return Err(BrokerError::execution(format!(
                 "unsupported systemd action `{action}`; expected status, start, stop, restart, reload, enable, or disable"
-            ));
+            )));
         }
 
         let _guard = SYSTEMD_LOCK
@@ -154,17 +160,21 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client);
-        return Err("native systemd restore requires Linux".to_string());
+        return Err(BrokerError::unavailable(
+            "native systemd restore requires Linux",
+        ));
     }
 
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("native systemd restore requires root clawd".to_string());
+            return Err(BrokerError::unavailable(
+                "native systemd restore requires root clawd",
+            ));
         }
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
@@ -182,8 +192,10 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, St
         crate::paths::with_user_override(uid, home, async {
             authorize_session(&session_id, peer_pid, &unit, Verb::SYS_SERVICE, false)?;
             validate_restore_record(&mutation_session, mutation_seq, &unit, active, enabled)
+                .map_err(BrokerError::execution)
         })
         .await?;
+        systemctl_path().map_err(backend_unavailable)?;
 
         let _guard = SYSTEMD_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -196,6 +208,10 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, St
             "state": read_unit_state(&unit).await?,
         }))
     }
+}
+
+fn backend_unavailable(message: String) -> BrokerError {
+    BrokerError::unavailable(message)
 }
 
 pub fn restore_unit_state(
@@ -249,23 +265,33 @@ fn authorize_session(
     unit: &str,
     verb: Verb,
     require_systemd_app: bool,
-) -> Result<SessionInfo, String> {
+) -> Result<SessionInfo, BrokerError> {
     let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("systemd session not found: {session_id}"))?;
+        .ok_or_else(|| {
+            BrokerError::authorization(format!("systemd session not found: {session_id}"))
+        })?;
     if require_systemd_app && session.app_id.as_deref() != Some("systemd") {
-        return Err("native systemd control is restricted to the systemd App".to_string());
+        return Err(BrokerError::authorization(
+            "native systemd control is restricted to the systemd App",
+        ));
     }
     if session.pending_bind || session.pid == 0 {
-        return Err("systemd session is not bound to a process".to_string());
+        return Err(BrokerError::authorization(
+            "systemd session is not bound to a process",
+        ));
     }
     let expected_start = session
         .start_time_ticks
-        .ok_or_else(|| "systemd session has no process identity".to_string())?;
+        .ok_or_else(|| BrokerError::authorization("systemd session has no process identity"))?;
     if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("systemd session process identity is stale".to_string());
+        return Err(BrokerError::authorization(
+            "systemd session process identity is stale",
+        ));
     }
     if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("systemd request did not originate from the authorized session".to_string());
+        return Err(BrokerError::authorization(
+            "systemd request did not originate from the authorized session",
+        ));
     }
 
     let mut caps = session.caps.clone().unwrap_or_else(CapSet::new);
@@ -274,10 +300,10 @@ fn authorize_session(
     }
     let requested = Cap::new(verb, Scope::name(unit));
     if !caps.covers(&requested) {
-        return Err(format!(
+        return Err(BrokerError::authorization(format!(
             "session lacks {} permission for `{unit}`",
             verb.as_str()
-        ));
+        )));
     }
     Ok(session)
 }
@@ -436,7 +462,7 @@ struct CommandOutput {
 }
 
 async fn run_systemctl(args: &[&str]) -> Result<CommandOutput, String> {
-    let mut command = tokio::process::Command::new(systemctl_path());
+    let mut command = tokio::process::Command::new(systemctl_path()?);
     command
         .args(args)
         .env_clear()
@@ -453,7 +479,7 @@ async fn run_systemctl(args: &[&str]) -> Result<CommandOutput, String> {
 }
 
 fn run_systemctl_sync(args: &[&str]) -> Result<CommandOutput, String> {
-    let output = std::process::Command::new(systemctl_path())
+    let output = std::process::Command::new(systemctl_path()?)
         .args(args)
         .env_clear()
         .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
@@ -553,11 +579,13 @@ fn optional_bool(params: &Value, key: &str) -> Result<Option<bool>, String> {
     }
 }
 
-fn systemctl_path() -> &'static str {
+fn systemctl_path() -> Result<&'static str, String> {
     if std::path::Path::new("/usr/bin/systemctl").is_file() {
-        "/usr/bin/systemctl"
+        Ok("/usr/bin/systemctl")
+    } else if std::path::Path::new("/bin/systemctl").is_file() {
+        Ok("/bin/systemctl")
     } else {
-        "/bin/systemctl"
+        Err("systemctl is not installed".to_string())
     }
 }
 

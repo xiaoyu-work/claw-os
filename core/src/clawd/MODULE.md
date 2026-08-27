@@ -75,10 +75,13 @@ route cannot exist without declaring every one of them, and an in-repo client
 cannot name a route that does not exist. Unknown commands, undeclared fields,
 wrong types, oversized strings and over-deep payloads all fail closed *before*
 the access class is consulted. Unknown, malformed, unauthorized, unavailable
-and handler execution failures have separate stable response codes. Mutating
-routes are never cancelled by the broker: dropping one at an await point could
-leave a package half-installed, so they are bounded by their own tool and lock
-timeouts plus a per-route in-flight ceiling.
+and handler execution failures have separate stable response codes. Subsystems
+with authorization or backend-availability decisions return typed
+`BrokerError`s at those decision points; ordinary validation/provider failures
+remain execution errors without classifying by message text. Mutating routes
+are never cancelled by the broker: dropping one at an await point could leave a
+package half-installed, so they are bounded by their own tool and lock timeouts
+plus a per-route in-flight ceiling.
 
 Resource ceilings are fixed at startup and live in `transport/limits.rs`:
 connections and in-flight requests, globally and per authenticated principal;

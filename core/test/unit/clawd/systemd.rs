@@ -42,3 +42,17 @@ fn static_units_have_no_enable_inverse() {
     assert_eq!(enabled_bool("static"), None);
     assert_eq!(enabled_bool("disabled"), Some(false));
 }
+
+#[test]
+fn missing_systemd_backend_is_unavailable() {
+    let error = backend_unavailable("systemctl is not installed".to_string());
+    assert_eq!(
+        error.kind,
+        crate::clawd::protocol::BrokerErrorKind::Unavailable
+    );
+    let response = crate::clawd::protocol::Response::handler_error(
+        crate::clawd::protocol::RequestId::unknown(),
+        error,
+    );
+    assert_eq!(response.error.unwrap().code, "unavailable");
+}
