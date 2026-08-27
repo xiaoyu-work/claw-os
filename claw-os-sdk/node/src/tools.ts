@@ -19,6 +19,8 @@ import { BridgeError, Unavailable, asObject, cosCallJson, hasError } from "./tra
 import {
   WireDecodeError,
   materializeWireValue,
+  stringifyWireJson,
+  type WireJsonValue,
   validateTool,
   validateToolCatalog,
 } from "./generated";
@@ -44,8 +46,8 @@ export interface ToolResult {
   name: string;
   appId: string;
   status: string;
-  value: unknown;
-  raw: Record<string, unknown>;
+  value: WireJsonValue;
+  raw: Record<string, WireJsonValue>;
 }
 
 /** One row from `cos ai tools`. */
@@ -54,13 +56,14 @@ export interface CatalogEntry {
   summary: string;
   verb: string;
   stability: string;
-  argsSchema?: Record<string, unknown>;
-  returnsSchema?: Record<string, unknown>;
-  raw: Record<string, unknown>;
+  argsSchema?: Record<string, WireJsonValue>;
+  returnsSchema?: Record<string, WireJsonValue>;
+  raw: Record<string, WireJsonValue>;
 }
 
 /**
- * Invoke a catalog tool through the kernel.
+ * Invoke a catalog tool through the kernel. `args` may be any JSON value;
+ * explicit null, scalars, and arrays are serialized without coercion.
  *
  * Throws {@link ToolDenied} for anything the gate refused (unknown
  * tool, missing capability, malformed args) and {@link ToolUnavailable}
@@ -68,7 +71,7 @@ export interface CatalogEntry {
  */
 export function call(
   name: string,
-  args: Record<string, unknown> = {},
+  args: WireJsonValue = {},
   opts: { appId?: string } = {},
 ): ToolResult {
   if (!name || typeof name !== "string") {
@@ -79,7 +82,7 @@ export function call(
     throw new ToolError(`${name}: app_id is required (pass appId or set COS_APP_ID)`);
   }
 
-  const argv = ["ai", "tool", name, "--app", app, "--args", JSON.stringify(args ?? {})];
+  const argv = ["ai", "tool", name, "--app", app, "--args", stringifyWireJson(args)];
   let outcome;
   try {
     outcome = cosCallJson(`cos ai tool ${name}`, argv);
@@ -104,7 +107,7 @@ export function call(
     appId: env.app_id,
     status: env.status,
     value: materializeWireValue(env.result),
-    raw: materializeWireValue(env) as Record<string, unknown>,
+    raw: materializeWireValue(env) as Record<string, WireJsonValue>,
   };
 }
 
@@ -140,9 +143,9 @@ export function catalog(): CatalogEntry[] {
       summary: row.summary,
       verb: row.verb,
       stability: row.stability,
-      argsSchema: row.args_schema,
-      returnsSchema: row.returns_schema,
-      raw: materializeWireValue(row) as Record<string, unknown>,
+      argsSchema: materializeWireValue(row.args_schema) as Record<string, WireJsonValue>,
+      returnsSchema: materializeWireValue(row.returns_schema) as Record<string, WireJsonValue>,
+      raw: materializeWireValue(row) as Record<string, WireJsonValue>,
     }));
 }
 

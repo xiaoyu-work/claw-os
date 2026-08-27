@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .generated import (
     WireDecodeError,
+    WireJsonValue,
     decode_wire_json,
     validate_ai,
     validate_budget_show,
@@ -166,7 +167,7 @@ class ProposedToolCall:
 
     id: str
     name: str
-    input: Any
+    input: WireJsonValue
 
 
 @dataclass
@@ -179,7 +180,7 @@ class AiResponse:
     budget: Budget = field(default_factory=Budget)
     review: Review = field(default_factory=Review)
     tool_calls: List[ProposedToolCall] = field(default_factory=list)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------

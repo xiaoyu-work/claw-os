@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import * as ai from "./ai";
+import * as tools from "./tools";
+import { WireDecimal, stringifyWireJson } from "./generated";
 import { installFakeCos, withCos } from "./testutil";
 
 const OK_CHAT = JSON.stringify({
@@ -121,6 +123,25 @@ test("budget accepts the producer budget-show shape", () => {
   );
   const result = withCos(fake, {}, () => ai.budget("notes"));
   assert.deepEqual(result, { period: "2026-08", unitsUsed: 7, unitsCap: 0 });
+});
+
+test("proposed lossless input round-trips directly through tools.call", () => {
+  const lexeme = "0.12345678901234567890";
+  const chatFake = installFakeCos(
+    OK_CHAT.replace('"input":{"path":"/x"}', `"input":${lexeme}`),
+  );
+  const response = withCos(chatFake, { COS_APP_ID: "notes" }, () => ai.chat("hi"));
+  assert.ok(response.toolCalls[0].input instanceof WireDecimal);
+  assert.equal(stringifyWireJson(response.toolCalls[0].input), lexeme);
+
+  const toolFake = installFakeCos(
+    JSON.stringify({ tool: "echo", app_id: "notes", status: "ok", result: null }),
+  );
+  withCos(toolFake, {}, () =>
+    tools.call("echo", response.toolCalls[0].input, { appId: "notes" }),
+  );
+  const argv = readFileSync(toolFake.argvOut, "utf8").split("\n");
+  assert.equal(argv[argv.indexOf("--args") + 1], lexeme);
 });
 
 test("embed is an unsupported compatibility shim", () => {

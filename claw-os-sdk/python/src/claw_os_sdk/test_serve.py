@@ -5,11 +5,13 @@ import json
 import os
 import sys
 import unittest
+from decimal import Decimal
 
 _THIS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import serve` works
 
 from claw_os_sdk import serve  # noqa: E402
+from claw_os_sdk.generated import decode_wire_json  # noqa: E402
 
 
 def _drive(app: serve.App, *frames: dict) -> list[dict]:
@@ -26,7 +28,7 @@ def _drive(app: serve.App, *frames: dict) -> list[dict]:
         out = sys.stdout.read()
     finally:
         sys.stdin, sys.stdout = real_stdin, real_stdout
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [decode_wire_json(line) for line in out.splitlines() if line.strip()]
 
 
 def _drive_raw(app: serve.App, *lines: str) -> list[dict]:
@@ -40,7 +42,7 @@ def _drive_raw(app: serve.App, *lines: str) -> list[dict]:
         out = sys.stdout.read()
     finally:
         sys.stdin, sys.stdout = real_stdin, real_stdout
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [decode_wire_json(line) for line in out.splitlines() if line.strip()]
 
 
 class HandshakeTests(unittest.TestCase):
@@ -325,22 +327,26 @@ class TransportTests(unittest.TestCase):
                 "params": 7,
             },
         )
-        self.assertEqual([frame["error"]["code"] for frame in out], [
-            serve.ERR_INVALID_REQUEST,
-            serve.ERR_INVALID_REQUEST,
-            serve.ERR_INVALID_REQUEST,
-        ])
+        self.assertEqual(
+            [frame["error"]["code"] for frame in out],
+            [
+                serve.ERR_INVALID_PARAMS,
+                serve.ERR_INVALID_PARAMS,
+                serve.ERR_INVALID_REQUEST,
+            ],
+        )
         self.assertEqual(out[2]["id"], None)
 
     def test_numeric_ids_accept_fractional_and_large_values(self) -> None:
-        large = 9223372036854775808
-        out = _drive(
+        fraction = "0.123456789012345678901234567890"
+        large = "18446744073709551616"
+        out = _drive_raw(
             serve.App(name="kv"),
-            {"jsonrpc": "2.0", "id": 1.5, "method": "ping"},
-            {"jsonrpc": "2.0", "id": large, "method": "ping"},
+            f'{{"jsonrpc":"2.0","id":{fraction},"method":"ping"}}',
+            f'{{"jsonrpc":"2.0","id":{large},"method":"ping"}}',
         )
-        self.assertEqual(out[0]["id"], 1.5)
-        self.assertEqual(out[1]["id"], large)
+        self.assertEqual(out[0]["id"], Decimal(fraction))
+        self.assertEqual(out[1]["id"], int(large))
 
     def test_initialize_rejects_malformed_known_capabilities(self) -> None:
         base = {
@@ -349,9 +355,15 @@ class TransportTests(unittest.TestCase):
         }
         for capabilities in (
             {"roots": False},
+            {"roots": None},
             {"roots": {"listChanged": "yes"}},
+            {"roots": {"listChanged": None}},
             {"experimental": False},
+            {"experimental": None},
             {"sampling": []},
+            {"sampling": None},
+            {"elicitation": False},
+            {"elicitation": None},
         ):
             with self.subTest(capabilities=capabilities):
                 out = _drive(
@@ -381,6 +393,41 @@ class TransportTests(unittest.TestCase):
             },
         )
         self.assertIn("result", out[0])
+
+    def test_method_specific_params_are_validated(self) -> None:
+        invalid = (
+            {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": []},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": []},
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list",
+                "params": {"cursor": 7},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/list",
+                "params": {"cursor": None},
+            },
+        )
+        out = _drive(serve.App(name="kv"), *invalid)
+        self.assertEqual(
+            [frame["error"]["code"] for frame in out],
+            [serve.ERR_INVALID_PARAMS] * len(invalid),
+        )
+
+        valid = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 5, "method": "ping", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/list",
+                "params": {"cursor": "next"},
+            },
+        )
+        self.assertTrue(all("result" in frame for frame in valid))
 
     def test_garbage_line_returns_parse_error_with_null_id(self) -> None:
         app = serve.App(name="kv")

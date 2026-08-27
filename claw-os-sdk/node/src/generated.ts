@@ -4,7 +4,7 @@
 
 /* eslint-disable */
 
-import { compareNumber, isLosslessNumber, parse as parseLosslessJson, splitNumber } from "lossless-json";
+import { compareNumber, isLosslessNumber, isSafeNumber, LosslessNumber, parse as parseLosslessJson, splitNumber, stringify as stringifyLosslessJson } from "lossless-json";
 
 export const EXPECTED_WIRE_VERSION = 1 as const;
 
@@ -311,16 +311,32 @@ export const WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD" as const;
 
 type WireRule = Record<string, unknown>;
 
-export function decodeWireJson(text: string): unknown {
-  return parseLosslessJson(text);
+export class WireDecimal {
+  constructor(readonly lexeme: string) {}
+  toString(): string { return this.lexeme; }
+  toJSON(): never { throw new TypeError("use stringifyWireJson for WireDecimal values"); }
+}
+
+export type WireJsonValue =
+  | null | boolean | string | number | bigint | WireDecimal
+  | WireJsonValue[] | { [key: string]: WireJsonValue };
+
+function isWireDecimal(value: unknown): value is WireDecimal {
+  return value instanceof WireDecimal;
+}
+
+export function decodeWireJson(text: string): WireJsonValue {
+  return materializeWireValue(parseLosslessJson(text));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value) && !isLosslessNumber(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    && !isLosslessNumber(value) && !isWireDecimal(value);
 }
 
 function wireNumberLexeme(value: unknown): string | undefined {
   if (isLosslessNumber(value)) return value.value;
+  if (isWireDecimal(value)) return value.lexeme;
   if (typeof value === "bigint") return value.toString();
   if (typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value)) {
     return value.toString();
@@ -348,17 +364,38 @@ export function wireIntegerToJs(value: unknown): number | bigint {
     : integer;
 }
 
-export function materializeWireValue(value: unknown): unknown {
+export function materializeWireValue(value: unknown): WireJsonValue {
   if (isLosslessNumber(value)) {
-    try { return value.valueOf(); } catch { return value; }
+    if (isMathematicalInteger(value)) return wireIntegerToJs(value);
+    return isSafeNumber(value.value, { approx: false })
+      ? Number(value.value)
+      : new WireDecimal(value.value);
   }
+  if (isWireDecimal(value) || typeof value === "bigint") return value;
   if (Array.isArray(value)) return value.map(materializeWireValue);
   if (isRecord(value)) {
     return Object.fromEntries(
       Object.entries(value).map(([key, item]) => [key, materializeWireValue(item)]),
     );
   }
-  return value;
+  if (value === null || typeof value === "boolean" || typeof value === "string" || typeof value === "number") return value;
+  throw new TypeError(`unsupported wire JSON value: ${typeof value}`);
+}
+
+export function stringifyWireJson(value: WireJsonValue): string {
+  const prepare = (item: WireJsonValue): unknown => {
+    if (isWireDecimal(item)) return new LosslessNumber(item.lexeme);
+    if (Array.isArray(item)) return item.map(prepare);
+    if (isRecord(item)) {
+      return Object.fromEntries(
+        Object.entries(item).map(([key, child]) => [key, prepare(child as WireJsonValue)]),
+      );
+    }
+    return item;
+  };
+  const encoded = stringifyLosslessJson(prepare(value));
+  if (encoded === undefined) throw new TypeError("wire JSON value is not serializable");
+  return encoded;
 }
 
 function wireError(code: string, schema: string, path: string, reason: string): WireDecodeError {

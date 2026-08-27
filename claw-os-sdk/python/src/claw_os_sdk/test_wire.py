@@ -6,6 +6,7 @@ import copy
 import json
 import subprocess
 import unittest
+from decimal import Decimal
 from unittest import mock
 
 from claw_os_sdk import ai, tools
@@ -18,6 +19,7 @@ from claw_os_sdk.generated import (
     WIRE_UNKNOWN_FIELD,
     WireDecodeError,
     decode_wire_json,
+    encode_wire_json,
     validate_ai,
     validate_budget_show,
     validate_tool,
@@ -190,6 +192,86 @@ class WireValidationTests(unittest.TestCase):
                 tools.call("echo", app_id="notes")
         self.assertIn("WIRE_TYPE", str(tool_error.exception))
         self.assertIn(" at $:", str(tool_error.exception))
+
+    def test_proposed_input_round_trips_directly_through_tools_call(self) -> None:
+        lexeme = "0.12345678901234567890"
+        payload = decode_wire_json(
+            json.dumps(_valid_ai()).replace(
+                '"input": {"value": "ok"}',
+                f'"input": {lexeme}',
+            )
+        )
+        response = ai._parse_response(payload)
+        self.assertEqual(response.tool_calls[0].input, Decimal(lexeme))
+
+        completed = subprocess.CompletedProcess(
+            ["cos"],
+            0,
+            '{"tool":"echo","app_id":"notes","status":"ok","result":null}',
+            "",
+        )
+        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+            tools, "_run_with_timeout", return_value=completed
+        ) as run:
+            tools.call(
+                "echo",
+                response.tool_calls[0].input,
+                app_id="notes",
+            )
+        command = run.call_args.args[0]
+        self.assertEqual(command[command.index("--args") + 1], lexeme)
+
+    def test_public_lossless_values_and_catalog_schemas_encode_exactly(self) -> None:
+        lexeme = "0.12345678901234567890"
+        tool_completed = subprocess.CompletedProcess(
+            ["cos"],
+            0,
+            f'{{"tool":"echo","app_id":"notes","status":"ok","result":{lexeme}}}',
+            "",
+        )
+        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+            tools, "_run_with_timeout", return_value=tool_completed
+        ):
+            result = tools.call("echo", {}, app_id="notes")
+        self.assertEqual(result.value, Decimal(lexeme))
+        self.assertEqual(encode_wire_json(result.value), lexeme)
+
+        catalog_completed = subprocess.CompletedProcess(
+            ["cos"],
+            0,
+            (
+                '{"tools":[{"name":"echo","summary":"Echo","verb":"ipc.invoke",'
+                '"stability":"stable","args_schema":{"minimum":'
+                + lexeme
+                + '},"returns_schema":{"maximum":'
+                + lexeme
+                + "}}]}"
+            ),
+            "",
+        )
+        with mock.patch.object(tools, "_cos_binary", return_value="cos"), mock.patch.object(
+            tools, "_run_with_timeout", return_value=catalog_completed
+        ):
+            entry = tools.catalog()[0]
+        self.assertEqual(encode_wire_json(entry.args_schema), f'{{"minimum":{lexeme}}}')
+        self.assertEqual(encode_wire_json(entry.returns_schema), f'{{"maximum":{lexeme}}}')
+
+    def test_tool_call_preserves_null_scalar_and_array_arguments(self) -> None:
+        completed = subprocess.CompletedProcess(
+            ["cos"],
+            0,
+            '{"tool":"echo","app_id":"notes","status":"ok","result":null}',
+            "",
+        )
+        for args in (None, "scalar", [1, True]):
+            with self.subTest(args=args), mock.patch.object(
+                tools, "_cos_binary", return_value="cos"
+            ), mock.patch.object(
+                tools, "_run_with_timeout", return_value=completed
+            ) as run:
+                tools.call("echo", args, app_id="notes")
+            command = run.call_args.args[0]
+            self.assertEqual(command[command.index("--args") + 1], encode_wire_json(args))
 
 
 if __name__ == "__main__":

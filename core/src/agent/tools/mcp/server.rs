@@ -111,6 +111,7 @@ impl McpServer {
             if raw
                 .get("params")
                 .is_some_and(|params| !params.is_object() && !params.is_array())
+                && raw.get("id").is_none()
             {
                 let response = JsonRpcResponse::err(
                     extract_id(&raw),
@@ -172,8 +173,8 @@ impl McpServer {
         let id = req.id.clone();
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req),
-            "ping" => JsonRpcResponse::ok(id, json!({})),
-            "tools/list" => self.handle_tools_list(id),
+            "ping" => self.handle_ping(req),
+            "tools/list" => self.handle_tools_list(req),
             "tools/call" => self.handle_tools_call(req).await,
             other => JsonRpcResponse::err(
                 id,
@@ -184,6 +185,14 @@ impl McpServer {
 
     fn handle_initialize(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
+        if let Some(params) = req.params.as_ref() {
+            if let Err(error) = validate_initialize_params(params) {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, error),
+                );
+            }
+        }
         let _params: InitializeParams = match req.params {
             Some(v) => match serde_json::from_value(v) {
                 Ok(p) => p,
@@ -221,7 +230,36 @@ impl McpServer {
         }
     }
 
-    fn handle_tools_list(&self, id: super::protocol::RequestId) -> JsonRpcResponse {
+    fn handle_ping(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id;
+        match req.params {
+            None | Some(Value::Object(_)) => JsonRpcResponse::ok(id, json!({})),
+            Some(_) => JsonRpcResponse::err(
+                id,
+                JsonRpcError::new(ERR_INVALID_PARAMS, "ping params must be an object"),
+            ),
+        }
+    }
+
+    fn handle_tools_list(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id;
+        if let Some(params) = req.params {
+            let Some(params) = params.as_object() else {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list params must be an object"),
+                );
+            };
+            if params
+                .get("cursor")
+                .is_some_and(|cursor| !cursor.is_string())
+            {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list cursor must be a string"),
+                );
+            }
+        }
         let mut tools: Vec<ToolDescriptor> = Vec::new();
         for name in self.registry.names() {
             if let Some(t) = self.registry.get(name) {
@@ -231,6 +269,7 @@ impl McpServer {
                     input_schema: t.input_schema(),
                 });
             }
+
         }
         let result = ListToolsResult {
             tools,
@@ -306,6 +345,33 @@ impl McpServer {
             Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
     }
+}
+
+fn validate_initialize_params(params: &Value) -> Result<(), String> {
+    let capabilities = params
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "initialize capabilities must be an object".to_string())?;
+    for name in ["experimental", "sampling", "elicitation"] {
+        if capabilities
+            .get(name)
+            .is_some_and(|capability| !capability.is_object())
+        {
+            return Err(format!("capabilities.{name} must be an object"));
+        }
+    }
+    if let Some(roots) = capabilities.get("roots") {
+        let roots = roots
+            .as_object()
+            .ok_or_else(|| "capabilities.roots must be an object".to_string())?;
+        if roots
+            .get("listChanged")
+            .is_some_and(|list_changed| !list_changed.is_boolean())
+        {
+            return Err("capabilities.roots.listChanged must be a boolean".to_string());
+        }
+    }
+    Ok(())
 }
 
 fn encode_response(response: &JsonRpcResponse) -> String {

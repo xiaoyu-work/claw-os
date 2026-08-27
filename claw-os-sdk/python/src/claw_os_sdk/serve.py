@@ -67,6 +67,7 @@ import os
 import sys
 import traceback
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
 from .generated import (
@@ -75,6 +76,8 @@ from .generated import (
     JSONRPC_ERROR_INVALID_REQUEST as ERR_INVALID_REQUEST,
     JSONRPC_ERROR_METHOD_NOT_FOUND as ERR_METHOD_NOT_FOUND,
     JSONRPC_ERROR_PARSE as ERR_PARSE,
+    decode_wire_json,
+    encode_wire_json,
 )
 
 
@@ -90,17 +93,6 @@ EXPECTED_WIRE_VERSION = 1
 # before json.loads even sees it. 16 MiB is comfortably above MCP's
 # realistic per-frame ceiling (largest tools/list payloads are < 1 MiB).
 MAX_LINE_BYTES = 16 * 1024 * 1024
-
-
-def _reject_json_constant(value: str) -> None:
-    raise ValueError(f"invalid JSON numeric constant: {value}")
-
-
-def _parse_finite_float(value: str) -> float:
-    number = float(value)
-    if not math.isfinite(number):
-        raise ValueError(f"JSON number is outside the finite float range: {value}")
-    return number
 
 
 @dataclass
@@ -206,11 +198,7 @@ class App:
 
     def _handle_line(self, line: str) -> None:
         try:
-            msg = json.loads(
-                line,
-                parse_constant=_reject_json_constant,
-                parse_float=_parse_finite_float,
-            )
+            msg = decode_wire_json(line)
         except (json.JSONDecodeError, ValueError) as e:
             # Parse errors get a null-id response per JSON-RPC.
             self._send_error(None, ERR_PARSE, f"parse error: {e}")
@@ -230,9 +218,12 @@ class App:
             raw_id is None
             or isinstance(raw_id, str)
             or (
-                isinstance(raw_id, (int, float))
+                isinstance(raw_id, (int, float, Decimal))
                 and not isinstance(raw_id, bool)
-                and (not isinstance(raw_id, float) or math.isfinite(raw_id))
+                and (
+                    (not isinstance(raw_id, float) or math.isfinite(raw_id))
+                    and (not isinstance(raw_id, Decimal) or raw_id.is_finite())
+                )
             )
         )
         msg_id = raw_id if valid_id else None
@@ -257,7 +248,11 @@ class App:
                 "request method must be a string",
             )
             return
-        if "params" in msg and not isinstance(params, (dict, list)):
+        if (
+            not has_id
+            and "params" in msg
+            and not isinstance(params, (dict, list))
+        ):
             self._send_error(
                 msg_id,
                 ERR_INVALID_REQUEST,
@@ -292,8 +287,18 @@ class App:
                 raise _RpcError(ERR_INVALID_PARAMS, "initialize params must be an object")
             return self._on_initialize(params)
         if method == "ping":
+            if params is not None and not isinstance(params, dict):
+                raise _RpcError(ERR_INVALID_PARAMS, "ping params must be an object")
             return {}
         if method == "tools/list":
+            if params is not None:
+                if not isinstance(params, dict):
+                    raise _RpcError(ERR_INVALID_PARAMS, "tools/list params must be an object")
+                if "cursor" in params and not isinstance(params["cursor"], str):
+                    raise _RpcError(
+                        ERR_INVALID_PARAMS,
+                        "tools/list cursor must be a string",
+                    )
             return self._on_list_tools()
         if method == "tools/call":
             if not isinstance(params, dict):
@@ -309,18 +314,15 @@ class App:
         capabilities = params.get("capabilities")
         if not isinstance(capabilities, dict):
             raise _RpcError(ERR_INVALID_PARAMS, "missing `capabilities`")
-        for name in ("experimental", "sampling"):
-            if name in capabilities and capabilities[name] is not None and not isinstance(
-                capabilities[name], dict
-            ):
+        for name in ("experimental", "sampling", "elicitation"):
+            if name in capabilities and not isinstance(capabilities[name], dict):
                 raise _RpcError(ERR_INVALID_PARAMS, f"`capabilities.{name}` must be an object")
-        if "roots" in capabilities and capabilities["roots"] is not None:
+        if "roots" in capabilities:
             roots = capabilities["roots"]
             if not isinstance(roots, dict):
                 raise _RpcError(ERR_INVALID_PARAMS, "`capabilities.roots` must be an object")
             if (
                 "listChanged" in roots
-                and roots["listChanged"] is not None
                 and not isinstance(roots["listChanged"], bool)
             ):
                 raise _RpcError(
@@ -395,7 +397,7 @@ class App:
 
     @staticmethod
     def _write(frame: Dict[str, Any]) -> None:
-        sys.stdout.write(json.dumps(frame, separators=(",", ":"), ensure_ascii=False))
+        sys.stdout.write(encode_wire_json(frame))
         sys.stdout.write("\n")
         sys.stdout.flush()
 
@@ -421,7 +423,7 @@ def _stringify(value: Any) -> str:
     if isinstance(value, str):
         return value
     try:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return encode_wire_json(value)
     except (TypeError, ValueError):
         return repr(value)
 

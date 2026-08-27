@@ -200,6 +200,8 @@ pub struct ClientCapabilities {
     pub roots: Option<RootsCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

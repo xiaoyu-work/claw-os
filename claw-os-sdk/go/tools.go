@@ -53,10 +53,11 @@ type CatalogEntry struct {
 	Raw           map[string]any
 }
 
-// CallTool invokes a catalog tool through the kernel. args may be nil. appID
-// defaults to $COS_APP_ID. Returns a *ToolDeniedError for anything the
+// CallTool invokes a catalog tool through the kernel. args may contain any
+// JSON value; nil is encoded as explicit JSON null. appID defaults to
+// $COS_APP_ID. Returns a *ToolDeniedError for anything the
 // gate refused, or *ToolUnavailableError for transport problems.
-func CallTool(name string, args map[string]any, appID string) (*ToolResult, error) {
+func CallTool(name string, args any, appID string) (*ToolResult, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, &ToolUnavailableError{Msg: "CallTool: name must be non-empty"}
 	}
@@ -66,9 +67,6 @@ func CallTool(name string, args map[string]any, appID string) (*ToolResult, erro
 	}
 	if app == "" {
 		return nil, &ToolUnavailableError{Msg: name + ": app_id is required (pass appID or set COS_APP_ID)"}
-	}
-	if args == nil {
-		args = map[string]any{}
 	}
 	payload, err := json.Marshal(args)
 	if err != nil {

@@ -61,7 +61,9 @@ from typing import Any, Dict, List, Mapping, Optional
 
 from .generated import (
     WireDecodeError,
+    WireJsonValue,
     decode_wire_json,
+    encode_wire_json,
     validate_tool,
     validate_tool_catalog,
 )
@@ -70,6 +72,7 @@ from .generated import (
 # Subprocess timeout — covers every shell-out to the `cos` binary so a
 # wedged child never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
+_MISSING = object()
 
 
 def _truncate(value: Any, limit: int = 200) -> str:
@@ -127,8 +130,8 @@ class ToolResult:
     name: str
     app_id: str = ""
     status: str = "ok"
-    value: Any = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    value: WireJsonValue = None
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 @dataclass
@@ -139,9 +142,9 @@ class CatalogEntry:
     summary: str
     verb: str
     stability: str = "experimental"
-    args_schema: Optional[Dict[str, Any]] = None
-    returns_schema: Optional[Dict[str, Any]] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    args_schema: Optional[Dict[str, WireJsonValue]] = None
+    returns_schema: Optional[Dict[str, WireJsonValue]] = None
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -151,13 +154,14 @@ class CatalogEntry:
 
 def call(
     name: str,
-    args: Optional[Mapping[str, Any]] = None,
+    args: Any = _MISSING,
     *,
     app_id: Optional[str] = None,
 ) -> ToolResult:
     """Invoke a catalog tool through the kernel.
 
-    Shells to ``cos ai tool <name> --app <id> --args <json>``. The
+    ``args`` may be any JSON value, including explicit ``None``, a scalar,
+    or an array. Shells to ``cos ai tool <name> --app <id> --args <json>``. The
     kernel resolves ``name`` against the catalog, derives the caps
     verb + scope, runs ``caps::require``, executes the implementation,
     and writes an audit row.
@@ -174,7 +178,7 @@ def call(
             f"{name}: app_id is required (pass app_id= or set COS_APP_ID)"
         )
 
-    args_payload = json.dumps(dict(args or {}))
+    args_payload = encode_wire_json({} if args is _MISSING else args)
     cmd = [
         _cos_binary(),
         "ai",

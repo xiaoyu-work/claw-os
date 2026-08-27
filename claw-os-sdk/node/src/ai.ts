@@ -31,6 +31,7 @@ import {
 import {
   WireDecodeError,
   materializeWireValue,
+  type WireJsonValue,
   validateAi,
   validateBudgetShow,
   type AiBudget,
@@ -86,7 +87,7 @@ export interface Review {
 export interface ProposedToolCall {
   id: string;
   name: string;
-  input: unknown;
+  input: WireJsonValue;
 }
 
 export interface AiResponse {
@@ -98,7 +99,7 @@ export interface AiResponse {
   budget: Budget;
   review: Review;
   toolCalls: ProposedToolCall[];
-  raw: Record<string, unknown>;
+  raw: Record<string, WireJsonValue>;
 }
 
 export interface ChatOptions {
@@ -334,6 +335,6 @@ function parseResponse(env: unknown): AiResponse {
       promptRedacted: review.prompt_redacted,
     },
     toolCalls,
-    raw: materializeWireValue(env) as Record<string, unknown>,
+    raw: materializeWireValue(env) as Record<string, WireJsonValue>,
   };
 }

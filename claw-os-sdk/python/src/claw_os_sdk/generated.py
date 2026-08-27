@@ -9,7 +9,7 @@ import json
 import math
 from decimal import Decimal
 
-from typing import Any, Dict, List, Mapping, TypedDict
+from typing import Any, Dict, List, Mapping, TypeAlias, TypedDict, Union
 
 # Wire-version value the kernel must advertise. See
 # wire/v1/envelope.schema.json.
@@ -365,14 +365,64 @@ WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON numeric constant: {value}")
 
-def decode_wire_json(text: str) -> Any:
-    """Decode JSON while preserving every finite number exactly."""
-    return json.loads(
+WireJsonValue: TypeAlias = Union[
+    None, bool, str, int, float, Decimal,
+    List["WireJsonValue"], Dict[str, "WireJsonValue"],
+]
+
+def materialize_wire_value(value: Any) -> WireJsonValue:
+    """Return public JSON values without losing decimal precision."""
+    if isinstance(value, Decimal):
+        if not value.is_finite():
+            raise ValueError("wire decimal must be finite")
+        number = float(value)
+        return number if math.isfinite(number) and Decimal.from_float(number) == value else value
+    if isinstance(value, list):
+        return [materialize_wire_value(item) for item in value]
+    if isinstance(value, Mapping):
+        return {str(key): materialize_wire_value(item) for key, item in value.items()}
+    if value is None or isinstance(value, (bool, str, int, float)):
+        return value
+    raise TypeError(f"unsupported wire JSON value: {type(value).__name__}")
+
+def decode_wire_json(text: str) -> WireJsonValue:
+    """Decode JSON into the stable public lossless value model."""
+    decoded = json.loads(
         text,
         parse_float=Decimal,
         parse_int=int,
         parse_constant=_reject_json_constant,
     )
+    return materialize_wire_value(decoded)
+
+def encode_wire_json(value: Any) -> str:
+    """Serialize the public lossless value model without rounding."""
+    def encode(item: Any) -> str:
+        if item is None:
+            return "null"
+        if isinstance(item, bool):
+            return "true" if item else "false"
+        if isinstance(item, str):
+            return json.dumps(item, ensure_ascii=False)
+        if isinstance(item, int):
+            return str(item)
+        if isinstance(item, Decimal):
+            if not item.is_finite():
+                raise ValueError("wire decimal must be finite")
+            return str(item)
+        if isinstance(item, float):
+            return json.dumps(item, allow_nan=False)
+        if isinstance(item, (list, tuple)):
+            return "[" + ",".join(encode(child) for child in item) + "]"
+        if isinstance(item, Mapping):
+            fields = []
+            for key, child in item.items():
+                if not isinstance(key, str):
+                    raise TypeError("wire JSON object keys must be strings")
+                fields.append(json.dumps(key, ensure_ascii=False) + ":" + encode(child))
+            return "{" + ",".join(fields) + "}"
+        raise TypeError(f"unsupported wire JSON value: {type(item).__name__}")
+    return encode(value)
 
 def _wire_decimal(value: Any) -> Decimal | None:
     if isinstance(value, bool):
