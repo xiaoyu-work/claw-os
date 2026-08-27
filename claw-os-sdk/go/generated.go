@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"math"
 	"math/big"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -333,28 +335,100 @@ func wireRule(value any) (map[string]any, bool) {
 	return rule, ok
 }
 
-func wireRational(value any) (*big.Rat, bool) {
+const wireMaxMaterializedIntegerDigits = 1024
+
+var wireJSONNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+
+type wireExactIntegerValue struct {
+	value *big.Int
+	overflow int
+}
+
+func wireExactInteger(value any) (wireExactIntegerValue, bool) {
+	var lexeme string
 	switch value := value.(type) {
 	case json.Number:
-		number, ok := new(big.Rat).SetString(string(value))
-		return number, ok
+		lexeme = string(value)
 	case float64:
-		if !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= 9007199254740991 {
-			number := new(big.Rat).SetFloat64(value)
-			return number, number != nil
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 9007199254740991 {
+			return wireExactIntegerValue{}, false
 		}
-		return nil, false
+		lexeme = strconv.FormatFloat(value, 'g', -1, 64)
 	case int:
-		return new(big.Rat).SetInt64(int64(value)), true
+		return wireExactIntegerValue{value: big.NewInt(int64(value))}, true
 	case int64:
-		return new(big.Rat).SetInt64(value), true
+		return wireExactIntegerValue{value: big.NewInt(value)}, true
 	case uint64:
-		integer := new(big.Int).SetUint64(value)
-		return new(big.Rat).SetInt(integer), true
+		return wireExactIntegerValue{value: new(big.Int).SetUint64(value)}, true
 	case uint32:
-		return new(big.Rat).SetInt64(int64(value)), true
+		return wireExactIntegerValue{value: big.NewInt(int64(value))}, true
 	default:
-		return nil, false
+		return wireExactIntegerValue{}, false
+	}
+	parts := wireJSONNumberPattern.FindStringSubmatch(lexeme)
+	if parts == nil {
+		return wireExactIntegerValue{}, false
+	}
+	negative := parts[1] == "-"
+	digits := strings.TrimLeft(parts[2]+parts[3], "0")
+	if digits == "" {
+		return wireExactIntegerValue{value: big.NewInt(0)}, true
+	}
+	exponentText := parts[4]
+	if exponentText == "" { exponentText = "0" }
+	exponentDigits := strings.TrimLeft(strings.TrimLeft(exponentText, "+-"), "0")
+	if exponentDigits == "" { exponentDigits = "0" }
+	var exponent int64
+	if len(exponentDigits) > 18 {
+		if strings.HasPrefix(exponentText, "-") { exponent = -1 << 62 } else { exponent = 1 << 62 }
+	} else {
+		parsed, err := strconv.ParseInt(exponentText, 10, 64)
+		if err != nil { return wireExactIntegerValue{}, false }
+		if parsed > 1<<60 { parsed = 1 << 60 }
+		if parsed < -(1<<60) { parsed = -(1 << 60) }
+		exponent = parsed
+	}
+	decimalPlaces := int64(len(parts[3])) - exponent
+	if decimalPlaces <= 0 {
+		zeros := -decimalPlaces
+		if zeros > wireMaxMaterializedIntegerDigits || int64(len(digits))+zeros > wireMaxMaterializedIntegerDigits {
+			overflow := 1
+			if negative { overflow = -1 }
+			return wireExactIntegerValue{overflow: overflow}, true
+		}
+		digits += strings.Repeat("0", int(zeros))
+	} else {
+		if decimalPlaces > int64(len(digits)) { return wireExactIntegerValue{}, false }
+		tail := digits[len(digits)-int(decimalPlaces):]
+		if strings.Trim(tail, "0") != "" { return wireExactIntegerValue{}, false }
+		digits = digits[:len(digits)-int(decimalPlaces)]
+		if digits == "" { digits = "0" }
+	}
+	integer, ok := new(big.Int).SetString(digits, 10)
+	if !ok { return wireExactIntegerValue{}, false }
+	if negative { integer.Neg(integer) }
+	return wireExactIntegerValue{value: integer}, true
+}
+
+func compareWireExactIntegers(left, right wireExactIntegerValue) int {
+	if left.overflow != right.overflow {
+		if left.overflow < right.overflow { return -1 }
+		return 1
+	}
+	if left.overflow != 0 { return 0 }
+	return left.value.Cmp(right.value)
+}
+
+func wireNumberValid(value any) bool {
+	switch value := value.(type) {
+	case json.Number:
+		return wireJSONNumberPattern.MatchString(string(value))
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= 9007199254740991
+	case int, int64, uint32, uint64:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -391,10 +465,9 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 		case "string":
 			_, valid = value.(string)
 		case "integer":
-			number, numeric := wireRational(value)
-			valid = numeric && number.IsInt()
+			_, valid = wireExactInteger(value)
 		case "number":
-			_, valid = wireRational(value)
+			valid = wireNumberValid(value)
 		case "boolean":
 			_, valid = value.(bool)
 		case "null":
@@ -405,9 +478,9 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 		}
 	}
 	if expected, present := rule["const"]; present {
-		expectedNumber, expectedNumeric := wireRational(expected)
-		actualNumber, actualNumeric := wireRational(value)
-		if (expectedNumeric && (!actualNumeric || expectedNumber.Cmp(actualNumber) != 0)) || (!expectedNumeric && expected != value) {
+		expectedNumber, expectedNumeric := wireExactInteger(expected)
+		actualNumber, actualNumeric := wireExactInteger(value)
+		if (expectedNumeric && (!actualNumeric || compareWireExactIntegers(expectedNumber, actualNumber) != 0)) || (!expectedNumeric && expected != value) {
 			return wireError(WireConst, schemaName, path, "value does not match const")
 		}
 	}
@@ -420,12 +493,12 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 			return wireError(WireEnum, schemaName, path, "value is not in the allowed enum")
 		}
 	}
-	if number, numeric := wireRational(value); numeric {
-		if minimum, ok := wireRational(rule["minimum"]); ok && number.Cmp(minimum) < 0 {
-			return wireError(WireMinimum, schemaName, path, "must be >= "+minimum.RatString())
+	if number, numeric := wireExactInteger(value); numeric {
+		if minimum, ok := wireExactInteger(rule["minimum"]); ok && compareWireExactIntegers(number, minimum) < 0 {
+			return wireError(WireMinimum, schemaName, path, "below minimum")
 		}
-		if maximum, ok := wireRational(rule["maximum"]); ok && number.Cmp(maximum) > 0 {
-			return wireError(WireMaximum, schemaName, path, "must be <= "+maximum.RatString())
+		if maximum, ok := wireExactInteger(rule["maximum"]); ok && compareWireExactIntegers(number, maximum) > 0 {
+			return wireError(WireMaximum, schemaName, path, "above maximum")
 		}
 	}
 	if object, ok := value.(map[string]any); ok {

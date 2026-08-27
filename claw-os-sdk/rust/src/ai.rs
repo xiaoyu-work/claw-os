@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{cos_call_json, BridgeError};
+use crate::{cos_call_json_structured, BridgeError, StructuredCosError};
 
 // ---------------------------------------------------------------------------
 // Response shape
@@ -294,16 +294,16 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         argv.push(tools.join(",").into());
     }
 
-    let value = match cos_call_json("ai", "chat", argv) {
+    let value = match cos_call_json_structured("ai", "chat", argv) {
         Ok(value) => value,
-        Err(BridgeError::AppError {
-            payload,
-            ..
-        }) => {
-            let message = payload["error"].as_str().unwrap_or("AI request denied");
-            return Err(classify_ai_error(message, &payload));
+        Err(StructuredCosError::App(error)) => {
+            let error = *error;
+            let message = error.payload["error"]
+                .as_str()
+                .unwrap_or("AI request denied");
+            return Err(classify_ai_error(message, &error.payload));
         }
-        Err(error) => return Err(AiError::Bridge(error)),
+        Err(StructuredCosError::Bridge(error)) => return Err(AiError::Bridge(error)),
     };
     parse_response(value)
 }

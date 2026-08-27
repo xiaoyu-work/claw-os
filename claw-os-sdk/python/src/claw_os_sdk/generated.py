@@ -485,10 +485,13 @@ def decode_wire_json(text: str) -> WireJsonValue:
             return Decimal(lexeme)
         except (InvalidOperation, ValueError):
             return WireDecimal(lexeme)
+    def parse_integer(lexeme: str) -> int | WireDecimal:
+        digits = lexeme.lstrip("-")
+        return int(lexeme) if len(digits) <= _MAX_MATERIALIZED_INTEGER_DIGITS else WireDecimal(lexeme)
     decoded = json.loads(
         text,
         parse_float=parse_decimal,
-        parse_int=int,
+        parse_int=parse_integer,
         parse_constant=_reject_json_constant,
     )
     return materialize_wire_value(decoded)

@@ -12,7 +12,7 @@ use std::ffi::OsString;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{cos_call_json, BridgeError};
+use crate::{cos_call_json_structured, BridgeError, StructuredCosError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -59,22 +59,18 @@ fn cos_tool_json(
     name: &str,
     argv: Vec<OsString>,
 ) -> Result<serde_json::Value, ToolError> {
-    match cos_call_json("tool", name, argv) {
+    match cos_call_json_structured("tool", name, argv) {
         Ok(value) => Ok(value),
-        Err(BridgeError::AppError {
-            message,
-            code,
-            payload,
-            ..
-        }) => {
+        Err(StructuredCosError::App(error)) => {
+            let error = *error;
             Err(ToolError::Denied {
                 name: name.to_string(),
-                message,
-                code,
-                payload: *payload,
+                message: error.message,
+                code: error.code,
+                payload: error.payload,
             })
         }
-        Err(error) => Err(ToolError::Bridge(error)),
+        Err(StructuredCosError::Bridge(error)) => Err(ToolError::Bridge(error)),
     }
 }
 

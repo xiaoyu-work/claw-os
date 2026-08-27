@@ -152,9 +152,9 @@ func asString(v any) string {
 }
 
 func asUint64(v any) uint64 {
-	number, ok := wireRational(v)
-	if ok && number.IsInt() && number.Sign() >= 0 && number.Num().IsUint64() {
-		return number.Num().Uint64()
+	number, ok := wireExactInteger(v)
+	if ok && number.overflow == 0 && number.value.Sign() >= 0 && number.value.IsUint64() {
+		return number.value.Uint64()
 	}
 	return 0
 }

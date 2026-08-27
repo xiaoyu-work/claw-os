@@ -68,16 +68,11 @@ fn call_surfaces_error_field_as_app_error() {
             verb,
             message,
             code,
-            payload,
         } => {
             assert_eq!(app, "fs");
             assert_eq!(verb, "read");
             assert_eq!(message, "file not found: /x");
             assert_eq!(code.as_deref(), Some("not-found"));
-            assert_eq!(
-                *payload,
-                serde_json::json!({"error":"file not found: /x","code":"not-found"})
-            );
         }
         other => panic!("expected AppError, got {other:?}"),
     }
@@ -92,9 +87,6 @@ fn is_denied_recognises_denied_code() {
         verb: "write".into(),
         message: "permission denied".into(),
         code: Some("denied".into()),
-        payload: Box::new(
-            serde_json::json!({"error": "permission denied", "code": "denied"})
-        ),
     };
     assert!(err.is_denied());
 }

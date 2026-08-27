@@ -297,8 +297,27 @@ async fn ping_and_tools_list_validate_method_specific_params() {
             let frame = client_t.recv().await.unwrap().unwrap();
             let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
             assert!(response.error.is_none());
-    }
+        }
 
-    drop(client_t);
-    let _ = server_handle.await;
+        drop(client_t);
+        let _ = server_handle.await;
+}
+
+#[tokio::test]
+async fn invalid_id_precedes_null_method_params() {
+        let (client_t, server_t) = in_memory_pair();
+        let server = McpServer::new("cos", "0", registry_with_echo());
+        let server_handle = tokio::spawn(server.serve(server_t));
+
+        client_t
+            .send(r#"{"jsonrpc":"2.0","id":true,"method":"ping","params":null}"#.into())
+            .await
+            .unwrap();
+        let frame = client_t.recv().await.unwrap().unwrap();
+        let response: serde_json::Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(response["id"], serde_json::Value::Null);
+        assert_eq!(response["error"]["code"], ERR_INVALID_REQUEST);
+
+        drop(client_t);
+        let _ = server_handle.await;
 }

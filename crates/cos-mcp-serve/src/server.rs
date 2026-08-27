@@ -177,6 +177,23 @@ impl Server {
                     continue;
                 }
             }
+            if raw.get("id").is_some()
+                && !matches!(
+                    raw.get("id"),
+                    Some(Value::Null | Value::String(_) | Value::Number(_))
+                )
+            {
+                let resp = JsonRpcResponse::err(
+                    RequestId::Null,
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "request id must be a string, number, or null",
+                    ),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
+                continue;
+            }
             if raw
                 .get("params")
                 .is_some_and(|params| !params.is_object() && !params.is_array())

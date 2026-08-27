@@ -96,6 +96,23 @@ EXPECTED_WIRE_VERSION = 1
 MAX_LINE_BYTES = 16 * 1024 * 1024
 
 
+def _has_unpaired_surrogate(value: str) -> bool:
+    index = 0
+    while index < len(value):
+        code = ord(value[index])
+        if 0xD800 <= code <= 0xDBFF:
+            if index + 1 >= len(value) or not (
+                0xDC00 <= ord(value[index + 1]) <= 0xDFFF
+            ):
+                return True
+            index += 2
+            continue
+        if 0xDC00 <= code <= 0xDFFF:
+            return True
+        index += 1
+    return False
+
+
 @dataclass
 class _Tool:
     """Internal record for one registered tool."""
@@ -223,6 +240,13 @@ class App:
 
         has_id = "id" in msg
         raw_id = msg.get("id")
+        if isinstance(raw_id, str) and _has_unpaired_surrogate(raw_id):
+            self._send_error(
+                None,
+                ERR_PARSE,
+                "request id contains an unpaired Unicode surrogate",
+            )
+            return
         valid_id = (
             raw_id is None
             or isinstance(raw_id, str)

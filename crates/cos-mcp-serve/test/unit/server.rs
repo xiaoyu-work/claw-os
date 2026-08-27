@@ -382,10 +382,28 @@ async fn ping_and_tools_list_validate_method_specific_params() {
             let frame = client.recv().await.unwrap().unwrap();
             let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
             assert!(response.error.is_none());
-    }
+        }
 
-    drop(client);
-    let _ = handle.await;
+        drop(client);
+        let _ = handle.await;
+}
+
+#[tokio::test]
+async fn invalid_id_precedes_null_method_params() {
+        let (client, server) = in_memory_pair();
+        let handle = tokio::spawn(Server::new("t", "0").serve(server));
+
+        client
+            .send(r#"{"jsonrpc":"2.0","id":true,"method":"ping","params":null}"#.into())
+            .await
+            .unwrap();
+        let frame = client.recv().await.unwrap().unwrap();
+        let response: Value = serde_json::from_str(&frame).unwrap();
+        assert_eq!(response["id"], Value::Null);
+        assert_eq!(response["error"]["code"], ERR_INVALID_REQUEST);
+
+        drop(client);
+        let _ = handle.await;
 }
 
 #[tokio::test]

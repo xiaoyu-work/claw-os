@@ -11,7 +11,7 @@ _THIS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import serve` works
 
 from claw_os_sdk import serve  # noqa: E402
-from claw_os_sdk.generated import decode_wire_json  # noqa: E402
+from claw_os_sdk.generated import WireDecimal, decode_wire_json  # noqa: E402
 
 
 def _drive(app: serve.App, *frames: dict) -> list[dict]:
@@ -298,6 +298,13 @@ class TransportTests(unittest.TestCase):
                 self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
                 self.assertIsNone(out[0]["id"])
 
+        combined = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": True, "method": "ping", "params": None},
+        )
+        self.assertEqual(combined[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+        self.assertIsNone(combined[0]["id"])
+
     def test_malformed_idless_envelope_returns_invalid_request(self) -> None:
         out = _drive(
             serve.App(name="kv"),
@@ -322,12 +329,13 @@ class TransportTests(unittest.TestCase):
         self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
         self.assertIsNone(out[0]["id"])
 
-    def test_lone_surrogate_id_is_safely_escaped_and_round_trips(self) -> None:
+    def test_lone_surrogate_id_is_parse_error(self) -> None:
         out = _drive_raw(
             serve.App(name="kv"),
             r'{"jsonrpc":"2.0","id":"\ud800","method":"ping"}',
         )
-        self.assertEqual(out[0]["id"], "\ud800")
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(out[0]["id"])
 
     def test_primitive_params_are_invalid_before_notification_suppression(self) -> None:
         out = _drive(
@@ -360,6 +368,14 @@ class TransportTests(unittest.TestCase):
         )
         self.assertEqual(out[0]["id"], Decimal(fraction))
         self.assertEqual(out[1]["id"], int(large))
+
+        long_integer = "1" * 5000
+        echoed = _drive_raw(
+            serve.App(name="kv"),
+            f'{{"jsonrpc":"2.0","id":{long_integer},"method":"ping"}}',
+        )
+        self.assertIsInstance(echoed[0]["id"], WireDecimal)
+        self.assertEqual(echoed[0]["id"].lexeme, long_integer)
 
     def test_initialize_rejects_malformed_known_capabilities(self) -> None:
         base = {

@@ -65,6 +65,7 @@ func TestIntegerValidationUsesJSONSchemaMathematicalSemantics(t *testing.T) {
 		"9007199254740992":     9007199254740992,
 		"18446744073709551615": ^uint64(0),
 	}
+
 	for literal, expected := range accepted {
 		value := validAIWire(t)
 		value["usage"].(map[string]any)["units"] = json.Number(literal)
@@ -96,6 +97,32 @@ func TestIntegerValidationUsesJSONSchemaMathematicalSemantics(t *testing.T) {
 	value["usage"].(map[string]any)["units"] = json.Number("18446744073709551615.5")
 	if err := ValidateAi(value).(*WireDecodeError); err.Code != WireType {
 		t.Fatalf("fractional-above-max error = %#v", err)
+	}
+}
+
+func TestHugeExponentClassificationStaysCompact(t *testing.T) {
+	const exponent = "999999999999999999999999"
+
+	zero := validAIWire(t)
+	zero["usage"].(map[string]any)["units"] = json.Number("0e" + exponent)
+	if err := ValidateAi(zero); err != nil {
+		t.Fatal(err)
+	}
+	response, err := parseResponse(zero)
+	if err != nil || response.Usage.Units != 0 {
+		t.Fatalf("zero response=%+v error=%v", response, err)
+	}
+
+	huge := validAIWire(t)
+	huge["usage"].(map[string]any)["units"] = json.Number("1e" + exponent)
+	if err := ValidateAi(huge).(*WireDecodeError); err.Code != WireMaximum {
+		t.Fatalf("huge error = %#v", err)
+	}
+
+	fractional := validAIWire(t)
+	fractional["usage"].(map[string]any)["units"] = json.Number("1e-" + exponent)
+	if err := ValidateAi(fractional).(*WireDecodeError); err.Code != WireType {
+		t.Fatalf("fractional error = %#v", err)
 	}
 }
 

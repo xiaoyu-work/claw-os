@@ -326,6 +326,13 @@ class WireValidationTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_wire_json(forged)
 
+    def test_long_integer_lexeme_stays_compact(self) -> None:
+        lexeme = "1" * 5000
+        value = decode_wire_json(lexeme)
+        self.assertIsInstance(value, WireDecimal)
+        self.assertEqual(value.lexeme, lexeme)
+        self.assertEqual(encode_wire_json(value), lexeme)
+
     def test_stable_error_code_precedes_opaque_message(self) -> None:
         with self.assertRaises(ai.AiBudgetExceeded):
             ai._raise_for_error({"error": "opaque", "code": "budget_exceeded"})

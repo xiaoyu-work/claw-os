@@ -75,7 +75,6 @@ pub enum BridgeError {
         verb: String,
         message: String,
         code: Option<String>,
-        payload: Box<serde_json::Value>,
     },
 
     /// The subprocess exited non-zero but stdout didn't parse as a
@@ -235,7 +234,6 @@ where
                     .get("code")
                     .and_then(|v| v.as_str())
                     .map(str::to_string),
-                payload: Box::new(parsed.clone()),
             });
         }
 
@@ -316,6 +314,62 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
+    cos_call_json_structured(family, verb, args).map_err(StructuredCosError::into_bridge)
+}
+
+#[derive(Debug)]
+pub(crate) struct StructuredAppError {
+    pub app: String,
+    pub verb: String,
+    pub message: String,
+    pub code: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+#[derive(Debug)]
+pub(crate) enum StructuredCosError {
+    App(Box<StructuredAppError>),
+    Bridge(BridgeError),
+}
+
+impl StructuredCosError {
+    fn into_bridge(self) -> BridgeError {
+        match self {
+            StructuredCosError::App(error) => {
+                let error = *error;
+                BridgeError::AppError {
+                    app: error.app,
+                    verb: error.verb,
+                    message: error.message,
+                    code: error.code,
+                }
+            }
+            StructuredCosError::Bridge(error) => error,
+        }
+    }
+}
+
+impl From<BridgeError> for StructuredCosError {
+    fn from(error: BridgeError) -> Self {
+        StructuredCosError::Bridge(error)
+    }
+}
+
+impl From<std::io::Error> for StructuredCosError {
+    fn from(error: std::io::Error) -> Self {
+        StructuredCosError::Bridge(BridgeError::Io(error))
+    }
+}
+
+pub(crate) fn cos_call_json_structured<A>(
+    family: &str,
+    verb: &str,
+    args: A,
+) -> Result<serde_json::Value, StructuredCosError>
+where
+    A: IntoIterator,
+    A::Item: AsRef<OsStr>,
+{
     let bin = std::env::var("CLAW_COS_BIN").unwrap_or_else(|_| "cos".into());
     let mut cmd = Command::new(bin);
     for a in args {
@@ -343,7 +397,8 @@ where
             verb: verb.to_string(),
             status: out.status.code().unwrap_or(-1),
             stderr: truncate_diag(&stderr, DIAG_LIMIT),
-        });
+        }
+        .into());
     };
 
     let parsed: serde_json::Value =
@@ -357,7 +412,7 @@ where
         })?;
 
     if let Some(err) = parsed.get("error").and_then(|v| v.as_str()) {
-        return Err(BridgeError::AppError {
+        return Err(StructuredCosError::App(Box::new(StructuredAppError {
             app: family.to_string(),
             verb: verb.to_string(),
             message: err.to_string(),
@@ -365,8 +420,8 @@ where
                 .get("code")
                 .and_then(|v| v.as_str())
                 .map(str::to_string),
-            payload: Box::new(parsed.clone()),
-        });
+            payload: parsed.clone(),
+        })));
     }
 
     // Same correctness fix as `call`: a clean-shaped JSON object on
@@ -380,7 +435,8 @@ where
             verb: verb.to_string(),
             status: out.status.code().unwrap_or(-1),
             stderr: truncate_diag(&stderr, DIAG_LIMIT),
-        });
+        }
+        .into());
     }
 
     Ok(parsed)
