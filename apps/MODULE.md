@@ -24,6 +24,9 @@ invoked.
   caller URLs to canonical ASCII before capability derivation and child
   dispatch; Python performs independent UTS-46 interpretation only on
   redirect locations.
+- Rust browser/network consumers derive exact `net.dial` scopes through
+  `obscura_net::effective_host_scope`, including effective ports and bracketed
+  IPv6 on initial requests and redirects.
 - Declare destructive confirmation booleans as required with `choices: [true]`;
   omission and explicit false must fail before authority is resolved.
 - Use `required_when` for conditional confirmation requirements; it references

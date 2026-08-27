@@ -60,3 +60,20 @@ fn rejects_unique_local_ipv6() {
     assert!(validate_navigable_url("http://[fd00::1]/").is_err());
     assert!(validate_navigable_url("http://[fe80::1]/").is_err());
 }
+
+#[test]
+fn browser_network_scope_includes_effective_ports() {
+    for (input, expected) in [
+        ("http://example.com/", "example.com:80"),
+        ("https://example.com/", "example.com:443"),
+        ("https://example.com:8443/", "example.com:8443"),
+        ("http://[2001:db8::1]/", "[2001:db8::1]:80"),
+    ] {
+        let url = url::Url::parse(input).unwrap();
+        assert_eq!(
+            obscura_net::effective_host_scope(&url).unwrap(),
+            expected,
+            "{input}"
+        );
+    }
+}

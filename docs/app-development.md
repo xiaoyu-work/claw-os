@@ -300,7 +300,9 @@ Declare it in `operations.<op>.needs[]`:
   arguments before capability derivation and child dispatch. Python therefore
   never reinterprets caller Unicode on the initial request; it applies UTS-46
   itself only when canonicalizing redirect locations before requesting their
-  authority.
+  authority. Rust browser/JavaScript consumers use
+  `obscura_net::effective_host_scope` so every initial and redirect policy
+  check includes the same effective port and bracketed IPv6 form.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a

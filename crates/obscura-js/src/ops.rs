@@ -627,7 +627,7 @@ fn validate_fetch_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, Strin
     }
     let port = url.port_or_known_default().unwrap_or(443);
     if std::env::var_os("COS_SESSION").is_some() {
-        authorize_fetch_scope(url, &host)?;
+        authorize_fetch_scope(url)?;
     }
     let addresses: Vec<std::net::SocketAddr> = (host.as_str(), port)
         .to_socket_addrs()
@@ -647,12 +647,8 @@ fn validate_fetch_url(url: &url::Url) -> Result<Vec<std::net::SocketAddr>, Strin
     Ok(addresses)
 }
 
-fn authorize_fetch_scope(url: &url::Url, host: &str) -> Result<(), String> {
-    let scope = match url.port() {
-        Some(port) if host.contains(':') => format!("[{host}]:{port}"),
-        Some(port) => format!("{host}:{port}"),
-        None => host.to_string(),
-    };
+fn authorize_fetch_scope(url: &url::Url) -> Result<(), String> {
+    let scope = obscura_net::effective_host_scope(url).map_err(|error| error.to_string())?;
     let output = std::process::Command::new("/usr/local/bin/cos")
         .args(["__policy", "check", "net.dial", "--host", &scope])
         .output()
@@ -747,4 +743,12 @@ pub fn build_extension() -> Extension {
         ]),
         ..Default::default()
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/ops.rs"
+    ));
 }
