@@ -14,8 +14,8 @@ use axum::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::clawd;
 use crate::state::AppState;
+use clawd_client::Command;
 
 #[derive(Debug, Serialize)]
 pub struct Session {
@@ -31,13 +31,11 @@ pub struct Session {
 }
 
 pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Session>>, StatusCode> {
-    let value = clawd::request(
-        &state.clawd_socket,
-        "memory.sessions",
-        json!({ "limit": 200 }),
-    )
-    .await
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let value = state
+        .clawd
+        .call(Command::MemorySessions, json!({ "limit": 200 }))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let rows = value
         .get("sessions")
         .and_then(Value::as_array)
@@ -56,13 +54,11 @@ pub async fn get(
     // No dedicated single-session lookup yet — page through the
     // recent list. 200 entries is more than the panel sidebar will
     // ever show, so this stays fast.
-    let value = clawd::request(
-        &state.clawd_socket,
-        "memory.sessions",
-        json!({ "limit": 200 }),
-    )
-    .await
-    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    let value = state
+        .clawd
+        .call(Command::MemorySessions, json!({ "limit": 200 }))
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
     let rows = value
         .get("sessions")
         .and_then(Value::as_array)
@@ -93,13 +89,14 @@ pub async fn history(
     State(state): State<AppState>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, StatusCode> {
-    let mut value = clawd::request(
-        &state.clawd_socket,
-        "memory.history",
-        json!({ "session_id": id, "limit": 500 }),
-    )
-    .await
-    .map_err(|_| StatusCode::BAD_GATEWAY)?;
+    let mut value = state
+        .clawd
+        .call(
+            Command::MemoryHistory,
+            json!({ "session_id": id, "limit": 500 }),
+        )
+        .await
+        .map_err(|_| StatusCode::BAD_GATEWAY)?;
     if let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) {
         messages.retain(|message| message.get("role").and_then(Value::as_str) != Some("system"));
     }

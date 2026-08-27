@@ -17,6 +17,7 @@ CLI, semantic, and embedding surfaces.
 | --- | --- |
 | `claw-embed/` | Reusable embedding, extraction, chunking, walking, and storage contracts |
 | `claw-semantic/` | Filesystem semantic daemon, config, service orchestration, and CLI |
+| `clawd-client/` | Unprivileged typed broker discovery, framing, envelopes, deadlines, and errors |
 | `cos-browser/`, `cos-mcp-serve/`, `cos-cli/` | First-party binaries/tools |
 | `obscura-*/` | Vendored browser-engine internals |
 | `../Cargo.toml` | Workspace membership and shared dependencies |
@@ -26,6 +27,8 @@ CLI, semantic, and embedding surfaces.
 Core and `claw-semantic` depend on `claw-embed`; the primitives crate does not
 import daemon or core orchestration. Core depends on crate APIs; focused crates
 do not import core orchestration.
+Desktop broker consumers depend on `clawd-client`; the client contains no
+desktop UI or privileged broker implementation.
 Keep Obscura changes scoped and preserve upstream licensing/provenance. Add a
 new crate only for a coherent reusable responsibility.
 

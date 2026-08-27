@@ -4,6 +4,7 @@ members = [
     "core",
     "claw-os-sdk/rust",
     "cos-runtime/rust",
+    "crates/clawd-client",
     "crates/cos-mcp-serve",
     "crates/obscura-dom",
     "crates/obscura-net",

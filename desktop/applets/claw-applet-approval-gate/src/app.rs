@@ -13,9 +13,8 @@ use cosmic::{
     },
     theme,
     widget::{
-        button, column, container, divider, row,
-        space::horizontal as horizontal_space, space::vertical as vertical_space,
-        text,
+        button, column, container, divider, row, space::horizontal as horizontal_space,
+        space::vertical as vertical_space, text,
     },
 };
 use std::{
@@ -125,10 +124,11 @@ impl cosmic::Application for ApprovalGate {
                 self.last_error = None;
                 // If the popup is open and the queue empties out,
                 // close it — nothing more to act on.
-                if self.pending.is_empty() && count_changed {
-                    if let Some(id) = self.popup.take() {
-                        return destroy_popup(id);
-                    }
+                if self.pending.is_empty()
+                    && count_changed
+                    && let Some(id) = self.popup.take()
+                {
+                    return destroy_popup(id);
                 }
                 Task::none()
             }
@@ -188,7 +188,11 @@ impl cosmic::Application for ApprovalGate {
         } else {
             "dialog-warning-symbolic"
         };
-        let btn = self.core.applet.icon_button(icon).on_press(Message::TogglePopup);
+        let btn = self
+            .core
+            .applet
+            .icon_button(icon)
+            .on_press(Message::TogglePopup);
         if self.pending.is_empty() {
             btn.into()
         } else {
@@ -221,11 +225,7 @@ impl cosmic::Application for ApprovalGate {
         ]);
 
         let body: Element<'_, Message> = if let Some(err) = &self.last_error {
-            padded_control(
-                text(fl!("runtime-error", message = err.as_str()))
-                    .size(12),
-            )
-            .into()
+            padded_control(text(fl!("runtime-error", message = err.as_str())).size(12)).into()
         } else if self.pending.is_empty() {
             padded_control(
                 container(text(fl!("no-pending")).size(12))
@@ -246,7 +246,9 @@ impl cosmic::Application for ApprovalGate {
 
         self.core
             .applet
-            .popup_container(column![header, divider::horizontal::default(), body].spacing(space_xxs))
+            .popup_container(
+                column![header, divider::horizontal::default(), body].spacing(space_xxs),
+            )
             .into()
     }
 
@@ -296,9 +298,7 @@ fn render_card(req: &Request, space_xxs: u16, space_xs: u16) -> Element<'_, Mess
         .spacing(space_xs)
         .align_y(cosmic::iced::core::Alignment::Center);
     if matches!(risk, Risk::Critical) {
-        actions = actions.push(
-            text(fl!("critical-warning")).size(10),
-        );
+        actions = actions.push(text(fl!("critical-warning")).size(10));
     } else {
         let id = req.id.clone();
         let id_session = req.id.clone();
@@ -319,14 +319,16 @@ fn render_card(req: &Request, space_xxs: u16, space_xs: u16) -> Element<'_, Mess
     }
     actions = actions.push(horizontal_space());
     let id_deny = req.id.clone();
-    actions = actions.push(
-        button::destructive(fl!("deny"))
-            .on_press(Message::Deny(id_deny)),
-    );
+    actions = actions.push(button::destructive(fl!("deny")).on_press(Message::Deny(id_deny)));
 
     padded_control(
-        column![head, body, vertical_space().height(Length::Fixed(4.0)), actions]
-            .spacing(space_xxs),
+        column![
+            head,
+            body,
+            vertical_space().height(Length::Fixed(4.0)),
+            actions
+        ]
+        .spacing(space_xxs),
     )
     .into()
 }

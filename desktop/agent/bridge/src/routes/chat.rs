@@ -10,7 +10,6 @@
 //! * daemon / IO failures → `error`
 
 use std::convert::Infallible;
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use axum::{
@@ -23,8 +22,8 @@ use futures::stream::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::clawd;
 use crate::state::AppState;
+use clawd_client::{Client, Command};
 
 /// Hard ceiling on a single chat turn. `task.stream` blocks ~1s per poll, so
 /// without this a task that never reports `terminal` (stuck agent, or a frame
@@ -33,15 +32,15 @@ use crate::state::AppState;
 const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
 
 struct CancelOnDrop {
-    socket: PathBuf,
+    clawd: Client,
     task_id: String,
     armed: bool,
 }
 
 impl CancelOnDrop {
-    fn new(socket: PathBuf, task_id: String) -> Self {
+    fn new(clawd: Client, task_id: String) -> Self {
         Self {
-            socket,
+            clawd,
             task_id,
             armed: true,
         }
@@ -60,11 +59,12 @@ impl Drop for CancelOnDrop {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let socket = self.socket.clone();
+        let clawd = self.clawd.clone();
         let task_id = self.task_id.clone();
         handle.spawn(async move {
-            if let Err(error) =
-                clawd::request(&socket, "task.cancel", json!({ "id": task_id })).await
+            if let Err(error) = clawd
+                .call(Command::TaskCancel, json!({ "id": task_id }))
+                .await
             {
                 tracing::warn!(%error, "failed to cancel disconnected agent task");
             }
@@ -265,7 +265,7 @@ pub async fn stream_chat(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let prompt = req.resolve_prompt();
     let session_id = req.session_id.clone();
-    let socket = state.clawd_socket.clone();
+    let clawd = state.clawd.clone();
 
     let stream = async_stream::stream! {
         if prompt.trim().is_empty() {
@@ -288,7 +288,7 @@ pub async fn stream_chat(
             params["session_id"] = Value::from(session_id.clone());
         }
 
-        let submitted = match clawd::request(&socket, "task.submit", params).await {
+        let submitted = match clawd.call(Command::TaskSubmit, params).await {
             Ok(value) => value,
             Err(err) => {
                 yield Ok(error_event(&err.to_string()));
@@ -307,7 +307,7 @@ pub async fn stream_chat(
             .get("session_id")
             .and_then(Value::as_str)
             .map(ToOwned::to_owned);
-        let mut cancel_on_drop = CancelOnDrop::new(socket.clone(), task_id.clone());
+        let mut cancel_on_drop = CancelOnDrop::new(clawd.clone(), task_id.clone());
         yield Ok(json_event(
             "task",
             json!({
@@ -325,7 +325,7 @@ pub async fn stream_chat(
                 yield Ok(error_event("agent task exceeded the maximum stream duration"));
                 return;
             }
-            let frame = match clawd::request(&socket, "task.stream", json!({
+            let frame = match clawd.call(Command::TaskStream, json!({
                 "id": task_id,
                 "cursor": cursor,
                 "timeout_ms": 1000u64
@@ -404,7 +404,9 @@ pub async fn cancel_chat(
             Json(json!({ "error": "task id is required" })),
         ));
     }
-    clawd::request(&state.clawd_socket, "task.cancel", json!({ "id": task_id }))
+    state
+        .clawd
+        .call(Command::TaskCancel, json!({ "id": task_id }))
         .await
         .map(Json)
         .map_err(|error| {
@@ -419,15 +421,14 @@ fn extract_message_text(event: &Value) -> Option<String> {
     let content = event.get("content").and_then(Value::as_array)?;
     let mut text = String::new();
     for block in content {
-        if block.get("type").and_then(Value::as_str) == Some("text")
-            || block.get("kind").and_then(Value::as_str) == Some("text")
+        if (block.get("type").and_then(Value::as_str) == Some("text")
+            || block.get("kind").and_then(Value::as_str) == Some("text"))
+            && let Some(chunk) = block.get("text").and_then(Value::as_str)
         {
-            if let Some(chunk) = block.get("text").and_then(Value::as_str) {
-                if !text.is_empty() {
-                    text.push('\n');
-                }
-                text.push_str(chunk);
+            if !text.is_empty() {
+                text.push('\n');
             }
+            text.push_str(chunk);
         }
     }
     if text.is_empty() { None } else { Some(text) }

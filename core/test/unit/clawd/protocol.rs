@@ -97,3 +97,42 @@ fn a_response_encodes_to_the_body_the_transport_frames() {
     let decoded: Response = serde_json::from_slice(&body).unwrap();
     assert_eq!(decoded, response);
 }
+
+#[test]
+fn desktop_client_envelopes_and_stable_errors_match_the_broker_contract() {
+    let desktop = clawd_client::Request::with_id(
+        clawd_client::Command::PermissionPending,
+        json!({"limit": 100}),
+        clawd_client::RequestId::parse("desktop-1").unwrap(),
+    );
+    let inbound: crate::clawd::wire::InboundRequest =
+        serde_json::from_value(serde_json::to_value(&desktop).unwrap()).unwrap();
+    assert_eq!(inbound.v, PROTOCOL_VERSION);
+    assert_eq!(inbound.id.as_str(), "desktop-1");
+    assert_eq!(inbound.command.as_str(), "permission.pending");
+    for command in clawd_client::Command::ALL {
+        assert!(
+            crate::clawd::routes::Command::parse(command.as_str()).is_some(),
+            "desktop command {} must remain in the core registry",
+            command.as_str()
+        );
+    }
+
+    let broker = Response::error(
+        RequestId::parse("desktop-1").unwrap(),
+        BrokerErrorKind::Unauthorized.code(),
+        "approval required",
+    );
+    let client: clawd_client::Response =
+        serde_json::from_slice(&encode_response(&broker).unwrap()).unwrap();
+    assert_eq!(
+        client.error.unwrap().code,
+        clawd_client::ErrorCode::NotAuthorized
+    );
+    assert_eq!(clawd_client::PROTOCOL_VERSION, PROTOCOL_VERSION);
+    assert_eq!(clawd_client::MAGIC, crate::clawd::wire::MAGIC);
+    assert_eq!(
+        clawd_client::MAX_RESPONSE_BYTES,
+        crate::clawd::wire::MAX_RESPONSE_BYTES
+    );
+}

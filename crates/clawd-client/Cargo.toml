@@ -1,0 +1,14 @@
+[package]
+name = "clawd-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Unprivileged typed client for the Claw OS clawd broker"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "time"] }
+uuid.workspace = true

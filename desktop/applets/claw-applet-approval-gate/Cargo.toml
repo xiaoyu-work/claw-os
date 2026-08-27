@@ -6,6 +6,7 @@ license = "GPL-3.0-only"
 
 [dependencies]
 anyhow.workspace = true
+clawd-client = { path = "../../../crates/clawd-client" }
 i18n-embed-fl.workspace = true
 i18n-embed.workspace = true
 libcosmic.workspace = true

@@ -16,7 +16,7 @@ desktop/agent/
 ├── bridge/                 # cos-agent-bridge — HTTP+SSE daemon
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server (/api only)
-│       ├── state.rs        # port discovery + clawd socket location
+│       ├── state.rs        # port discovery + shared clawd client
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
@@ -53,6 +53,11 @@ desktop/agent/
            │  task.submit / stream    │
            └──────────────────────────┘
 ```
+
+The bridge and approval applet share `crates/clawd-client` for canonical
+`CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),
+v1 request IDs/envelopes, `CBK1` length-prefixed framing, deadlines, bounds,
+and typed transport/protocol errors.
 
 The bridge no longer serves a static SPA — the previous React
 frontend was retired in favour of `cos-agent-ui`. Every UI surface
