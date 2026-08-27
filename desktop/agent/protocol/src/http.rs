@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{MIN_SUPPORTED_PROTOCOL_VERSION, ProtocolVersion};
+use crate::{ProtocolMetadata, ProtocolVersion};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BridgeEndpoint {
@@ -11,10 +11,19 @@ pub struct BridgeEndpoint {
 }
 
 impl BridgeEndpoint {
+    pub const fn protocol_metadata(&self) -> ProtocolMetadata {
+        ProtocolMetadata {
+            protocol_version: self.protocol_version,
+            min_protocol_version: self.min_protocol_version,
+        }
+    }
+
     pub const fn has_valid_version_range(&self) -> bool {
-        self.min_protocol_version.0 <= self.protocol_version.0
-            && self.min_protocol_version.0 <= crate::CURRENT_PROTOCOL_VERSION
-            && self.protocol_version.0 >= MIN_SUPPORTED_PROTOCOL_VERSION
+        self.protocol_metadata().is_valid()
+    }
+
+    pub const fn negotiate(&self, client: ProtocolMetadata) -> Option<ProtocolVersion> {
+        self.protocol_metadata().negotiate_highest(client)
     }
 }
 

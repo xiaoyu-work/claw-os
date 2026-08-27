@@ -5,6 +5,7 @@
 //! bearer token to a private discovery file under `$XDG_RUNTIME_DIR`.
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
@@ -12,16 +13,46 @@ pub use cos_agent_protocol::{
     BridgeEndpoint, ChatRequest, DonePayload, ErrorEnvelope, HistoryMessage, ModelsResponse,
     SessionSummary, StreamEvent, ToolCallView, ToolResultView,
 };
-use cos_agent_protocol::{CURRENT_PROTOCOL_VERSION, PROTOCOL_VERSION_HEADER};
+use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
+use reqwest::header::HeaderMap;
+use serde::Deserialize;
 
 /// Maximum age of the endpoint file before we assume the bridge is dead.
 /// Today we don't actually check mtime — kept here for the future
 /// "bridge appears down" UI banner.
 #[allow(dead_code)]
 pub const ENDPOINT_FILE_STALE_AFTER: Duration = Duration::from_secs(86_400);
+const SERVICE_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+const BRIDGE_STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
+const BRIDGE_SERVICE: &str = "cos-agent-bridge.service";
+static UPGRADE_RESTART_ATTEMPTED: AtomicBool = AtomicBool::new(false);
 
-/// Read and validate the private endpoint file the bridge published at boot.
-pub fn read_bridge_endpoint() -> Result<BridgeEndpoint> {
+#[derive(Debug)]
+enum DiscoveryState {
+    Ready(BridgeEndpoint),
+    UpgradeRequired,
+}
+
+#[derive(Debug, Deserialize)]
+struct LegacyBridgeEndpoint {
+    port: u16,
+    token: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ServiceAction {
+    Start,
+    Restart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HealthStatus {
+    Healthy,
+    NegotiationFailed,
+    Unavailable,
+}
+
+fn read_bridge_discovery() -> Result<DiscoveryState> {
     let dir = std::env::var("XDG_RUNTIME_DIR")
         .ok()
         .map(PathBuf::from)
@@ -66,19 +97,12 @@ pub fn read_bridge_endpoint() -> Result<BridgeEndpoint> {
             }
         }
     }
-    let endpoint: BridgeEndpoint = serde_json::from_slice(
-        &std::fs::read(&path)
-            .with_context(|| format!("reading bridge endpoint {}", path.display()))?,
-    )
-    .context("decoding bridge endpoint")?;
-    if !endpoint.has_valid_version_range() || !endpoint.protocol_version.is_supported() {
-        anyhow::bail!(
-            "bridge protocol range {}..={} is incompatible with UI version {}",
-            endpoint.min_protocol_version.0,
-            endpoint.protocol_version.0,
-            CURRENT_PROTOCOL_VERSION
-        );
-    }
+    let bytes = std::fs::read(&path)
+        .with_context(|| format!("reading bridge endpoint {}", path.display()))?;
+    let state = decode_bridge_discovery(&bytes).context("decoding bridge endpoint")?;
+    let DiscoveryState::Ready(endpoint) = state else {
+        return Ok(state);
+    };
     if endpoint.port == 0
         || endpoint.token.len() < 32
         || endpoint.token.len() > 256
@@ -89,7 +113,22 @@ pub fn read_bridge_endpoint() -> Result<BridgeEndpoint> {
     {
         anyhow::bail!("bridge endpoint contains invalid credentials");
     }
-    Ok(endpoint)
+    Ok(DiscoveryState::Ready(endpoint))
+}
+
+fn decode_bridge_discovery(bytes: &[u8]) -> Result<DiscoveryState> {
+    if let Ok(endpoint) = serde_json::from_slice::<BridgeEndpoint>(bytes) {
+        return if endpoint.has_valid_version_range()
+            && endpoint.negotiate(ProtocolMetadata::CURRENT).is_some()
+        {
+            Ok(DiscoveryState::Ready(endpoint))
+        } else {
+            Ok(DiscoveryState::UpgradeRequired)
+        };
+    }
+    let legacy: LegacyBridgeEndpoint = serde_json::from_slice(bytes)?;
+    let _ = (legacy.port, legacy.token);
+    Ok(DiscoveryState::UpgradeRequired)
 }
 
 /// Resolve a path relative to the bridge into a full URL.
@@ -98,25 +137,31 @@ pub fn bridge_url(endpoint: &BridgeEndpoint, path: &str) -> String {
 }
 
 pub async fn ensure_bridge_endpoint() -> Result<BridgeEndpoint> {
-    if let Ok(endpoint) = read_bridge_endpoint()
-        && bridge_is_healthy(&endpoint).await
-    {
-        return Ok(endpoint);
+    let action = match read_bridge_discovery() {
+        Ok(DiscoveryState::Ready(endpoint)) => {
+            let health = bridge_health(&endpoint).await;
+            if service_action(&DiscoveryState::Ready(endpoint.clone()), health).is_none() {
+                return Ok(endpoint);
+            }
+            service_action(&DiscoveryState::Ready(endpoint), health).unwrap_or(ServiceAction::Start)
+        }
+        Ok(state @ DiscoveryState::UpgradeRequired) => {
+            service_action(&state, HealthStatus::NegotiationFailed)
+                .unwrap_or(ServiceAction::Restart)
+        }
+        Err(_) => ServiceAction::Start,
+    };
+    if action == ServiceAction::Restart && !claim_upgrade_restart(&UPGRADE_RESTART_ATTEMPTED) {
+        anyhow::bail!("bridge protocol upgrade restart was already attempted");
     }
+    control_bridge_service(action).await;
 
-    let mut systemctl = tokio::process::Command::new("systemctl");
-    systemctl
-        .args(["--user", "start", "cos-agent-bridge.service"])
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let _ = tokio::time::timeout(Duration::from_secs(5), systemctl.status()).await;
-
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    // Service control runs once. Polling never invokes another restart, which
+    // keeps stale discovery from causing an upgrade loop.
+    let deadline = tokio::time::Instant::now() + BRIDGE_STARTUP_TIMEOUT;
     loop {
-        if let Ok(endpoint) = read_bridge_endpoint()
-            && bridge_is_healthy(&endpoint).await
+        if let Ok(DiscoveryState::Ready(endpoint)) = read_bridge_discovery()
+            && bridge_health(&endpoint).await == HealthStatus::Healthy
         {
             return Ok(endpoint);
         }
@@ -127,38 +172,92 @@ pub async fn ensure_bridge_endpoint() -> Result<BridgeEndpoint> {
     }
 }
 
-async fn bridge_is_healthy(endpoint: &BridgeEndpoint) -> bool {
+fn service_action(discovery: &DiscoveryState, health: HealthStatus) -> Option<ServiceAction> {
+    match discovery {
+        DiscoveryState::Ready(_) if health == HealthStatus::Healthy => None,
+        DiscoveryState::Ready(_) if health == HealthStatus::Unavailable => {
+            Some(ServiceAction::Start)
+        }
+        DiscoveryState::Ready(_) | DiscoveryState::UpgradeRequired => Some(ServiceAction::Restart),
+    }
+}
+
+fn claim_upgrade_restart(attempted: &AtomicBool) -> bool {
+    attempted
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+}
+
+async fn control_bridge_service(action: ServiceAction) {
+    let succeeded = run_systemctl(action).await;
+    if action == ServiceAction::Restart && !succeeded {
+        // A failed restart may mean the unit is installed but inactive, or
+        // systemd did not know it yet. Preserve the previous start fallback;
+        // a manually launched bridge remains untouched if no unit exists.
+        let _ = run_systemctl(ServiceAction::Start).await;
+    }
+}
+
+async fn run_systemctl(action: ServiceAction) -> bool {
+    let verb = match action {
+        ServiceAction::Start => "start",
+        ServiceAction::Restart => "restart",
+    };
+    let mut systemctl = tokio::process::Command::new("systemctl");
+    systemctl
+        .args(["--user", verb, BRIDGE_SERVICE])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    tokio::time::timeout(SERVICE_CONTROL_TIMEOUT, systemctl.status())
+        .await
+        .is_ok_and(|status| status.is_ok_and(|status| status.success()))
+}
+
+async fn bridge_health(endpoint: &BridgeEndpoint) -> HealthStatus {
+    let Ok(selected) = selected_protocol_version(endpoint) else {
+        return HealthStatus::NegotiationFailed;
+    };
     let Ok(client) = reqwest::Client::builder()
         .timeout(Duration::from_secs(2))
         .build()
     else {
-        return false;
+        return HealthStatus::Unavailable;
     };
-    let response = client
+    let Ok(response) = client
         .get(bridge_url(endpoint, "/api/health"))
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
-        .await;
-    response.is_ok_and(|response| {
-        response.status().is_success() && validate_response_protocol(&response).is_ok()
-    })
+        .await
+    else {
+        return HealthStatus::Unavailable;
+    };
+    if health_response_is_compatible(&response, selected) {
+        HealthStatus::Healthy
+    } else if validate_response_protocol_headers(response.headers(), selected).is_err() {
+        HealthStatus::NegotiationFailed
+    } else {
+        HealthStatus::Unavailable
+    }
 }
 
 /// `GET /api/sessions` — list persisted conversations newest-first.
 pub async fn fetch_sessions(endpoint: BridgeEndpoint) -> Result<Vec<SessionSummary>> {
     let url = bridge_url(&endpoint, "/api/sessions");
+    let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .context("building sessions client")?
         .get(&url)
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
@@ -176,17 +275,18 @@ pub async fn fetch_history(
 ) -> Result<Vec<HistoryMessage>> {
     let path = format!("/api/sessions/{session_id}/history");
     let url = bridge_url(&endpoint, &path);
+    let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .context("building history client")?
         .get(&url)
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
@@ -199,17 +299,18 @@ pub async fn fetch_history(
 
 pub async fn session_exists(endpoint: BridgeEndpoint, session_id: &str) -> Result<bool> {
     let url = bridge_url(&endpoint, &format!("/api/sessions/{session_id}"));
+    let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .build()
         .context("building session lookup client")?
         .get(&url)
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(false);
     }
@@ -221,17 +322,18 @@ pub async fn session_exists(endpoint: BridgeEndpoint, session_id: &str) -> Resul
 
 pub async fn fetch_models(endpoint: BridgeEndpoint) -> Result<ModelsResponse> {
     let url = bridge_url(&endpoint, "/api/models");
+    let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(15))
         .build()
         .context("building models client")?
         .get(&url)
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
         .await
         .with_context(|| format!("GET {url}"))?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
@@ -243,17 +345,18 @@ pub async fn fetch_models(endpoint: BridgeEndpoint) -> Result<ModelsResponse> {
 
 pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> {
     let url = bridge_url(&endpoint, &format!("/api/chat/{task_id}/cancel"));
+    let selected = selected_protocol_version(&endpoint)?;
     let response = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
         .context("building cancellation client")?
         .post(&url)
-        .header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+        .header(PROTOCOL_VERSION_HEADER, selected.0)
         .bearer_auth(&endpoint.token)
         .send()
         .await
         .with_context(|| format!("POST {url}"))?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }
@@ -263,23 +366,56 @@ pub async fn cancel_task(endpoint: BridgeEndpoint, task_id: &str) -> Result<()> 
 pub fn versioned_request(
     request: reqwest::RequestBuilder,
     endpoint: &BridgeEndpoint,
-) -> reqwest::RequestBuilder {
-    request.header(PROTOCOL_VERSION_HEADER, endpoint.protocol_version.0)
+) -> Result<(reqwest::RequestBuilder, ProtocolVersion)> {
+    let selected = selected_protocol_version(endpoint)?;
+    Ok((
+        request.header(PROTOCOL_VERSION_HEADER, selected.0),
+        selected,
+    ))
 }
 
-pub fn validate_response_protocol(response: &reqwest::Response) -> Result<()> {
-    let version = response
-        .headers()
+pub fn selected_protocol_version(endpoint: &BridgeEndpoint) -> Result<ProtocolVersion> {
+    endpoint
+        .negotiate(ProtocolMetadata::CURRENT)
+        .with_context(|| {
+            format!(
+                "bridge protocol range {}..={} has no overlap with UI range {}..={}",
+                endpoint.min_protocol_version.0,
+                endpoint.protocol_version.0,
+                ProtocolMetadata::CURRENT.min_protocol_version.0,
+                ProtocolMetadata::CURRENT.protocol_version.0,
+            )
+        })
+}
+
+pub fn validate_response_protocol(
+    response: &reqwest::Response,
+    selected: ProtocolVersion,
+) -> Result<()> {
+    validate_response_protocol_headers(response.headers(), selected)
+}
+
+fn validate_response_protocol_headers(
+    headers: &HeaderMap,
+    selected: ProtocolVersion,
+) -> Result<()> {
+    let version = headers
         .get(PROTOCOL_VERSION_HEADER)
         .and_then(|value| value.to_str().ok())
         .and_then(|value| value.parse::<u16>().ok())
         .context("bridge response omitted a valid protocol version")?;
-    if version != CURRENT_PROTOCOL_VERSION {
+    if version != selected.0 {
         anyhow::bail!(
-            "bridge response protocol version {version} is incompatible with UI version {CURRENT_PROTOCOL_VERSION}"
+            "bridge echoed protocol version {version}, expected negotiated version {}",
+            selected.0
         );
     }
     Ok(())
+}
+
+fn health_response_is_compatible(response: &reqwest::Response, selected: ProtocolVersion) -> bool {
+    response.status().is_success()
+        && validate_response_protocol_headers(response.headers(), selected).is_ok()
 }
 
 pub async fn response_error(response: reqwest::Response, url: &str) -> anyhow::Error {
@@ -293,8 +429,14 @@ pub async fn response_error(response: reqwest::Response, url: &str) -> anyhow::E
                 .unwrap_or(envelope.error);
             anyhow!("bridge {url} responded {status}: {detail}")
         }
+
         Err(error) => {
             anyhow!("bridge {url} responded {status} with an invalid error envelope: {error}")
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/bridge.rs"));
 }

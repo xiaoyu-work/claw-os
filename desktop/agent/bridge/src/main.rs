@@ -23,8 +23,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cos_agent_protocol::{
-    CURRENT_PROTOCOL_VERSION, CURRENT_PROTOCOL_VERSION_HEADER_VALUE, ErrorCode, ErrorEnvelope,
-    PROTOCOL_VERSION_HEADER, ProtocolVersion,
+    ErrorCode, ErrorEnvelope, PROTOCOL_MIN_VERSION_HEADER, PROTOCOL_VERSION_HEADER,
+    ProtocolMetadata, ProtocolVersion,
 };
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -96,29 +96,40 @@ async fn require_protocol_version(request: Request, next: Next) -> Response {
         .map(ProtocolVersion);
     let Some(version) = supplied else {
         return protocol_error(
+            ProtocolMetadata::CURRENT,
             ErrorCode::ProtocolVersionRequired,
             "desktop Agent protocol version header is required",
         );
     };
-    if !version.is_supported() {
+    if !validate_selected_version(version, ProtocolMetadata::CURRENT) {
         return protocol_error(
+            ProtocolMetadata::CURRENT,
             ErrorCode::IncompatibleProtocolVersion,
             format!(
-                "desktop Agent protocol version {} is incompatible; supported version is {}",
-                version.0, CURRENT_PROTOCOL_VERSION
+                "desktop Agent protocol version {} is incompatible; supported range is {}..={}",
+                version.0,
+                ProtocolMetadata::CURRENT.min_protocol_version.0,
+                ProtocolMetadata::CURRENT.protocol_version.0,
             ),
         );
     }
 
     let mut response = next.run(request).await;
-    response.headers_mut().insert(
-        PROTOCOL_VERSION_HEADER,
-        HeaderValue::from_static(CURRENT_PROTOCOL_VERSION_HEADER_VALUE),
-    );
+    response
+        .headers_mut()
+        .insert(PROTOCOL_VERSION_HEADER, HeaderValue::from(version.0));
     response
 }
 
-fn protocol_error(code: ErrorCode, message: impl Into<String>) -> Response {
+fn validate_selected_version(version: ProtocolVersion, supported: ProtocolMetadata) -> bool {
+    supported.contains(version)
+}
+
+fn protocol_error(
+    supported: ProtocolMetadata,
+    code: ErrorCode,
+    message: impl Into<String>,
+) -> Response {
     let mut response = (
         StatusCode::UPGRADE_REQUIRED,
         Json(ErrorEnvelope::new(code, message)),
@@ -126,7 +137,11 @@ fn protocol_error(code: ErrorCode, message: impl Into<String>) -> Response {
         .into_response();
     response.headers_mut().insert(
         PROTOCOL_VERSION_HEADER,
-        HeaderValue::from_static(CURRENT_PROTOCOL_VERSION_HEADER_VALUE),
+        HeaderValue::from(supported.protocol_version.0),
+    );
+    response.headers_mut().insert(
+        PROTOCOL_MIN_VERSION_HEADER,
+        HeaderValue::from(supported.min_protocol_version.0),
     );
     response
 }

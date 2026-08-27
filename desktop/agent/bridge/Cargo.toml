@@ -23,3 +23,6 @@ async-stream = "0.3"
 bytes = "1"
 clawd-client = { path = "../../../crates/clawd-client" }
 cos-agent-protocol = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

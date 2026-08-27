@@ -35,7 +35,8 @@ pub async fn open_chat_stream(
         .connect_timeout(std::time::Duration::from_secs(5))
         .build()
         .context("building reqwest client")?;
-    let response = versioned_request(client.post(&url), &endpoint)
+    let (request_builder, selected) = versioned_request(client.post(&url), &endpoint)?;
+    let response = request_builder
         .bearer_auth(&endpoint.token)
         .header("Accept", "text/event-stream")
         .header("Content-Type", "application/json")
@@ -44,7 +45,7 @@ pub async fn open_chat_stream(
         .await
         .with_context(|| format!("POST {url}"))?;
 
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }

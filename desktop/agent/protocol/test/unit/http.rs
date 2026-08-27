@@ -113,9 +113,13 @@ fn discovery_metadata_has_a_golden_shape_and_valid_range() {
         port: 43123,
         token: "token".into(),
         protocol_version: ProtocolVersion::CURRENT,
-        min_protocol_version: ProtocolVersion(MIN_SUPPORTED_PROTOCOL_VERSION),
+        min_protocol_version: ProtocolVersion(crate::MIN_SUPPORTED_PROTOCOL_VERSION),
     };
     assert!(endpoint.has_valid_version_range());
+    assert_eq!(
+        endpoint.negotiate(ProtocolMetadata::CURRENT),
+        Some(ProtocolVersion(1))
+    );
     assert_eq!(
         serde_json::to_string(&endpoint).unwrap(),
         r#"{"port":43123,"token":"token","protocol_version":1,"min_protocol_version":1}"#

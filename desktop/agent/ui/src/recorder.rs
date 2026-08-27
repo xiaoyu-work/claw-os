@@ -390,14 +390,15 @@ pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceRespo
         .timeout(Duration::from_secs(135))
         .build()
         .context("build voice upload client")?;
-    let response = versioned_request(client.post(&url), &endpoint)
+    let (request_builder, selected) = versioned_request(client.post(&url), &endpoint)?;
+    let response = request_builder
         .bearer_auth(&endpoint.token)
         .header("Content-Type", "audio/wav")
         .body(wav)
         .send()
         .await
         .context("POST /api/voice/upload")?;
-    validate_response_protocol(&response)?;
+    validate_response_protocol(&response, selected)?;
     if !response.status().is_success() {
         return Err(response_error(response, &url).await);
     }

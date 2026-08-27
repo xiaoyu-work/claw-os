@@ -19,3 +19,27 @@ fn metadata_round_trips() {
         ProtocolMetadata::CURRENT
     );
 }
+
+#[test]
+fn negotiation_selects_highest_overlap() {
+    let v1_client = ProtocolMetadata::CURRENT;
+    let future_bridge = ProtocolMetadata {
+        min_protocol_version: ProtocolVersion(1),
+        protocol_version: ProtocolVersion(2),
+    };
+    assert_eq!(
+        v1_client.negotiate_highest(future_bridge),
+        Some(ProtocolVersion(1))
+    );
+
+    let v2_only_bridge = ProtocolMetadata {
+        min_protocol_version: ProtocolVersion(2),
+        protocol_version: ProtocolVersion(3),
+    };
+    assert_eq!(v1_client.negotiate_highest(v2_only_bridge), None);
+    assert!(!ProtocolMetadata {
+        min_protocol_version: ProtocolVersion(3),
+        protocol_version: ProtocolVersion(2),
+    }
+    .is_valid());
+}

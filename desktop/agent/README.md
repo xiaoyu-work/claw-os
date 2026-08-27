@@ -109,14 +109,27 @@ header. Discovery also publishes `min_protocol_version` and
 `protocol_version`. Missing, malformed, or unsupported versions fail with HTTP
 426 and a typed
 `incompatible_protocol_version` or `protocol_version_required` error; the UI
-also rejects discovery and responses outside its compiled compatibility range.
+selects the highest version in the intersection of its compiled range and the
+bridge discovery range. The bridge validates that selected version and echoes
+it on every response; the UI rejects a missing or different echo.
 
-The current policy supports exactly v1 (`min=1`, `current=1`). Additive fields
-within v1 must have Serde defaults so older v1 payloads remain readable.
-Renames retain a deserialization alias. Removing a field, changing its meaning
-or type, or changing an SSE event name is incompatible and requires advancing
-both minimum and current versions. UI and bridge are shipped together; there
-is no silent cross-major fallback.
+The current binaries support exactly v1 (`min=1`, `current=1`), while the
+intersection policy permits a future `min=1,current=2` bridge to serve a v1 UI.
+No-overlap requests fail with HTTP 426 and headers advertising the bridge
+range. Additive fields within v1 must have Serde defaults so older v1 payloads
+remain readable. Renames retain a deserialization alias. Removing a field,
+changing its meaning or type, or changing an SSE event name is incompatible
+and advances the current version; the minimum advances only when older
+versions are no longer served.
+
+On upgrade, the UI recognizes legacy port/token-only discovery and health
+responses without a negotiated-version echo. It performs one bounded
+`systemctl --user restart` cycle (falling back to the existing start behavior
+when restart is unavailable), then polls without restarting again. That
+upgrade restart is claimed at most once for the UI process lifetime, so its
+periodic reconnect cannot form a restart loop. A healthy manually launched
+compatible bridge is left untouched; ordinary transport unavailability keeps
+the prior non-disruptive `start` behavior.
 
 ## Protocol coverage
 
