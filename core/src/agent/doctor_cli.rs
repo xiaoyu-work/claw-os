@@ -218,6 +218,10 @@ fn check_provider(probe_network: bool, probe_timeout_secs: u64) -> Value {
         .get("active_configured")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let configuration_error = raw
+        .get("active_configuration_error")
+        .cloned()
+        .unwrap_or(Value::Null);
     // Only surface `network_probe` when the caller actually asked
     // for one; otherwise `provider_doctor_cmd` returns a "static
     // only" stub that's just noise here (the `flags` block already
@@ -263,6 +267,7 @@ fn check_provider(probe_network: bool, probe_timeout_secs: u64) -> Value {
         "model": cfg.model,
         "max_turns": cfg.max_turns,
         "configured": active_configured,
+        "configuration_error": configuration_error,
         "matrix": matrix,
     });
     if let Some(p) = network_probe {

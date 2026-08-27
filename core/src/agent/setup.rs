@@ -538,8 +538,17 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
 fn provider_configured_for_readiness(cfg: &crate::config::AgentConfig) -> Result<bool, String> {
     match llm::registry::build(&cfg.provider, &cfg.model, cfg) {
         Ok(provider) => Ok(provider.is_configured()),
-        Err(error) => match &error {
-            llm::LlmError::CredentialStore { credential, .. } => Err(json!({
+        Err(error) => Err(provider_configuration_error(cfg, &error).to_string()),
+    }
+}
+
+pub(super) fn provider_configuration_error(
+    cfg: &crate::config::AgentConfig,
+    error: &llm::LlmError,
+) -> Value {
+    let details = crate::agent::safety::redact::Redactor::default_set().redact(&error.to_string());
+    match error {
+        llm::LlmError::CredentialStore { credential, .. } => json!({
                 "error": "agent credential store error",
                 "kind": "credential_store",
                 "provider": cfg.provider,
@@ -548,11 +557,37 @@ fn provider_configured_for_readiness(cfg: &crate::config::AgentConfig) -> Result
                 "fix": format!(
                     "cos credential revoke {credential} --namespace agent"
                 ),
-                "details": error.to_string(),
+                "details": details,
+        }),
+        llm::LlmError::NotConfigured(message)
+            if llm::credential_pool::Pool::is_declared(cfg)
+                && message.starts_with("credential pool '") =>
+        {
+            json!({
+                "error": "agent credential pool is unusable",
+                "kind": "credential_pool",
+                "provider": cfg.provider,
+                "credential_names": cfg.api_key_credentials,
+                "environment_variables": cfg.api_key_envs,
+                "namespace": "agent",
+                "fix": "cos agent setup text",
+                "details": details,
             })
-            .to_string()),
-            _ => Ok(false),
-        },
+        }
+        llm::LlmError::NotConfigured(_) => json!({
+            "error": "agent provider is not configured",
+            "kind": "not_configured",
+            "provider": cfg.provider,
+            "fix": "cos agent setup text",
+            "details": details,
+        }),
+        _ => json!({
+            "error": "agent provider configuration error",
+            "kind": "provider_configuration",
+            "provider": cfg.provider,
+            "fix": "cos agent setup text",
+            "details": details,
+        }),
     }
 }
 
@@ -565,22 +600,22 @@ pub fn provider_needs_credential(name: &str) -> bool {
 /// resolved. Used by both the readiness gate and `cos agent status`
 /// so they agree on what "key present" means.
 pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Option<KeySource>> {
+    if let Some(pool) = llm::credential_pool::Pool::try_from_agent_config(
+        format!("provider:{}", cfg.provider),
+        cfg,
+    )? {
+        return Ok(pool
+            .stats()
+            .into_iter()
+            .next()
+            .map(|stats| KeySource::from_pool_source(stats.source)));
+    }
     if let Some(name) = cfg.api_key_credential.as_deref() {
         if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
             return Ok(Some(KeySource::credential(name)));
         }
     }
     if let Some(env_name) = cfg.api_key_env.as_deref() {
-        if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
-            return Ok(Some(KeySource::env(env_name)));
-        }
-    }
-    for name in &cfg.api_key_credentials {
-        if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
-            return Ok(Some(KeySource::credential(name)));
-        }
-    }
-    for env_name in &cfg.api_key_envs {
         if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
             return Ok(Some(KeySource::env(env_name)));
         }
@@ -604,6 +639,16 @@ impl KeySource {
         Self {
             kind: "env",
             name: name.to_string(),
+        }
+    }
+    fn from_pool_source(source: llm::credential_pool::KeySource) -> Self {
+        match source {
+            llm::credential_pool::KeySource::Credential(name) => Self::credential(&name),
+            llm::credential_pool::KeySource::Env(name) => Self::env(&name),
+            llm::credential_pool::KeySource::Inline => Self {
+                kind: "inline",
+                name: "inline".into(),
+            },
         }
     }
     pub fn to_json(&self) -> Value {
@@ -640,7 +685,10 @@ fn status_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn status_llm() -> Value {
-    let cfg = &crate::config::get().agent;
+    status_llm_for(&crate::config::get().agent)
+}
+
+fn status_llm_for(cfg: &crate::config::AgentConfig) -> Value {
     let ready = is_ready(cfg);
     let reason = match ready.as_ref() {
         Ok(_) => Value::Null,
@@ -655,6 +703,10 @@ fn status_llm() -> Value {
         "provider_fallbacks": fallback_status(cfg),
         "api_key_credential": cfg.api_key_credential,
         "api_key_env": cfg.api_key_env,
+        "api_key_credentials": cfg.api_key_credentials,
+        "api_key_envs": cfg.api_key_envs,
+        "pool_strategy": cfg.pool_strategy,
+        "pool_cooldown_secs": cfg.pool_cooldown_secs,
         "base_url": cfg.base_url,
         "endpoint": base_url,
         "api_version": api_version,

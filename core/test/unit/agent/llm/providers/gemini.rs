@@ -621,9 +621,14 @@ fn registry_alias_check() {
 
 #[test]
 fn gemini_no_pool_when_neither_plural_field_set() {
-    let c = AgentConfig::default();
+    const LEGACY: &str = "COS_TEST_GEM_LEGACY_ONLY";
+    std::env::set_var(LEGACY, "legacy-key");
+    let mut c = AgentConfig::default();
+    c.api_key_env = Some(LEGACY.into());
     let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
+    std::env::remove_var(LEGACY);
     assert!(gc.pool.is_none());
+    assert_eq!(gc.api_key.as_deref(), Some("legacy-key"));
 }
 
 #[test]
@@ -632,11 +637,51 @@ fn gemini_pool_built_from_envs() {
     std::env::set_var("COS_TEST_GEM_POOL_B", "gem-bbb");
     let mut c = AgentConfig::default();
     c.api_key_envs = vec!["COS_TEST_GEM_POOL_A".into(), "COS_TEST_GEM_POOL_B".into()];
+    c.api_key_credential = Some("../ignored-legacy-credential".into());
     let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
     std::env::remove_var("COS_TEST_GEM_POOL_A");
     std::env::remove_var("COS_TEST_GEM_POOL_B");
     let pool = gc.pool.expect("pool should be built");
     assert_eq!(pool.len(), 2);
+    assert!(gc.api_key.is_none());
+}
+
+#[test]
+fn gemini_pool_unresolved_fails_closed_instead_of_using_single_key() {
+    const LEGACY: &str = "COS_TEST_GEM_LEGACY_MUST_NOT_BE_USED";
+    const MISSING: &str = "COS_TEST_GEM_POOL_MISSING";
+    std::env::set_var(LEGACY, "legacy-secret-must-not-leak");
+    std::env::remove_var(MISSING);
+    let mut c = AgentConfig::default();
+    c.api_key_env = Some(LEGACY.into());
+    c.api_key_envs = vec![MISSING.into()];
+
+    let error = GeminiConfig::try_from_agent_config("gemini-1.5-flash", &c).unwrap_err();
+    std::env::remove_var(LEGACY);
+    match error {
+        LlmError::NotConfigured(message) => {
+            assert!(message.contains(MISSING), "got: {message}");
+            assert!(!message.contains("legacy-secret-must-not-leak"));
+        }
+        other => panic!("expected NotConfigured, got {other:?}"),
+    }
+}
+
+#[test]
+fn gemini_pool_partial_uses_resolved_entry_and_ignores_single_key() {
+    const PRESENT: &str = "COS_TEST_GEM_POOL_PARTIAL_PRESENT";
+    const MISSING: &str = "COS_TEST_GEM_POOL_PARTIAL_MISSING";
+    std::env::set_var(PRESENT, "pool-key");
+    std::env::remove_var(MISSING);
+    let mut c = AgentConfig::default();
+    c.api_key_credential = Some("../ignored-legacy-credential".into());
+    c.api_key_envs = vec![MISSING.into(), PRESENT.into()];
+
+    let gc = GeminiConfig::try_from_agent_config("gemini-1.5-flash", &c)
+        .expect("partial pool should resolve");
+    std::env::remove_var(PRESENT);
+    assert!(gc.api_key.is_none());
+    assert_eq!(gc.pool.expect("pool").len(), 1);
 }
 
 #[test]

@@ -89,6 +89,7 @@ fn check_provider_reports_matrix_and_active() {
     assert!(v.get("registered").is_some());
     assert!(v.get("available").is_some());
     assert!(v.get("configured").is_some());
+    assert!(v.get("configuration_error").is_some());
     let matrix = v.get("matrix").and_then(|m| m.as_array()).expect("matrix array");
     // Every registered provider should show up in the matrix
     // (no --names filter applied), and each entry must carry
@@ -100,6 +101,7 @@ fn check_provider_reports_matrix_and_active() {
         assert!(entry.get("env_present").is_some());
         assert!(entry.get("credential_present").is_some());
         assert!(entry.get("configured").is_some());
+        assert!(entry.get("configuration_error").is_some());
     }
     // No network probe was requested → no network_probe block.
     assert!(v.get("network_probe").is_none());

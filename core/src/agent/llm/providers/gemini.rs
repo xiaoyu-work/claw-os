@@ -103,31 +103,24 @@ impl GeminiConfig {
 
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = resolve_api_key(
-            agent.api_key_credential.as_deref(),
-            agent.api_key_env.as_deref(),
-        )?;
-
         let request_timeout = if agent.request_timeout == 0 {
             Duration::from_secs(0)
         } else {
             Duration::from_secs(agent.request_timeout)
         };
 
-        let pool = match crate::agent::llm::credential_pool::Pool::try_from_agent_config(
+        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
             "provider:gemini",
             agent,
-        ) {
-            Ok(Some(p)) => Some(Arc::new(p)),
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(
-                    target: "cos::agent::llm::pool",
-                    "credential pool for provider 'gemini' declared but unresolved: {e}; \
-                     falling back to single-key path"
-                );
-                None
-            }
+        )?
+        .map(Arc::new);
+        let api_key = if pool.is_some() {
+            None
+        } else {
+            resolve_api_key(
+                agent.api_key_credential.as_deref(),
+                agent.api_key_env.as_deref(),
+            )?
         };
 
         Ok(Self {

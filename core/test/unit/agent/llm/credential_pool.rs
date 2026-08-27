@@ -85,6 +85,66 @@ fn from_sources_skips_missing_env() {
     assert!(matches!(err, PoolError::Empty { .. }));
 }
 
+#[test]
+fn config_pool_absent_preserves_single_key_path() {
+    let cfg = crate::config::AgentConfig::default();
+    assert!(!Pool::is_declared(&cfg));
+    assert!(Pool::try_from_agent_config("absent", &cfg)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn config_pool_unresolved_fails_with_source_names() {
+    const ENV_NAME: &str = "COS_TEST_POOL_CONFIG_MISSING";
+    std::env::remove_var(ENV_NAME);
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_envs = vec![ENV_NAME.into()];
+
+    let error = Pool::try_from_agent_config("unresolved", &cfg).unwrap_err();
+    match error {
+        crate::agent::llm::LlmError::NotConfigured(message) => {
+            assert!(message.contains(ENV_NAME), "got: {message}");
+            assert!(message.contains("cos credential store"), "got: {message}");
+        }
+        other => panic!("expected NotConfigured, got {other:?}"),
+    }
+}
+
+#[test]
+fn config_pool_partial_keeps_usable_entries() {
+    const PRESENT: &str = "COS_TEST_POOL_CONFIG_PARTIAL_PRESENT";
+    const MISSING: &str = "COS_TEST_POOL_CONFIG_PARTIAL_MISSING";
+    std::env::set_var(PRESENT, " pool-key ");
+    std::env::remove_var(MISSING);
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_envs = vec![MISSING.into(), PRESENT.into()];
+
+    let pool = Pool::try_from_agent_config("partial", &cfg)
+        .unwrap()
+        .expect("declared pool");
+    std::env::remove_var(PRESENT);
+    assert_eq!(pool.len(), 1);
+    assert_eq!(pool.acquire().unwrap().value(), "pool-key");
+}
+
+#[test]
+fn config_pool_valid_keeps_all_entries() {
+    const FIRST: &str = "COS_TEST_POOL_CONFIG_VALID_FIRST";
+    const SECOND: &str = "COS_TEST_POOL_CONFIG_VALID_SECOND";
+    std::env::set_var(FIRST, "key-one");
+    std::env::set_var(SECOND, "key-two");
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_envs = vec![FIRST.into(), SECOND.into()];
+
+    let pool = Pool::try_from_agent_config("valid", &cfg)
+        .unwrap()
+        .expect("declared pool");
+    std::env::remove_var(FIRST);
+    std::env::remove_var(SECOND);
+    assert_eq!(pool.len(), 2);
+}
+
 // ---- selection: sticky -------------------------------------------------
 
 #[test]

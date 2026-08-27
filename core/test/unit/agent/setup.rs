@@ -309,6 +309,147 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
 }
 
 #[test]
+fn pool_readiness_covers_empty_partial_valid_and_absent_states() {
+    let _g = env_lock();
+    let _store = CredentialTestEnv::new("pool-readiness");
+    const LEGACY_ENV: &str = "__COS_TEST_POOL_READINESS_LEGACY__";
+    const POOL_PRESENT: &str = "__COS_TEST_POOL_READINESS_PRESENT__";
+    const POOL_SECOND: &str = "__COS_TEST_POOL_READINESS_SECOND__";
+    const LEGACY_VALUE: &str = "legacy-secret-must-not-leak";
+    let _legacy = EnvVarGuard::set(LEGACY_ENV, LEGACY_VALUE);
+    let _present = EnvVarGuard::set(POOL_PRESENT, " pool-key-one ");
+    let _second = EnvVarGuard::remove(POOL_SECOND);
+    let missing_credential = format!("missing-pool-{}", uuid::Uuid::new_v4().simple());
+    let providers = [
+        ("openai", "gpt-test"),
+        ("anthropic", "claude-test"),
+        ("gemini", "gemini-test"),
+    ];
+
+    for (provider, model) in providers {
+        let mut cfg = mock_cfg();
+        cfg.provider = provider.into();
+        cfg.model = model.into();
+        cfg.api_key_env = Some(LEGACY_ENV.into());
+        cfg.api_key_credentials = vec![missing_credential.clone()];
+        cfg.api_key_envs = vec![POOL_SECOND.into()];
+
+        let build_error = match llm::registry::build(provider, model, &cfg) {
+            Ok(_) => panic!("{provider} accepted an unresolved pool"),
+            Err(error) => error,
+        };
+        let build_text = build_error.to_string();
+        assert!(matches!(build_error, llm::LlmError::NotConfigured(_)));
+        assert!(build_text.contains(&missing_credential));
+        assert!(build_text.contains(POOL_SECOND));
+        assert!(!build_text.contains(LEGACY_VALUE));
+
+        let readiness = is_ready(&cfg).expect_err("unresolved pool must block readiness");
+        let payload: serde_json::Value =
+            serde_json::from_str(&readiness).expect("structured readiness error");
+        assert_eq!(payload["kind"], "credential_pool");
+        assert_eq!(payload["provider"], provider);
+        assert_eq!(payload["credential_names"], json!([missing_credential]));
+        assert_eq!(payload["environment_variables"], json!([POOL_SECOND]));
+        assert!(payload["details"]
+            .as_str()
+            .is_some_and(|details| details.contains(POOL_SECOND)));
+        assert!(!readiness.contains(LEGACY_VALUE));
+
+        let status = status_llm_for(&cfg);
+        assert_eq!(status["ready"], false);
+        assert_eq!(status["reason"]["kind"], "credential_pool");
+        assert_eq!(status["api_key_credentials"], json!([missing_credential]));
+        assert_eq!(status["api_key_envs"], json!([POOL_SECOND]));
+
+        cfg.api_key_envs = vec![POOL_SECOND.into(), POOL_PRESENT.into()];
+        assert!(is_ready(&cfg).is_ok(), "{provider} rejected partial pool");
+        let source = resolved_key_source(&cfg)
+            .expect("resolve partial pool source")
+            .expect("partial pool source");
+        assert_eq!(source.kind, "env");
+        assert_eq!(source.name, POOL_PRESENT);
+    }
+
+    std::env::set_var(POOL_SECOND, "pool-key-two");
+    for (provider, model) in providers {
+        let mut cfg = mock_cfg();
+        cfg.provider = provider.into();
+        cfg.model = model.into();
+        cfg.api_key_env = Some(LEGACY_ENV.into());
+        cfg.api_key_envs = vec![POOL_PRESENT.into(), POOL_SECOND.into()];
+        assert!(is_ready(&cfg).is_ok(), "{provider} rejected valid pool");
+        let source = resolved_key_source(&cfg)
+            .expect("resolve valid pool source")
+            .expect("valid pool source");
+        assert_eq!(source.kind, "env");
+        assert_eq!(source.name, POOL_PRESENT);
+
+        cfg.api_key_envs.clear();
+        assert!(is_ready(&cfg).is_ok(), "{provider} rejected legacy key");
+        let source = resolved_key_source(&cfg)
+            .expect("resolve absent-pool source")
+            .expect("legacy source");
+        assert_eq!(source.kind, "env");
+        assert_eq!(source.name, LEGACY_ENV);
+    }
+    std::env::remove_var(POOL_SECOND);
+}
+
+#[test]
+fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
+    let _g = env_lock();
+    let store = CredentialTestEnv::new("corrupt-pool-key");
+    let credential_name = format!("corrupt-pool-{}", uuid::Uuid::new_v4().simple());
+    let agent_dir = store.credentials_dir().join("agent");
+    std::fs::create_dir_all(&agent_dir).expect("create agent credential directory");
+    std::fs::write(
+        agent_dir.join(format!("{credential_name}.json")),
+        "{ definitely not valid credential json",
+    )
+    .expect("write corrupt credential");
+
+    const LEGACY_ENV: &str = "__COS_TEST_CORRUPT_POOL_LEGACY__";
+    const LEGACY_VALUE: &str = "legacy-key-must-not-leak";
+    let _legacy = EnvVarGuard::set(LEGACY_ENV, LEGACY_VALUE);
+    let mut cfg = mock_cfg();
+    cfg.api_key_credential = None;
+    cfg.api_key_env = Some(LEGACY_ENV.into());
+    cfg.api_key_credentials = vec![credential_name.clone()];
+
+    for (provider, model) in [
+        ("openai", "gpt-test"),
+        ("anthropic", "claude-test"),
+        ("gemini", "gemini-test"),
+    ] {
+        cfg.provider = provider.into();
+        cfg.model = model.into();
+        let error = match llm::registry::build(provider, model, &cfg) {
+            Ok(_) => panic!("{provider} ignored corrupt pool credential"),
+            Err(error) => error,
+        };
+        match &error {
+            llm::LlmError::CredentialStore {
+                credential,
+                message,
+            } => {
+                assert_eq!(credential, &credential_name);
+                assert!(message.contains("parse"));
+            }
+            other => panic!("expected typed credential-store error, got {other:?}"),
+        }
+        assert!(!error.to_string().contains(LEGACY_VALUE));
+
+        let readiness = is_ready(&cfg).expect_err("corrupt pool must block readiness");
+        let payload: serde_json::Value =
+            serde_json::from_str(&readiness).expect("structured readiness error");
+        assert_eq!(payload["kind"], "credential_store");
+        assert_eq!(payload["credential"], credential_name);
+        assert!(!readiness.contains(LEGACY_VALUE));
+    }
+}
+
+#[test]
 fn is_ready_accepts_usable_local_fallback() {
     let mut cfg = mock_cfg();
     cfg.provider = "anthropic".into();

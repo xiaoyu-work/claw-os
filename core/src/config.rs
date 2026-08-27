@@ -308,7 +308,9 @@ pub struct AgentConfig {
     /// [`crate::agent::llm::credential_pool`]) and supersedes the
     /// single-key fields (`api_key_credential` / `api_key_env`). Order
     /// is preserved — sticky strategy will start from index 0. Empty
-    /// or unresolved entries are silently dropped at construction.
+    /// or unresolved entries are dropped when another pool entry is
+    /// usable; a declared pool with no usable entries is a configuration
+    /// error and never falls back to the single-key fields.
     #[serde(default)]
     pub api_key_credentials: Vec<String>,
 

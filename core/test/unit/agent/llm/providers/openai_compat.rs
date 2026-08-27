@@ -1353,9 +1353,14 @@ async fn end_to_end_includes_extra_headers() {
 
 #[test]
 fn no_pool_when_neither_plural_field_set() {
-    let c = AgentConfig::default();
+    const LEGACY: &str = "COS_TEST_OPENAI_LEGACY_ONLY";
+    std::env::set_var(LEGACY, "legacy-key");
+    let mut c = AgentConfig::default();
+    c.api_key_env = Some(LEGACY.into());
     let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
+    std::env::remove_var(LEGACY);
     assert!(oc.pool.is_none());
+    assert_eq!(oc.api_key.as_deref(), Some("legacy-key"));
 }
 
 #[test]
@@ -1364,23 +1369,51 @@ fn pool_built_from_envs() {
     std::env::set_var("COS_TEST_POOL_KEY_B", "sk-bbb");
     let mut c = AgentConfig::default();
     c.api_key_envs = vec!["COS_TEST_POOL_KEY_A".into(), "COS_TEST_POOL_KEY_B".into()];
+    c.api_key_credential = Some("../ignored-legacy-credential".into());
     let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
     std::env::remove_var("COS_TEST_POOL_KEY_A");
     std::env::remove_var("COS_TEST_POOL_KEY_B");
     let pool = oc.pool.expect("pool should be built");
     assert_eq!(pool.len(), 2);
+    assert!(oc.api_key.is_none());
 }
 
 #[test]
-fn pool_unresolved_falls_back_to_single_key_silently() {
+fn pool_unresolved_fails_closed_instead_of_using_single_key() {
+    const LEGACY: &str = "COS_TEST_OPENAI_LEGACY_MUST_NOT_BE_USED";
+    const MISSING: &str = "COS_TEST_DOES_NOT_EXIST_ENV_AAAA";
+    std::env::set_var(LEGACY, "legacy-secret-must-not-leak");
+    std::env::remove_var(MISSING);
     let mut c = AgentConfig::default();
-    c.api_key_envs = vec!["COS_TEST_DOES_NOT_EXIST_ENV_AAAA".into()];
-    let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
-    // Pool empty → warn-and-fall-through; single-key path stays
-    // available (empty in this case since no api_key_credential
-    // is set either).
-    assert!(oc.pool.is_none());
+    c.api_key_env = Some(LEGACY.into());
+    c.api_key_envs = vec![MISSING.into()];
+    let error =
+        OpenAICompatConfig::try_from_agent_config("openai", "gpt-4o-mini", &c).unwrap_err();
+    std::env::remove_var(LEGACY);
+    match error {
+        LlmError::NotConfigured(message) => {
+            assert!(message.contains(MISSING), "got: {message}");
+            assert!(!message.contains("legacy-secret-must-not-leak"));
+        }
+        other => panic!("expected NotConfigured, got {other:?}"),
+    }
+}
+
+#[test]
+fn pool_partial_uses_resolved_entry_and_ignores_single_key() {
+    const PRESENT: &str = "COS_TEST_OPENAI_POOL_PARTIAL_PRESENT";
+    const MISSING: &str = "COS_TEST_OPENAI_POOL_PARTIAL_MISSING";
+    std::env::set_var(PRESENT, "pool-key");
+    std::env::remove_var(MISSING);
+    let mut c = AgentConfig::default();
+    c.api_key_credential = Some("../ignored-legacy-credential".into());
+    c.api_key_envs = vec![MISSING.into(), PRESENT.into()];
+
+    let oc = OpenAICompatConfig::try_from_agent_config("openai", "gpt-4o-mini", &c)
+        .expect("partial pool should resolve");
+    std::env::remove_var(PRESENT);
     assert!(oc.api_key.is_none());
+    assert_eq!(oc.pool.expect("pool").len(), 1);
 }
 
 #[test]

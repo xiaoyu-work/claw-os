@@ -239,8 +239,8 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                 Err(_) => Value::Null,
             };
 
-            let (ready_ok, ready_reason, fix) = match ready {
-                Ok(()) => (true, Value::Null, Value::Null),
+            let (ready_ok, ready_reason, fix, readiness_error) = match ready {
+                Ok(()) => (true, Value::Null, Value::Null, Value::Null),
                 Err(reason_json) => {
                     let parsed: Value =
                         serde_json::from_str(&reason_json).unwrap_or_else(|_| json!(reason_json));
@@ -253,17 +253,25 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
                         .get("fix")
                         .cloned()
                         .unwrap_or_else(|| json!("cos agent setup text"));
-                    (false, err, fix)
+                    (false, err, fix, parsed)
                 }
             };
 
             Ok(json!({
                 "ready": ready_ok,
                 "ready_reason": ready_reason,
+                "readiness_error": readiness_error,
                 "fix": fix,
                 "provider": cfg.provider,
                 "model": cfg.model,
                 "key_source": key_source,
+                "credential_pool": {
+                    "declared": llm::credential_pool::Pool::is_declared(cfg),
+                    "credential_names": cfg.api_key_credentials,
+                    "environment_variables": cfg.api_key_envs,
+                    "strategy": cfg.pool_strategy,
+                    "cooldown_secs": cfg.pool_cooldown_secs,
+                },
                 "needs_credential": setup::provider_needs_credential(&cfg.provider),
                 "config_path": setup::config_path().display().to_string(),
                 "last_session": last_session,
@@ -3674,10 +3682,8 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
             }
         };
 
-        let configured = match llm::registry::build(name, &active_model, &probe_cfg) {
-            Ok(p) => p.is_configured(),
-            Err(_) => false,
-        };
+        let (configured, configuration_error) =
+            provider_build_status(name, &active_model, &probe_cfg);
 
         let env_present = canonical_env
             .map(|e| std::env::var(e).map(|v| !v.is_empty()).unwrap_or(false))
@@ -3723,17 +3729,41 @@ fn providers_cmd(args: &[String]) -> Result<Value, String> {
             "key_required": canonical_env.is_some(),
             "pool_declared_keys": pool_declared_keys,
             "pool_strategy": pool_strategy,
+            "configuration_error": configuration_error,
         }));
     }
+
+    let active_configured = entries.iter().any(|entry| {
+        entry.get("active") == Some(&Value::Bool(true))
+            && entry.get("configured") == Some(&Value::Bool(true))
+    });
+    let active_configuration_error = entries
+        .iter()
+        .find(|entry| entry.get("active") == Some(&Value::Bool(true)))
+        .and_then(|entry| entry.get("configuration_error"))
+        .cloned()
+        .unwrap_or(Value::Null);
 
     Ok(json!({
         "active": active,
         "active_model": cfg.agent.model.clone(),
-        "active_configured": entries.iter().any(|e| e.get("active") == Some(&Value::Bool(true)) && e.get("configured") == Some(&Value::Bool(true))),
+        "active_configured": active_configured,
+        "active_configuration_error": active_configuration_error,
         "probe_credentials": probe_credentials,
         "providers": entries,
         "count": entries.len(),
     }))
+}
+
+fn provider_build_status(
+    name: &str,
+    model: &str,
+    cfg: &crate::config::AgentConfig,
+) -> (bool, Value) {
+    match llm::registry::build(name, model, cfg) {
+        Ok(provider) => (provider.is_configured(), Value::Null),
+        Err(error) => (false, setup::provider_configuration_error(cfg, &error)),
+    }
 }
 
 /// `cos agent provider-doctor [--names <a,b,c>] [--probe-network]

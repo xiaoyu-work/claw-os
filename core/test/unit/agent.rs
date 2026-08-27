@@ -1354,6 +1354,31 @@ fn providers_cmd_surfaces_bedrock_with_aws_access_key_env() {
     );
 }
 
+#[test]
+fn provider_build_status_surfaces_unresolved_pool_without_secret_values() {
+    const LEGACY_ENV: &str = "__COS_TEST_PROVIDER_STATUS_LEGACY__";
+    const MISSING_POOL_ENV: &str = "__COS_TEST_PROVIDER_STATUS_POOL_MISSING__";
+    const LEGACY_VALUE: &str = "legacy-status-secret-must-not-leak";
+    std::env::set_var(LEGACY_ENV, LEGACY_VALUE);
+    std::env::remove_var(MISSING_POOL_ENV);
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.provider = "openai".into();
+    cfg.model = "gpt-test".into();
+    cfg.api_key_env = Some(LEGACY_ENV.into());
+    cfg.api_key_envs = vec![MISSING_POOL_ENV.into()];
+
+    let (configured, error) = provider_build_status("openai", "gpt-test", &cfg);
+    std::env::remove_var(LEGACY_ENV);
+    assert!(!configured);
+    assert_eq!(error["kind"], "credential_pool");
+    assert_eq!(error["provider"], "openai");
+    assert_eq!(error["environment_variables"], json!([MISSING_POOL_ENV]));
+    assert!(error["details"]
+        .as_str()
+        .is_some_and(|details| details.contains(MISSING_POOL_ENV)));
+    assert!(!error.to_string().contains(LEGACY_VALUE));
+}
+
 // ---- provider-doctor ----
 
 #[test]

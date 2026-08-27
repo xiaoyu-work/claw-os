@@ -216,35 +216,27 @@ impl OpenAICompatConfig {
         // Strip a trailing slash so the request path concat is clean.
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = resolve_api_key(
-            agent.api_key_credential.as_deref(),
-            agent.api_key_env.as_deref(),
-        )?;
-
         let request_timeout = if agent.request_timeout == 0 {
             Duration::from_secs(0)
         } else {
             Duration::from_secs(agent.request_timeout)
         };
 
-        // Pool supersedes single-key when multi-key fields are set.
-        // Pool construction failure (declared but unresolved) is logged
-        // and ignored — fall through to single-key. This keeps a typo
-        // in `api_key_credentials` from bricking the agent at startup.
-        let pool = match crate::agent::llm::credential_pool::Pool::try_from_agent_config(
+        // A declared pool is authoritative. Resolve it before touching the
+        // legacy fields so stale single-key credentials can neither rescue
+        // nor interfere with pool configuration.
+        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
             format!("provider:{alias}"),
             agent,
-        ) {
-            Ok(Some(p)) => Some(Arc::new(p)),
-            Ok(None) => None,
-            Err(e) => {
-                tracing::warn!(
-                    target: "cos::agent::llm::pool",
-                    "credential pool for provider '{alias}' declared but unresolved: {e}; \
-                     falling back to single-key path"
-                );
-                None
-            }
+        )?
+        .map(Arc::new);
+        let api_key = if pool.is_some() {
+            None
+        } else {
+            resolve_api_key(
+                agent.api_key_credential.as_deref(),
+                agent.api_key_env.as_deref(),
+            )?
         };
 
         Ok(Self {

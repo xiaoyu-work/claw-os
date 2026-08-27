@@ -323,25 +323,67 @@ impl Pool {
         Self::from_entries(name, entries, strategy)
     }
 
+    /// Whether either multi-key source list was declared. Only an absent
+    /// pool permits callers to resolve the legacy single-key fields.
+    pub fn is_declared(cfg: &crate::config::AgentConfig) -> bool {
+        !cfg.api_key_credentials.is_empty() || !cfg.api_key_envs.is_empty()
+    }
+
     /// Build a pool from an [`crate::config::AgentConfig`] block. Returns
-    /// `Ok(None)` when neither `api_key_credentials` nor `api_key_envs`
-    /// is set (the caller should fall back to its single-key path).
-    /// Returns `Ok(Some(pool))` when at least one entry resolved.
-    /// Returns `Err(PoolError::Empty)` when fields were declared but
-    /// nothing resolved (caller should treat that as "credentials
-    /// declared but missing" — a config error rather than a fallback
-    /// trigger). Cooldown picks up `pool_cooldown_secs` (0 → disabled).
+    /// `Ok(None)` only when neither multi-key source list is declared.
+    /// Declared pools resolve eagerly and fail closed when every source is
+    /// missing or blank. Credential-store failures remain typed so callers
+    /// can distinguish corruption from an absent entry. Cooldown picks up
+    /// `pool_cooldown_secs` (0 → disabled).
     pub fn try_from_agent_config(
         name: impl Into<String>,
         cfg: &crate::config::AgentConfig,
-    ) -> Result<Option<Self>, PoolError> {
-        if cfg.api_key_credentials.is_empty() && cfg.api_key_envs.is_empty() {
+    ) -> crate::agent::llm::Result<Option<Self>> {
+        if !Self::is_declared(cfg) {
             return Ok(None);
         }
-        let creds: Vec<&str> = cfg.api_key_credentials.iter().map(|s| s.as_str()).collect();
-        let envs: Vec<&str> = cfg.api_key_envs.iter().map(|s| s.as_str()).collect();
+
+        let name = name.into();
+        let mut entries = Vec::new();
+        for credential in &cfg.api_key_credentials {
+            match crate::credential::try_load(credential, "agent").map_err(|message| {
+                crate::agent::llm::LlmError::CredentialStore {
+                    credential: credential.clone(),
+                    message,
+                }
+            })? {
+                Some(value) if !value.trim().is_empty() => entries.push(
+                    PoolEntry::from_credential(credential.clone(), value.trim().to_string()),
+                ),
+                Some(_) | None => {}
+            }
+        }
+        for env_name in &cfg.api_key_envs {
+            if let Ok(value) = std::env::var(env_name) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_env(env_name.clone(), value.to_string()));
+                }
+            }
+        }
+
+        if entries.is_empty() {
+            return Err(crate::agent::llm::LlmError::NotConfigured(format!(
+                "credential pool '{name}' was declared but no usable key resolved; \
+                 unresolved credential names: {:?}; unresolved environment variables: {:?}. \
+                 Store a listed credential with `cos credential store <name> <key> \
+                 --namespace agent` or set a listed environment variable",
+                cfg.api_key_credentials, cfg.api_key_envs
+            )));
+        }
+
         let strategy = SelectionStrategy::from_str_lossy(&cfg.pool_strategy);
-        let mut pool = Self::from_sources(name, &creds, &envs, &[], strategy)?;
+        let mut pool = Self::from_entries(name, entries, strategy).map_err(|error| {
+            crate::agent::llm::LlmError::NotConfigured(format!(
+                "{error}. Fix the declared pool sources, then run \
+                 `cos agent setup text --verify-only`"
+            ))
+        })?;
         pool.set_cooldown(Duration::from_secs(cfg.pool_cooldown_secs));
         Ok(Some(pool))
     }
