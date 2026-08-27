@@ -69,3 +69,23 @@ fn empty_body_yields_empty_parsed_row() {
     assert!(p.tool_calls.is_empty());
     assert!(p.tool_results.is_empty());
 }
+
+#[test]
+fn load_history_excludes_injected_rows_before_applying_limit() {
+    let tmp = tempfile::tempdir().unwrap();
+    let db = MemoryDb::open(tmp.path().join("memory.db")).unwrap();
+    db.record_message("session", "user", "hi").unwrap();
+    db.record_injected("session", "skills_catalog", "catalog")
+        .unwrap();
+    db.record_injected("session", "memory_notes", "notes")
+        .unwrap();
+    db.record_message("session", "assistant", "hello").unwrap();
+
+    let messages = load_history(&db, "session", 2).unwrap();
+
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[0].role, "user");
+    assert_eq!(messages[0].text, "hi");
+    assert_eq!(messages[1].role, "assistant");
+    assert_eq!(messages[1].text, "hello");
+}

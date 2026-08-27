@@ -55,7 +55,11 @@ pub fn load_history(
     session_id: &str,
     limit: usize,
 ) -> Result<Vec<HistoryMessage>, MemoryError> {
-    let rows = db.recent(session_id, limit)?;
+    // Prompt injections are retained in the audit-oriented `recent` view,
+    // but they are not conversation turns and must never appear in chat UIs.
+    // Filter them in SQL before applying the limit so a context-heavy session
+    // cannot crowd real user/assistant/tool rows out of its visible history.
+    let rows = db.recent_replayable(session_id, limit)?;
     Ok(rows
         .into_iter()
         .map(|r| {

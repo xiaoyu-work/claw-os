@@ -676,10 +676,12 @@ pub(super) fn status_media(modality: Modality) -> Value {
         };
         (ready, reason)
     };
+    let configured = provider != "none" && !provider.is_empty();
 
     json!({
         "modality": spec.name,
         "config_block": spec.config_block,
+        "configured": configured,
         "ready": ready,
         "provider": provider,
         "model": model,

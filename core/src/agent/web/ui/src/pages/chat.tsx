@@ -18,6 +18,11 @@ import { ArrowUp, Loader2, Square, Wrench, AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, streamSse } from "@/lib/api";
+import {
+  restoreHistoryMessages,
+  type ChatMessage,
+  type ToolCall,
+} from "@/lib/chat-history";
 import { renderSafeMarkdown } from "@/lib/safe-markdown";
 import { useRoute, navigate } from "@/lib/router";
 import { cn } from "@/lib/utils";
@@ -25,22 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 
-type ToolCall = {
-  id: string;
-  name: string;
-  isError?: boolean;
-  finished: boolean;
-};
-
-type Msg = {
-  id: string;
-  role: "user" | "assistant" | "system";
-  text: string;
-  tools: ToolCall[];
-  warnings: string[];
-  status: "streaming" | "done" | "error" | "interrupted";
-  error?: string;
-};
+type Msg = ChatMessage;
 
 function uid() {
   return Math.random().toString(36).slice(2, 10);
@@ -78,52 +68,22 @@ export function ChatPage({ meta }: { meta: any }) {
       .then((r) => {
         if (cancelled) return;
         const list: any[] = Array.isArray(r) ? r : r?.messages || [];
-        const restored: Msg[] = [];
-        for (let i = 0; i < list.length; i++) {
-          const m = list[i];
-          const role = (m.role || m.kind || "assistant") as Msg["role"];
-          const text = typeof m.text === "string" ? m.text : (m.content || "");
-          const calls: any[] = Array.isArray(m.tool_calls) ? m.tool_calls : [];
-          const results: any[] = Array.isArray(m.tool_results) ? m.tool_results : [];
-
-          // Tool-result rows are stored under role="user" by the runtime
-          // (Anthropic convention). When such a row has tool_results and
-          // no user prose, treat it as a continuation of the previous
-          // assistant turn rather than a user message.
-          const isToolResultRow =
-            role === "user" && results.length > 0 && !text.trim();
-          if (isToolResultRow) {
-            for (const res of results) {
-              for (let j = restored.length - 1; j >= 0; j--) {
-                if (restored[j].role !== "assistant") continue;
-                const slot = restored[j].tools.find((t) => !t.finished);
-                if (slot) {
-                  slot.isError = !!res?.is_error;
-                  slot.finished = true;
-                  break;
-                }
-              }
-            }
-            continue;
-          }
-
-          const tools: ToolCall[] = calls.map((c, k) => ({
-            id: `${m.id ?? i}-${k}`,
-            name: String(c?.name || "tool"),
-            finished: false,
-          }));
-          restored.push({
-            id: String(m.id ?? i),
-            role,
-            text,
-            tools,
-            warnings: [],
-            status: "done",
-          });
-        }
-        setMessages(restored);
+        setMessages(restoreHistoryMessages(list));
       })
-      .catch(() => {});
+      .catch((error: any) => {
+        if (cancelled) return;
+        setMessages([
+          {
+            id: uid(),
+            role: "assistant",
+            text: "",
+            tools: [],
+            warnings: [],
+            status: "error",
+            error: error?.message || "Failed to load session history",
+          },
+        ]);
+      });
     return () => {
       cancelled = true;
     };

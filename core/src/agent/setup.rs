@@ -697,6 +697,7 @@ fn status_llm_for(cfg: &crate::config::AgentConfig) -> Value {
     let (base_url, api_version) = split_base_url_and_api_version(cfg.base_url.as_deref());
     json!({
         "modality": "text",
+        "configured": provider_is_configured(&cfg.provider),
         "ready": ready.is_ok(),
         "provider": cfg.provider,
         "model": cfg.model,
@@ -713,6 +714,11 @@ fn status_llm_for(cfg: &crate::config::AgentConfig) -> Value {
         "config_path": config_path().display().to_string(),
         "reason": reason,
     })
+}
+
+fn provider_is_configured(provider: &str) -> bool {
+    let provider = provider.trim();
+    !provider.is_empty() && !matches!(provider, "none" | "mock")
 }
 
 fn fallback_status(cfg: &crate::config::AgentConfig) -> Vec<Value> {

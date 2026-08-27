@@ -10,10 +10,17 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, RotateCcw, XCircle } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Loader2,
+  RotateCcw,
+  XCircle,
+} from "lucide-react";
 
 import { api } from "@/lib/api";
 import { isActive, navigate, useRoute } from "@/lib/router";
+import { readSetupStatus } from "@/lib/setup-status";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -28,7 +35,7 @@ import {
 } from "@/components/ui/select";
 
 const MODALITIES = [
-  { key: "text", label: "Text model" },
+  { key: "text", label: "Text" },
   { key: "embed", label: "Embeddings" },
   { key: "tts", label: "Text → speech" },
   { key: "stt", label: "Speech → text" },
@@ -40,7 +47,11 @@ export function SettingsPage({ meta }: { meta: any }) {
   const modality = useMemo(() => {
     if (route === "/settings/about") return "about";
     const m = route.match(/^\/settings\/([^/]+)/);
-    return m?.[1] || "text";
+    return m?.[1] === "llm" ? "text" : m?.[1] || "text";
+  }, [route]);
+
+  useEffect(() => {
+    if (route === "/settings/llm") navigate("/settings/text");
   }, [route]);
 
   return (
@@ -126,7 +137,13 @@ type ProviderEntry = {
 };
 
 function providerId(p: ProviderEntry): string {
-  return String(p.id || p.key || p.label || p.name || "");
+  return String(p.id || p.key || p.name || p.label || "");
+}
+
+function providerLabel(p: ProviderEntry): string {
+  const id = providerId(p);
+  if (id === "copilot") return "GitHub Copilot";
+  return String(p.label || p.display || p.name || id);
 }
 
 function isOauthOnly(p?: ProviderEntry): boolean {
@@ -159,8 +176,8 @@ function ModalityPanel({ modality }: { modality: string }) {
     setMsg(null);
     try {
       const [st, pv] = await Promise.all([
-        api.get(`/api/setup/status/${modality}`).catch(() => null),
-        api.get(`/api/setup/providers/${modality}`).catch(() => null),
+        api.get(`/api/setup/status/${modality}`),
+        api.get(`/api/setup/providers/${modality}`),
       ]);
       setStatus(st);
       const list = extractProviders(pv);
@@ -168,20 +185,13 @@ function ModalityPanel({ modality }: { modality: string }) {
       const stObj = (st as any) || {};
       const curProvider = stObj.provider || stObj.current || providerId(list[0] || {});
       const curModel = stObj.model || stObj.current_model;
-      // Functional setters so a reload that runs *after* the user has
-      // selected something (e.g. OAuth flow → load() in the same panel
-      // instance) doesn't clobber their choice. The seeded value only
-      // wins on the first render when state is still empty.
-      setProvider((prev) => prev || String(curProvider || ""));
-      setModel((prev) => prev || String(curModel || ""));
-      setExtras((prev) => {
-        if (Object.keys(prev).length > 0) return prev;
-        const next: Record<string, string> = {};
-        for (const k of ["base_url", "api_version", "endpoint"]) {
-          if (typeof stObj[k] === "string") next[k] = stObj[k];
-        }
-        return next;
-      });
+      setProvider(String(curProvider || ""));
+      setModel(String(curModel || ""));
+      const nextExtras: Record<string, string> = {};
+      for (const k of ["base_url", "api_version", "endpoint"]) {
+        if (typeof stObj[k] === "string") nextExtras[k] = stObj[k];
+      }
+      setExtras(nextExtras);
     } catch (e: any) {
       setMsg({ kind: "err", text: e?.message || "Load failed" });
     } finally {
@@ -203,6 +213,13 @@ function ModalityPanel({ modality }: { modality: string }) {
       setModels(extractModelIds(entry.models));
       return;
     }
+    if (
+      isOauthOnly(entry) &&
+      ((status as any)?.provider !== provider || (status as any)?.ready !== true)
+    ) {
+      setModels([]);
+      return;
+    }
     let cancelled = false;
     api
       .get(`/api/setup/models/${modality}/${provider}`)
@@ -216,7 +233,7 @@ function ModalityPanel({ modality }: { modality: string }) {
     return () => {
       cancelled = true;
     };
-  }, [modality, provider, providers]);
+  }, [modality, provider, providers, status]);
 
   const providerEntry = useMemo(
     () => providers.find((p) => providerId(p) === provider),
@@ -330,7 +347,7 @@ function ModalityPanel({ modality }: { modality: string }) {
   }
 
   // After OAuth success, the GitHub token has been stored as a credential
-  // but the active LLM provider in config.json hasn't been switched. The
+  // but the active text provider in config.json hasn't been switched. The
   // CLI wizard's terminal flow handles this in one shot: fetch live
   // models, let the user pick one, then `apply` with the credential. The
   // web port mirrors that — auto-pick the first model and apply so the
@@ -380,7 +397,7 @@ function ModalityPanel({ modality }: { modality: string }) {
     }
   }
 
-  const ready = (status as any)?.ready === true || (status as any)?.configured === true;
+  const { configured, ready, reason } = readSetupStatus(status);
   const oauthOnly = isOauthOnly(providerEntry);
   // Provider-declared extra fields (e.g. Azure base_url + api_version).
   // We render these regardless of OAuth mode — Azure for example needs
@@ -402,9 +419,15 @@ function ModalityPanel({ modality }: { modality: string }) {
               <CheckCircle2 className="h-3.5 w-3.5" /> configured
             </span>
           ) : (
-            <span className="flex items-center gap-1 text-yellow-500">
-              <XCircle className="h-3.5 w-3.5" /> not configured
-            </span>
+            configured ? (
+              <span className="flex items-center gap-1 text-amber-500">
+                <AlertTriangle className="h-3.5 w-3.5" /> configured · needs attention
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-yellow-500">
+                <XCircle className="h-3.5 w-3.5" /> not configured
+              </span>
+            )
           )}
         </div>
       </div>
@@ -434,7 +457,7 @@ function ModalityPanel({ modality }: { modality: string }) {
                   const id = providerId(p);
                   return (
                     <SelectItem key={id} value={id}>
-                      {p.label || p.display || p.name || id}
+                      {providerLabel(p)}
                       {isOauthOnly(p) ? " · OAuth" : ""}
                     </SelectItem>
                   );
@@ -445,7 +468,7 @@ function ModalityPanel({ modality }: { modality: string }) {
 
           {oauthOnly ? (
             <CopilotAuthBlock
-              providerLabel={providerEntry?.label || provider}
+              providerLabel={providerEntry ? providerLabel(providerEntry) : provider}
               busy={busy === "oauth"}
               oauth={oauth}
               ready={ready}
@@ -488,6 +511,12 @@ function ModalityPanel({ modality }: { modality: string }) {
               </div>
             </>
           )}
+
+          {configured && !ready && reason ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
+              {reason}
+            </div>
+          ) : null}
 
           <div className="grid gap-1.5">
             <Label>Model</Label>

@@ -168,6 +168,28 @@ fn is_ready_blocks_real_provider_with_no_credential() {
 }
 
 #[test]
+fn text_status_distinguishes_configured_from_ready() {
+    let mut cfg = mock_cfg();
+    cfg.provider = "copilot".into();
+    cfg.model = "gpt-4o".into();
+    cfg.api_key_credential = Some("definitely_not_present".into());
+
+    let status = status_llm_for(&cfg);
+
+    assert_eq!(status["configured"], json!(true));
+    assert_eq!(status["ready"], json!(false));
+    assert_eq!(status["provider"], json!("copilot"));
+}
+
+#[test]
+fn text_status_treats_mock_as_unconfigured() {
+    let status = status_llm_for(&mock_cfg());
+
+    assert_eq!(status["configured"], json!(false));
+    assert_eq!(status["ready"], json!(false));
+}
+
+#[test]
 fn is_ready_passes_when_env_credential_present() {
     let mut cfg = mock_cfg();
     cfg.provider = "anthropic".into();

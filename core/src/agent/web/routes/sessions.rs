@@ -53,8 +53,9 @@ pub async fn history(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let db = MemoryDb::open_default()
         .map_err(|e| internal(format!("open memory: {e}")))?;
-    // Shared with clawd's `memory.history` command — the desktop agent
-    // UI and the web client both render history off the same shape.
+    // Shared with clawd's `memory.history` command. `load_history` excludes
+    // audit-only prompt injections before applying the limit; this web route
+    // additionally hides any legacy system rows from the conversational view.
     let mut messages = load_history(&db, &id, 500)
         .map_err(|e| internal(format!("read history: {e}")))?;
     messages.retain(|message| message.role != "system");
