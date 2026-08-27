@@ -54,18 +54,16 @@ pub fn build(name: &str, model: &str, agent_cfg: &AgentConfig) -> Result<Arc<dyn
         ));
     }
     if providers::openai_compat::is_alias(name) {
-        return Ok(providers::openai_compat::build_provider(
-            name, model, agent_cfg,
-        ));
+        return providers::openai_compat::build_provider(name, model, agent_cfg);
     }
     if providers::anthropic::is_alias(name) {
-        return Ok(providers::anthropic::build_provider(model, agent_cfg));
+        return providers::anthropic::build_provider(model, agent_cfg);
     }
     if providers::bedrock::is_alias(name) {
         return Ok(providers::bedrock::build_provider(model, agent_cfg));
     }
     if providers::gemini::is_alias(name) {
-        return Ok(providers::gemini::build_provider(model, agent_cfg));
+        return providers::gemini::build_provider(model, agent_cfg);
     }
     match name {
         "mock" => Ok(Arc::new(providers::mock::MockProvider::new(

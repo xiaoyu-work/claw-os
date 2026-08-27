@@ -267,10 +267,18 @@ fn resolve_api_key_uses_env_when_credential_missing() {
 
 #[test]
 fn resolve_api_key_ignores_empty_env() {
-    std::env::set_var("COS_TEST_KEY_VAR_8743", "");
+    std::env::set_var("COS_TEST_KEY_VAR_8743", " \t\r\n ");
     let v = resolve_api_key(None, Some("COS_TEST_KEY_VAR_8743")).unwrap();
     assert_eq!(v, None);
     std::env::remove_var("COS_TEST_KEY_VAR_8743");
+}
+
+#[test]
+fn resolve_api_key_trims_env_value() {
+    std::env::set_var("COS_TEST_KEY_VAR_8744", "  sk-from-env  \n");
+    let v = resolve_api_key(None, Some("COS_TEST_KEY_VAR_8744")).unwrap();
+    assert_eq!(v.as_deref(), Some("sk-from-env"));
+    std::env::remove_var("COS_TEST_KEY_VAR_8744");
 }
 
 // ---- is_configured ---------------------------------------------------

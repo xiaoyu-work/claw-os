@@ -135,14 +135,25 @@ fn alias_is_copilot(alias: &str) -> bool {
 }
 
 /// Resolve an API key from the credential store, then env var, then None.
-/// Errors only on a corrupted credential file — a missing entry is `Ok(None)`.
+/// Missing and blank entries fall through; unreadable stored credentials
+/// produce a typed error so construction cannot silently drop corruption.
 pub fn resolve_api_key(
     api_key_credential: Option<&str>,
     api_key_env: Option<&str>,
-) -> std::result::Result<Option<String>, String> {
+) -> Result<Option<String>> {
     if let Some(name) = api_key_credential {
-        match crate::credential::try_load(name, "agent")? {
-            Some(value) => return Ok(Some(value)),
+        match crate::credential::try_load(name, "agent").map_err(|message| {
+            LlmError::CredentialStore {
+                credential: name.to_string(),
+                message,
+            }
+        })? {
+            Some(value) => {
+                let value = value.trim();
+                if !value.is_empty() {
+                    return Ok(Some(value.to_string()));
+                }
+            }
             None => {
                 // Fall through to env.
             }
@@ -150,8 +161,9 @@ pub fn resolve_api_key(
     }
     if let Some(env_name) = api_key_env {
         if let Ok(value) = std::env::var(env_name) {
+            let value = value.trim();
             if !value.is_empty() {
-                return Ok(Some(value));
+                return Ok(Some(value.to_string()));
             }
         }
     }
@@ -194,7 +206,7 @@ impl std::fmt::Debug for OpenAICompatConfig {
 
 impl OpenAICompatConfig {
     /// Build from a registered alias + the agent config block.
-    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
         let base_url = agent
             .base_url
             .clone()
@@ -207,9 +219,7 @@ impl OpenAICompatConfig {
         let api_key = resolve_api_key(
             agent.api_key_credential.as_deref(),
             agent.api_key_env.as_deref(),
-        )
-        .ok()
-        .flatten();
+        )?;
 
         let request_timeout = if agent.request_timeout == 0 {
             Duration::from_secs(0)
@@ -237,7 +247,7 @@ impl OpenAICompatConfig {
             }
         };
 
-        Self {
+        Ok(Self {
             alias: alias.to_string(),
             base_url,
             api_key,
@@ -245,7 +255,13 @@ impl OpenAICompatConfig {
             extra_headers: agent.extra_headers.clone(),
             request_timeout,
             pool,
-        }
+        })
+    }
+
+    #[cfg(test)]
+    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(alias, model, agent)
+            .expect("test credential configuration should resolve")
     }
 }
 
@@ -279,8 +295,16 @@ impl OpenAICompatProvider {
 
     /// Convenience constructor that pulls everything from `AgentConfig`.
     /// Used by the registry.
+    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
+        Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
+            alias, model, agent,
+        )?))
+    }
+
+    #[cfg(test)]
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::new(OpenAICompatConfig::from_agent_config(alias, model, agent))
+        Self::try_from_agent_config(alias, model, agent)
+            .expect("test credential configuration should resolve")
     }
 
     fn endpoint(&self) -> String {
@@ -795,9 +819,11 @@ pub fn is_alias(name: &str) -> bool {
     PROVIDER_ALIASES.contains(&name)
 }
 
-// Construction helper used by the registry. Returns Arc<dyn Provider>.
-pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
-    Arc::new(OpenAICompatProvider::from_agent_config(alias, model, agent))
+// Construction helper used by the registry.
+pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    Ok(Arc::new(OpenAICompatProvider::try_from_agent_config(
+        alias, model, agent,
+    )?))
 }
 
 #[cfg(test)]

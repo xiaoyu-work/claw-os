@@ -52,6 +52,16 @@ pub enum LlmError {
     #[error("authentication failed")]
     Auth,
 
+    #[error(
+        "credential store error for `{credential}` in namespace `agent`: {message}. \
+         Repair or replace it with `cos credential revoke {credential} --namespace agent`, \
+         then configure the credential again"
+    )]
+    CredentialStore {
+        credential: String,
+        message: String,
+    },
+
     #[error("response could not be parsed: {0}")]
     Parse(String),
 

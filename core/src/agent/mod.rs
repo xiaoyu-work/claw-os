@@ -217,9 +217,10 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
             let cfg = &crate::config::get().agent;
             let daemon = agent_client::daemon_status()?;
             let ready = setup::is_ready(cfg);
-            let key_source = setup::resolved_key_source(cfg)
-                .map(|s| s.to_json())
-                .unwrap_or(Value::Null);
+            let key_source = match setup::resolved_key_source(cfg) {
+                Ok(Some(source)) => source.to_json(),
+                Ok(None) | Err(_) => Value::Null,
+            };
 
             // Most-recent session (best-effort; never fails the call).
             let last_session = match memory::sqlite_fts::MemoryDb::open_default() {
@@ -4042,6 +4043,7 @@ fn llm_error_kind(e: &llm::LlmError) -> &'static str {
         llm::LlmError::Provider { .. } => "provider",
         llm::LlmError::RateLimited { .. } => "rate_limited",
         llm::LlmError::Auth => "auth",
+        llm::LlmError::CredentialStore { .. } => "credential_store",
         llm::LlmError::Parse(_) => "parse",
         llm::LlmError::Stream(_) => "stream",
         llm::LlmError::Internal(_) => "internal",

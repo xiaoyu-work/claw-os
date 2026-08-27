@@ -94,7 +94,7 @@ impl std::fmt::Debug for GeminiConfig {
 }
 
 impl GeminiConfig {
-    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
         let base_url = agent
             .base_url
             .clone()
@@ -106,9 +106,7 @@ impl GeminiConfig {
         let api_key = resolve_api_key(
             agent.api_key_credential.as_deref(),
             agent.api_key_env.as_deref(),
-        )
-        .ok()
-        .flatten();
+        )?;
 
         let request_timeout = if agent.request_timeout == 0 {
             Duration::from_secs(0)
@@ -132,14 +130,20 @@ impl GeminiConfig {
             }
         };
 
-        Self {
+        Ok(Self {
             base_url,
             api_key,
             model: model.to_string(),
             extra_headers: agent.extra_headers.clone(),
             request_timeout,
             pool,
-        }
+        })
+    }
+
+    #[cfg(test)]
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(model, agent)
+            .expect("test credential configuration should resolve")
     }
 }
 
@@ -164,8 +168,16 @@ impl GeminiProvider {
         Self { cfg, client }
     }
 
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
+        Ok(Self::new(GeminiConfig::try_from_agent_config(
+            model, agent,
+        )?))
+    }
+
+    #[cfg(test)]
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::new(GeminiConfig::from_agent_config(model, agent))
+        Self::try_from_agent_config(model, agent)
+            .expect("test credential configuration should resolve")
     }
 
     fn endpoint(&self) -> String {
@@ -692,8 +704,10 @@ pub fn is_alias(name: &str) -> bool {
     name == PROVIDER_NAME
 }
 
-pub fn build_provider(model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
-    Arc::new(GeminiProvider::from_agent_config(model, agent))
+pub fn build_provider(model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    Ok(Arc::new(GeminiProvider::try_from_agent_config(
+        model, agent,
+    )?))
 }
 
 #[cfg(test)]

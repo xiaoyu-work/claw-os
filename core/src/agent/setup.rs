@@ -504,24 +504,24 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     if !provider_needs_credential(&cfg.provider) {
         return Ok(());
     }
-    if credential_present(cfg) {
-        return Ok(());
+    match provider_configured_for_readiness(cfg) {
+        Ok(true) => return Ok(()),
+        Ok(false) => {}
+        Err(error) => return Err(error),
     }
-    if llm::registry::build(&cfg.provider, &cfg.model, cfg)
-        .is_ok_and(|provider| provider.is_configured())
-    {
-        return Ok(());
-    }
-    if cfg.provider_fallbacks.iter().any(|fallback| {
+    for fallback in &cfg.provider_fallbacks {
         let fallback_cfg = fallback.apply_to(cfg);
-        !fallback_cfg.provider.is_empty()
-            && fallback_cfg.provider != "mock"
-            && (!provider_needs_credential(&fallback_cfg.provider)
-                || credential_present(&fallback_cfg)
-                || llm::registry::build(&fallback_cfg.provider, &fallback_cfg.model, &fallback_cfg)
-                    .is_ok_and(|provider| provider.is_configured()))
-    }) {
-        return Ok(());
+        if fallback_cfg.provider.is_empty() || fallback_cfg.provider == "mock" {
+            continue;
+        }
+        if !provider_needs_credential(&fallback_cfg.provider) {
+            return Ok(());
+        }
+        match provider_configured_for_readiness(&fallback_cfg) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(error) => return Err(error),
+        }
     }
     Err(json!({
         "error": "agent provider configured but no credential found",
@@ -535,48 +535,57 @@ pub fn is_ready(cfg: &crate::config::AgentConfig) -> Result<(), String> {
     .to_string())
 }
 
-pub fn provider_needs_credential(name: &str) -> bool {
-    !matches!(name, "mock" | "llama_local")
+fn provider_configured_for_readiness(cfg: &crate::config::AgentConfig) -> Result<bool, String> {
+    match llm::registry::build(&cfg.provider, &cfg.model, cfg) {
+        Ok(provider) => Ok(provider.is_configured()),
+        Err(error) => match &error {
+            llm::LlmError::CredentialStore { credential, .. } => Err(json!({
+                "error": "agent credential store error",
+                "kind": "credential_store",
+                "provider": cfg.provider,
+                "credential": credential,
+                "namespace": "agent",
+                "fix": format!(
+                    "cos credential revoke {credential} --namespace agent"
+                ),
+                "details": error.to_string(),
+            })
+            .to_string()),
+            _ => Ok(false),
+        },
+    }
 }
 
-fn credential_present(cfg: &crate::config::AgentConfig) -> bool {
-    resolved_key_source(cfg).is_some()
+pub fn provider_needs_credential(name: &str) -> bool {
+    !matches!(name, "mock" | "llama_local")
 }
 
 /// Returns a structured description of which credential/env actually
 /// resolved a non-empty API key for `cfg`, or `None` if no source
 /// resolved. Used by both the readiness gate and `cos agent status`
 /// so they agree on what "key present" means.
-pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> Option<KeySource> {
+pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Option<KeySource>> {
     if let Some(name) = cfg.api_key_credential.as_deref() {
-        if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
-            if !v.trim().is_empty() {
-                return Some(KeySource::credential(name));
-            }
+        if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
+            return Ok(Some(KeySource::credential(name)));
         }
     }
     if let Some(env_name) = cfg.api_key_env.as_deref() {
-        if let Ok(v) = std::env::var(env_name) {
-            if !v.trim().is_empty() {
-                return Some(KeySource::env(env_name));
-            }
+        if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
+            return Ok(Some(KeySource::env(env_name)));
         }
     }
     for name in &cfg.api_key_credentials {
-        if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
-            if !v.trim().is_empty() {
-                return Some(KeySource::credential(name));
-            }
+        if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
+            return Ok(Some(KeySource::credential(name)));
         }
     }
     for env_name in &cfg.api_key_envs {
-        if let Ok(v) = std::env::var(env_name) {
-            if !v.trim().is_empty() {
-                return Some(KeySource::env(env_name));
-            }
+        if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
+            return Ok(Some(KeySource::env(env_name)));
         }
     }
-    None
+    Ok(None)
 }
 
 #[derive(Debug, Clone)]
