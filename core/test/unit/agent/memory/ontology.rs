@@ -108,6 +108,32 @@ fn lifetime_policy_keeps_durable_knowledge_and_bounds_live_state() {
     .unwrap();
     assert_eq!(resolution.lifetime, FactLifetime::Durable);
 
+    for attribute in ["cause", "fix"] {
+        let service_resolution = normalize_fact(
+            "resolution",
+            "database_service",
+            attribute,
+            "connection pool exhausted",
+            Some(FactLifetime::Durable),
+            None,
+        )
+        .unwrap();
+        assert_eq!(service_resolution.lifetime, FactLifetime::Durable);
+        assert_eq!(service_resolution.ttl_days, None);
+    }
+
+    let service_status = normalize_fact(
+        "resolution",
+        "database_service",
+        "status",
+        "running",
+        Some(FactLifetime::Durable),
+        None,
+    )
+    .unwrap();
+    assert_eq!(service_status.lifetime, FactLifetime::Observed);
+    assert_eq!(service_status.ttl_days, Some(MEDIUM_OBSERVED_TTL_DAYS));
+
     let package = normalize_fact(
         "environment",
         "ripgrep",

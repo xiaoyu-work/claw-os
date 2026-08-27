@@ -130,13 +130,13 @@
     #[test]
     fn looks_secret_flags_long_alphanumeric_runs() {
         assert!(looks_secret("user has token AKIAIOSFODNN7EXAMPLEKEYZ"));
+        assert!(looks_secret("550e8400-e29b-41d4-a716-446655440000"));
     }
 
     #[test]
     fn looks_secret_does_not_flag_normal_facts() {
         assert!(!looks_secret("user prefers Rust"));
         assert!(!looks_secret("user lives in Beijing"));
-        assert!(!looks_secret("550e8400-e29b-41d4-a716-446655440000"));
         assert!(!looks_secret(""));
     }
 
@@ -174,6 +174,23 @@
         let mut secret_value = safe.clone();
         secret_value.value = Some("Bearer demo-credential".to_string());
         assert!(fact_looks_secret(&secret_value));
+
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        let mut uuid_text = safe.clone();
+        uuid_text.text = uuid.to_string();
+        assert!(fact_looks_secret(&uuid_text));
+
+        let mut uuid_entity = safe.clone();
+        uuid_entity.entity = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_entity));
+
+        let mut uuid_attribute = safe.clone();
+        uuid_attribute.attribute = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_attribute));
+
+        let mut uuid_value = safe.clone();
+        uuid_value.value = Some(uuid.to_string());
+        assert!(fact_looks_secret(&uuid_value));
 
         let mut secret_category = safe;
         secret_category.category = FactCategory::Other("password".to_string());
@@ -619,6 +636,7 @@ other content
 <fact category="environment" entity="secret-store" attribute="owner" value="local" confidence="0.95">Entity field should be filtered</fact>
 <fact category="environment" entity="service" attribute="access_token" value="configured" confidence="0.95">Attribute field should be filtered</fact>
 <fact category="environment" entity="editor" attribute="name" value="Bearer demo-credential" confidence="0.95">Value field should be filtered</fact>
+<fact category="identity" entity="machine" attribute="id" value="550e8400-e29b-41d4-a716-446655440000" confidence="0.95">UUID-shaped credential</fact>
 <fact category="password" entity="shell" attribute="name" value="fish" confidence="0.95">Rendered line should be filtered</fact>"#
                 .to_string(),
         ));
@@ -643,7 +661,7 @@ other content
 
         let outcome = curator.curate_session(&db, "sess-1", false).await.unwrap();
 
-        assert_eq!(outcome.facts_proposed.len(), 5);
+        assert_eq!(outcome.facts_proposed.len(), 6);
         assert_eq!(outcome.facts_added.len(), 1);
         assert_eq!(outcome.facts_added[0].body(), "editor.name = helix");
 
@@ -653,6 +671,7 @@ other content
             "secret-store",
             "access_token",
             "demo-credential",
+            "550e8400-e29b-41d4-a716-446655440000",
             "[password]",
         ] {
             assert!(

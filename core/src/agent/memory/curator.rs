@@ -797,7 +797,7 @@ pub fn looks_secret(text: &str) -> bool {
 }
 
 fn secret_like_run(run: &str) -> bool {
-    run.len() >= 24 && !looks_like_uuid(run)
+    run.len() >= 24
 }
 
 fn looks_like_uuid(value: &str) -> bool {
@@ -823,7 +823,7 @@ fn fact_looks_secret(fact: &ExtractedFact) -> bool {
         || fact
             .source_session_id
             .as_deref()
-            .is_some_and(looks_secret)
+            .is_some_and(|source| !looks_like_uuid(source) && looks_secret(source))
         || looks_secret(&fact.body())
 }
 
@@ -938,7 +938,7 @@ fn normalize_provenance_session_id(value: &str) -> String {
         && trimmed
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | ':'));
-    if valid && !looks_secret(trimmed) {
+    if valid && (looks_like_uuid(trimmed) || !looks_secret(trimmed)) {
         trimmed.to_string()
     } else {
         "redacted".to_string()
@@ -952,7 +952,16 @@ fn render_persistable_fact_line(fact: &ExtractedFact, today: &str) -> Option<Str
         return None;
     }
     let line = render_fact_line(fact, today);
-    (!looks_secret(&line)).then_some(line)
+    let mut validation_fact = fact.clone();
+    if validation_fact
+        .source_session_id
+        .as_deref()
+        .is_some_and(looks_like_uuid)
+    {
+        validation_fact.source_session_id = Some("trusted-session-uuid".to_string());
+    }
+    let validation_line = render_fact_line(&validation_fact, today);
+    (!looks_secret(&validation_line)).then_some(line)
 }
 
 const SECTION_HEADER: &str = "## Curated facts (auto)";

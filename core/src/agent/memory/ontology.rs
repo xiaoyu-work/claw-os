@@ -367,16 +367,18 @@ fn is_live_state(slot: &CanonicalSlot) -> bool {
         slot.attribute.as_str(),
         "availability"
             | "capacity"
+            | "distribution"
+            | "enabled"
             | "installation"
             | "memory_size"
             | "package_count"
+            | "pid"
             | "running"
+            | "state"
             | "status"
             | "uptime"
             | "version"
     ) || slot.attribute.starts_with("current_")
-        || is_runtime_entity(&slot.entity)
-        || matches!(slot.entity.as_str(), "memory" | "os" | "package" | "system")
 }
 
 fn is_runtime_entity(entity: &str) -> bool {
