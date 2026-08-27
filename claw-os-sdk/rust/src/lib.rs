@@ -390,3 +390,11 @@ mod tests {
         "/test/unit/lib.rs"
     ));
 }
+
+#[cfg(test)]
+mod generated_tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/generated.rs"
+    ));
+}

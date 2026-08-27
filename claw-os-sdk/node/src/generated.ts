@@ -57,7 +57,7 @@ export interface AiReview {
 export interface AiToolCall {
   id: string;
   name: string;
-  input: unknown;
+  input: Record<string, unknown>;
 }
 
 /**
@@ -253,5 +253,182 @@ export interface Tool {
   app_id: string;
   status: "ok";
   result: unknown;
+}
+
+/**
+ * Catalog tool list reply.
+ * Shape returned by `cos ai tools`.
+ */
+export interface ToolCatalog {
+  tools: WireCatalogEntry[];
+}
+
+/**
+ * WireCatalogEntry.
+ */
+export interface WireCatalogEntry {
+  name: string;
+  summary: string;
+  verb: string;
+  stability: "stable" | "experimental";
+  args_schema: Record<string, unknown>;
+  returns_schema: Record<string, unknown>;
+}
+
+/** Stable failure returned by generated wire validators. */
+export class WireDecodeError extends Error {
+  constructor(
+    readonly code: string,
+    readonly schema: string,
+    readonly path: string,
+    readonly reason: string,
+  ) {
+    super(`${code}: invalid ${schema} at ${path}: ${reason}`);
+    this.name = "WireDecodeError";
+  }
+}
+
+export const WIRE_CONST = "WIRE_CONST" as const;
+export const WIRE_ENUM = "WIRE_ENUM" as const;
+export const WIRE_MAXIMUM = "WIRE_MAXIMUM" as const;
+export const WIRE_MINIMUM = "WIRE_MINIMUM" as const;
+export const WIRE_ONE_OF = "WIRE_ONE_OF" as const;
+export const WIRE_REQUIRED = "WIRE_REQUIRED" as const;
+export const WIRE_TYPE = "WIRE_TYPE" as const;
+export const WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD" as const;
+
+type WireRule = Record<string, unknown>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function wireError(code: string, schema: string, path: string, reason: string): WireDecodeError {
+  return new WireDecodeError(code, schema, path, reason);
+}
+
+function validateWireSchema(
+  rule: WireRule,
+  root: WireRule,
+  value: unknown,
+  schemaName: string,
+  path: string,
+): void {
+  const reference = rule["$ref"];
+  if (typeof reference === "string") {
+    const defs = root["$defs"];
+    const parts = reference.split("/");
+    const target = isRecord(defs) ? defs[parts[parts.length - 1]] : undefined;
+    if (!isRecord(target)) {
+      throw wireError(WIRE_TYPE, schemaName, path, `unresolved schema reference ${reference}`);
+    }
+    validateWireSchema(target, root, value, schemaName, path);
+    return;
+  }
+  const branches = rule["oneOf"];
+  if (Array.isArray(branches)) {
+    let matches = 0;
+    for (const branch of branches) {
+      if (!isRecord(branch)) continue;
+      try {
+        validateWireSchema(branch, root, value, schemaName, path);
+        matches += 1;
+      } catch (error) {
+        if (!(error instanceof WireDecodeError)) throw error;
+      }
+    }
+    if (matches !== 1) {
+      throw wireError(WIRE_ONE_OF, schemaName, path, "expected exactly one allowed shape");
+    }
+    return;
+  }
+  const expected = rule["type"];
+  const valid =
+    expected === "object" ? isRecord(value) :
+    expected === "array" ? Array.isArray(value) :
+    expected === "string" ? typeof value === "string" :
+    expected === "integer" ? typeof value === "number" && Number.isSafeInteger(value) :
+    expected === "number" ? typeof value === "number" && Number.isFinite(value) :
+    expected === "boolean" ? typeof value === "boolean" :
+    expected === "null" ? value === null : true;
+  if (typeof expected === "string" && !valid) {
+    throw wireError(WIRE_TYPE, schemaName, path, `expected ${expected}`);
+  }
+  if ("const" in rule && !Object.is(value, rule["const"])) {
+    throw wireError(WIRE_CONST, schemaName, path, "value does not match const");
+  }
+  const allowed = rule["enum"];
+  if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {
+    throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");
+  }
+  if (typeof value === "number") {
+    const minimum = rule["minimum"];
+    if (typeof minimum === "number" && value < minimum) {
+      throw wireError(WIRE_MINIMUM, schemaName, path, `must be >= ${minimum}`);
+    }
+    const maximum = rule["maximum"];
+    if (typeof maximum === "number" && value > maximum) {
+      throw wireError(WIRE_MAXIMUM, schemaName, path, `must be <= ${maximum}`);
+    }
+  }
+  if (isRecord(value)) {
+    const required = rule["required"];
+    if (Array.isArray(required)) {
+      for (const field of required) {
+        if (typeof field === "string" && !(field in value)) {
+          throw wireError(WIRE_REQUIRED, schemaName, `${path}.${field}`, "field is required");
+        }
+      }
+    }
+    const properties = rule["properties"];
+    if (isRecord(properties)) {
+      for (const field of Object.keys(properties).sort()) {
+        const fieldRule = properties[field];
+        if (field in value && isRecord(fieldRule)) {
+          validateWireSchema(fieldRule, root, value[field], schemaName, `${path}.${field}`);
+        }
+      }
+      const extras = Object.keys(value).filter((field) => !(field in properties)).sort();
+      const additional = rule["additionalProperties"];
+      if (additional === false && extras.length > 0) {
+        throw wireError(WIRE_UNKNOWN_FIELD, schemaName, `${path}.${extras[0]}`, "unknown field");
+      }
+      if (isRecord(additional)) {
+        for (const field of extras) {
+          validateWireSchema(additional, root, value[field], schemaName, `${path}.${field}`);
+        }
+      }
+    }
+  }
+  const itemRule = rule["items"];
+  if (Array.isArray(value) && isRecord(itemRule)) {
+    value.forEach((item, index) => {
+      validateWireSchema(itemRule, root, item, schemaName, `${path}[${index}]`);
+    });
+  }
+}
+
+const _WIRE_SCHEMA_AI: WireRule = {"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"};
+
+export function validateAi(value: unknown): asserts value is Ai & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$");
+}
+
+const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = {"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"};
+
+export function validateToolCatalog(value: unknown): asserts value is ToolCatalog & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value, "ToolCatalog", "$");
+}
+
+const _WIRE_SCHEMA_TOOL: WireRule = {"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"};
+
+export function validateTool(value: unknown): asserts value is Tool & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$");
+}
+
+const _WIRE_SCHEMA_AI_BUDGET: WireRule = {"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"};
+
+export function validateAiBudget(value: unknown): asserts value is AiBudget & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_AI_BUDGET, _WIRE_SCHEMA_AI_BUDGET, value, "AiBudget", "$");
 }
 

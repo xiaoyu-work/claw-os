@@ -87,22 +87,13 @@ func CallTool(name string, args map[string]any, appID string) (*ToolResult, erro
 	}
 
 	env := out.Envelope
-	resName := name
-	if s := asString(env["tool"]); s != "" {
-		resName = s
-	}
-	resApp := app
-	if s := asString(env["app_id"]); s != "" {
-		resApp = s
-	}
-	status := "ok"
-	if s := asString(env["status"]); s != "" {
-		status = s
+	if err := ValidateTool(env); err != nil {
+		return nil, &ToolUnavailableError{Msg: "tool result decode failed: " + err.Error()}
 	}
 	return &ToolResult{
-		Name:   resName,
-		AppID:  resApp,
-		Status: status,
+		Name:   asString(env["tool"]),
+		AppID:  asString(env["app_id"]),
+		Status: asString(env["status"]),
 		Value:  env["result"],
 		Raw:    env,
 	}, nil
@@ -122,27 +113,20 @@ func Catalog() ([]CatalogEntry, error) {
 	if out.Status != 0 || out.hasError() {
 		return nil, &ToolDeniedError{Payload: out.Envelope}
 	}
-	rawRows, ok := out.Envelope["tools"].([]any)
-	if !ok {
-		return nil, &ToolUnavailableError{Msg: "cos ai tools envelope missing `tools` array"}
+	if err := ValidateToolCatalog(out.Envelope); err != nil {
+		return nil, &ToolUnavailableError{Msg: "catalog decode failed: " + err.Error()}
 	}
+	rawRows := out.Envelope["tools"].([]any)
 	entries := make([]CatalogEntry, 0, len(rawRows))
 	for _, r := range rawRows {
-		row, ok := r.(map[string]any)
-		if !ok {
-			continue
-		}
-		stability := asString(row["stability"])
-		if stability == "" {
-			stability = "experimental"
-		}
+		row := r.(map[string]any)
 		entries = append(entries, CatalogEntry{
 			Name:          asString(row["name"]),
 			Summary:       asString(row["summary"]),
 			Verb:          asString(row["verb"]),
-			Stability:     stability,
-			ArgsSchema:    maybeSchema(row["args_schema"]),
-			ReturnsSchema: maybeSchema(row["returns_schema"]),
+			Stability:     asString(row["stability"]),
+			ArgsSchema:    asMap(row["args_schema"]),
+			ReturnsSchema: asMap(row["returns_schema"]),
 			Raw:           row,
 		})
 	}
@@ -161,17 +145,4 @@ func ForChat(names ...string) []string {
 		}
 	}
 	return out
-}
-
-func maybeSchema(blob any) map[string]any {
-	switch v := blob.(type) {
-	case map[string]any:
-		return v
-	case string:
-		var parsed map[string]any
-		if json.Unmarshal([]byte(v), &parsed) == nil {
-			return parsed
-		}
-	}
-	return nil
 }

@@ -36,7 +36,7 @@ test("chat builds the right argv and parses the envelope", () => {
     "--origin",
     "external-content",
   ]);
-  assert.ok(argv.includes("--prompt"));
+  assert.ok(argv.includes("--prompt-file"));
   assert.ok(argv.includes("--max-units"));
   assert.ok(argv.includes("--tools"));
 });
@@ -74,6 +74,19 @@ test("generic error envelope maps to AiDenied", () => {
   assert.throws(
     () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
     ai.AiDenied,
+  );
+});
+
+test("malformed tool call rejects the entire response", () => {
+  const payload = JSON.parse(OK_CHAT) as Record<string, unknown>;
+  payload.tool_calls = [{ id: "c1", input: {} }];
+  const fake = installFakeCos(JSON.stringify(payload));
+  assert.throws(
+    () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
+    (error: unknown) =>
+      error instanceof ai.AiUnavailable &&
+      error.message.includes("WIRE_REQUIRED") &&
+      error.message.includes("$.tool_calls[0].name"),
   );
 });
 

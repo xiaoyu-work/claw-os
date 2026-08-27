@@ -143,7 +143,7 @@ async fn tools_call_routes_to_handler() {
 }
 
 #[tokio::test]
-async fn unknown_tool_yields_method_not_found() {
+async fn unknown_tool_yields_invalid_params() {
     let s = Server::new("t", "0").tool(Arc::new(Echo));
     let (client, server) = in_memory_pair();
     let handle = tokio::spawn(s.serve(server));
@@ -161,7 +161,7 @@ async fn unknown_tool_yields_method_not_found() {
     let frame = client.recv().await.unwrap().unwrap();
     let resp: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
     let err = resp.error.unwrap();
-    assert_eq!(err.code, ERR_METHOD_NOT_FOUND);
+    assert_eq!(err.code, ERR_INVALID_PARAMS);
     drop(client);
     let _ = handle.await;
 }
@@ -217,6 +217,39 @@ async fn parse_error_keeps_server_alive() {
     let frame = client.recv().await.unwrap().unwrap();
     let resp: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
     assert!(resp.error.is_none());
+    drop(client);
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
+
+    client.send("[]".into()).await.unwrap();
+    let frame = client.recv().await.unwrap().unwrap();
+    let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response.id, RequestId::Null);
+    assert_eq!(response.error.unwrap().code, ERR_INVALID_REQUEST);
+
+    drop(client);
+    let _ = handle.await;
+}
+
+#[tokio::test]
+async fn initialize_without_params_yields_invalid_params() {
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
+
+    let request = JsonRpcRequest::new(1, "initialize", None);
+    client
+        .send(serde_json::to_string(&request).unwrap())
+        .await
+        .unwrap();
+    let frame = client.recv().await.unwrap().unwrap();
+    let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response.error.unwrap().code, ERR_INVALID_PARAMS);
+
     drop(client);
     let _ = handle.await;
 }

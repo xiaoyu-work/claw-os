@@ -18,10 +18,13 @@ claw-os-sdk/
 │   │   ├── perms.schema.json       capability decision envelope
 │   │   ├── ai.schema.json          AI wire schema (kernel protocol)
 │   │   ├── tool.schema.json        catalog tool invocation
+│   │   ├── tool_catalog.schema.json catalog tool list
+│   │   ├── contract.json           validators + stable error codes
 │   │   ├── app.schema.json         cos app <id> <verb>
 │   │   └── manifest.schema.json    app.json schema
-│   └── codegen.py        reads wire/v1/*.schema.json → emits
-│                         typed bindings into rust/python/node/go.
+│   └── codegen.py        reads wire/v1 schemas + contract → emits
+│                         typed validators into rust/python/node/go
+│                         and MCP error-code modules.
 │
 ├── rust/                Rust SDK (cargo crate `claw-os-sdk`)
 │   ├── Cargo.toml
@@ -129,6 +132,7 @@ Run codegen with:
 ```sh
 cd claw-os-sdk
 python3 wire/codegen.py            # writes generated.* into each language tree
+python3 wire/codegen.py --check    # verifies all generated outputs are current
 ```
 
 ## Versioning
@@ -169,7 +173,7 @@ Install from an immutable release artifact or tag, never from `main`.
 | Component | Status |
 |-----------|--------|
 | `wire/v1` schemas | Initial draft |
-| `wire/codegen.py` | Initial — emits Rust + Python; Node + Go are placeholder generators |
+| `wire/codegen.py` | Emits deterministic Rust, Python, Node, Go, and MCP validation bindings |
 | `rust/` | Moved from `crates/claw-bridge`; adds `ai`, `tools`. The `policy / fs / exec / pkg / notify / net` modules moved on into `cos-runtime/`. |
 | `python/` | Moved from `apps/_lib`; packaged as `claw-os-sdk`. The internal `policy` / `snapshot` helpers moved on into `cos-runtime/python/`. |
 | `node/` | Built out — `ai`, `tools`, `gui` over wire v1, with tests |

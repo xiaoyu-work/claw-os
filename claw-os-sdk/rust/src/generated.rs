@@ -302,6 +302,24 @@ pub struct Tool {
     pub result: serde_json::Value,
 }
 
+/// Catalog tool list reply
+/// Shape returned by `cos ai tools`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCatalog {
+    pub tools: Vec<WireCatalogEntry>,
+}
+
+/// WireCatalogEntry
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WireCatalogEntry {
+    pub name: String,
+    pub summary: String,
+    pub verb: String,
+    pub stability: String,
+    pub args_schema: serde_json::Value,
+    pub returns_schema: serde_json::Value,
+}
+
 /// Reject values outside the ai.verb enum.
 ///
 /// The wire schema lists a closed set of allowed values; a kernel
@@ -365,5 +383,173 @@ pub fn validate_tool_status(value: &str) -> Result<(), String> {
     } else {
         Err(format!("invalid tool.status value: {value}"))
     }
+}
+
+/// Stable failure returned by generated wire validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireDecodeError {
+    pub code: &'static str,
+    pub schema: &'static str,
+    pub path: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for WireDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: invalid {} at {}: {}", self.code, self.schema, self.path, self.reason)
+    }
+}
+
+impl std::error::Error for WireDecodeError {}
+
+pub const WIRE_CONST: &str = "WIRE_CONST";
+pub const WIRE_ENUM: &str = "WIRE_ENUM";
+pub const WIRE_MAXIMUM: &str = "WIRE_MAXIMUM";
+pub const WIRE_MINIMUM: &str = "WIRE_MINIMUM";
+pub const WIRE_ONE_OF: &str = "WIRE_ONE_OF";
+pub const WIRE_REQUIRED: &str = "WIRE_REQUIRED";
+pub const WIRE_TYPE: &str = "WIRE_TYPE";
+pub const WIRE_UNKNOWN_FIELD: &str = "WIRE_UNKNOWN_FIELD";
+
+fn wire_error(
+    code: &'static str,
+    schema: &'static str,
+    path: &str,
+    reason: impl Into<String>,
+) -> WireDecodeError {
+    WireDecodeError { code, schema, path: path.to_string(), reason: reason.into() }
+}
+
+fn validate_wire_schema(
+    rule: &serde_json::Value,
+    root: &serde_json::Value,
+    value: &serde_json::Value,
+    schema_name: &'static str,
+    path: &str,
+) -> Result<(), WireDecodeError> {
+    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference.rsplit('/').next().unwrap_or_default();
+        let target = root.get("$defs").and_then(|defs| defs.get(name)).ok_or_else(|| {
+            wire_error(WIRE_TYPE, schema_name, path, format!("unresolved schema reference {reference}"))
+        })?;
+        return validate_wire_schema(target, root, value, schema_name, path);
+    }
+    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {
+        let matches = branches.iter().filter(|branch| {
+            validate_wire_schema(branch, root, value, schema_name, path).is_ok()
+        }).count();
+        if matches != 1 {
+            return Err(wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape"));
+        }
+        return Ok(());
+    }
+    if let Some(expected) = rule.get("type").and_then(serde_json::Value::as_str) {
+        let valid = match expected {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            _ => false,
+        };
+        if !valid {
+            return Err(wire_error(WIRE_TYPE, schema_name, path, format!("expected {expected}")));
+        }
+    }
+    if let Some(expected) = rule.get("const") {
+        if value != expected {
+            return Err(wire_error(WIRE_CONST, schema_name, path, "value does not match const"));
+        }
+    }
+    if let Some(allowed) = rule.get("enum").and_then(serde_json::Value::as_array) {
+        if !allowed.contains(value) {
+            return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));
+        }
+    }
+    if let Some(number) = value.as_f64() {
+        if let Some(minimum) = rule.get("minimum").and_then(serde_json::Value::as_f64) {
+            if number < minimum {
+                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {minimum}")));
+            }
+        }
+        if let Some(maximum) = rule.get("maximum").and_then(serde_json::Value::as_f64) {
+            if number > maximum {
+                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {maximum}")));
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = rule.get("required").and_then(serde_json::Value::as_array) {
+            for field in required {
+                let field = field.as_str().unwrap_or_default();
+                if !object.contains_key(field) {
+                    let field_path = format!("{path}.{field}");
+                    return Err(wire_error(WIRE_REQUIRED, schema_name, &field_path, "field is required"));
+                }
+            }
+        }
+        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {
+            let mut names: Vec<&String> = properties.keys().collect();
+            names.sort();
+            for name in names {
+                if let Some(field_value) = object.get(name) {
+                    let field_path = format!("{path}.{name}");
+                    validate_wire_schema(&properties[name], root, field_value, schema_name, &field_path)?;
+                }
+            }
+            let mut extras: Vec<&String> = object.keys().filter(|name| !properties.contains_key(*name)).collect();
+            extras.sort();
+            if rule.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                if let Some(name) = extras.first() {
+                    let field_path = format!("{path}.{name}");
+                    return Err(wire_error(WIRE_UNKNOWN_FIELD, schema_name, &field_path, "unknown field"));
+                }
+            } else if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {
+                for name in extras {
+                    let field_path = format!("{path}.{name}");
+                    validate_wire_schema(additional, root, &object[name], schema_name, &field_path)?;
+                }
+            }
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(item_rule) = rule.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                let item_path = format!("{path}[{index}]");
+                validate_wire_schema(item_rule, root, item, schema_name, &item_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
+pub fn validate_ai(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "Ai", "$")
+}
+
+const _WIRE_SCHEMA_TOOL_CATALOG: &str = r###"{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}"###;
+pub fn validate_tool_catalog(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL_CATALOG)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "ToolCatalog", "$")
+}
+
+const _WIRE_SCHEMA_TOOL: &str = r###"{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}"###;
+pub fn validate_tool(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "Tool", "$")
+}
+
+const _WIRE_SCHEMA_AI_BUDGET: &str = r###"{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"}"###;
+pub fn validate_ai_budget(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI_BUDGET)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "AiBudget", "$")
 }
 

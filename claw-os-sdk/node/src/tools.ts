@@ -16,6 +16,11 @@
 //   }
 
 import { BridgeError, Unavailable, asObject, cosCallJson, hasError } from "./transport";
+import {
+  WireDecodeError,
+  validateTool,
+  validateToolCatalog,
+} from "./generated";
 
 /** Base class for every error this module raises. */
 export class ToolError extends BridgeError {}
@@ -81,15 +86,23 @@ export function call(
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);
     throw e;
   }
-  const env = asObject(outcome.envelope);
   if (outcome.status !== 0 || hasError(outcome.envelope)) {
-    throw new ToolDenied(env);
+    throw new ToolDenied(asObject(outcome.envelope));
   }
+  try {
+    validateTool(outcome.envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new ToolUnavailable(`tool result decode failed: ${error.message}`);
+    }
+    throw error;
+  }
+  const env = outcome.envelope;
   return {
-    name: String(env["tool"] ?? name),
-    appId: String(env["app_id"] ?? app),
-    status: String(env["status"] ?? "ok"),
-    value: env["result"],
+    name: env.tool,
+    appId: env.app_id,
+    status: env.status,
+    value: env.result,
     raw: env,
   };
 }
@@ -112,25 +125,23 @@ export function catalog(): CatalogEntry[] {
   if (outcome.status !== 0 || hasError(outcome.envelope)) {
     throw new ToolDenied(asObject(outcome.envelope));
   }
-  const env = asObject(outcome.envelope);
-  const rows = Array.isArray(env["tools"])
-    ? (env["tools"] as unknown[])
-    : Array.isArray(outcome.envelope)
-      ? (outcome.envelope as unknown[])
-      : null;
-  if (!rows) {
-    throw new ToolUnavailable("cos ai tools envelope missing `tools` array");
+  try {
+    validateToolCatalog(outcome.envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new ToolUnavailable(`catalog decode failed: ${error.message}`);
+    }
+    throw error;
   }
-  return rows
-    .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
-    .map((row) => ({
-      name: String(row["name"] ?? ""),
-      summary: String(row["summary"] ?? ""),
-      verb: String(row["verb"] ?? ""),
-      stability: String(row["stability"] ?? "experimental"),
-      argsSchema: maybeSchema(row["args_schema"]),
-      returnsSchema: maybeSchema(row["returns_schema"]),
-      raw: row,
+  const env = outcome.envelope;
+  return env.tools.map((row) => ({
+      name: row.name,
+      summary: row.summary,
+      verb: row.verb,
+      stability: row.stability,
+      argsSchema: row.args_schema,
+      returnsSchema: row.returns_schema,
+      raw: { ...row },
     }));
 }
 
@@ -149,20 +160,4 @@ export function forChat(...names: string[]): string[] {
     if (s) out.push(s);
   }
   return out;
-}
-
-function maybeSchema(blob: unknown): Record<string, unknown> | undefined {
-  if (blob == null) return undefined;
-  if (typeof blob === "object") return blob as Record<string, unknown>;
-  if (typeof blob === "string") {
-    try {
-      const parsed = JSON.parse(blob);
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
 }

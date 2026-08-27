@@ -5,11 +5,19 @@ Run `python3 wire/codegen.py` from the SDK root to regenerate.
 
 from __future__ import annotations
 
+import json
+import math
+
 from typing import Any, Dict, List, Mapping, TypedDict
 
 # Wire-version value the kernel must advertise. See
 # wire/v1/envelope.schema.json.
 EXPECTED_WIRE_VERSION = 1
+JSONRPC_ERROR_INTERNAL = -32603
+JSONRPC_ERROR_INVALID_PARAMS = -32602
+JSONRPC_ERROR_INVALID_REQUEST = -32600
+JSONRPC_ERROR_METHOD_NOT_FOUND = -32601
+JSONRPC_ERROR_PARSE = -32700
 
 
 def check_wire_version(envelope: Mapping[str, object]) -> None:
@@ -76,7 +84,7 @@ class AiToolCall(TypedDict):
     """
     id: str
     name: str
-    input: Any
+    input: Dict[str, Any]
 
 class App(TypedDict, total=False):
     """App-verb invocation reply.
@@ -273,6 +281,23 @@ class Tool(TypedDict):
     status: str
     result: Any
 
+class ToolCatalog(TypedDict):
+    """Catalog tool list reply.
+
+    Shape returned by `cos ai tools`.
+    """
+    tools: List["WireCatalogEntry"]
+
+class WireCatalogEntry(TypedDict):
+    """WireCatalogEntry.
+    """
+    name: str
+    summary: str
+    verb: str
+    stability: str
+    args_schema: Dict[str, Any]
+    returns_schema: Dict[str, Any]
+
 def validate_ai_verb(value: str) -> None:
     """Raise ValueError if value is not in the ai.verb
     enum. Mirrors generated::validate_ai_verb."""
@@ -307,4 +332,126 @@ def validate_tool_status(value: str) -> None:
     allowed = ['ok']
     if value not in allowed:
         raise ValueError(f"invalid tool.status value: {value!r}")
+
+class WireDecodeError(ValueError):
+    """Stable failure returned by generated wire validators."""
+
+    def __init__(self, code: str, schema: str, path: str, reason: str) -> None:
+        self.code = code
+        self.schema = schema
+        self.path = path
+        self.reason = reason
+        super().__init__(f"{code}: invalid {schema} at {path}: {reason}")
+
+WIRE_CONST = "WIRE_CONST"
+WIRE_ENUM = "WIRE_ENUM"
+WIRE_MAXIMUM = "WIRE_MAXIMUM"
+WIRE_MINIMUM = "WIRE_MINIMUM"
+WIRE_ONE_OF = "WIRE_ONE_OF"
+WIRE_REQUIRED = "WIRE_REQUIRED"
+WIRE_TYPE = "WIRE_TYPE"
+WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
+
+def _wire_error(code: str, schema: str, path: str, reason: str) -> WireDecodeError:
+    return WireDecodeError(code, schema, path, reason)
+
+def _validate_wire_schema(
+    rule: Mapping[str, Any],
+    root: Mapping[str, Any],
+    value: Any,
+    schema_name: str,
+    path: str,
+) -> None:
+    reference = rule.get("$ref")
+    if isinstance(reference, str):
+        target = root.get("$defs", {}).get(reference.rsplit("/", 1)[-1])
+        if not isinstance(target, Mapping):
+            raise _wire_error(WIRE_TYPE, schema_name, path, f"unresolved schema reference {reference}")
+        _validate_wire_schema(target, root, value, schema_name, path)
+        return
+    branches = rule.get("oneOf")
+    if isinstance(branches, list):
+        matches = 0
+        for branch in branches:
+            try:
+                _validate_wire_schema(branch, root, value, schema_name, path)
+            except WireDecodeError:
+                continue
+            matches += 1
+        if matches != 1:
+            raise _wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape")
+        return
+    expected = rule.get("type")
+    valid = {
+        "object": isinstance(value, Mapping),
+        "array": isinstance(value, list),
+        "string": isinstance(value, str),
+        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "number": isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
+        "boolean": isinstance(value, bool),
+        "null": value is None,
+    }
+    if isinstance(expected, str) and not valid.get(expected, False):
+        raise _wire_error(WIRE_TYPE, schema_name, path, f"expected {expected}")
+    if "const" in rule and value != rule["const"]:
+        raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")
+    allowed = rule.get("enum")
+    if isinstance(allowed, list) and value not in allowed:
+        raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = rule.get("minimum")
+        if minimum is not None and value < minimum:
+            raise _wire_error(WIRE_MINIMUM, schema_name, path, f"must be >= {minimum}")
+        maximum = rule.get("maximum")
+        if maximum is not None and value > maximum:
+            raise _wire_error(WIRE_MAXIMUM, schema_name, path, f"must be <= {maximum}")
+    if isinstance(value, Mapping):
+        required = rule.get("required", [])
+        for field in required:
+            if field not in value:
+                raise _wire_error(WIRE_REQUIRED, schema_name, f"{path}.{field}", "field is required")
+        properties = rule.get("properties")
+        if isinstance(properties, Mapping):
+            for field in sorted(properties):
+                if field in value:
+                    _validate_wire_schema(
+                        properties[field], root, value[field], schema_name, f"{path}.{field}"
+                    )
+            extras = sorted(field for field in value if field not in properties)
+            additional = rule.get("additionalProperties", True)
+            if additional is False and extras:
+                raise _wire_error(WIRE_UNKNOWN_FIELD, schema_name, f"{path}.{extras[0]}", "unknown field")
+            if isinstance(additional, Mapping):
+                for field in extras:
+                    _validate_wire_schema(
+                        additional, root, value[field], schema_name, f"{path}.{field}"
+                    )
+    if isinstance(value, list) and isinstance(rule.get("items"), Mapping):
+        item_rule = rule["items"]
+        for index, item in enumerate(value):
+            _validate_wire_schema(item_rule, root, item, schema_name, f"{path}[{index}]")
+
+_WIRE_SCHEMA_AI: Dict[str, Any] = json.loads(r'''{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}''')
+
+def validate_ai(value: Any) -> None:
+    """Validate a value against wire/v1/ai.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$")
+
+_WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = json.loads(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
+
+def validate_tool_catalog(value: Any) -> None:
+    """Validate a value against wire/v1/tool_catalog.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value, "ToolCatalog", "$")
+
+_WIRE_SCHEMA_TOOL: Dict[str, Any] = json.loads(r'''{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}''')
+
+def validate_tool(value: Any) -> None:
+    """Validate a value against wire/v1/tool.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$")
+
+_WIRE_SCHEMA_AI_BUDGET: Dict[str, Any] = json.loads(r'''{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"}''')
+
+def validate_ai_budget(value: Any) -> None:
+    """Validate a value against wire/v1/ai_budget.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_AI_BUDGET, _WIRE_SCHEMA_AI_BUDGET, value, "AiBudget", "$")
 

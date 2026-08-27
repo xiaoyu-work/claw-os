@@ -2,6 +2,7 @@ package clawossdk
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -101,6 +102,26 @@ func TestChatErrorClassification(t *testing.T) {
 				t.Fatalf("%s: want AiDeniedError, got %T", c.body, err)
 			}
 		}
+	}
+}
+
+func TestChatRejectsMalformedToolCall(t *testing.T) {
+	body := `{
+	  "verb":"ai.chat","text":"hello","model":"m","provider":"p",
+	  "usage":{"input_tokens":1,"output_tokens":1,"units":2},
+	  "budget":{"period":"2026-08","units_used":2,"units_cap":100},
+	  "review":{"safety":"strict","prompt_redacted":false},
+	  "tool_calls":[{"id":"c1","input":{}}]
+	}`
+	bin, _ := fakeCos(t, body, 0)
+	var err error
+	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
+		_, err = Chat("hi", ChatOptions{})
+	})
+	unavailable, ok := err.(*AiUnavailableError)
+	if !ok || !strings.Contains(unavailable.Msg, "WIRE_REQUIRED") ||
+		!strings.Contains(unavailable.Msg, "$.tool_calls[0].name") {
+		t.Fatalf("expected strict decode error, got %T %v", err, err)
 	}
 }
 

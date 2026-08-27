@@ -62,8 +62,9 @@ func TestToolDenied(t *testing.T) {
 func TestCatalogParses(t *testing.T) {
 	body := `{"tools": [
 		{"name": "fs.read_text", "summary": "read", "verb": "fs.read", "stability": "stable",
-		 "args_schema": {"type": "object"}, "returns_schema": "{\"type\":\"string\"}"},
-		{"name": "kv.get"}
+		 "args_schema": {"type": "object"}, "returns_schema": {"type":"string"}},
+		{"name": "kv.get", "summary": "get", "verb": "data.kv.read", "stability": "experimental",
+		 "args_schema": {}, "returns_schema": {}}
 	]}`
 	bin, argvOut := fakeCos(t, body, 0)
 	var entries []CatalogEntry
@@ -81,10 +82,10 @@ func TestCatalogParses(t *testing.T) {
 		t.Fatalf("entry0 = %+v", entries[0])
 	}
 	if entries[0].ReturnsSchema["type"] != "string" {
-		t.Fatalf("returns_schema not parsed from string: %v", entries[0].ReturnsSchema)
+		t.Fatalf("returns_schema = %v", entries[0].ReturnsSchema)
 	}
 	if entries[1].Stability != "experimental" {
-		t.Fatalf("missing stability should default to experimental, got %q", entries[1].Stability)
+		t.Fatalf("stability = %q", entries[1].Stability)
 	}
 	// Catalog must NOT pass --app or a `list` subcommand.
 	argv := readArgv(t, argvOut)

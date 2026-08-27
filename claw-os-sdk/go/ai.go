@@ -201,6 +201,9 @@ func Budget(appID string) (*AiBudget, error) {
 	if out.Status != 0 || out.hasError() {
 		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(out.Envelope["error"])}
 	}
+	if err := ValidateAiBudget(out.Envelope); err != nil {
+		return nil, &AiUnavailableError{Msg: "budget response decode failed: " + err.Error()}
+	}
 	b := parseBudget(out.Envelope)
 	return &b, nil
 }
@@ -295,7 +298,11 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 	if out.Status != 0 || out.hasError() {
 		return nil, classifyError(out.Envelope)
 	}
-	return parseResponse(out.Envelope), nil
+	response, err := parseResponse(out.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func classifyError(env map[string]any) error {
@@ -317,17 +324,19 @@ func parseBudget(blk map[string]any) AiBudget {
 	}
 }
 
-func parseResponse(env map[string]any) *AiResponse {
+func parseResponse(env map[string]any) (*AiResponse, error) {
+	if err := ValidateAi(env); err != nil {
+		return nil, &AiUnavailableError{Msg: "ai response decode failed: " + err.Error()}
+	}
 	usage := asMap(env["usage"])
 	review := asMap(env["review"])
 
 	var calls []ProposedToolCall
-	if raw, ok := env["tool_calls"].([]any); ok {
-		for _, c := range raw {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
+	if raw, present := env["tool_calls"]; present {
+		rawCalls := raw.([]any)
+		calls = make([]ProposedToolCall, 0, len(rawCalls))
+		for _, c := range rawCalls {
+			cm := c.(map[string]any)
 			calls = append(calls, ProposedToolCall{
 				ID:    asString(cm["id"]),
 				Name:  asString(cm["name"]),
@@ -348,16 +357,10 @@ func parseResponse(env map[string]any) *AiResponse {
 		},
 		Budget: parseBudget(asMap(env["budget"])),
 		Review: AiReview{
-			Safety: func() string {
-				s := asString(review["safety"])
-				if s == "" {
-					return "strict"
-				}
-				return s
-			}(),
+			Safety:         asString(review["safety"]),
 			PromptRedacted: asBool(review["prompt_redacted"]),
 		},
 		ToolCalls: calls,
 		Raw:       env,
-	}
+	}, nil
 }

@@ -22,6 +22,7 @@
 
 pub mod client;
 pub mod discover;
+mod generated;
 pub mod integration;
 pub mod protocol;
 pub mod server;

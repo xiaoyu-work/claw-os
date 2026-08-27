@@ -35,7 +35,16 @@ class HandshakeTests(unittest.TestCase):
 
         out = _drive(
             app,
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": serve.PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
         )
 
         self.assertEqual(len(out), 1)
@@ -54,6 +63,13 @@ class HandshakeTests(unittest.TestCase):
         )
 
         self.assertEqual(out, [])
+
+    def test_initialize_missing_params_returns_invalid_params(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
 
     def test_name_defaults_to_cos_app_id(self) -> None:
         prev = os.environ.get("COS_APP_ID")
@@ -267,6 +283,13 @@ class TransportTests(unittest.TestCase):
         )
 
         self.assertEqual(out[0]["result"], {})
+
+    def test_explicit_null_id_is_a_request(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": None, "method": "ping"},
+        )
+        self.assertEqual(out, [{"jsonrpc": "2.0", "id": None, "result": {}}])
 
 
 class FrameValidationTests(unittest.TestCase):

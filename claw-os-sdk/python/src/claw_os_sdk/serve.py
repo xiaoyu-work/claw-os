@@ -68,18 +68,20 @@ import traceback
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
+from .generated import (
+    JSONRPC_ERROR_INTERNAL as ERR_INTERNAL,
+    JSONRPC_ERROR_INVALID_PARAMS as ERR_INVALID_PARAMS,
+    JSONRPC_ERROR_INVALID_REQUEST as ERR_INVALID_REQUEST,
+    JSONRPC_ERROR_METHOD_NOT_FOUND as ERR_METHOD_NOT_FOUND,
+    JSONRPC_ERROR_PARSE as ERR_PARSE,
+)
+
 
 PROTOCOL_VERSION = "2025-06-18"
 JSONRPC_VERSION = "2.0"
 
 # Wire-version reported by the kernel; must match wire/v1/envelope.schema.json.
 EXPECTED_WIRE_VERSION = 1
-
-ERR_PARSE = -32700
-ERR_INVALID_REQUEST = -32600
-ERR_METHOD_NOT_FOUND = -32601
-ERR_INVALID_PARAMS = -32602
-ERR_INTERNAL = -32603
 
 # Cap any single inbound JSON-RPC frame at 16 MiB. A peer (buggy debug
 # client, fuzz harness, malicious caller) that sends a single 4 GB line
@@ -211,10 +213,33 @@ class App:
 
         method = msg.get("method")
         params = msg.get("params")
-        msg_id = msg.get("id")
-
-        if msg_id is None:
+        if "id" not in msg:
             self._handle_notification(method, params)
+            return
+        if not isinstance(method, str):
+            self._send_error(
+                msg.get("id"),
+                ERR_INVALID_REQUEST,
+                "request method must be a string",
+            )
+            return
+
+        msg_id = msg["id"]
+        valid_id = (
+            msg_id is None
+            or isinstance(msg_id, str)
+            or (
+                isinstance(msg_id, int)
+                and not isinstance(msg_id, bool)
+                and -(2**63) <= msg_id < 2**63
+            )
+        )
+        if not valid_id:
+            self._send_error(
+                None,
+                ERR_INVALID_REQUEST,
+                "request id must be a string, number, or null",
+            )
             return
 
         try:
@@ -237,19 +262,33 @@ class App:
 
     def _handle_request(self, method: Optional[str], params: Any) -> Any:
         if method == "initialize":
-            return self._on_initialize(params or {})
+            if not isinstance(params, dict):
+                raise _RpcError(ERR_INVALID_PARAMS, "initialize params must be an object")
+            return self._on_initialize(params)
         if method == "ping":
             return {}
         if method == "tools/list":
             return self._on_list_tools()
         if method == "tools/call":
-            return self._on_call_tool(params or {})
+            if not isinstance(params, dict):
+                raise _RpcError(ERR_INVALID_PARAMS, "tools/call params must be an object")
+            return self._on_call_tool(params)
         raise _RpcError(ERR_METHOD_NOT_FOUND, f"unknown method `{method}`")
 
     # ---- method handlers --------------------------------------------
 
-    def _on_initialize(self, _params: Dict[str, Any]) -> Dict[str, Any]:
-        # We accept any client protocol version and report ours.
+    def _on_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        if not isinstance(params.get("protocolVersion"), str):
+            raise _RpcError(ERR_INVALID_PARAMS, "missing `protocolVersion`")
+        if not isinstance(params.get("capabilities"), dict):
+            raise _RpcError(ERR_INVALID_PARAMS, "missing `capabilities`")
+        client_info = params.get("clientInfo")
+        if (
+            not isinstance(client_info, dict)
+            or not isinstance(client_info.get("name"), str)
+            or not isinstance(client_info.get("version"), str)
+        ):
+            raise _RpcError(ERR_INVALID_PARAMS, "missing or invalid `clientInfo`")
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
@@ -272,7 +311,9 @@ class App:
         name = params.get("name")
         if not isinstance(name, str):
             raise _RpcError(ERR_INVALID_PARAMS, "missing `name`")
-        arguments = params.get("arguments") or {}
+        arguments = params.get("arguments")
+        if arguments is None:
+            arguments = {}
         if not isinstance(arguments, dict):
             raise _RpcError(ERR_INVALID_PARAMS, "`arguments` must be an object")
         tool = self._tools.get(name)

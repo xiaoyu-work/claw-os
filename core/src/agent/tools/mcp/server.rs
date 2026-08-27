@@ -21,8 +21,9 @@ use serde_json::{json, Value};
 use super::protocol::{
     CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
     InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListToolsResult,
-    ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL, ERR_INVALID_PARAMS,
-    ERR_METHOD_NOT_FOUND, PROTOCOL_VERSION,
+    RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL,
+    ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE,
+    JSONRPC_VERSION, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 use crate::agent::tools::registry::ToolRegistry;
@@ -77,28 +78,58 @@ impl McpServer {
             // doesn't grow unbounded for long-lived servers.
             handlers.retain(|h| !h.is_finished());
 
-            let parsed: Result<JsonRpcRequest, _> = serde_json::from_str(&frame);
+            let raw: Value = match serde_json::from_str(&frame) {
+                Ok(value) => value,
+                Err(error) => {
+                    let response = JsonRpcResponse::err(
+                        RequestId::Null,
+                        JsonRpcError::new(ERR_PARSE, format!("parse error: {error}")),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+            };
+            if !raw.is_object() {
+                let response = JsonRpcResponse::err(
+                    RequestId::Null,
+                    JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
+                );
+                t.send(encode_response(&response)).await?;
+                continue;
+            }
+            if raw.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+                let response = JsonRpcResponse::err(
+                    extract_id(&raw),
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "missing or invalid jsonrpc 2.0 envelope",
+                    ),
+                );
+                t.send(encode_response(&response)).await?;
+                continue;
+            }
+            if raw.get("id").is_none() {
+                continue;
+            }
+            let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
+                Ok(request) => request,
+                Err(error) => {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            format!("invalid request: {error}"),
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+            };
             let server = me.clone();
             let t = t.clone();
             handlers.push(tokio::spawn(async move {
-                let resp = match parsed {
-                    Ok(req) => server.handle(req).await,
-                    Err(err) => JsonRpcResponse::err(
-                        super::protocol::RequestId::Num(0),
-                        JsonRpcError::new(
-                            super::protocol::ERR_PARSE,
-                            format!("parse error: {err}"),
-                        ),
-                    ),
-                };
-                let body = serde_json::to_string(&resp).unwrap_or_else(|_| {
-                    serde_json::to_string(&JsonRpcResponse::err(
-                        super::protocol::RequestId::Num(0),
-                        JsonRpcError::new(ERR_INTERNAL, "encode failed"),
-                    ))
-                    .unwrap_or_default()
-                });
-                let _ = t.send(body).await;
+                let response = server.handle(request).await;
+                let _ = t.send(encode_response(&response)).await;
             }));
         }
         // Best-effort drain of in-flight handlers before returning so
@@ -209,13 +240,22 @@ impl McpServer {
                 return JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(
-                        ERR_METHOD_NOT_FOUND,
+                        ERR_INVALID_PARAMS,
                         format!("tool not registered: {}", params.name),
                     ),
                 );
             }
         };
-        let arguments = params.arguments.unwrap_or(Value::Null);
+        let arguments = match params.arguments {
+            Some(Value::Object(arguments)) => Value::Object(arguments),
+            Some(_) => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
+            None => json!({}),
+        };
         let result = tool.exec(arguments).await;
         let body = CallToolResult {
             content: vec![ContentItem::Text {
@@ -227,6 +267,27 @@ impl McpServer {
             Ok(v) => JsonRpcResponse::ok(id, v),
             Err(e) => JsonRpcResponse::err(id, JsonRpcError::new(ERR_INTERNAL, e.to_string())),
         }
+    }
+}
+
+fn encode_response(response: &JsonRpcResponse) -> String {
+    serde_json::to_string(response).unwrap_or_else(|_| {
+        serde_json::to_string(&JsonRpcResponse::err(
+            RequestId::Null,
+            JsonRpcError::new(ERR_INTERNAL, "encode failed"),
+        ))
+        .unwrap_or_default()
+    })
+}
+
+fn extract_id(raw: &Value) -> RequestId {
+    match raw.get("id") {
+        Some(Value::Number(number)) => number
+            .as_i64()
+            .map(RequestId::Num)
+            .unwrap_or(RequestId::Null),
+        Some(Value::String(value)) => RequestId::Str(value.clone()),
+        _ => RequestId::Null,
     }
 }
 

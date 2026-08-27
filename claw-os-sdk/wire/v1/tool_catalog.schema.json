@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://claw-os.dev/wire/v1/tool_catalog.schema.json",
+  "title": "Catalog tool list reply",
+  "description": "Shape returned by `cos ai tools`.",
+  "type": "object",
+  "required": ["tools"],
+  "additionalProperties": true,
+  "properties": {
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/WireCatalogEntry" }
+    }
+  },
+  "$defs": {
+    "WireCatalogEntry": {
+      "type": "object",
+      "required": [
+        "name",
+        "summary",
+        "verb",
+        "stability",
+        "args_schema",
+        "returns_schema"
+      ],
+      "additionalProperties": true,
+      "properties": {
+        "name": { "type": "string" },
+        "summary": { "type": "string" },
+        "verb": { "type": "string" },
+        "stability": {
+          "type": "string",
+          "enum": ["stable", "experimental"]
+        },
+        "args_schema": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "returns_schema": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

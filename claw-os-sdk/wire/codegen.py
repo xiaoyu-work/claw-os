@@ -30,6 +30,7 @@ Run from the SDK root:
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import sys
@@ -37,15 +38,13 @@ import textwrap
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIRE_DIR = ROOT / "wire" / "v1"
+CONTRACT_PATH = WIRE_DIR / "contract.json"
 RUST_OUT = ROOT / "rust" / "src" / "generated.rs"
 PY_OUT   = ROOT / "python" / "src" / "claw_os_sdk" / "generated.py"
 TS_OUT   = ROOT / "node" / "src" / "generated.ts"
 GO_OUT   = ROOT / "go" / "generated.go"
-
-# Wire protocol version. All schemas pin `wire_version: { const: 1 }`
-# in envelope.schema.json; we re-export the constant from each language
-# binding so consumers have a single source of truth at runtime.
-EXPECTED_WIRE_VERSION = 1
+CORE_MCP_OUT = ROOT.parent / "core" / "src" / "agent" / "tools" / "mcp" / "generated.rs"
+CRATE_MCP_OUT = ROOT.parent / "crates" / "cos-mcp-serve" / "src" / "generated.rs"
 
 BANNER_LINES = [
     "DO NOT EDIT BY HAND.",
@@ -110,6 +109,39 @@ def load_schemas() -> list[tuple[str, dict]]:
         with path.open() as fh:
             schemas.append((name, json.load(fh)))
     return schemas
+
+
+def load_contract() -> dict:
+    with CONTRACT_PATH.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _schema_json(schema: dict) -> str:
+    return json.dumps(schema, sort_keys=True, separators=(",", ":"))
+
+
+def _validation_schemas(
+    schemas: list[tuple[str, dict]], contract: dict
+) -> list[tuple[str, dict]]:
+    by_name = dict(schemas)
+    names = contract["validation"]["schemas"]
+    missing = [name for name in names if name not in by_name]
+    if missing:
+        raise ValueError(f"validation schema not found: {', '.join(missing)}")
+    return [(name, by_name[name]) for name in names]
+
+
+def _validation_targets(
+    schemas: list[tuple[str, dict]], contract: dict
+) -> list[tuple[str, dict]]:
+    targets = _validation_schemas(schemas, contract)
+    by_name = dict(schemas)
+    for target in contract["validation"].get("targets", []):
+        rule = by_name[target["schema"]]
+        for component in target["path"]:
+            rule = rule[component]
+        targets.append((target["name"], rule))
+    return targets
 
 
 # --- rust --------------------------------------------------------------
@@ -200,7 +232,7 @@ def rust_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("")
 
 
-def emit_rust(schemas: list[tuple[str, dict]]) -> str:
+def emit_rust(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -214,7 +246,8 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
     body.append(f"/// Expected wire-version value emitted by the kernel. The")
     body.append(f"/// generated [`Envelope`] type's runtime check accepts only")
     body.append(f"/// this constant; anything else is surfaced as an error.")
-    body.append(f"pub const EXPECTED_WIRE_VERSION: i64 = {EXPECTED_WIRE_VERSION};")
+    expected_wire_version = contract["wire_version"]
+    body.append(f"pub const EXPECTED_WIRE_VERSION: i64 = {expected_wire_version};")
     body.append("")
     body.append("/// Verify a deserialised envelope advertises a wire version this")
     body.append("/// SDK understands. Returns `Err(msg)` on mismatch.")
@@ -262,6 +295,7 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
         body.append("    }")
         body.append("}")
         body.append("")
+    _emit_rust_validation(body, _validation_targets(schemas, contract), contract)
     return "\n".join(body) + "\n"
 
 
@@ -292,6 +326,160 @@ def _collect_enum_validators(parent: str, schema: dict, acc: list) -> None:
     for pname, pschema in props.items():
         if pschema.get("type") == "string" and "enum" in pschema:
             acc.append((parent, pname, list(pschema["enum"])))
+
+
+def _emit_rust_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "/// Stable failure returned by generated wire validators.",
+        "#[derive(Debug, Clone, PartialEq, Eq)]",
+        "pub struct WireDecodeError {",
+        "    pub code: &'static str,",
+        "    pub schema: &'static str,",
+        "    pub path: String,",
+        "    pub reason: String,",
+        "}",
+        "",
+        "impl std::fmt::Display for WireDecodeError {",
+        "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {",
+        "        write!(f, \"{}: invalid {} at {}: {}\", self.code, self.schema, self.path, self.reason)",
+        "    }",
+        "}",
+        "",
+        "impl std::error::Error for WireDecodeError {}",
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'pub const WIRE_{key.upper()}: &str = "{value}";')
+    body.extend([
+        "",
+        "fn wire_error(",
+        "    code: &'static str,",
+        "    schema: &'static str,",
+        "    path: &str,",
+        "    reason: impl Into<String>,",
+        ") -> WireDecodeError {",
+        "    WireDecodeError { code, schema, path: path.to_string(), reason: reason.into() }",
+        "}",
+        "",
+        "fn validate_wire_schema(",
+        "    rule: &serde_json::Value,",
+        "    root: &serde_json::Value,",
+        "    value: &serde_json::Value,",
+        "    schema_name: &'static str,",
+        "    path: &str,",
+        ") -> Result<(), WireDecodeError> {",
+        '    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {',
+        "        let name = reference.rsplit('/').next().unwrap_or_default();",
+        '        let target = root.get("$defs").and_then(|defs| defs.get(name)).ok_or_else(|| {',
+        '            wire_error(WIRE_TYPE, schema_name, path, format!("unresolved schema reference {reference}"))',
+        "        })?;",
+        "        return validate_wire_schema(target, root, value, schema_name, path);",
+        "    }",
+        '    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {',
+        "        let matches = branches.iter().filter(|branch| {",
+        "            validate_wire_schema(branch, root, value, schema_name, path).is_ok()",
+        "        }).count();",
+        "        if matches != 1 {",
+        '            return Err(wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape"));',
+        "        }",
+        "        return Ok(());",
+        "    }",
+        '    if let Some(expected) = rule.get("type").and_then(serde_json::Value::as_str) {',
+        "        let valid = match expected {",
+        '            "object" => value.is_object(),',
+        '            "array" => value.is_array(),',
+        '            "string" => value.is_string(),',
+        '            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),',
+        '            "number" => value.is_number(),',
+        '            "boolean" => value.is_boolean(),',
+        '            "null" => value.is_null(),',
+        "            _ => false,",
+        "        };",
+        "        if !valid {",
+        '            return Err(wire_error(WIRE_TYPE, schema_name, path, format!("expected {expected}")));',
+        "        }",
+        "    }",
+        '    if let Some(expected) = rule.get("const") {',
+        "        if value != expected {",
+        '            return Err(wire_error(WIRE_CONST, schema_name, path, "value does not match const"));',
+        "        }",
+        "    }",
+        '    if let Some(allowed) = rule.get("enum").and_then(serde_json::Value::as_array) {',
+        "        if !allowed.contains(value) {",
+        '            return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));',
+        "        }",
+        "    }",
+        "    if let Some(number) = value.as_f64() {",
+        '        if let Some(minimum) = rule.get("minimum").and_then(serde_json::Value::as_f64) {',
+        "            if number < minimum {",
+        '                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {minimum}")));',
+        "            }",
+        "        }",
+        '        if let Some(maximum) = rule.get("maximum").and_then(serde_json::Value::as_f64) {',
+        "            if number > maximum {",
+        '                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {maximum}")));',
+        "            }",
+        "        }",
+        "    }",
+        "    if let Some(object) = value.as_object() {",
+        '        if let Some(required) = rule.get("required").and_then(serde_json::Value::as_array) {',
+        "            for field in required {",
+        "                let field = field.as_str().unwrap_or_default();",
+        "                if !object.contains_key(field) {",
+        "                    let field_path = format!(\"{path}.{field}\");",
+        '                    return Err(wire_error(WIRE_REQUIRED, schema_name, &field_path, "field is required"));',
+        "                }",
+        "            }",
+        "        }",
+        '        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {',
+        "            let mut names: Vec<&String> = properties.keys().collect();",
+        "            names.sort();",
+        "            for name in names {",
+        "                if let Some(field_value) = object.get(name) {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        "                    validate_wire_schema(&properties[name], root, field_value, schema_name, &field_path)?;",
+        "                }",
+        "            }",
+        "            let mut extras: Vec<&String> = object.keys().filter(|name| !properties.contains_key(*name)).collect();",
+        "            extras.sort();",
+        '            if rule.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {',
+        "                if let Some(name) = extras.first() {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        '                    return Err(wire_error(WIRE_UNKNOWN_FIELD, schema_name, &field_path, "unknown field"));',
+        "                }",
+        '            } else if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {',
+        "                for name in extras {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        "                    validate_wire_schema(additional, root, &object[name], schema_name, &field_path)?;",
+        "                }",
+        "            }",
+        "        }",
+        "    }",
+        "    if let Some(items) = value.as_array() {",
+        '        if let Some(item_rule) = rule.get("items") {',
+        "            for (index, item) in items.iter().enumerate() {",
+        "                let item_path = format!(\"{path}[{index}]\");",
+        "                validate_wire_schema(item_rule, root, item, schema_name, &item_path)?;",
+        "            }",
+        "        }",
+        "    }",
+        "    Ok(())",
+        "}",
+        "",
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate_{_snake(name)}"
+        body.append(f'const {const_name}: &str = r###"{_schema_json(schema)}"###;')
+        body.append(f"pub fn {fn_name}(value: &serde_json::Value) -> Result<(), WireDecodeError> {{")
+        body.append(f"    let schema: serde_json::Value = serde_json::from_str({const_name})")
+        body.append('        .expect("generated wire schema must be valid JSON");')
+        body.append(f'    validate_wire_schema(&schema, &schema, value, "{_camel(name)}", "$")')
+        body.append("}")
+        body.append("")
 
 
 # --- python ------------------------------------------------------------
@@ -368,7 +556,7 @@ def py_typed_dict(name: str, schema: dict, defs: dict, out: list[str]) -> None:
         out.append(f"    {pname}: {ty}")
 
 
-def emit_python(schemas: list[tuple[str, dict]]) -> str:
+def emit_python(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append('"""' + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -377,11 +565,16 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("from __future__ import annotations")
     body.append("")
+    body.append("import json")
+    body.append("import math")
+    body.append("")
     body.append("from typing import Any, Dict, List, Mapping, TypedDict")
     body.append("")
     body.append(f"# Wire-version value the kernel must advertise. See")
     body.append(f"# wire/v1/envelope.schema.json.")
-    body.append(f"EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION}")
+    body.append(f"EXPECTED_WIRE_VERSION = {contract['wire_version']}")
+    for key, value in contract["json_rpc_error_codes"].items():
+        body.append(f"JSONRPC_ERROR_{key.upper()} = {value}")
     body.append("")
     body.append("")
     body.append("def check_wire_version(envelope: Mapping[str, object]) -> None:")
@@ -421,8 +614,120 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
         body.append(f"    allowed = {values!r}")
         body.append("    if value not in allowed:")
         body.append(f"        raise ValueError(f\"invalid {parent}.{field_name} value: {{value!r}}\")")
+    _emit_python_validation(body, _validation_targets(schemas, contract), contract)
     body.append("")
     return "\n".join(body) + "\n"
+
+
+def _emit_python_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "",
+        "class WireDecodeError(ValueError):",
+        '    """Stable failure returned by generated wire validators."""',
+        "",
+        "    def __init__(self, code: str, schema: str, path: str, reason: str) -> None:",
+        "        self.code = code",
+        "        self.schema = schema",
+        "        self.path = path",
+        "        self.reason = reason",
+        '        super().__init__(f"{code}: invalid {schema} at {path}: {reason}")',
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'WIRE_{key.upper()} = "{value}"')
+    body.extend([
+        "",
+        "def _wire_error(code: str, schema: str, path: str, reason: str) -> WireDecodeError:",
+        "    return WireDecodeError(code, schema, path, reason)",
+        "",
+        "def _validate_wire_schema(",
+        "    rule: Mapping[str, Any],",
+        "    root: Mapping[str, Any],",
+        "    value: Any,",
+        "    schema_name: str,",
+        "    path: str,",
+        ") -> None:",
+        '    reference = rule.get("$ref")',
+        "    if isinstance(reference, str):",
+        '        target = root.get("$defs", {}).get(reference.rsplit("/", 1)[-1])',
+        "        if not isinstance(target, Mapping):",
+        '            raise _wire_error(WIRE_TYPE, schema_name, path, f"unresolved schema reference {reference}")',
+        "        _validate_wire_schema(target, root, value, schema_name, path)",
+        "        return",
+        '    branches = rule.get("oneOf")',
+        "    if isinstance(branches, list):",
+        "        matches = 0",
+        "        for branch in branches:",
+        "            try:",
+        "                _validate_wire_schema(branch, root, value, schema_name, path)",
+        "            except WireDecodeError:",
+        "                continue",
+        "            matches += 1",
+        "        if matches != 1:",
+        '            raise _wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape")',
+        "        return",
+        '    expected = rule.get("type")',
+        "    valid = {",
+        '        "object": isinstance(value, Mapping),',
+        '        "array": isinstance(value, list),',
+        '        "string": isinstance(value, str),',
+        '        "integer": isinstance(value, int) and not isinstance(value, bool),',
+        '        "number": isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),',
+        '        "boolean": isinstance(value, bool),',
+        '        "null": value is None,',
+        "    }",
+        "    if isinstance(expected, str) and not valid.get(expected, False):",
+        '        raise _wire_error(WIRE_TYPE, schema_name, path, f"expected {expected}")',
+        '    if "const" in rule and value != rule["const"]:',
+        '        raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")',
+        '    allowed = rule.get("enum")',
+        "    if isinstance(allowed, list) and value not in allowed:",
+        '        raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")',
+        "    if isinstance(value, (int, float)) and not isinstance(value, bool):",
+        '        minimum = rule.get("minimum")',
+        "        if minimum is not None and value < minimum:",
+        '            raise _wire_error(WIRE_MINIMUM, schema_name, path, f"must be >= {minimum}")',
+        '        maximum = rule.get("maximum")',
+        "        if maximum is not None and value > maximum:",
+        '            raise _wire_error(WIRE_MAXIMUM, schema_name, path, f"must be <= {maximum}")',
+        "    if isinstance(value, Mapping):",
+        '        required = rule.get("required", [])',
+        "        for field in required:",
+        "            if field not in value:",
+        '                raise _wire_error(WIRE_REQUIRED, schema_name, f"{path}.{field}", "field is required")',
+        '        properties = rule.get("properties")',
+        "        if isinstance(properties, Mapping):",
+        "            for field in sorted(properties):",
+        "                if field in value:",
+        "                    _validate_wire_schema(",
+        "                        properties[field], root, value[field], schema_name, f\"{path}.{field}\"",
+        "                    )",
+        "            extras = sorted(field for field in value if field not in properties)",
+        '            additional = rule.get("additionalProperties", True)',
+        "            if additional is False and extras:",
+        '                raise _wire_error(WIRE_UNKNOWN_FIELD, schema_name, f"{path}.{extras[0]}", "unknown field")',
+        "            if isinstance(additional, Mapping):",
+        "                for field in extras:",
+        "                    _validate_wire_schema(",
+        "                        additional, root, value[field], schema_name, f\"{path}.{field}\"",
+        "                    )",
+        "    if isinstance(value, list) and isinstance(rule.get(\"items\"), Mapping):",
+        '        item_rule = rule["items"]',
+        "        for index, item in enumerate(value):",
+        '            _validate_wire_schema(item_rule, root, item, schema_name, f"{path}[{index}]")',
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate_{_snake(name)}"
+        body.append("")
+        body.append(f"{const_name}: Dict[str, Any] = json.loads(r'''{_schema_json(schema)}''')")
+        body.append("")
+        body.append(f"def {fn_name}(value: Any) -> None:")
+        body.append(f'    """Validate a value against wire/v1/{name}.schema.json."""')
+        body.append(f'    _validate_wire_schema({const_name}, {const_name}, value, "{_camel(name)}", "$")')
 
 
 # --- typescript --------------------------------------------------------
@@ -483,7 +788,7 @@ def ts_interface(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("}")
 
 
-def emit_ts(schemas: list[tuple[str, dict]]) -> str:
+def emit_ts(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -491,7 +796,7 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("/* eslint-disable */")
     body.append("")
-    body.append(f"export const EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION} as const;")
+    body.append(f"export const EXPECTED_WIRE_VERSION = {contract['wire_version']} as const;")
     body.append("")
     for name, schema in schemas:
         ts_interface(name, schema, schema.get("$defs", {}), body)
@@ -501,8 +806,159 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
             ts_interface(nname, nschema, schema.get("$defs", {}), body)
         for def_name, def_schema in schema.get("$defs", {}).items():
             ts_interface(def_name, def_schema, {}, body)
+    _emit_ts_validation(body, _validation_targets(schemas, contract), contract)
     body.append("")
     return "\n".join(body) + "\n"
+
+
+def _emit_ts_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "",
+        "/** Stable failure returned by generated wire validators. */",
+        "export class WireDecodeError extends Error {",
+        "  constructor(",
+        "    readonly code: string,",
+        "    readonly schema: string,",
+        "    readonly path: string,",
+        "    readonly reason: string,",
+        "  ) {",
+        "    super(`${code}: invalid ${schema} at ${path}: ${reason}`);",
+        '    this.name = "WireDecodeError";',
+        "  }",
+        "}",
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'export const WIRE_{key.upper()} = "{value}" as const;')
+    body.extend([
+        "",
+        "type WireRule = Record<string, unknown>;",
+        "",
+        "function isRecord(value: unknown): value is Record<string, unknown> {",
+        "  return typeof value === \"object\" && value !== null && !Array.isArray(value);",
+        "}",
+        "",
+        "function wireError(code: string, schema: string, path: string, reason: string): WireDecodeError {",
+        "  return new WireDecodeError(code, schema, path, reason);",
+        "}",
+        "",
+        "function validateWireSchema(",
+        "  rule: WireRule,",
+        "  root: WireRule,",
+        "  value: unknown,",
+        "  schemaName: string,",
+        "  path: string,",
+        "): void {",
+        '  const reference = rule["$ref"];',
+        "  if (typeof reference === \"string\") {",
+        '    const defs = root["$defs"];',
+        "    const parts = reference.split(\"/\");",
+        "    const target = isRecord(defs) ? defs[parts[parts.length - 1]] : undefined;",
+        "    if (!isRecord(target)) {",
+        "      throw wireError(WIRE_TYPE, schemaName, path, `unresolved schema reference ${reference}`);",
+        "    }",
+        "    validateWireSchema(target, root, value, schemaName, path);",
+        "    return;",
+        "  }",
+        '  const branches = rule["oneOf"];',
+        "  if (Array.isArray(branches)) {",
+        "    let matches = 0;",
+        "    for (const branch of branches) {",
+        "      if (!isRecord(branch)) continue;",
+        "      try {",
+        "        validateWireSchema(branch, root, value, schemaName, path);",
+        "        matches += 1;",
+        "      } catch (error) {",
+        "        if (!(error instanceof WireDecodeError)) throw error;",
+        "      }",
+        "    }",
+        "    if (matches !== 1) {",
+        '      throw wireError(WIRE_ONE_OF, schemaName, path, "expected exactly one allowed shape");',
+        "    }",
+        "    return;",
+        "  }",
+        '  const expected = rule["type"];',
+        "  const valid =",
+        '    expected === "object" ? isRecord(value) :',
+        '    expected === "array" ? Array.isArray(value) :',
+        '    expected === "string" ? typeof value === "string" :',
+        '    expected === "integer" ? typeof value === "number" && Number.isSafeInteger(value) :',
+        '    expected === "number" ? typeof value === "number" && Number.isFinite(value) :',
+        '    expected === "boolean" ? typeof value === "boolean" :',
+        '    expected === "null" ? value === null : true;',
+        "  if (typeof expected === \"string\" && !valid) {",
+        "    throw wireError(WIRE_TYPE, schemaName, path, `expected ${expected}`);",
+        "  }",
+        '  if ("const" in rule && !Object.is(value, rule["const"])) {',
+        '    throw wireError(WIRE_CONST, schemaName, path, "value does not match const");',
+        "  }",
+        '  const allowed = rule["enum"];',
+        "  if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {",
+        '    throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");',
+        "  }",
+        "  if (typeof value === \"number\") {",
+        '    const minimum = rule["minimum"];',
+        "    if (typeof minimum === \"number\" && value < minimum) {",
+        "      throw wireError(WIRE_MINIMUM, schemaName, path, `must be >= ${minimum}`);",
+        "    }",
+        '    const maximum = rule["maximum"];',
+        "    if (typeof maximum === \"number\" && value > maximum) {",
+        "      throw wireError(WIRE_MAXIMUM, schemaName, path, `must be <= ${maximum}`);",
+        "    }",
+        "  }",
+        "  if (isRecord(value)) {",
+        '    const required = rule["required"];',
+        "    if (Array.isArray(required)) {",
+        "      for (const field of required) {",
+        "        if (typeof field === \"string\" && !(field in value)) {",
+        '          throw wireError(WIRE_REQUIRED, schemaName, `${path}.${field}`, "field is required");',
+        "        }",
+        "      }",
+        "    }",
+        '    const properties = rule["properties"];',
+        "    if (isRecord(properties)) {",
+        "      for (const field of Object.keys(properties).sort()) {",
+        "        const fieldRule = properties[field];",
+        "        if (field in value && isRecord(fieldRule)) {",
+        "          validateWireSchema(fieldRule, root, value[field], schemaName, `${path}.${field}`);",
+        "        }",
+        "      }",
+        "      const extras = Object.keys(value).filter((field) => !(field in properties)).sort();",
+        '      const additional = rule["additionalProperties"];',
+        "      if (additional === false && extras.length > 0) {",
+        '        throw wireError(WIRE_UNKNOWN_FIELD, schemaName, `${path}.${extras[0]}`, "unknown field");',
+        "      }",
+        "      if (isRecord(additional)) {",
+        "        for (const field of extras) {",
+        "          validateWireSchema(additional, root, value[field], schemaName, `${path}.${field}`);",
+        "        }",
+        "      }",
+        "    }",
+        "  }",
+        '  const itemRule = rule["items"];',
+        "  if (Array.isArray(value) && isRecord(itemRule)) {",
+        "    value.forEach((item, index) => {",
+        "      validateWireSchema(itemRule, root, item, schemaName, `${path}[${index}]`);",
+        "    });",
+        "  }",
+        "}",
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate{_camel(name)}"
+        type_name = _camel(name)
+        body.append("")
+        body.append(f"const {const_name}: WireRule = {_schema_json(schema)};")
+        body.append("")
+        body.append(
+            f"export function {fn_name}(value: unknown): "
+            f"asserts value is {type_name} & Record<string, unknown> {{"
+        )
+        body.append(f'  validateWireSchema({const_name}, {const_name}, value, "{type_name}", "$");')
+        body.append("}")
 
 
 # --- go ----------------------------------------------------------------
@@ -565,7 +1021,7 @@ def go_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("")
 
 
-def emit_go(schemas: list[tuple[str, dict]]) -> str:
+def emit_go(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -573,12 +1029,18 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("package clawossdk")
     body.append("")
-    body.append("import \"fmt\"")
+    body.append("import (")
+    body.append('\t"encoding/json"')
+    body.append('\t"fmt"')
+    body.append('\t"math"')
+    body.append('\t"sort"')
+    body.append('\t"strings"')
+    body.append(")")
     body.append("")
     body.append(f"// ExpectedWireVersion is the wire-protocol version the kernel must")
     body.append(f"// advertise on every envelope. Mirrors generated.rs's")
     body.append(f"// EXPECTED_WIRE_VERSION.")
-    body.append(f"const ExpectedWireVersion = {EXPECTED_WIRE_VERSION}")
+    body.append(f"const ExpectedWireVersion = {contract['wire_version']}")
     body.append("")
     body.append("// CheckWireVersion reports an error when the envelope's")
     body.append("// wire_version does not match what this SDK supports.")
@@ -613,28 +1075,262 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
         body.append(f"\treturn fmt.Errorf(\"invalid {parent}.{field_name} value: %q\", value)")
         body.append("}")
         body.append("")
+    _emit_go_validation(body, _validation_targets(schemas, contract), contract)
+    return "\n".join(body)
+
+
+def _emit_go_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "// WireDecodeError is the stable failure returned by generated wire validators.",
+        "type WireDecodeError struct {",
+        "\tCode string",
+        "\tSchema string",
+        "\tPath string",
+        "\tReason string",
+        "}",
+        "",
+        "func (e *WireDecodeError) Error() string {",
+        '\treturn fmt.Sprintf("%s: invalid %s at %s: %s", e.Code, e.Schema, e.Path, e.Reason)',
+        "}",
+        "",
+        "const (",
+    ])
+    for key, value in codes.items():
+        body.append(f'\tWire{_camel(key)} = "{value}"')
+    body.extend([
+        ")",
+        "",
+        "func wireError(code, schema, path, reason string) error {",
+        "\treturn &WireDecodeError{Code: code, Schema: schema, Path: path, Reason: reason}",
+        "}",
+        "",
+        "func wireRule(value any) (map[string]any, bool) {",
+        "\trule, ok := value.(map[string]any)",
+        "\treturn rule, ok",
+        "}",
+        "",
+        "func wireNumber(value any) (float64, bool) {",
+        "\tvar number float64",
+        "\tswitch value := value.(type) {",
+        "\tcase json.Number:",
+        "\t\tparsed, err := value.Float64()",
+        "\t\tif err != nil { return 0, false }",
+        "\t\tnumber = parsed",
+        "\tcase float64:",
+        "\t\tnumber = value",
+        "\tcase int:",
+        "\t\tnumber = float64(value)",
+        "\tcase int64:",
+        "\t\tnumber = float64(value)",
+        "\tcase uint64:",
+        "\t\tnumber = float64(value)",
+        "\tcase uint32:",
+        "\t\tnumber = float64(value)",
+        "\tdefault:",
+        "\t\treturn 0, false",
+        "\t}",
+        "\treturn number, !math.IsInf(number, 0) && !math.IsNaN(number)",
+        "}",
+        "",
+        "func validateWireSchema(rule, root map[string]any, value any, schemaName, path string) error {",
+        '\tif reference, ok := rule["$ref"].(string); ok {',
+        '\t\tdefs, _ := wireRule(root["$defs"])',
+        '\t\tparts := strings.Split(reference, "/")',
+        "\t\ttarget, found := wireRule(defs[parts[len(parts)-1]])",
+        "\t\tif !found {",
+        '\t\t\treturn wireError(WireType, schemaName, path, "unresolved schema reference "+reference)',
+        "\t\t}",
+        "\t\treturn validateWireSchema(target, root, value, schemaName, path)",
+        "\t}",
+        '\tif branches, ok := rule["oneOf"].([]any); ok {',
+        "\t\tmatches := 0",
+        "\t\tfor _, branchValue := range branches {",
+        "\t\t\tbranch, valid := wireRule(branchValue)",
+        "\t\t\tif valid && validateWireSchema(branch, root, value, schemaName, path) == nil {",
+        "\t\t\t\tmatches++",
+        "\t\t\t}",
+        "\t\t}",
+        "\t\tif matches != 1 {",
+        '\t\t\treturn wireError(WireOneOf, schemaName, path, "expected exactly one allowed shape")',
+        "\t\t}",
+        "\t\treturn nil",
+        "\t}",
+        '\tif expected, ok := rule["type"].(string); ok {',
+        "\t\tvalid := false",
+        "\t\tswitch expected {",
+        '\t\tcase "object":',
+        "\t\t\t_, valid = value.(map[string]any)",
+        '\t\tcase "array":',
+        "\t\t\t_, valid = value.([]any)",
+        '\t\tcase "string":',
+        "\t\t\t_, valid = value.(string)",
+        '\t\tcase "integer":',
+        "\t\t\tnumber, numeric := wireNumber(value)",
+        "\t\t\tvalid = numeric && math.Trunc(number) == number",
+        '\t\tcase "number":',
+        "\t\t\t_, valid = wireNumber(value)",
+        '\t\tcase "boolean":',
+        "\t\t\t_, valid = value.(bool)",
+        '\t\tcase "null":',
+        "\t\t\tvalid = value == nil",
+        "\t\t}",
+        "\t\tif !valid {",
+        '\t\t\treturn wireError(WireType, schemaName, path, "expected "+expected)',
+        "\t\t}",
+        "\t}",
+        '\tif expected, present := rule["const"]; present {',
+        "\t\texpectedNumber, expectedNumeric := wireNumber(expected)",
+        "\t\tactualNumber, actualNumeric := wireNumber(value)",
+        "\t\tif (expectedNumeric && (!actualNumeric || expectedNumber != actualNumber)) || (!expectedNumeric && expected != value) {",
+        '\t\t\treturn wireError(WireConst, schemaName, path, "value does not match const")',
+        "\t\t}",
+        "\t}",
+        '\tif allowed, ok := rule["enum"].([]any); ok {',
+        "\t\tmatched := false",
+        "\t\tfor _, candidate := range allowed {",
+        "\t\t\tif candidate == value { matched = true; break }",
+        "\t\t}",
+        "\t\tif !matched {",
+        '\t\t\treturn wireError(WireEnum, schemaName, path, "value is not in the allowed enum")',
+        "\t\t}",
+        "\t}",
+        "\tif number, numeric := wireNumber(value); numeric {",
+        '\t\tif minimum, ok := wireNumber(rule["minimum"]); ok && number < minimum {',
+        '\t\t\treturn wireError(WireMinimum, schemaName, path, fmt.Sprintf("must be >= %v", minimum))',
+        "\t\t}",
+        '\t\tif maximum, ok := wireNumber(rule["maximum"]); ok && number > maximum {',
+        '\t\t\treturn wireError(WireMaximum, schemaName, path, fmt.Sprintf("must be <= %v", maximum))',
+        "\t\t}",
+        "\t}",
+        "\tif object, ok := value.(map[string]any); ok {",
+        '\t\tif required, ok := rule["required"].([]any); ok {',
+        "\t\t\tfor _, fieldValue := range required {",
+        "\t\t\t\tfield, _ := fieldValue.(string)",
+        "\t\t\t\tif _, present := object[field]; !present {",
+        '\t\t\t\t\treturn wireError(WireRequired, schemaName, path+"."+field, "field is required")',
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t}",
+        '\t\tif properties, ok := wireRule(rule["properties"]); ok {',
+        "\t\t\tnames := make([]string, 0, len(properties))",
+        "\t\t\tfor name := range properties { names = append(names, name) }",
+        "\t\t\tsort.Strings(names)",
+        "\t\t\tfor _, name := range names {",
+        "\t\t\t\tfieldValue, present := object[name]",
+        "\t\t\t\tfieldRule, validRule := wireRule(properties[name])",
+        "\t\t\t\tif present && validRule {",
+        "\t\t\t\t\tif err := validateWireSchema(fieldRule, root, fieldValue, schemaName, path+\".\"+name); err != nil { return err }",
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t\textras := make([]string, 0)",
+        "\t\t\tfor name := range object {",
+        "\t\t\t\tif _, known := properties[name]; !known { extras = append(extras, name) }",
+        "\t\t\t}",
+        "\t\t\tsort.Strings(extras)",
+        '\t\t\tif additional, ok := rule["additionalProperties"].(bool); ok && !additional && len(extras) > 0 {',
+        '\t\t\t\treturn wireError(WireUnknownField, schemaName, path+"."+extras[0], "unknown field")',
+        "\t\t\t}",
+        '\t\t\tif additional, ok := wireRule(rule["additionalProperties"]); ok {',
+        "\t\t\t\tfor _, name := range extras {",
+        "\t\t\t\t\tif err := validateWireSchema(additional, root, object[name], schemaName, path+\".\"+name); err != nil { return err }",
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t}",
+        "\t}",
+        "\tif items, ok := value.([]any); ok {",
+        '\t\tif itemRule, ok := wireRule(rule["items"]); ok {',
+        "\t\t\tfor index, item := range items {",
+        '\t\t\t\tif err := validateWireSchema(itemRule, root, item, schemaName, fmt.Sprintf("%s[%d]", path, index)); err != nil { return err }',
+        "\t\t\t}",
+        "\t\t}",
+        "\t}",
+        "\treturn nil",
+        "}",
+        "",
+    ])
+    for name, schema in schemas:
+        const_name = f"wireSchema{_camel(name)}"
+        fn_name = f"Validate{_camel(name)}"
+        type_name = _camel(name)
+        body.append(f"const {const_name} = {json.dumps(_schema_json(schema))}")
+        body.append("")
+        body.append(f"// {fn_name} validates a value against wire/v1/{name}.schema.json.")
+        body.append(f"func {fn_name}(value any) error {{")
+        body.append("\tvar schema map[string]any")
+        body.append(f"\tdecoder := json.NewDecoder(strings.NewReader({const_name}))")
+        body.append("\tdecoder.UseNumber()")
+        body.append("\tif err := decoder.Decode(&schema); err != nil {")
+        body.append('\t\tpanic("generated wire schema is invalid: " + err.Error())')
+        body.append("\t}")
+        body.append(f'\treturn validateWireSchema(schema, schema, value, "{type_name}", "$")')
+        body.append("}")
+        body.append("")
+
+
+def emit_mcp_rust(contract: dict) -> str:
+    codes = contract["json_rpc_error_codes"]
+    body = [
+        "// " + BANNER_LINES[0],
+        "// Generated by claw-os-sdk/wire/codegen.py from wire/v1/contract.json.",
+        "// Run `python3 wire/codegen.py` from the SDK root to regenerate.",
+        "",
+    ]
+    for key, value in codes.items():
+        body.append(f"pub const ERR_{key.upper()}: i64 = {value};")
+    body.append("")
     return "\n".join(body)
 
 
 # --- main --------------------------------------------------------------
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail when generated outputs differ without writing them",
+    )
+    args = parser.parse_args()
     schemas = load_schemas()
     if not schemas:
         print("no schemas found in", WIRE_DIR, file=sys.stderr)
         return 1
-    RUST_OUT.parent.mkdir(parents=True, exist_ok=True)
-    PY_OUT.parent.mkdir(parents=True, exist_ok=True)
-    TS_OUT.parent.mkdir(parents=True, exist_ok=True)
-    GO_OUT.parent.mkdir(parents=True, exist_ok=True)
-    RUST_OUT.write_text(emit_rust(schemas))
-    PY_OUT.write_text(emit_python(schemas))
-    TS_OUT.write_text(emit_ts(schemas))
-    GO_OUT.write_text(emit_go(schemas))
-    print(f"wrote {RUST_OUT.relative_to(ROOT)}")
-    print(f"wrote {PY_OUT.relative_to(ROOT)}")
-    print(f"wrote {TS_OUT.relative_to(ROOT)}")
-    print(f"wrote {GO_OUT.relative_to(ROOT)}")
+    contract = load_contract()
+    envelope = dict(schemas)["envelope"]
+    envelope_version = envelope["properties"]["wire_version"]["const"]
+    if envelope_version != contract["wire_version"]:
+        print(
+            "contract wire_version does not match envelope schema const",
+            file=sys.stderr,
+        )
+        return 1
+    outputs = {
+        RUST_OUT: emit_rust(schemas, contract),
+        PY_OUT: emit_python(schemas, contract),
+        TS_OUT: emit_ts(schemas, contract),
+        GO_OUT: emit_go(schemas, contract),
+        CORE_MCP_OUT: emit_mcp_rust(contract),
+        CRATE_MCP_OUT: emit_mcp_rust(contract),
+    }
+    if args.check:
+        stale = [
+            path
+            for path, content in outputs.items()
+            if not path.exists() or path.read_text(encoding="utf-8") != content
+        ]
+        if stale:
+            for path in stale:
+                print(f"stale {path.relative_to(ROOT.parent)}", file=sys.stderr)
+            return 1
+        print("generated wire bindings are up to date")
+        return 0
+    for path, content in outputs.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        print(f"wrote {path.relative_to(ROOT.parent)}")
     return 0
 
 

@@ -55,6 +55,7 @@
 //! now to keep desktop binaries off the kernel's dependency surface;
 //! a future cleanup can extract a shared `cos-mcp-types` crate.
 
+mod generated;
 pub mod protocol;
 pub mod server;
 pub mod tool;

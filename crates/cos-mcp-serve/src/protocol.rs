@@ -154,11 +154,9 @@ impl JsonRpcError {
 
 // --- Standard JSON-RPC error codes ---------------------------------
 
-pub const ERR_PARSE: i64 = -32700;
-pub const ERR_INVALID_REQUEST: i64 = -32600;
-pub const ERR_METHOD_NOT_FOUND: i64 = -32601;
-pub const ERR_INVALID_PARAMS: i64 = -32602;
-pub const ERR_INTERNAL: i64 = -32603;
+pub use crate::generated::{
+    ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE,
+};
 
 // --- MCP-specific payloads -----------------------------------------
 

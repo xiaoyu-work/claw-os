@@ -28,6 +28,12 @@ import {
   cosCallJson,
   hasError,
 } from "./transport";
+import {
+  WireDecodeError,
+  validateAi,
+  validateAiBudget,
+  type AiBudget,
+} from "./generated";
 
 /** Base class for every error this module raises. */
 export class AiError extends BridgeError {}
@@ -211,13 +217,21 @@ export function budget(appId?: string): Budget {
     "show",
     app,
   ]);
-  const env = asObject(envelope);
   if (status !== 0 || hasError(envelope)) {
+    const env = asObject(envelope);
     throw new AiUnavailable(
       `cos agent budget show failed: ${String(env["error"] ?? status)}`,
     );
   }
-  return parseBudget(env);
+  try {
+    validateAiBudget(envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new AiUnavailable(`budget response decode failed: ${error.message}`);
+    }
+    throw error;
+  }
+  return parseBudget(envelope);
 }
 
 function resolveApp(modality: string, appId?: string): string {
@@ -255,11 +269,10 @@ function dispatch(a: DispatchArgs): AiResponse {
       if (e instanceof Unavailable) throw new AiUnavailable(e.message);
       throw e;
     }
-    const env = asObject(outcome.envelope);
     if (outcome.status !== 0 || hasError(outcome.envelope)) {
-      raiseForError(env);
+      raiseForError(asObject(outcome.envelope));
     }
-    return parseResponse(env);
+    return parseResponse(outcome.envelope);
   } finally {
     rmSync(privateDir, { recursive: true, force: true });
   }
@@ -276,46 +289,44 @@ function raiseForError(env: Record<string, unknown>): never {
   throw new AiDenied(env);
 }
 
-function num(v: unknown): number {
-  const n = typeof v === "number" ? v : Number(v);
-  return Number.isFinite(n) ? n : 0;
-}
-
-function parseBudget(blk: Record<string, unknown>): Budget {
+function parseBudget(blk: AiBudget): Budget {
   return {
-    period: String(blk["period"] ?? ""),
-    unitsUsed: num(blk["units_used"]),
-    unitsCap: num(blk["units_cap"]),
+    period: blk.period,
+    unitsUsed: blk.units_used,
+    unitsCap: blk.units_cap,
   };
 }
 
-function parseResponse(env: Record<string, unknown>): AiResponse {
-  const usage = asObject(env["usage"]);
-  const review = asObject(env["review"]);
-  const rawCalls = env["tool_calls"];
-  const toolCalls: ProposedToolCall[] = Array.isArray(rawCalls)
-    ? rawCalls
-        .filter((tc): tc is Record<string, unknown> => typeof tc === "object" && tc !== null)
-        .map((tc) => ({
-          id: String(tc["id"] ?? ""),
-          name: String(tc["name"] ?? ""),
-          input: asObject(tc["input"]),
-        }))
-    : [];
+function parseResponse(env: unknown): AiResponse {
+  try {
+    validateAi(env);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new AiUnavailable(`ai response decode failed: ${error.message}`);
+    }
+    throw error;
+  }
+  const usage = env.usage;
+  const review = env.review;
+  const toolCalls: ProposedToolCall[] = (env.tool_calls ?? []).map((toolCall) => ({
+    id: toolCall.id,
+    name: toolCall.name,
+    input: toolCall.input,
+  }));
   return {
-    text: String(env["text"] ?? ""),
-    model: String(env["model"] ?? ""),
-    provider: String(env["provider"] ?? ""),
-    verb: String(env["verb"] ?? ""),
+    text: env.text,
+    model: env.model,
+    provider: env.provider,
+    verb: env.verb,
     usage: {
-      inputTokens: num(usage["input_tokens"]),
-      outputTokens: num(usage["output_tokens"]),
-      units: num(usage["units"]),
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      units: usage.units,
     },
-    budget: parseBudget(asObject(env["budget"])),
+    budget: parseBudget(env.budget),
     review: {
-      safety: String(review["safety"] ?? "strict"),
-      promptRedacted: Boolean(review["prompt_redacted"] ?? false),
+      safety: review.safety,
+      promptRedacted: review.prompt_redacted,
     },
     toolCalls,
     raw: env,

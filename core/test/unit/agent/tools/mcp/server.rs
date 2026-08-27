@@ -90,7 +90,7 @@ async fn unknown_method_yields_method_not_found() {
 }
 
 #[tokio::test]
-async fn unknown_tool_yields_method_not_found() {
+async fn unknown_tool_yields_invalid_params() {
     let (client_t, server_t) = in_memory_pair();
     let server = McpServer::new("cos", "0", registry_with_echo());
     let server_handle = tokio::spawn(server.serve(server_t));
@@ -100,7 +100,7 @@ async fn unknown_tool_yields_method_not_found() {
     let err = client.call_tool("missing", None).await.unwrap_err();
     match err {
         ClientError::Server { code, .. } => {
-            assert_eq!(code, ERR_METHOD_NOT_FOUND);
+            assert_eq!(code, ERR_INVALID_PARAMS);
         }
         other => panic!("expected Server error, got {other:?}"),
     }
@@ -126,5 +126,21 @@ async fn parse_error_does_not_kill_server() {
     client.start().await;
     let _ = client.request("ping", None).await.unwrap();
     drop(client);
+    let _ = server_handle.await;
+}
+
+#[tokio::test]
+async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
+    let (client_t, server_t) = in_memory_pair();
+    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server_handle = tokio::spawn(server.serve(server_t));
+
+    client_t.send("[]".into()).await.unwrap();
+    let frame = client_t.recv().await.unwrap().unwrap();
+    let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response.id, super::super::protocol::RequestId::Null);
+    assert_eq!(response.error.unwrap().code, ERR_INVALID_REQUEST);
+
+    drop(client_t);
     let _ = server_handle.await;
 }

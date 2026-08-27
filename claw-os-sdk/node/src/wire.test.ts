@@ -1,0 +1,96 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  WIRE_ENUM,
+  WIRE_MINIMUM,
+  WIRE_REQUIRED,
+  WIRE_TYPE,
+  WIRE_UNKNOWN_FIELD,
+  WireDecodeError,
+  validateAi,
+  validateTool,
+  validateToolCatalog,
+} from "./generated";
+
+function validAi(): Record<string, unknown> {
+  return {
+    text: "hello",
+    model: "m",
+    provider: "p",
+    verb: "ai.chat",
+    usage: { input_tokens: 1, output_tokens: 2, units: 3 },
+    budget: { period: "2026-08", units_used: 3, units_cap: 100 },
+    review: { safety: "strict", prompt_redacted: false },
+    tool_calls: [{ id: "c1", name: "echo", input: { value: "ok" } }],
+  };
+}
+
+test("AI validator enforces the shared contract", () => {
+  const cases: Array<[Record<string, unknown>, string, string]> = [];
+
+  const missing = validAi();
+  delete missing.text;
+  cases.push([missing, WIRE_REQUIRED, "$.text"]);
+
+  const wrongType = validAi();
+  (wrongType.usage as Record<string, unknown>).input_tokens = "1";
+  cases.push([wrongType, WIRE_TYPE, "$.usage.input_tokens"]);
+
+  const belowMinimum = validAi();
+  (belowMinimum.usage as Record<string, unknown>).units = -1;
+  cases.push([belowMinimum, WIRE_MINIMUM, "$.usage.units"]);
+
+  const invalidEnum = validAi();
+  invalidEnum.verb = "ai.unknown";
+  cases.push([invalidEnum, WIRE_ENUM, "$.verb"]);
+
+  const unknownNested = validAi();
+  (unknownNested.usage as Record<string, unknown>).extra = true;
+  cases.push([unknownNested, WIRE_UNKNOWN_FIELD, "$.usage.extra"]);
+
+  const malformedCall = validAi();
+  delete ((malformedCall.tool_calls as Array<Record<string, unknown>>)[0]).name;
+  cases.push([malformedCall, WIRE_REQUIRED, "$.tool_calls[0].name"]);
+
+  const malformedInput = validAi();
+  ((malformedInput.tool_calls as Array<Record<string, unknown>>)[0]).input = "scalar";
+  cases.push([malformedInput, WIRE_TYPE, "$.tool_calls[0].input"]);
+
+  for (const [payload, code, path] of cases) {
+    assert.throws(
+      () => validateAi(payload),
+      (error: unknown) =>
+        error instanceof WireDecodeError &&
+        error.code === code &&
+        error.path === path,
+    );
+  }
+});
+
+test("structured items are validated without skipping", () => {
+  assert.doesNotThrow(() => validateAi(validAi()));
+  assert.doesNotThrow(() =>
+    validateTool({ tool: "echo", app_id: "app", status: "ok", result: null }),
+  );
+  assert.throws(
+    () =>
+      validateToolCatalog({
+        tools: [
+          {
+            name: "echo",
+            summary: "Echo",
+            verb: "ipc.invoke",
+            stability: "stable",
+            args_schema: {},
+            returns_schema: {},
+          },
+          7,
+        ],
+      }),
+    (error: unknown) =>
+      error instanceof WireDecodeError &&
+      error.code === WIRE_TYPE &&
+      error.path === "$.tools[1]",
+  );
+});

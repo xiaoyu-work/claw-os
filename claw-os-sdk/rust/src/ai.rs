@@ -317,8 +317,9 @@ fn parse_response(value: serde_json::Value) -> Result<AiResponse, AiError> {
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(classify_ai_error(err, &value));
     }
-    // Decode the kernel reply into the stable response type. Keep
-    // schema drift loud instead of substituting an empty response.
+    crate::generated::validate_ai(&value).map_err(|error| {
+        AiError::Unavailable(format!("ai response decode failed: {error}"))
+    })?;
     let resp: AiResponse =
         serde_json::from_value(value).map_err(|e| {
             AiError::Unavailable(format!("ai response decode failed: {e}"))

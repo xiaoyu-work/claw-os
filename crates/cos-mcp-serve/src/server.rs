@@ -178,34 +178,7 @@ impl Server {
                 }
             }
 
-            // Notifications: per spec, MUST NOT carry an `id` field.
-            // A "notifications/*" frame WITH an id is malformed.
-            let method_starts_with_notifications = raw
-                .get("method")
-                .and_then(|m| m.as_str())
-                .map(|s| s.starts_with("notifications/"))
-                .unwrap_or(false);
             let has_id = raw.get("id").is_some();
-            if method_starts_with_notifications {
-                if has_id {
-                    let id = extract_id(&raw);
-                    let resp = JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(
-                            ERR_INVALID_REQUEST,
-                            "notifications/* must not carry an id",
-                        ),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                }
-                // Drop the notification silently.
-                continue;
-            }
-
-            // Conversely, a frame with no id but a non-notification
-            // method is still a notification per spec — silently
-            // accept the `JsonRpcNotification` shape and ignore.
             if !has_id {
                 let _ = serde_json::from_value::<JsonRpcNotification>(raw);
                 continue;
@@ -272,14 +245,12 @@ impl Server {
                     );
                 }
             },
-            None => InitializeParams {
-                protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
-                capabilities: Default::default(),
-                client_info: Implementation {
-                    name: "unknown".into(),
-                    version: "unknown".into(),
-                },
-            },
+            None => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "missing params"),
+                );
+            }
         };
         let result = InitializeResult {
             protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
@@ -351,13 +322,22 @@ impl Server {
                 return JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(
-                        ERR_METHOD_NOT_FOUND,
+                        ERR_INVALID_PARAMS,
                         format!("tool not registered: {}", params.name),
                     ),
                 );
             }
         };
-        let arguments = params.arguments.unwrap_or(Value::Null);
+        let arguments = match params.arguments {
+            Some(Value::Object(arguments)) => Value::Object(arguments),
+            Some(_) => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
+            None => json!({}),
+        };
         let result = tool.exec(arguments).await;
         let body = CallToolResult {
             content: vec![ContentItem::Text {

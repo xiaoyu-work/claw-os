@@ -57,6 +57,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from .generated import WireDecodeError, validate_ai, validate_ai_budget
+
 
 # Subprocess timeout — covers every shell-out to the `cos` binary. The
 # default is long enough for slow providers but bounded so a hung child
@@ -158,7 +160,7 @@ class ProposedToolCall:
 
     id: str
     name: str
-    input: Dict[str, Any] = field(default_factory=dict)
+    input: Dict[str, Any]
 
 
 @dataclass
@@ -348,10 +350,14 @@ def budget(app_id: Optional[str] = None) -> Budget:
         raise AiUnavailable(
             f"cos agent budget show exited {proc.returncode}: {_truncate(text)}"
         )
+    try:
+        validate_ai_budget(env)
+    except WireDecodeError as exc:
+        raise AiUnavailable(f"budget response decode failed: {exc}") from exc
     return Budget(
-        period=env.get("period", ""),
-        units_used=int(env.get("units_used", 0) or 0),
-        units_cap=int(env.get("units_cap", 0) or 0),
+        period=env["period"],
+        units_used=env["units_used"],
+        units_cap=env["units_cap"],
     )
 
 
@@ -430,40 +436,41 @@ def _dispatch(
 
 
 def _parse_response(env: Mapping[str, Any]) -> AiResponse:
-    usage = env.get("usage") or {}
-    budget_blk = env.get("budget") or {}
-    review = env.get("review") or {}
-    raw_calls = env.get("tool_calls") or []
+    try:
+        validate_ai(env)
+    except WireDecodeError as exc:
+        raise AiUnavailable(f"ai response decode failed: {exc}") from exc
+    usage = env["usage"]
+    budget_blk = env["budget"]
+    review = env["review"]
+    raw_calls = env.get("tool_calls", [])
     parsed_calls: List[ProposedToolCall] = []
-    if isinstance(raw_calls, list):
-        for tc in raw_calls:
-            if not isinstance(tc, Mapping):
-                continue
-            parsed_calls.append(
-                ProposedToolCall(
-                    id=str(tc.get("id", "")),
-                    name=str(tc.get("name", "")),
-                    input=dict(tc.get("input") or {}),
-                )
+    for tc in raw_calls:
+        parsed_calls.append(
+            ProposedToolCall(
+                id=tc["id"],
+                name=tc["name"],
+                input=dict(tc["input"]),
             )
+        )
     return AiResponse(
-        text=env.get("text", ""),
-        model=env.get("model", ""),
-        provider=env.get("provider", ""),
-        verb=env.get("verb", ""),
+        text=env["text"],
+        model=env["model"],
+        provider=env["provider"],
+        verb=env["verb"],
         usage=Usage(
-            input_tokens=int(usage.get("input_tokens", 0) or 0),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
-            units=int(usage.get("units", 0) or 0),
+            input_tokens=usage["input_tokens"],
+            output_tokens=usage["output_tokens"],
+            units=usage["units"],
         ),
         budget=Budget(
-            period=budget_blk.get("period", ""),
-            units_used=int(budget_blk.get("units_used", 0) or 0),
-            units_cap=int(budget_blk.get("units_cap", 0) or 0),
+            period=budget_blk["period"],
+            units_used=budget_blk["units_used"],
+            units_cap=budget_blk["units_cap"],
         ),
         review=Review(
-            safety=review.get("safety", "strict"),
-            prompt_redacted=bool(review.get("prompt_redacted", False)),
+            safety=review["safety"],
+            prompt_redacted=review["prompt_redacted"],
         ),
         tool_calls=parsed_calls,
         raw=dict(env),

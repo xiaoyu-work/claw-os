@@ -48,6 +48,7 @@ test("catalog parses tool rows", () => {
           verb: "fs.read",
           stability: "stable",
           args_schema: { type: "object" },
+          returns_schema: { type: "string" },
         },
       ],
     }),

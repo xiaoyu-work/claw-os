@@ -114,6 +114,9 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
             payload: value,
         });
     }
+    crate::generated::validate_tool(&value).map_err(|error| {
+        ToolError::Unavailable(format!("tool result decode failed: {error}"))
+    })?;
     serde_json::from_value(value.clone()).map_err(|e| {
         ToolError::Unavailable(format!("tool result decode failed ({e}): {value}"))
     })
@@ -123,6 +126,9 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
 pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
     let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
     let value = cos_tool_json("catalog", argv)?;
+    crate::generated::validate_tool_catalog(&value).map_err(|error| {
+        ToolError::Unavailable(format!("catalog decode failed: {error}"))
+    })?;
     let rows = value
         .get("tools")
         .and_then(serde_json::Value::as_array)
