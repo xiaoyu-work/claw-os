@@ -108,17 +108,8 @@ jobs:
           COS_USER_DATA_DIR="$RUNNER_TEMP/cos-user-data" \
             /usr/local/bin/cos agent skills info claw-os \
             | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["source"] == "builtin"'
-          sudo python3 - <<'PY'
-          import json
-          import socket
-
-          client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-          client.connect("/run/cos/clawd.sock")
-          client.sendall(b'{"id":1,"command":"daemon.health","params":{}}\n')
-          response = json.loads(client.makefile("r", encoding="utf-8").readline())
-          assert response["ok"] is True, response
-          assert response["result"]["daemon"] == "clawd", response
-          PY
+          timeout 15s sudo /usr/local/bin/cos agent service status \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert data["status"] == "running", data; assert data["daemon"] == "clawd", data'
 
       - name: Upload Agent package
         uses: actions/upload-artifact@v4
