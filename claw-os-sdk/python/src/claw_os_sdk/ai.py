@@ -57,6 +57,15 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from .generated import (
+    WireDecodeError,
+    WireJsonValue,
+    decode_wire_json,
+    validate_ai,
+    validate_budget_show,
+    wire_integer_to_int,
+)
+
 
 # Subprocess timeout — covers every shell-out to the `cos` binary. The
 # default is long enough for slow providers but bounded so a hung child
@@ -158,7 +167,7 @@ class ProposedToolCall:
 
     id: str
     name: str
-    input: Dict[str, Any] = field(default_factory=dict)
+    input: WireJsonValue
 
 
 @dataclass
@@ -171,7 +180,7 @@ class AiResponse:
     budget: Budget = field(default_factory=Budget)
     review: Review = field(default_factory=Review)
     tool_calls: List[ProposedToolCall] = field(default_factory=list)
-    raw: Dict[str, Any] = field(default_factory=dict)
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -337,8 +346,8 @@ def budget(app_id: Optional[str] = None) -> Budget:
             f"cos agent budget show returned no output (exit {proc.returncode})"
         )
     try:
-        env = json.loads(text)
-    except json.JSONDecodeError as exc:
+        env = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise AiUnavailable(
             f"cos agent budget show returned non-JSON output: {_truncate(text)}"
         ) from exc
@@ -348,10 +357,14 @@ def budget(app_id: Optional[str] = None) -> Budget:
         raise AiUnavailable(
             f"cos agent budget show exited {proc.returncode}: {_truncate(text)}"
         )
+    try:
+        validate_budget_show(env)
+    except WireDecodeError as exc:
+        raise AiUnavailable(f"budget response decode failed: {exc}") from exc
     return Budget(
-        period=env.get("period", ""),
-        units_used=int(env.get("units_used", 0) or 0),
-        units_cap=int(env.get("units_cap", 0) or 0),
+        period=env["period"],
+        units_used=wire_integer_to_int(env["units_used"]),
+        units_cap=0,
     )
 
 
@@ -417,53 +430,60 @@ def _dispatch(
         )
 
     try:
-        envelope = json.loads(payload_text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(payload_text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise AiUnavailable(
             f"cos ai chat returned non-JSON output: {_truncate(payload_text)}"
         ) from exc
 
-    if proc.returncode != 0 or "error" in envelope:
+    if proc.returncode != 0:
+        if isinstance(envelope, Mapping):
+            _raise_for_error(envelope)
+        raise AiUnavailable(
+            f"cos ai chat exited {proc.returncode}: {_truncate(payload_text)}"
+        )
+    if isinstance(envelope, Mapping) and "error" in envelope:
         _raise_for_error(envelope)
 
     return _parse_response(envelope)
 
 
-def _parse_response(env: Mapping[str, Any]) -> AiResponse:
-    usage = env.get("usage") or {}
-    budget_blk = env.get("budget") or {}
-    review = env.get("review") or {}
-    raw_calls = env.get("tool_calls") or []
+def _parse_response(env: Any) -> AiResponse:
+    try:
+        validate_ai(env)
+    except WireDecodeError as exc:
+        raise AiUnavailable(f"ai response decode failed: {exc}") from exc
+    usage = env["usage"]
+    budget_blk = env["budget"]
+    review = env["review"]
+    raw_calls = env.get("tool_calls", [])
     parsed_calls: List[ProposedToolCall] = []
-    if isinstance(raw_calls, list):
-        for tc in raw_calls:
-            if not isinstance(tc, Mapping):
-                continue
-            parsed_calls.append(
-                ProposedToolCall(
-                    id=str(tc.get("id", "")),
-                    name=str(tc.get("name", "")),
-                    input=dict(tc.get("input") or {}),
-                )
+    for tc in raw_calls:
+        parsed_calls.append(
+            ProposedToolCall(
+                id=tc["id"],
+                name=tc["name"],
+                input=tc["input"],
             )
+        )
     return AiResponse(
-        text=env.get("text", ""),
-        model=env.get("model", ""),
-        provider=env.get("provider", ""),
-        verb=env.get("verb", ""),
+        text=env["text"],
+        model=env["model"],
+        provider=env["provider"],
+        verb=env["verb"],
         usage=Usage(
-            input_tokens=int(usage.get("input_tokens", 0) or 0),
-            output_tokens=int(usage.get("output_tokens", 0) or 0),
-            units=int(usage.get("units", 0) or 0),
+            input_tokens=wire_integer_to_int(usage["input_tokens"]),
+            output_tokens=wire_integer_to_int(usage["output_tokens"]),
+            units=wire_integer_to_int(usage["units"]),
         ),
         budget=Budget(
-            period=budget_blk.get("period", ""),
-            units_used=int(budget_blk.get("units_used", 0) or 0),
-            units_cap=int(budget_blk.get("units_cap", 0) or 0),
+            period=budget_blk["period"],
+            units_used=wire_integer_to_int(budget_blk["units_used"]),
+            units_cap=wire_integer_to_int(budget_blk["units_cap"]),
         ),
         review=Review(
-            safety=review.get("safety", "strict"),
-            prompt_redacted=bool(review.get("prompt_redacted", False)),
+            safety=review["safety"],
+            prompt_redacted=review["prompt_redacted"],
         ),
         tool_calls=parsed_calls,
         raw=dict(env),
@@ -471,6 +491,11 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
 
 
 def _raise_for_error(env: Mapping[str, Any]) -> None:
+    code = str(env.get("code") or "").upper()
+    if code == "BUDGET_EXCEEDED":
+        raise AiBudgetExceeded(env)
+    if code == "SAFETY_VIOLATION":
+        raise AiSafetyViolation(env)
     msg = (env.get("error") or "").lower()
     if "budget" in msg and ("exceed" in msg or "over" in msg):
         raise AiBudgetExceeded(env)

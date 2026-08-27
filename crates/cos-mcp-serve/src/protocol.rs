@@ -34,14 +34,14 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
-    Num(i64),
+    Num(serde_json::Number),
     Str(String),
     Null,
 }
 
 impl From<i64> for RequestId {
     fn from(n: i64) -> Self {
-        RequestId::Num(n)
+        RequestId::Num(n.into())
     }
 }
 
@@ -154,11 +154,9 @@ impl JsonRpcError {
 
 // --- Standard JSON-RPC error codes ---------------------------------
 
-pub const ERR_PARSE: i64 = -32700;
-pub const ERR_INVALID_REQUEST: i64 = -32600;
-pub const ERR_METHOD_NOT_FOUND: i64 = -32601;
-pub const ERR_INVALID_PARAMS: i64 = -32602;
-pub const ERR_INTERNAL: i64 = -32603;
+pub use crate::generated::{
+    ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE,
+};
 
 // --- MCP-specific payloads -----------------------------------------
 
@@ -202,6 +200,8 @@ pub struct ClientCapabilities {
     pub roots: Option<RootsCapability>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sampling: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elicitation: Option<BTreeMap<String, Value>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

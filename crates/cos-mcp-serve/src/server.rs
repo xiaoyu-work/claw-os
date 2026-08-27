@@ -177,38 +177,73 @@ impl Server {
                     continue;
                 }
             }
-
-            // Notifications: per spec, MUST NOT carry an `id` field.
-            // A "notifications/*" frame WITH an id is malformed.
-            let method_starts_with_notifications = raw
-                .get("method")
-                .and_then(|m| m.as_str())
-                .map(|s| s.starts_with("notifications/"))
-                .unwrap_or(false);
-            let has_id = raw.get("id").is_some();
-            if method_starts_with_notifications {
-                if has_id {
-                    let id = extract_id(&raw);
-                    let resp = JsonRpcResponse::err(
-                        id,
-                        JsonRpcError::new(
-                            ERR_INVALID_REQUEST,
-                            "notifications/* must not carry an id",
-                        ),
-                    );
-                    t.send(serde_json::to_string(&resp).unwrap_or_default())
-                        .await?;
-                }
-                // Drop the notification silently.
+            if raw.get("id").is_some()
+                && !matches!(
+                    raw.get("id"),
+                    Some(Value::Null | Value::String(_) | Value::Number(_))
+                )
+            {
+                let resp = JsonRpcResponse::err(
+                    RequestId::Null,
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "request id must be a string, number, or null",
+                    ),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
+                continue;
+            }
+            if raw
+                .get("params")
+                .is_some_and(|params| !params.is_object() && !params.is_array())
+                && raw.get("id").is_none()
+            {
+                let id = extract_id(&raw);
+                let resp = JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "request params must be an object or array",
+                    ),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
+                continue;
+            }
+            if raw.get("id").is_some()
+                && raw.get("params").is_some_and(Value::is_null)
+                && matches!(
+                    raw.get("method").and_then(Value::as_str),
+                    Some("ping" | "tools/list")
+                )
+            {
+                let resp = JsonRpcResponse::err(
+                    extract_id(&raw),
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
                 continue;
             }
 
-            // Conversely, a frame with no id but a non-notification
-            // method is still a notification per spec — silently
-            // accept the `JsonRpcNotification` shape and ignore.
+            let has_id = raw.get("id").is_some();
             if !has_id {
-                let _ = serde_json::from_value::<JsonRpcNotification>(raw);
-                continue;
+                match serde_json::from_value::<JsonRpcNotification>(raw) {
+                    Ok(_) => continue,
+                    Err(err) => {
+                        let resp = JsonRpcResponse::err(
+                            RequestId::Null,
+                            JsonRpcError::new(
+                                ERR_INVALID_REQUEST,
+                                format!("invalid notification: {err}"),
+                            ),
+                        );
+                        t.send(serde_json::to_string(&resp).unwrap_or_default())
+                            .await?;
+                        continue;
+                    }
+                }
             }
 
             let parsed: Result<JsonRpcRequest, _> = serde_json::from_str(&frame);
@@ -243,8 +278,8 @@ impl Server {
         let id = req.id.clone();
         match req.method.as_str() {
             "initialize" => self.handle_initialize(req),
-            "ping" => JsonRpcResponse::ok(id, json!({})),
-            "tools/list" => self.handle_tools_list(id),
+            "ping" => self.handle_ping(req),
+            "tools/list" => self.handle_tools_list(req),
             "tools/call" => self.handle_tools_call(req).await,
             other => JsonRpcResponse::err(
                 id,
@@ -255,6 +290,14 @@ impl Server {
 
     fn handle_initialize(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
+        if let Some(params) = req.params.as_ref() {
+            if let Err(error) = validate_initialize_params(params) {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, error),
+                );
+            }
+        }
         // We accept the params for compliance but don't currently
         // honour client capabilities (we don't emit progress
         // notifications, etc.). The spec allows servers to ignore
@@ -272,14 +315,12 @@ impl Server {
                     );
                 }
             },
-            None => InitializeParams {
-                protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
-                capabilities: Default::default(),
-                client_info: Implementation {
-                    name: "unknown".into(),
-                    version: "unknown".into(),
-                },
-            },
+            None => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "missing params"),
+                );
+            }
         };
         let result = InitializeResult {
             protocol_version: crate::protocol::PROTOCOL_VERSION.to_string(),
@@ -301,7 +342,36 @@ impl Server {
         }
     }
 
-    fn handle_tools_list(&self, id: RequestId) -> JsonRpcResponse {
+    fn handle_ping(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id;
+        match req.params {
+            None | Some(Value::Object(_)) => JsonRpcResponse::ok(id, json!({})),
+            Some(_) => JsonRpcResponse::err(
+                id,
+                JsonRpcError::new(ERR_INVALID_PARAMS, "ping params must be an object"),
+            ),
+        }
+    }
+
+    fn handle_tools_list(&self, req: JsonRpcRequest) -> JsonRpcResponse {
+        let id = req.id;
+        if let Some(params) = req.params {
+            let Some(params) = params.as_object() else {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list params must be an object"),
+                );
+            };
+            if params
+                .get("cursor")
+                .is_some_and(|cursor| !cursor.is_string())
+            {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "tools/list cursor must be a string"),
+                );
+            }
+        }
         let mut tools: Vec<ToolDescriptor> = Vec::with_capacity(self.tools.len());
         // Sort by name so list order is deterministic — easier on
         // both human readers and JSON-Schema-aware UIs that snapshot
@@ -316,6 +386,7 @@ impl Server {
                 input_schema: t.input_schema(),
             });
         }
+
         let result = ListToolsResult {
             tools,
             next_cursor: None,
@@ -328,6 +399,11 @@ impl Server {
 
     async fn handle_tools_call(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
+        let arguments_present = req
+            .params
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|params| params.contains_key("arguments"));
         let params: CallToolParams = match req.params {
             Some(v) => match serde_json::from_value(v) {
                 Ok(p) => p,
@@ -351,13 +427,28 @@ impl Server {
                 return JsonRpcResponse::err(
                     id,
                     JsonRpcError::new(
-                        ERR_METHOD_NOT_FOUND,
+                        ERR_INVALID_PARAMS,
                         format!("tool not registered: {}", params.name),
                     ),
                 );
             }
         };
-        let arguments = params.arguments.unwrap_or(Value::Null);
+        let arguments = match params.arguments {
+            Some(Value::Object(arguments)) => Value::Object(arguments),
+            Some(_) => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
+            None if !arguments_present => json!({}),
+            None => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
+        };
         let result = tool.exec(arguments).await;
         let body = CallToolResult {
             content: vec![ContentItem::Text {
@@ -372,16 +463,40 @@ impl Server {
     }
 }
 
+fn validate_initialize_params(params: &Value) -> Result<(), String> {
+    let capabilities = params
+        .get("capabilities")
+        .and_then(Value::as_object)
+        .ok_or_else(|| "initialize capabilities must be an object".to_string())?;
+    for name in ["experimental", "sampling", "elicitation"] {
+        if capabilities
+            .get(name)
+            .is_some_and(|capability| !capability.is_object())
+        {
+            return Err(format!("capabilities.{name} must be an object"));
+        }
+    }
+    if let Some(roots) = capabilities.get("roots") {
+        let roots = roots
+            .as_object()
+            .ok_or_else(|| "capabilities.roots must be an object".to_string())?;
+        if roots
+            .get("listChanged")
+            .is_some_and(|list_changed| !list_changed.is_boolean())
+        {
+            return Err("capabilities.roots.listChanged must be a boolean".to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Pull a [`RequestId`] out of an arbitrary JSON-RPC frame value.
 /// Returns [`RequestId::Null`] when no id is present or the id is of an
 /// unrecognised type — exactly what the JSON-RPC 2.0 spec mandates
 /// for error responses to malformed requests.
 fn extract_id(raw: &Value) -> RequestId {
     match raw.get("id") {
-        Some(Value::Number(n)) => n
-            .as_i64()
-            .map(RequestId::Num)
-            .unwrap_or(RequestId::Null),
+        Some(Value::Number(number)) => RequestId::Num(number.clone()),
         Some(Value::String(s)) => RequestId::Str(s.clone()),
         _ => RequestId::Null,
     }

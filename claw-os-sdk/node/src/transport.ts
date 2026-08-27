@@ -10,6 +10,7 @@
 // "App X is making this call".
 
 import { spawnSync } from "node:child_process";
+import { decodeWireJson } from "./generated";
 
 /** Default per-call timeout. Bounded so a wedged child never blocks
  * the calling app forever, but long enough for slow providers. */
@@ -103,7 +104,7 @@ export function cosCallJson(
 
   let envelope: unknown;
   try {
-    envelope = JSON.parse(text);
+    envelope = decodeWireJson(text);
   } catch {
     throw new Unavailable(`${label} returned non-JSON output: ${truncate(text)}`);
   }

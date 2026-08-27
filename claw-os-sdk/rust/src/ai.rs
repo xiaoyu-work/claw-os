@@ -23,7 +23,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{cos_call_json, BridgeError};
+use crate::{cos_call_json_structured, BridgeError, StructuredCosError};
 
 // ---------------------------------------------------------------------------
 // Response shape
@@ -294,31 +294,28 @@ fn dispatch(prompt: &str, opts: ChatOpts) -> Result<AiResponse, AiError> {
         argv.push(tools.join(",").into());
     }
 
-    let value = match cos_call_json("ai", "chat", argv) {
+    let value = match cos_call_json_structured("ai", "chat", argv) {
         Ok(value) => value,
-        Err(BridgeError::AppError {
-            message,
-            code,
-            ..
-        }) => {
-            let mut payload = serde_json::json!({ "error": &message });
-            if let Some(code) = code {
-                payload["code"] = serde_json::Value::String(code);
-            }
-            let message = payload["error"].as_str().unwrap_or("AI request denied");
-            return Err(classify_ai_error(message, &payload));
+        Err(StructuredCosError::App(error)) => {
+            let error = *error;
+            let message = error.payload["error"]
+                .as_str()
+                .unwrap_or("AI request denied");
+            return Err(classify_ai_error(message, &error.payload));
         }
-        Err(error) => return Err(AiError::Bridge(error)),
+        Err(StructuredCosError::Bridge(error)) => return Err(AiError::Bridge(error)),
     };
     parse_response(value)
 }
 
-fn parse_response(value: serde_json::Value) -> Result<AiResponse, AiError> {
+fn parse_response(mut value: serde_json::Value) -> Result<AiResponse, AiError> {
     if let Some(err) = value.get("error").and_then(|v| v.as_str()) {
         return Err(classify_ai_error(err, &value));
     }
-    // Decode the kernel reply into the stable response type. Keep
-    // schema drift loud instead of substituting an empty response.
+    crate::generated::validate_ai(&value).map_err(|error| {
+        AiError::Unavailable(format!("ai response decode failed: {error}"))
+    })?;
+    crate::generated::normalize_ai_integers(&mut value);
     let resp: AiResponse =
         serde_json::from_value(value).map_err(|e| {
             AiError::Unavailable(format!("ai response decode failed: {e}"))

@@ -174,7 +174,7 @@ impl McpClient {
     }
 
     fn next_request_id(&self) -> RequestId {
-        RequestId::Num(self.next_id.fetch_add(1, Ordering::Relaxed))
+        self.next_id.fetch_add(1, Ordering::Relaxed).into()
     }
 
     /// Send a JSON-RPC request and await the response. Returns the

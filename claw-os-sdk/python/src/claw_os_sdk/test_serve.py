@@ -5,11 +5,13 @@ import json
 import os
 import sys
 import unittest
+from decimal import Decimal
 
 _THIS_DIR = os.path.dirname(__file__)
 sys.path.insert(0, os.path.dirname(_THIS_DIR))  # so `from claw_os_sdk import serve` works
 
 from claw_os_sdk import serve  # noqa: E402
+from claw_os_sdk.generated import WireDecimal, decode_wire_json  # noqa: E402
 
 
 def _drive(app: serve.App, *frames: dict) -> list[dict]:
@@ -26,7 +28,21 @@ def _drive(app: serve.App, *frames: dict) -> list[dict]:
         out = sys.stdout.read()
     finally:
         sys.stdin, sys.stdout = real_stdin, real_stdout
-    return [json.loads(line) for line in out.splitlines() if line.strip()]
+    return [decode_wire_json(line) for line in out.splitlines() if line.strip()]
+
+
+def _drive_raw(app: serve.App, *lines: str) -> list[dict]:
+    stdin_text = "\n".join(lines) + "\n"
+    real_stdin, real_stdout = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(stdin_text)
+    sys.stdout = io.StringIO()
+    try:
+        app.serve()
+        sys.stdout.seek(0)
+        out = sys.stdout.read()
+    finally:
+        sys.stdin, sys.stdout = real_stdin, real_stdout
+    return [decode_wire_json(line) for line in out.splitlines() if line.strip()]
 
 
 class HandshakeTests(unittest.TestCase):
@@ -35,7 +51,16 @@ class HandshakeTests(unittest.TestCase):
 
         out = _drive(
             app,
-            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": serve.PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "test", "version": "1"},
+                },
+            },
         )
 
         self.assertEqual(len(out), 1)
@@ -54,6 +79,13 @@ class HandshakeTests(unittest.TestCase):
         )
 
         self.assertEqual(out, [])
+
+    def test_initialize_missing_params_returns_invalid_params(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
 
     def test_name_defaults_to_cos_app_id(self) -> None:
         prev = os.environ.get("COS_APP_ID")
@@ -200,6 +232,19 @@ class ToolsCallTests(unittest.TestCase):
         self.assertIn("error", out[0])
         self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
 
+    def test_explicit_null_arguments_are_rejected(self) -> None:
+        app = self._kv_app()
+        out = _drive(
+            app,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "kv.get", "arguments": None},
+            },
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
+
     def test_dict_return_value_is_serialised_as_json_text(self) -> None:
         app = serve.App(name="x")
 
@@ -243,6 +288,183 @@ class TransportTests(unittest.TestCase):
         frame = json.loads(out.strip())
         self.assertEqual(frame["error"]["code"], serve.ERR_INVALID_REQUEST)
 
+    def test_invalid_id_is_normalized_before_earlier_envelope_errors(self) -> None:
+        for invalid_id in (True, {"nested": "id"}):
+            with self.subTest(invalid_id=invalid_id):
+                out = _drive(
+                    serve.App(name="kv"),
+                    {"id": invalid_id, "method": "ping"},
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+                self.assertIsNone(out[0]["id"])
+
+        combined = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": True, "method": "ping", "params": None},
+        )
+        self.assertEqual(combined[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+        self.assertIsNone(combined[0]["id"])
+
+    def test_malformed_idless_envelope_returns_invalid_request(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "params": {}},
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+        self.assertIsNone(out[0]["id"])
+
+    def test_nonfinite_json_constants_are_parse_errors(self) -> None:
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                out = _drive_raw(
+                    serve.App(name="kv"),
+                    f'{{"jsonrpc":"2.0","id":{constant},"method":"ping"}}',
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+                self.assertIsNone(out[0]["id"])
+
+    def test_deeply_nested_json_is_parse_error_not_process_crash(self) -> None:
+        nested = "[" * 2000 + "0" + "]" * 2000
+        out = _drive_raw(serve.App(name="kv"), nested)
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(out[0]["id"])
+
+    def test_lone_surrogate_id_is_parse_error(self) -> None:
+        out = _drive_raw(
+            serve.App(name="kv"),
+            r'{"jsonrpc":"2.0","id":"\ud800","method":"ping"}',
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(out[0]["id"])
+
+    def test_primitive_params_are_invalid_before_notification_suppression(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": True},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": "bad"},
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": 7,
+            },
+        )
+        self.assertEqual(
+            [frame["error"]["code"] for frame in out],
+            [
+                serve.ERR_INVALID_PARAMS,
+                serve.ERR_INVALID_PARAMS,
+                serve.ERR_INVALID_REQUEST,
+            ],
+        )
+        self.assertEqual(out[2]["id"], None)
+
+    def test_numeric_ids_accept_fractional_and_large_values(self) -> None:
+        fraction = "0.123456789012345678901234567890"
+        large = "18446744073709551616"
+        out = _drive_raw(
+            serve.App(name="kv"),
+            f'{{"jsonrpc":"2.0","id":{fraction},"method":"ping"}}',
+            f'{{"jsonrpc":"2.0","id":{large},"method":"ping"}}',
+        )
+        self.assertEqual(out[0]["id"], Decimal(fraction))
+        self.assertEqual(out[1]["id"], int(large))
+
+        long_integer = "1" * 5000
+        echoed = _drive_raw(
+            serve.App(name="kv"),
+            f'{{"jsonrpc":"2.0","id":{long_integer},"method":"ping"}}',
+        )
+        self.assertIsInstance(echoed[0]["id"], WireDecimal)
+        self.assertEqual(echoed[0]["id"].lexeme, long_integer)
+
+    def test_initialize_rejects_malformed_known_capabilities(self) -> None:
+        base = {
+            "protocolVersion": serve.PROTOCOL_VERSION,
+            "clientInfo": {"name": "test", "version": "1"},
+        }
+        for capabilities in (
+            {"roots": False},
+            {"roots": None},
+            {"roots": {"listChanged": "yes"}},
+            {"roots": {"listChanged": None}},
+            {"experimental": False},
+            {"experimental": None},
+            {"sampling": []},
+            {"sampling": None},
+            {"elicitation": False},
+            {"elicitation": None},
+        ):
+            with self.subTest(capabilities=capabilities):
+                out = _drive(
+                    serve.App(name="kv"),
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {**base, "capabilities": capabilities},
+                    },
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
+
+        out = _drive(
+            serve.App(name="kv"),
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    **base,
+                    "capabilities": {
+                        "unknown": {"future": True},
+                        "roots": {"listChanged": True, "future": 1},
+                    },
+                },
+            },
+        )
+        self.assertIn("result", out[0])
+
+    def test_method_specific_params_are_validated(self) -> None:
+        invalid = (
+            {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": []},
+            {"jsonrpc": "2.0", "id": 7, "method": "ping", "params": None},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": []},
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/list",
+                "params": None,
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "tools/list",
+                "params": {"cursor": 7},
+            },
+            {
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "tools/list",
+                "params": {"cursor": None},
+            },
+        )
+        out = _drive(serve.App(name="kv"), *invalid)
+        self.assertEqual(
+            [frame["error"]["code"] for frame in out],
+            [serve.ERR_INVALID_PARAMS] * len(invalid),
+        )
+
+        valid = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 5, "method": "ping", "params": {}},
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/list",
+                "params": {"cursor": "next"},
+            },
+        )
+        self.assertTrue(all("result" in frame for frame in valid))
+
     def test_garbage_line_returns_parse_error_with_null_id(self) -> None:
         app = serve.App(name="kv")
         sys.stdin_orig, sys.stdout_orig = sys.stdin, sys.stdout
@@ -267,6 +489,13 @@ class TransportTests(unittest.TestCase):
         )
 
         self.assertEqual(out[0]["result"], {})
+
+    def test_explicit_null_id_is_a_request(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": None, "method": "ping"},
+        )
+        self.assertEqual(out, [{"jsonrpc": "2.0", "id": None, "result": {}}])
 
 
 class FrameValidationTests(unittest.TestCase):
@@ -331,6 +560,48 @@ class FrameValidationTests(unittest.TestCase):
         self.assertEqual(frames[0]["error"]["code"], serve.ERR_PARSE)
         self.assertIn("exceeds", frames[0]["error"]["message"])
         self.assertEqual(frames[1]["id"], 7)
+        self.assertEqual(frames[1]["result"], {})
+
+    def test_more_than_twice_limit_frame_drains_to_real_newline(self) -> None:
+        limit = 64
+        followup = json.dumps({"jsonrpc": "2.0", "id": 9, "method": "ping"})
+        for reader in (
+            io.StringIO("x" * (limit * 3 + 7) + "\n" + followup + "\n"),
+            io.BytesIO(
+                ("x" * (limit * 3 + 7) + "\n" + followup + "\n").encode()
+            ),
+        ):
+            with self.subTest(reader=type(reader).__name__):
+                line, overflowed = serve._read_bounded_line(reader, limit)
+                self.assertEqual(line, "")
+                self.assertTrue(overflowed)
+                line, overflowed = serve._read_bounded_line(reader, limit)
+                self.assertEqual(line, followup)
+                self.assertFalse(overflowed)
+
+    def test_invalid_utf8_emits_one_parse_error_and_keeps_frame_sync(self) -> None:
+        followup = b'{"jsonrpc":"2.0","id":10,"method":"ping"}\n'
+
+        class BinaryInput:
+            def __init__(self, data: bytes) -> None:
+                self.buffer = io.BytesIO(data)
+
+        app = serve.App(name="kv")
+        real_stdin, real_stdout = sys.stdin, sys.stdout
+        sys.stdin = BinaryInput(b"\xff\n" + followup)
+        sys.stdout = io.StringIO()
+        try:
+            app.serve()
+            sys.stdout.seek(0)
+            output = sys.stdout.read()
+        finally:
+            sys.stdin, sys.stdout = real_stdin, real_stdout
+
+        frames = [decode_wire_json(line) for line in output.splitlines()]
+        self.assertEqual(len(frames), 2)
+        self.assertEqual(frames[0]["error"]["code"], serve.ERR_PARSE)
+        self.assertIsNone(frames[0]["id"])
+        self.assertEqual(frames[1]["id"], 10)
         self.assertEqual(frames[1]["result"], {})
 
 

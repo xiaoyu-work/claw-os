@@ -73,9 +73,9 @@ func (e *AiSafetyViolationError) Error() string {
 // NOT execute. Apps decide whether to fulfil any by calling Tool with
 // the same Name + Input; ID echoes back to the provider next turn.
 type ProposedToolCall struct {
-	ID    string         `json:"id"`
-	Name  string         `json:"name"`
-	Input map[string]any `json:"input"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input any    `json:"input"`
 }
 
 // AiResponse is the parsed reply from the AI gate. It reuses the
@@ -199,10 +199,17 @@ func Budget(appID string) (*AiBudget, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(out.Envelope["error"])}
+		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(asMap(out.Envelope)["error"])}
 	}
-	b := parseBudget(out.Envelope)
-	return &b, nil
+	if err := ValidateBudgetShow(out.Envelope); err != nil {
+		return nil, &AiUnavailableError{Msg: "budget response decode failed: " + err.Error()}
+	}
+	env := asMap(out.Envelope)
+	return &AiBudget{
+		Period:    asString(env["period"]),
+		UnitsUsed: asUint64(env["units_used"]),
+		UnitsCap:  0,
+	}, nil
 }
 
 func resolveApp(modality, appID string) (string, error) {
@@ -293,12 +300,23 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, classifyError(out.Envelope)
+		return nil, classifyError(asMap(out.Envelope))
 	}
-	return parseResponse(out.Envelope), nil
+	response, err := parseResponse(out.Envelope)
+	if err != nil {
+		return nil, err
+	}
+	return response, nil
 }
 
 func classifyError(env map[string]any) error {
+	code := strings.ToUpper(asString(env["code"]))
+	switch code {
+	case "BUDGET_EXCEEDED":
+		return &AiBudgetExceededError{Payload: env}
+	case "SAFETY_VIOLATION":
+		return &AiSafetyViolationError{Payload: env}
+	}
 	msg := strings.ToLower(asString(env["error"]))
 	if strings.Contains(msg, "budget") && (strings.Contains(msg, "exceed") || strings.Contains(msg, "over")) {
 		return &AiBudgetExceededError{Payload: env}
@@ -317,21 +335,24 @@ func parseBudget(blk map[string]any) AiBudget {
 	}
 }
 
-func parseResponse(env map[string]any) *AiResponse {
+func parseResponse(value any) (*AiResponse, error) {
+	if err := ValidateAi(value); err != nil {
+		return nil, &AiUnavailableError{Msg: "ai response decode failed: " + err.Error()}
+	}
+	env := asMap(value)
 	usage := asMap(env["usage"])
 	review := asMap(env["review"])
 
 	var calls []ProposedToolCall
-	if raw, ok := env["tool_calls"].([]any); ok {
-		for _, c := range raw {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
+	if raw, present := env["tool_calls"]; present {
+		rawCalls := raw.([]any)
+		calls = make([]ProposedToolCall, 0, len(rawCalls))
+		for _, c := range rawCalls {
+			cm := c.(map[string]any)
 			calls = append(calls, ProposedToolCall{
 				ID:    asString(cm["id"]),
 				Name:  asString(cm["name"]),
-				Input: asMap(cm["input"]),
+				Input: cm["input"],
 			})
 		}
 	}
@@ -348,16 +369,10 @@ func parseResponse(env map[string]any) *AiResponse {
 		},
 		Budget: parseBudget(asMap(env["budget"])),
 		Review: AiReview{
-			Safety: func() string {
-				s := asString(review["safety"])
-				if s == "" {
-					return "strict"
-				}
-				return s
-			}(),
+			Safety:         asString(review["safety"]),
 			PromptRedacted: asBool(review["prompt_redacted"]),
 		},
 		ToolCalls: calls,
 		Raw:       env,
-	}
+	}, nil
 }

@@ -16,6 +16,14 @@
 //   }
 
 import { BridgeError, Unavailable, asObject, cosCallJson, hasError } from "./transport";
+import {
+  WireDecodeError,
+  materializeWireValue,
+  stringifyWireJson,
+  type WireJsonValue,
+  validateTool,
+  validateToolCatalog,
+} from "./generated";
 
 /** Base class for every error this module raises. */
 export class ToolError extends BridgeError {}
@@ -38,8 +46,8 @@ export interface ToolResult {
   name: string;
   appId: string;
   status: string;
-  value: unknown;
-  raw: Record<string, unknown>;
+  value: WireJsonValue;
+  raw: Record<string, WireJsonValue>;
 }
 
 /** One row from `cos ai tools`. */
@@ -48,13 +56,14 @@ export interface CatalogEntry {
   summary: string;
   verb: string;
   stability: string;
-  argsSchema?: Record<string, unknown>;
-  returnsSchema?: Record<string, unknown>;
-  raw: Record<string, unknown>;
+  argsSchema?: Record<string, WireJsonValue>;
+  returnsSchema?: Record<string, WireJsonValue>;
+  raw: Record<string, WireJsonValue>;
 }
 
 /**
- * Invoke a catalog tool through the kernel.
+ * Invoke a catalog tool through the kernel. `args` may be any JSON value;
+ * explicit null, scalars, and arrays are serialized without coercion.
  *
  * Throws {@link ToolDenied} for anything the gate refused (unknown
  * tool, missing capability, malformed args) and {@link ToolUnavailable}
@@ -62,7 +71,7 @@ export interface CatalogEntry {
  */
 export function call(
   name: string,
-  args: Record<string, unknown> = {},
+  args: WireJsonValue = {},
   opts: { appId?: string } = {},
 ): ToolResult {
   if (!name || typeof name !== "string") {
@@ -73,7 +82,7 @@ export function call(
     throw new ToolError(`${name}: app_id is required (pass appId or set COS_APP_ID)`);
   }
 
-  const argv = ["ai", "tool", name, "--app", app, "--args", JSON.stringify(args ?? {})];
+  const argv = ["ai", "tool", name, "--app", app, "--args", stringifyWireJson(args)];
   let outcome;
   try {
     outcome = cosCallJson(`cos ai tool ${name}`, argv);
@@ -81,16 +90,24 @@ export function call(
     if (e instanceof Unavailable) throw new ToolUnavailable(e.message);
     throw e;
   }
-  const env = asObject(outcome.envelope);
   if (outcome.status !== 0 || hasError(outcome.envelope)) {
-    throw new ToolDenied(env);
+    throw new ToolDenied(asObject(outcome.envelope));
   }
+  try {
+    validateTool(outcome.envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new ToolUnavailable(`tool result decode failed: ${error.message}`);
+    }
+    throw error;
+  }
+  const env = outcome.envelope;
   return {
-    name: String(env["tool"] ?? name),
-    appId: String(env["app_id"] ?? app),
-    status: String(env["status"] ?? "ok"),
-    value: env["result"],
-    raw: env,
+    name: env.tool,
+    appId: env.app_id,
+    status: env.status,
+    value: materializeWireValue(env.result),
+    raw: materializeWireValue(env) as Record<string, WireJsonValue>,
   };
 }
 
@@ -112,25 +129,23 @@ export function catalog(): CatalogEntry[] {
   if (outcome.status !== 0 || hasError(outcome.envelope)) {
     throw new ToolDenied(asObject(outcome.envelope));
   }
-  const env = asObject(outcome.envelope);
-  const rows = Array.isArray(env["tools"])
-    ? (env["tools"] as unknown[])
-    : Array.isArray(outcome.envelope)
-      ? (outcome.envelope as unknown[])
-      : null;
-  if (!rows) {
-    throw new ToolUnavailable("cos ai tools envelope missing `tools` array");
+  try {
+    validateToolCatalog(outcome.envelope);
+  } catch (error) {
+    if (error instanceof WireDecodeError) {
+      throw new ToolUnavailable(`catalog decode failed: ${error.message}`);
+    }
+    throw error;
   }
-  return rows
-    .filter((r): r is Record<string, unknown> => typeof r === "object" && r !== null)
-    .map((row) => ({
-      name: String(row["name"] ?? ""),
-      summary: String(row["summary"] ?? ""),
-      verb: String(row["verb"] ?? ""),
-      stability: String(row["stability"] ?? "experimental"),
-      argsSchema: maybeSchema(row["args_schema"]),
-      returnsSchema: maybeSchema(row["returns_schema"]),
-      raw: row,
+  const env = outcome.envelope;
+  return env.tools.map((row) => ({
+      name: row.name,
+      summary: row.summary,
+      verb: row.verb,
+      stability: row.stability,
+      argsSchema: materializeWireValue(row.args_schema) as Record<string, WireJsonValue>,
+      returnsSchema: materializeWireValue(row.returns_schema) as Record<string, WireJsonValue>,
+      raw: materializeWireValue(row) as Record<string, WireJsonValue>,
     }));
 }
 
@@ -149,20 +164,4 @@ export function forChat(...names: string[]): string[] {
     if (s) out.push(s);
   }
   return out;
-}
-
-function maybeSchema(blob: unknown): Record<string, unknown> | undefined {
-  if (blob == null) return undefined;
-  if (typeof blob === "object") return blob as Record<string, unknown>;
-  if (typeof blob === "string") {
-    try {
-      const parsed = JSON.parse(blob);
-      if (typeof parsed === "object" && parsed !== null) {
-        return parsed as Record<string, unknown>;
-      }
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
 }

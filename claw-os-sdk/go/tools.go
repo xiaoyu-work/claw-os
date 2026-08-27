@@ -53,10 +53,11 @@ type CatalogEntry struct {
 	Raw           map[string]any
 }
 
-// CallTool invokes a catalog tool through the kernel. args may be nil. appID
-// defaults to $COS_APP_ID. Returns a *ToolDeniedError for anything the
+// CallTool invokes a catalog tool through the kernel. args may contain any
+// JSON value; nil is encoded as explicit JSON null. appID defaults to
+// $COS_APP_ID. Returns a *ToolDeniedError for anything the
 // gate refused, or *ToolUnavailableError for transport problems.
-func CallTool(name string, args map[string]any, appID string) (*ToolResult, error) {
+func CallTool(name string, args any, appID string) (*ToolResult, error) {
 	if strings.TrimSpace(name) == "" {
 		return nil, &ToolUnavailableError{Msg: "CallTool: name must be non-empty"}
 	}
@@ -66,9 +67,6 @@ func CallTool(name string, args map[string]any, appID string) (*ToolResult, erro
 	}
 	if app == "" {
 		return nil, &ToolUnavailableError{Msg: name + ": app_id is required (pass appID or set COS_APP_ID)"}
-	}
-	if args == nil {
-		args = map[string]any{}
 	}
 	payload, err := json.Marshal(args)
 	if err != nil {
@@ -83,26 +81,17 @@ func CallTool(name string, args map[string]any, appID string) (*ToolResult, erro
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: out.Envelope}
+		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
 	}
 
-	env := out.Envelope
-	resName := name
-	if s := asString(env["tool"]); s != "" {
-		resName = s
+	if err := ValidateTool(out.Envelope); err != nil {
+		return nil, &ToolUnavailableError{Msg: "tool result decode failed: " + err.Error()}
 	}
-	resApp := app
-	if s := asString(env["app_id"]); s != "" {
-		resApp = s
-	}
-	status := "ok"
-	if s := asString(env["status"]); s != "" {
-		status = s
-	}
+	env := asMap(out.Envelope)
 	return &ToolResult{
-		Name:   resName,
-		AppID:  resApp,
-		Status: status,
+		Name:   asString(env["tool"]),
+		AppID:  asString(env["app_id"]),
+		Status: asString(env["status"]),
 		Value:  env["result"],
 		Raw:    env,
 	}, nil
@@ -120,29 +109,23 @@ func Catalog() ([]CatalogEntry, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: out.Envelope}
+		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
 	}
-	rawRows, ok := out.Envelope["tools"].([]any)
-	if !ok {
-		return nil, &ToolUnavailableError{Msg: "cos ai tools envelope missing `tools` array"}
+	if err := ValidateToolCatalog(out.Envelope); err != nil {
+		return nil, &ToolUnavailableError{Msg: "catalog decode failed: " + err.Error()}
 	}
+	env := asMap(out.Envelope)
+	rawRows := env["tools"].([]any)
 	entries := make([]CatalogEntry, 0, len(rawRows))
 	for _, r := range rawRows {
-		row, ok := r.(map[string]any)
-		if !ok {
-			continue
-		}
-		stability := asString(row["stability"])
-		if stability == "" {
-			stability = "experimental"
-		}
+		row := r.(map[string]any)
 		entries = append(entries, CatalogEntry{
 			Name:          asString(row["name"]),
 			Summary:       asString(row["summary"]),
 			Verb:          asString(row["verb"]),
-			Stability:     stability,
-			ArgsSchema:    maybeSchema(row["args_schema"]),
-			ReturnsSchema: maybeSchema(row["returns_schema"]),
+			Stability:     asString(row["stability"]),
+			ArgsSchema:    asMap(row["args_schema"]),
+			ReturnsSchema: asMap(row["returns_schema"]),
 			Raw:           row,
 		})
 	}
@@ -161,17 +144,4 @@ func ForChat(names ...string) []string {
 		}
 	}
 	return out
-}
-
-func maybeSchema(blob any) map[string]any {
-	switch v := blob.(type) {
-	case map[string]any:
-		return v
-	case string:
-		var parsed map[string]any
-		if json.Unmarshal([]byte(v), &parsed) == nil {
-			return parsed
-		}
-	}
-	return nil
 }

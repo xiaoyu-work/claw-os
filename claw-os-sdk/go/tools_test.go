@@ -1,6 +1,9 @@
 package clawossdk
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestToolBuildsArgvAndParses(t *testing.T) {
 	body := `{"tool": "fs.read_text", "app_id": "notes", "status": "ok", "result": {"content": "hi"}}`
@@ -62,8 +65,9 @@ func TestToolDenied(t *testing.T) {
 func TestCatalogParses(t *testing.T) {
 	body := `{"tools": [
 		{"name": "fs.read_text", "summary": "read", "verb": "fs.read", "stability": "stable",
-		 "args_schema": {"type": "object"}, "returns_schema": "{\"type\":\"string\"}"},
-		{"name": "kv.get"}
+		 "args_schema": {"type": "object"}, "returns_schema": {"type":"string"}},
+		{"name": "kv.get", "summary": "get", "verb": "data.kv.read", "stability": "experimental",
+		 "args_schema": {}, "returns_schema": {}}
 	]}`
 	bin, argvOut := fakeCos(t, body, 0)
 	var entries []CatalogEntry
@@ -81,10 +85,10 @@ func TestCatalogParses(t *testing.T) {
 		t.Fatalf("entry0 = %+v", entries[0])
 	}
 	if entries[0].ReturnsSchema["type"] != "string" {
-		t.Fatalf("returns_schema not parsed from string: %v", entries[0].ReturnsSchema)
+		t.Fatalf("returns_schema = %v", entries[0].ReturnsSchema)
 	}
 	if entries[1].Stability != "experimental" {
-		t.Fatalf("missing stability should default to experimental, got %q", entries[1].Stability)
+		t.Fatalf("stability = %q", entries[1].Stability)
 	}
 	// Catalog must NOT pass --app or a `list` subcommand.
 	argv := readArgv(t, argvOut)
@@ -98,4 +102,98 @@ func TestForChatTrimsAndDrops(t *testing.T) {
 	if len(got) != 2 || got[0] != "fs.read_text" || got[1] != "kv.get" {
 		t.Fatalf("ForChat = %v", got)
 	}
+}
+
+func TestProposedLosslessInputRoundTripsThroughCallTool(t *testing.T) {
+	const lexeme = "0.12345678901234567890"
+	payload := validAIWire(t)
+	payload["tool_calls"].([]any)[0].(map[string]any)["input"] = json.Number(lexeme)
+	response, err := parseResponse(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bin, argvOut := fakeCos(
+		t,
+		`{"tool":"echo","app_id":"notes","status":"ok","result":null}`,
+		0,
+	)
+	withCos(t, bin, nil, func() {
+		_, err = CallTool("echo", response.ToolCalls[0].Input, "notes")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	argv := readArgv(t, argvOut)
+	if got := argv[indexOf(argv, "--args")+1]; got != lexeme {
+		t.Fatalf("args = %q, want %q", got, lexeme)
+	}
+}
+
+func TestCallToolPreservesArbitraryJSONAndLosslessResults(t *testing.T) {
+	for _, args := range []any{nil, "scalar", []any{json.Number("1"), true}} {
+		bin, argvOut := fakeCos(
+			t,
+			`{"tool":"echo","app_id":"notes","status":"ok","result":0.12345678901234567890}`,
+			0,
+		)
+		var result *ToolResult
+		var err error
+		withCos(t, bin, nil, func() {
+			result, err = CallTool("echo", args, "notes")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected, err := json.Marshal(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		argv := readArgv(t, argvOut)
+		if got := argv[indexOf(argv, "--args")+1]; got != string(expected) {
+			t.Fatalf("args = %q, want %q", got, expected)
+		}
+		encoded, err := json.Marshal(result.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(encoded) != "0.12345678901234567890" {
+			t.Fatalf("result = %s", encoded)
+		}
+	}
+}
+
+func TestCatalogSchemasRetainLosslessNumbers(t *testing.T) {
+	const lexeme = "0.12345678901234567890"
+	body := `{"tools":[{
+		"name":"echo","summary":"Echo","verb":"ipc.invoke","stability":"stable",
+		"args_schema":{"minimum":` + lexeme + `},
+		"returns_schema":{"maximum":` + lexeme + `}
+	}]}`
+	bin, _ := fakeCos(t, body, 0)
+	var entries []CatalogEntry
+	var err error
+	withCos(t, bin, nil, func() {
+		entries, err = Catalog()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	argsSchema, _ := json.Marshal(entries[0].ArgsSchema)
+	returnsSchema, _ := json.Marshal(entries[0].ReturnsSchema)
+	if string(argsSchema) != `{"minimum":`+lexeme+`}` {
+		t.Fatalf("args schema = %s", argsSchema)
+	}
+	if string(returnsSchema) != `{"maximum":`+lexeme+`}` {
+		t.Fatalf("returns schema = %s", returnsSchema)
+	}
+}
+
+func indexOf(values []string, target string) int {
+	for index, value := range values {
+		if value == target {
+			return index
+		}
+	}
+	return -1
 }

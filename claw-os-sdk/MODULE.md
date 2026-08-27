@@ -10,6 +10,8 @@ Rust, Python, Node, and Go bindings.
 - Maintain versioned wire types and operation/capability schemas.
 - Provide public SDK calls without exposing internal broker details.
 - Keep language bindings behaviorally compatible.
+- Own decoder validation and JSON-RPC error codes in `wire/v1/contract.json`
+  plus the versioned schemas.
 - Release every language binding at the same SDK SemVer through GitHub.
 - Generate, rather than hand-edit, generated bindings.
 
@@ -18,6 +20,7 @@ Rust, Python, Node, and Go bindings.
 | Path | Role |
 | --- | --- |
 | `wire/` | Versioned contract and code generation |
+| `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
@@ -30,9 +33,18 @@ must not depend on its policy/runtime internals.
 
 ## Dependencies
 
-Wire schema is the source of truth. Core and every language SDK consume it.
+Wire schemas and `wire/v1/contract.json` are the source of truth. Core, MCP,
+and every language SDK consume them.
 Serialization changes stay backwards compatible unless introduced under a new
 wire version.
+JSON Schema integers use mathematical semantics: finite values with no
+fractional component, including `1.0` and exponent notation. Type validation
+runs before schema minimum/maximum checks in every generated decoder. Wire
+number lexemes are preserved and evaluated as exact decimal rationals before
+conversion; u64-domain Node values materialize as `bigint` when necessary.
+Unrestricted payloads use `serde_json::Value` (Rust), `Decimal`/`WireDecimal` plus
+`encode_wire_json` (Python), `WireDecimal`/`bigint` plus `stringifyWireJson`
+(Node), and `json.Number` with `encoding/json` (Go).
 
 ## Tests
 
@@ -44,7 +56,11 @@ Regenerate from this directory after wire changes:
 ```bash
 cd claw-os-sdk
 python3 wire/codegen.py
+python3 wire/codegen.py --check
 ```
+
+The generator writes the four SDK bindings plus the core and
+`cos-mcp-serve` JSON-RPC constant modules.
 
 Then run the affected language tests plus the repository Python suite:
 

@@ -12,7 +12,7 @@ use std::ffi::OsString;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{cos_call_json, BridgeError};
+use crate::{cos_call_json_structured, BridgeError, StructuredCosError};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ToolError {
@@ -59,25 +59,18 @@ fn cos_tool_json(
     name: &str,
     argv: Vec<OsString>,
 ) -> Result<serde_json::Value, ToolError> {
-    match cos_call_json("tool", name, argv) {
+    match cos_call_json_structured("tool", name, argv) {
         Ok(value) => Ok(value),
-        Err(BridgeError::AppError {
-            message,
-            code,
-            ..
-        }) => {
-            let mut payload = serde_json::json!({ "error": &message });
-            if let Some(code) = code.clone() {
-                payload["code"] = serde_json::Value::String(code);
-            }
+        Err(StructuredCosError::App(error)) => {
+            let error = *error;
             Err(ToolError::Denied {
                 name: name.to_string(),
-                message,
-                code,
-                payload,
+                message: error.message,
+                code: error.code,
+                payload: error.payload,
             })
         }
-        Err(error) => Err(ToolError::Bridge(error)),
+        Err(StructuredCosError::Bridge(error)) => Err(ToolError::Bridge(error)),
     }
 }
 
@@ -114,6 +107,9 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
             payload: value,
         });
     }
+    crate::generated::validate_tool(&value).map_err(|error| {
+        ToolError::Unavailable(format!("tool result decode failed: {error}"))
+    })?;
     serde_json::from_value(value.clone()).map_err(|e| {
         ToolError::Unavailable(format!("tool result decode failed ({e}): {value}"))
     })
@@ -123,6 +119,9 @@ pub fn call(name: &str, args: &serde_json::Value) -> Result<ToolResult, ToolErro
 pub fn catalog() -> Result<Vec<CatalogEntry>, ToolError> {
     let argv: Vec<OsString> = vec!["ai".into(), "tools".into()];
     let value = cos_tool_json("catalog", argv)?;
+    crate::generated::validate_tool_catalog(&value).map_err(|error| {
+        ToolError::Unavailable(format!("catalog decode failed: {error}"))
+    })?;
     let rows = value
         .get("tools")
         .and_then(serde_json::Value::as_array)

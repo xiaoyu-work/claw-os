@@ -2,6 +2,7 @@ package clawossdk
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,8 @@ func TestChatErrorClassification(t *testing.T) {
 	}{
 		{`{"error": "monthly budget exceeded"}`, "budget"},
 		{`{"error": "prompt injection detected"}`, "safety"},
+		{`{"error": "opaque", "code": "budget_exceeded"}`, "budget"},
+		{`{"error": "opaque", "code": "SaFeTy_ViOlAtIoN"}`, "safety"},
 		{`{"error": "capability denied"}`, "denied"},
 	}
 	for _, c := range cases {
@@ -101,6 +104,79 @@ func TestChatErrorClassification(t *testing.T) {
 				t.Fatalf("%s: want AiDeniedError, got %T", c.body, err)
 			}
 		}
+	}
+}
+
+func TestChatRejectsMalformedToolCall(t *testing.T) {
+	body := `{
+	  "verb":"ai.chat","text":"hello","model":"m","provider":"p",
+	  "usage":{"input_tokens":1,"output_tokens":1,"units":2},
+	  "budget":{"period":"2026-08","units_used":2,"units_cap":100},
+	  "review":{"safety":"strict","prompt_redacted":false},
+	  "tool_calls":[{"id":"c1","input":{}}]
+	}`
+	bin, _ := fakeCos(t, body, 0)
+	var err error
+	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
+		_, err = Chat("hi", ChatOptions{})
+	})
+	unavailable, ok := err.(*AiUnavailableError)
+	if !ok || !strings.Contains(unavailable.Msg, "WIRE_REQUIRED") ||
+		!strings.Contains(unavailable.Msg, "$.tool_calls[0].name") {
+		t.Fatalf("expected strict decode error, got %T %v", err, err)
+	}
+}
+
+func TestChatAcceptsMathematicalIntegersAndUnrestrictedToolInput(t *testing.T) {
+	body := `{
+	  "verb":"ai.chat","text":"hello","model":"m","provider":"p",
+	  "usage":{"input_tokens":1.0,"output_tokens":1e0,"units":2.0},
+	  "budget":{"period":"2026-08","units_used":2e0,"units_cap":100.0},
+	  "review":{"safety":"strict","prompt_redacted":false},
+	  "tool_calls":[{"id":"c1","name":"echo","input":["a",1]}]
+	}`
+	bin, _ := fakeCos(t, body, 0)
+	var response *AiResponse
+	var err error
+	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
+		response, err = Chat("hi", ChatOptions{})
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.InputTokens != 1 || response.Usage.OutputTokens != 1 {
+		t.Fatalf("usage = %+v", response.Usage)
+	}
+	if input, ok := response.ToolCalls[0].Input.([]any); !ok || len(input) != 2 {
+		t.Fatalf("tool input = %#v", response.ToolCalls[0].Input)
+	}
+}
+
+func TestChatRejectsScalarRootWithStableWireError(t *testing.T) {
+	bin, _ := fakeCos(t, `null`, 0)
+	var err error
+	withCos(t, bin, map[string]string{"COS_APP_ID": "notes"}, func() {
+		_, err = Chat("hi", ChatOptions{})
+	})
+	unavailable, ok := err.(*AiUnavailableError)
+	if !ok || !strings.Contains(unavailable.Msg, "WIRE_TYPE") ||
+		!strings.Contains(unavailable.Msg, " at $:") {
+		t.Fatalf("expected stable root decode error, got %T %v", err, err)
+	}
+}
+
+func TestBudgetAcceptsProducerShape(t *testing.T) {
+	bin, _ := fakeCos(t, `{"app":"notes","period":"2026-08","units_used":7}`, 0)
+	var budget *AiBudget
+	var err error
+	withCos(t, bin, nil, func() {
+		budget, err = Budget("notes")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if budget.Period != "2026-08" || budget.UnitsUsed != 7 || budget.UnitsCap != 0 {
+		t.Fatalf("budget = %+v", budget)
 	}
 }
 

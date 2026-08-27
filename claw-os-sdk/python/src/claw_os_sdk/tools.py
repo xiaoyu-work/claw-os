@@ -59,10 +59,20 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from .generated import (
+    WireDecodeError,
+    WireJsonValue,
+    decode_wire_json,
+    encode_wire_json,
+    validate_tool,
+    validate_tool_catalog,
+)
+
 
 # Subprocess timeout — covers every shell-out to the `cos` binary so a
 # wedged child never blocks the calling app forever.
 _DEFAULT_TIMEOUT_S = 60
+_MISSING = object()
 
 
 def _truncate(value: Any, limit: int = 200) -> str:
@@ -120,8 +130,8 @@ class ToolResult:
     name: str
     app_id: str = ""
     status: str = "ok"
-    value: Any = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    value: WireJsonValue = None
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 @dataclass
@@ -132,9 +142,9 @@ class CatalogEntry:
     summary: str
     verb: str
     stability: str = "experimental"
-    args_schema: Optional[Dict[str, Any]] = None
-    returns_schema: Optional[Dict[str, Any]] = None
-    raw: Dict[str, Any] = field(default_factory=dict)
+    args_schema: Optional[Dict[str, WireJsonValue]] = None
+    returns_schema: Optional[Dict[str, WireJsonValue]] = None
+    raw: Dict[str, WireJsonValue] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -144,13 +154,14 @@ class CatalogEntry:
 
 def call(
     name: str,
-    args: Optional[Mapping[str, Any]] = None,
+    args: Any = _MISSING,
     *,
     app_id: Optional[str] = None,
 ) -> ToolResult:
     """Invoke a catalog tool through the kernel.
 
-    Shells to ``cos ai tool <name> --app <id> --args <json>``. The
+    ``args`` may be any JSON value, including explicit ``None``, a scalar,
+    or an array. Shells to ``cos ai tool <name> --app <id> --args <json>``. The
     kernel resolves ``name`` against the catalog, derives the caps
     verb + scope, runs ``caps::require``, executes the implementation,
     and writes an audit row.
@@ -167,7 +178,7 @@ def call(
             f"{name}: app_id is required (pass app_id= or set COS_APP_ID)"
         )
 
-    args_payload = json.dumps(dict(args or {}))
+    args_payload = encode_wire_json({} if args is _MISSING else args)
     cmd = [
         _cos_binary(),
         "ai",
@@ -186,20 +197,30 @@ def call(
             f"cos ai tool {name} returned no output (exit {proc.returncode})"
         )
     try:
-        envelope = json.loads(text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ToolUnavailable(
             f"cos ai tool {name} returned non-JSON output: {_truncate(text)}"
         ) from exc
 
-    if proc.returncode != 0 or "error" in envelope:
+    if proc.returncode != 0:
+        if isinstance(envelope, Mapping):
+            raise ToolDenied(envelope)
+        raise ToolUnavailable(
+            f"cos ai tool {name} exited {proc.returncode}: {_truncate(text)}"
+        )
+    if isinstance(envelope, Mapping) and "error" in envelope:
         raise ToolDenied(envelope)
 
+    try:
+        validate_tool(envelope)
+    except WireDecodeError as exc:
+        raise ToolUnavailable(f"tool result decode failed: {exc}") from exc
     return ToolResult(
-        name=str(envelope.get("tool", name)),
-        app_id=str(envelope.get("app_id", app)),
-        status=str(envelope.get("status", "ok")),
-        value=envelope.get("result"),
+        name=envelope["tool"],
+        app_id=envelope["app_id"],
+        status=envelope["status"],
+        value=envelope["result"],
         raw=dict(envelope),
     )
 
@@ -219,8 +240,8 @@ def catalog() -> List[CatalogEntry]:
             f"cos ai tools returned no output (exit {proc.returncode})"
         )
     try:
-        envelope = json.loads(text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ToolUnavailable(
             f"cos ai tools returned non-JSON output: {_truncate(text)}"
         ) from exc
@@ -232,24 +253,22 @@ def catalog() -> List[CatalogEntry]:
             envelope if isinstance(envelope, Mapping) else {"error": str(envelope)}
         )
 
-    rows = envelope.get("tools") if isinstance(envelope, Mapping) else envelope
-    if not isinstance(rows, list):
-        raise ToolUnavailable(
-            f"cos ai tools envelope missing `tools` array: {envelope!r}"
-        )
+    try:
+        validate_tool_catalog(envelope)
+    except WireDecodeError as exc:
+        raise ToolUnavailable(f"catalog decode failed: {exc}") from exc
+    rows = envelope["tools"]
 
     out: List[CatalogEntry] = []
     for row in rows:
-        if not isinstance(row, Mapping):
-            continue
         out.append(
             CatalogEntry(
-                name=str(row.get("name", "")),
-                summary=str(row.get("summary", "")),
-                verb=str(row.get("verb", "")),
-                stability=str(row.get("stability", "experimental")),
-                args_schema=_maybe_schema(row.get("args_schema")),
-                returns_schema=_maybe_schema(row.get("returns_schema")),
+                name=row["name"],
+                summary=row["summary"],
+                verb=row["verb"],
+                stability=row["stability"],
+                args_schema=dict(row["args_schema"]),
+                returns_schema=dict(row["returns_schema"]),
                 raw=dict(row),
             )
         )
@@ -296,22 +315,6 @@ def _run_with_timeout(cmd: List[str], label: str) -> subprocess.CompletedProcess
         raise ToolUnavailable(
             f"{label} timed out after {_DEFAULT_TIMEOUT_S}s"
         ) from exc
-
-
-def _maybe_schema(blob: Any) -> Optional[Dict[str, Any]]:
-    """Schemas come over the wire as either parsed JSON or raw text."""
-    if blob is None:
-        return None
-    if isinstance(blob, Mapping):
-        return dict(blob)
-    if isinstance(blob, str):
-        try:
-            parsed = json.loads(blob)
-        except json.JSONDecodeError:
-            return None
-        if isinstance(parsed, Mapping):
-            return dict(parsed)
-    return None
 
 
 def _cos_binary() -> str:

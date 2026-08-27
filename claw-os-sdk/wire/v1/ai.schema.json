@@ -36,16 +36,25 @@
         "input_tokens": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 4294967295,
           "x-rust-type": "u32",
           "x-go-type": "uint32"
         },
         "output_tokens": {
           "type": "integer",
           "minimum": 0,
+          "maximum": 4294967295,
           "x-rust-type": "u32",
           "x-go-type": "uint32"
         },
-        "units": { "type": "integer", "minimum": 0 }
+        "units": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
+        }
       }
     },
     "budget": {
@@ -55,8 +64,22 @@
       "description": "App budget snapshot after the call.",
       "properties": {
         "period": { "type": "string" },
-        "units_used": { "type": "integer", "minimum": 0 },
-        "units_cap": { "type": "integer", "minimum": 0 }
+        "units_used": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
+        },
+        "units_cap": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
+        }
       }
     },
     "review": {

@@ -18,6 +18,7 @@ transports, discovery, and tool-registry integration.
 | Path | Role |
 | --- | --- |
 | `protocol.rs` | MCP/JSON-RPC types and protocol version |
+| `generated.rs` | JSON-RPC error codes generated from the SDK wire contract |
 | `transport.rs` | Bounded transport abstraction and stdio |
 | `client.rs` | Request lifecycle and reader task |
 | `server.rs` | Local tools/list/tools/call server |
@@ -29,6 +30,8 @@ transports, discovery, and tool-registry integration.
 MCP attachment is optional and must not prevent the agent from starting.
 Remote tool descriptors/results remain untrusted and pass through the normal
 registry, capability, and prompt-injection boundaries.
+Equivalent first-party MCP failures use the generated codes owned by
+`claw-os-sdk/wire/v1/contract.json`.
 
 ## Tests
 

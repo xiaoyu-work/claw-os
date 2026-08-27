@@ -14,6 +14,9 @@ dependency. It handles the subset of JSON Schema used by wire/v1:
 
   - object with `properties` (+ `required`, `additionalProperties`)
   - primitive types: string, integer, number, boolean
+    (`integer` follows JSON Schema mathematical semantics over lossless
+    decimal-rational lexemes, so `1`, `1.0`, and `1e0` are equivalent;
+    bounds run afterward)
   - arrays (with `items`)
   - `enum` ⇒ becomes a string with a doc-listed allow-list (kept loose to
     stay forward-compatible with kernel additions). For Rust/Python/Go we
@@ -30,6 +33,7 @@ Run from the SDK root:
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import sys
@@ -37,15 +41,13 @@ import textwrap
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIRE_DIR = ROOT / "wire" / "v1"
+CONTRACT_PATH = WIRE_DIR / "contract.json"
 RUST_OUT = ROOT / "rust" / "src" / "generated.rs"
 PY_OUT   = ROOT / "python" / "src" / "claw_os_sdk" / "generated.py"
 TS_OUT   = ROOT / "node" / "src" / "generated.ts"
 GO_OUT   = ROOT / "go" / "generated.go"
-
-# Wire protocol version. All schemas pin `wire_version: { const: 1 }`
-# in envelope.schema.json; we re-export the constant from each language
-# binding so consumers have a single source of truth at runtime.
-EXPECTED_WIRE_VERSION = 1
+CORE_MCP_OUT = ROOT.parent / "core" / "src" / "agent" / "tools" / "mcp" / "generated.rs"
+CRATE_MCP_OUT = ROOT.parent / "crates" / "cos-mcp-serve" / "src" / "generated.rs"
 
 BANNER_LINES = [
     "DO NOT EDIT BY HAND.",
@@ -110,6 +112,39 @@ def load_schemas() -> list[tuple[str, dict]]:
         with path.open() as fh:
             schemas.append((name, json.load(fh)))
     return schemas
+
+
+def load_contract() -> dict:
+    with CONTRACT_PATH.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _schema_json(schema: dict) -> str:
+    return json.dumps(schema, sort_keys=True, separators=(",", ":"))
+
+
+def _validation_schemas(
+    schemas: list[tuple[str, dict]], contract: dict
+) -> list[tuple[str, dict]]:
+    by_name = dict(schemas)
+    names = contract["validation"]["schemas"]
+    missing = [name for name in names if name not in by_name]
+    if missing:
+        raise ValueError(f"validation schema not found: {', '.join(missing)}")
+    return [(name, by_name[name]) for name in names]
+
+
+def _validation_targets(
+    schemas: list[tuple[str, dict]], contract: dict
+) -> list[tuple[str, dict]]:
+    targets = _validation_schemas(schemas, contract)
+    by_name = dict(schemas)
+    for target in contract["validation"].get("targets", []):
+        rule = by_name[target["schema"]]
+        for component in target["path"]:
+            rule = rule[component]
+        targets.append((target["name"], rule))
+    return targets
 
 
 # --- rust --------------------------------------------------------------
@@ -200,7 +235,7 @@ def rust_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("")
 
 
-def emit_rust(schemas: list[tuple[str, dict]]) -> str:
+def emit_rust(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -210,11 +245,14 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
     body.append("#![allow(non_snake_case, non_camel_case_types)]")
     body.append("")
     body.append("use serde_json;")
+    body.append("use num_bigint::BigInt;")
+    body.append("use num_traits::ToPrimitive;")
     body.append("")
     body.append(f"/// Expected wire-version value emitted by the kernel. The")
     body.append(f"/// generated [`Envelope`] type's runtime check accepts only")
     body.append(f"/// this constant; anything else is surfaced as an error.")
-    body.append(f"pub const EXPECTED_WIRE_VERSION: i64 = {EXPECTED_WIRE_VERSION};")
+    expected_wire_version = contract["wire_version"]
+    body.append(f"pub const EXPECTED_WIRE_VERSION: i64 = {expected_wire_version};")
     body.append("")
     body.append("/// Verify a deserialised envelope advertises a wire version this")
     body.append("/// SDK understands. Returns `Err(msg)` on mismatch.")
@@ -262,6 +300,7 @@ def emit_rust(schemas: list[tuple[str, dict]]) -> str:
         body.append("    }")
         body.append("}")
         body.append("")
+    _emit_rust_validation(body, _validation_targets(schemas, contract), contract)
     return "\n".join(body) + "\n"
 
 
@@ -292,6 +331,281 @@ def _collect_enum_validators(parent: str, schema: dict, acc: list) -> None:
     for pname, pschema in props.items():
         if pschema.get("type") == "string" and "enum" in pschema:
             acc.append((parent, pname, list(pschema["enum"])))
+
+
+def _emit_rust_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "/// Stable failure returned by generated wire validators.",
+        "#[derive(Debug, Clone, PartialEq, Eq)]",
+        "pub struct WireDecodeError {",
+        "    pub code: &'static str,",
+        "    pub schema: &'static str,",
+        "    pub path: String,",
+        "    pub reason: String,",
+        "}",
+        "",
+        "impl std::fmt::Display for WireDecodeError {",
+        "    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {",
+        "        write!(f, \"{}: invalid {} at {}: {}\", self.code, self.schema, self.path, self.reason)",
+        "    }",
+        "}",
+        "",
+        "impl std::error::Error for WireDecodeError {}",
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'pub const WIRE_{key.upper()}: &str = "{value}";')
+    body.extend([
+        "",
+        "fn wire_error(",
+        "    code: &'static str,",
+        "    schema: &'static str,",
+        "    path: &str,",
+        "    reason: impl Into<String>,",
+        ") -> WireDecodeError {",
+        "    WireDecodeError { code, schema, path: path.to_string(), reason: reason.into() }",
+        "}",
+        "",
+        "#[derive(Debug, Clone)]",
+        "enum ExactInteger {",
+        "    Value(BigInt),",
+        "    PositiveOverflow,",
+        "    NegativeOverflow,",
+        "}",
+        "",
+        "fn exact_integer(value: &serde_json::Value) -> Option<ExactInteger> {",
+        "    let lexeme = value.as_number()?.to_string();",
+        "    let (mantissa, exponent_text) = lexeme",
+        "        .split_once(['e', 'E'])",
+        '        .map_or((lexeme.as_str(), "0"), |parts| parts);',
+        "    let exponent = exponent_text.parse::<i64>().unwrap_or_else(|_| {",
+        "        if exponent_text.starts_with('-') { i64::MIN } else { i64::MAX }",
+        "    });",
+        "    let negative = mantissa.starts_with('-');",
+        "    let unsigned = mantissa.trim_start_matches('-');",
+        "    let fraction_len = unsigned",
+        "        .split_once('.')",
+        "        .map_or(0, |(_, fraction)| fraction.len());",
+        "    let digits = unsigned.replace('.', \"\");",
+        "    let digits = digits.trim_start_matches('0');",
+        "    if digits.is_empty() {",
+        "        return Some(ExactInteger::Value(BigInt::from(0)));",
+        "    }",
+        "    let decimal_places = i128::from(fraction_len as i64) - i128::from(exponent);",
+        "    let integer_digits = if decimal_places <= 0 {",
+        "        let zeros = usize::try_from(-decimal_places).ok()?;",
+        "        if zeros > 1024 {",
+        "            return Some(if negative { ExactInteger::NegativeOverflow } else { ExactInteger::PositiveOverflow });",
+        "        }",
+        '        format!("{digits}{}", "0".repeat(zeros))',
+        "    } else {",
+        "        let places = usize::try_from(decimal_places).ok()?;",
+        "        if places > digits.len() || !digits[digits.len() - places..].chars().all(|ch| ch == '0') {",
+        "            return None;",
+        "        }",
+        "        digits[..digits.len() - places].to_string()",
+        "    };",
+        "    let integer_digits = if integer_digits.is_empty() { \"0\" } else { &integer_digits };",
+        "    let signed = if negative { format!(\"-{integer_digits}\") } else { integer_digits.to_string() };",
+        "    BigInt::parse_bytes(signed.as_bytes(), 10).map(ExactInteger::Value)",
+        "}",
+        "",
+        "fn compare_exact_integers(left: &ExactInteger, right: &ExactInteger) -> std::cmp::Ordering {",
+        "    use std::cmp::Ordering;",
+        "    match (left, right) {",
+        "        (ExactInteger::NegativeOverflow, ExactInteger::NegativeOverflow)",
+        "        | (ExactInteger::PositiveOverflow, ExactInteger::PositiveOverflow) => Ordering::Equal,",
+        "        (ExactInteger::NegativeOverflow, _) | (_, ExactInteger::PositiveOverflow) => Ordering::Less,",
+        "        (ExactInteger::PositiveOverflow, _) | (_, ExactInteger::NegativeOverflow) => Ordering::Greater,",
+        "        (ExactInteger::Value(left), ExactInteger::Value(right)) => left.cmp(right),",
+        "    }",
+        "}",
+        "",
+        "fn validate_wire_schema(",
+        "    rule: &serde_json::Value,",
+        "    root: &serde_json::Value,",
+        "    value: &serde_json::Value,",
+        "    schema_name: &'static str,",
+        "    path: &str,",
+        ") -> Result<(), WireDecodeError> {",
+        '    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {',
+        "        let name = reference.rsplit('/').next().unwrap_or_default();",
+        '        let target = root.get("$defs").and_then(|defs| defs.get(name)).ok_or_else(|| {',
+        '            wire_error(WIRE_TYPE, schema_name, path, format!("unresolved schema reference {reference}"))',
+        "        })?;",
+        "        return validate_wire_schema(target, root, value, schema_name, path);",
+        "    }",
+        '    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {',
+        "        let matches = branches.iter().filter(|branch| {",
+        "            validate_wire_schema(branch, root, value, schema_name, path).is_ok()",
+        "        }).count();",
+        "        if matches != 1 {",
+        '            return Err(wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape"));',
+        "        }",
+        "        return Ok(());",
+        "    }",
+        '    if let Some(expected) = rule.get("type").and_then(serde_json::Value::as_str) {',
+        "        let valid = match expected {",
+        '            "object" => value.is_object(),',
+        '            "array" => value.is_array(),',
+        '            "string" => value.is_string(),',
+        '            "integer" => exact_integer(value).is_some(),',
+        '            "number" => value.is_number(),',
+        '            "boolean" => value.is_boolean(),',
+        '            "null" => value.is_null(),',
+        "            _ => false,",
+        "        };",
+        "        if !valid {",
+        '            return Err(wire_error(WIRE_TYPE, schema_name, path, format!("expected {expected}")));',
+        "        }",
+        "    }",
+        '    if let Some(expected) = rule.get("const") {',
+        "        let equal = match (exact_integer(value), exact_integer(expected)) {",
+        "            (Some(left), Some(right)) => compare_exact_integers(&left, &right).is_eq(),",
+        "            _ => value == expected,",
+        "        };",
+        "        if !equal {",
+        '            return Err(wire_error(WIRE_CONST, schema_name, path, "value does not match const"));',
+        "        }",
+        "    }",
+        '    if let Some(allowed) = rule.get("enum").and_then(serde_json::Value::as_array) {',
+        "        if !allowed.contains(value) {",
+        '            return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));',
+        "        }",
+        "    }",
+        "    if let Some(number) = exact_integer(value) {",
+        '        if let Some(minimum) = rule.get("minimum").and_then(exact_integer) {',
+        "            if compare_exact_integers(&number, &minimum).is_lt() {",
+        '                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {}", rule["minimum"])));',
+        "            }",
+        "        }",
+        '        if let Some(maximum) = rule.get("maximum").and_then(exact_integer) {',
+        "            if compare_exact_integers(&number, &maximum).is_gt() {",
+        '                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {}", rule["maximum"])));',
+        "            }",
+        "        }",
+        "    }",
+        "    if let Some(object) = value.as_object() {",
+        '        if let Some(required) = rule.get("required").and_then(serde_json::Value::as_array) {',
+        "            for field in required {",
+        "                let field = field.as_str().unwrap_or_default();",
+        "                if !object.contains_key(field) {",
+        "                    let field_path = format!(\"{path}.{field}\");",
+        '                    return Err(wire_error(WIRE_REQUIRED, schema_name, &field_path, "field is required"));',
+        "                }",
+        "            }",
+        "        }",
+        '        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {',
+        "            let mut names: Vec<&String> = properties.keys().collect();",
+        "            names.sort();",
+        "            for name in names {",
+        "                if let Some(field_value) = object.get(name) {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        "                    validate_wire_schema(&properties[name], root, field_value, schema_name, &field_path)?;",
+        "                }",
+        "            }",
+        "            let mut extras: Vec<&String> = object.keys().filter(|name| !properties.contains_key(*name)).collect();",
+        "            extras.sort();",
+        '            if rule.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {',
+        "                if let Some(name) = extras.first() {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        '                    return Err(wire_error(WIRE_UNKNOWN_FIELD, schema_name, &field_path, "unknown field"));',
+        "                }",
+        '            } else if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {',
+        "                for name in extras {",
+        "                    let field_path = format!(\"{path}.{name}\");",
+        "                    validate_wire_schema(additional, root, &object[name], schema_name, &field_path)?;",
+        "                }",
+        "            }",
+        "        }",
+        "    }",
+        "    if let Some(items) = value.as_array() {",
+        '        if let Some(item_rule) = rule.get("items") {',
+        "            for (index, item) in items.iter().enumerate() {",
+        "                let item_path = format!(\"{path}[{index}]\");",
+        "                validate_wire_schema(item_rule, root, item, schema_name, &item_path)?;",
+        "            }",
+        "        }",
+        "    }",
+        "    Ok(())",
+        "}",
+        "",
+        "fn normalize_wire_integers(",
+        "    rule: &serde_json::Value,",
+        "    root: &serde_json::Value,",
+        "    value: &mut serde_json::Value,",
+        ") {",
+        '    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {',
+        "        let name = reference.rsplit('/').next().unwrap_or_default();",
+        '        if let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) {',
+        "            normalize_wire_integers(target, root, value);",
+        "        }",
+        "        return;",
+        "    }",
+        '    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {',
+        "        if let Some(branch) = branches.iter().find(|branch| {",
+        '            validate_wire_schema(branch, root, value, "generated", "$").is_ok()',
+        "        }) {",
+        "            normalize_wire_integers(branch, root, value);",
+        "        }",
+        "        return;",
+        "    }",
+        '    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer") {',
+        "        if let Some(ExactInteger::Value(number)) = exact_integer(value) {",
+        "            if let Some(number) = number.to_u64() {",
+        "                *value = serde_json::Value::Number(serde_json::Number::from(number));",
+        "            } else if let Some(number) = number.to_i64() {",
+        "                *value = serde_json::Value::Number(serde_json::Number::from(number));",
+        "            }",
+        "        }",
+        "        return;",
+        "    }",
+        "    if let Some(object) = value.as_object_mut() {",
+        '        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {',
+        "            for (name, field_rule) in properties {",
+        "                if let Some(field_value) = object.get_mut(name) {",
+        "                    normalize_wire_integers(field_rule, root, field_value);",
+        "                }",
+        "            }",
+        '            if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {',
+        "                for (name, field_value) in object {",
+        "                    if !properties.contains_key(name) {",
+        "                        normalize_wire_integers(additional, root, field_value);",
+        "                    }",
+        "                }",
+        "            }",
+        "        }",
+        "    } else if let Some(items) = value.as_array_mut() {",
+        '        if let Some(item_rule) = rule.get("items") {',
+        "            for item in items {",
+        "                normalize_wire_integers(item_rule, root, item);",
+        "            }",
+        "        }",
+        "    }",
+        "}",
+        "",
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate_{_snake(name)}"
+        body.append(f'const {const_name}: &str = r###"{_schema_json(schema)}"###;')
+        body.append(f"pub fn {fn_name}(value: &serde_json::Value) -> Result<(), WireDecodeError> {{")
+        body.append(f"    let schema: serde_json::Value = serde_json::from_str({const_name})")
+        body.append('        .expect("generated wire schema must be valid JSON");')
+        body.append(f'    validate_wire_schema(&schema, &schema, value, "{_camel(name)}", "$")')
+        body.append("}")
+        body.append("")
+        body.append(
+            f"pub fn normalize_{_snake(name)}_integers(value: &mut serde_json::Value) {{"
+        )
+        body.append(f"    let schema: serde_json::Value = serde_json::from_str({const_name})")
+        body.append('        .expect("generated wire schema must be valid JSON");')
+        body.append("    normalize_wire_integers(&schema, &schema, value);")
+        body.append("}")
+        body.append("")
 
 
 # --- python ------------------------------------------------------------
@@ -368,7 +682,7 @@ def py_typed_dict(name: str, schema: dict, defs: dict, out: list[str]) -> None:
         out.append(f"    {pname}: {ty}")
 
 
-def emit_python(schemas: list[tuple[str, dict]]) -> str:
+def emit_python(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append('"""' + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -377,11 +691,19 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("from __future__ import annotations")
     body.append("")
-    body.append("from typing import Any, Dict, List, Mapping, TypedDict")
+    body.append("import json")
+    body.append("import math")
+    body.append("import re")
+    body.append("from dataclasses import dataclass")
+    body.append("from decimal import Decimal, InvalidOperation")
+    body.append("")
+    body.append("from typing import Any, Dict, List, Mapping, TypeAlias, TypedDict, Union")
     body.append("")
     body.append(f"# Wire-version value the kernel must advertise. See")
     body.append(f"# wire/v1/envelope.schema.json.")
-    body.append(f"EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION}")
+    body.append(f"EXPECTED_WIRE_VERSION = {contract['wire_version']}")
+    for key, value in contract["json_rpc_error_codes"].items():
+        body.append(f"JSONRPC_ERROR_{key.upper()} = {value}")
     body.append("")
     body.append("")
     body.append("def check_wire_version(envelope: Mapping[str, object]) -> None:")
@@ -421,13 +743,323 @@ def emit_python(schemas: list[tuple[str, dict]]) -> str:
         body.append(f"    allowed = {values!r}")
         body.append("    if value not in allowed:")
         body.append(f"        raise ValueError(f\"invalid {parent}.{field_name} value: {{value!r}}\")")
+    _emit_python_validation(body, _validation_targets(schemas, contract), contract)
     body.append("")
     return "\n".join(body) + "\n"
+
+
+def _emit_python_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "",
+        "class WireDecodeError(ValueError):",
+        '    """Stable failure returned by generated wire validators."""',
+        "",
+        "    def __init__(self, code: str, schema: str, path: str, reason: str) -> None:",
+        "        self.code = code",
+        "        self.schema = schema",
+        "        self.path = path",
+        "        self.reason = reason",
+        '        super().__init__(f"{code}: invalid {schema} at {path}: {reason}")',
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'WIRE_{key.upper()} = "{value}"')
+    body.extend([
+        "",
+        "def _reject_json_constant(value: str) -> None:",
+        '    raise ValueError(f"invalid JSON numeric constant: {value}")',
+        "",
+        "@dataclass(frozen=True)",
+        "class WireDecimal:",
+        '    """Compact exact JSON number lexeme outside Decimal operating bounds."""',
+        "    lexeme: str",
+        "",
+        "    def __post_init__(self) -> None:",
+        "        _validate_wire_decimal_lexeme(self.lexeme)",
+        "",
+        "_JSON_NUMBER_RE = re.compile(",
+        '    r"^(?P<sign>-?)(?P<integer>0|[1-9][0-9]*)(?:\\.(?P<fraction>[0-9]+))?(?:[eE](?P<exponent>[+-]?[0-9]+))?$"',
+        ")",
+        "_MAX_MATERIALIZED_INTEGER_DIGITS = 1024",
+        "",
+        "def _validate_wire_decimal_lexeme(lexeme: str) -> re.Match[str]:",
+        "    match = _JSON_NUMBER_RE.fullmatch(lexeme)",
+        "    if match is None:",
+        '        raise ValueError(f"invalid finite JSON number lexeme: {lexeme!r}")',
+        "    return match",
+        "",
+        "@dataclass(frozen=True)",
+        "class _ExactInteger:",
+        "    value: int | None",
+        "    overflow: int = 0",
+        "",
+        "def _integer_from_parts(",
+        "    negative: bool,",
+        "    digits: str,",
+        "    fraction_len: int,",
+        "    exponent_text: str,",
+        ") -> _ExactInteger | None:",
+        "    digits = digits.lstrip(\"0\")",
+        "    if not digits:",
+        "        return _ExactInteger(0)",
+        "    exponent_digits = exponent_text.lstrip(\"+-\").lstrip(\"0\") or \"0\"",
+        "    if len(exponent_digits) > 18:",
+        "        exponent = -(10**19) if exponent_text.startswith(\"-\") else 10**19",
+        "    else:",
+        "        exponent = int(exponent_text)",
+        "    decimal_places = fraction_len - exponent",
+        "    if decimal_places <= 0:",
+        "        zeros = -decimal_places",
+        "        if len(digits) + zeros > _MAX_MATERIALIZED_INTEGER_DIGITS:",
+        "            return _ExactInteger(None, -1 if negative else 1)",
+        '        integer = int(digits + ("0" * zeros))',
+        "    else:",
+        "        if decimal_places > len(digits):",
+        "            return None",
+        "        tail = digits[len(digits) - decimal_places:]",
+        '        if any(char != "0" for char in tail):',
+        "            return None",
+        "        retained = digits[:len(digits) - decimal_places]",
+        "        integer = int(retained or \"0\")",
+        "    return _ExactInteger(-integer if negative else integer)",
+        "",
+        "def _exact_integer(value: Any) -> _ExactInteger | None:",
+        "    if isinstance(value, bool):",
+        "        return None",
+        "    if isinstance(value, int):",
+        "        return _ExactInteger(value)",
+        "    if isinstance(value, float):",
+        "        if not math.isfinite(value) or not value.is_integer():",
+        "            return None",
+        "        return _ExactInteger(int(value))",
+        "    if isinstance(value, Decimal):",
+        "        if not value.is_finite():",
+        "            return None",
+        "        parts = value.as_tuple()",
+        '        digits = "".join(str(digit) for digit in parts.digits) or "0"',
+        "        return _integer_from_parts(bool(parts.sign), digits, 0, str(parts.exponent))",
+        "    if isinstance(value, WireDecimal):",
+        "        match = _validate_wire_decimal_lexeme(value.lexeme)",
+        '        integer = match.group("integer")',
+        '        fraction = match.group("fraction") or ""',
+        "        return _integer_from_parts(",
+        '            match.group("sign") == "-",',
+        "            integer + fraction,",
+        "            len(fraction),",
+        '            match.group("exponent") or "0",',
+        "        )",
+        "    return None",
+        "",
+        "def _compare_exact_integers(left: _ExactInteger, right: _ExactInteger) -> int:",
+        "    if left.overflow != right.overflow:",
+        "        return -1 if left.overflow < right.overflow else 1",
+        "    if left.overflow:",
+        "        return 0",
+        "    assert left.value is not None and right.value is not None",
+        "    return (left.value > right.value) - (left.value < right.value)",
+        "",
+        "WireJsonValue: TypeAlias = Union[",
+        "    None, bool, str, int, float, Decimal, WireDecimal,",
+        '    List["WireJsonValue"], Dict[str, "WireJsonValue"],',
+        "]",
+        "",
+        "def materialize_wire_value(value: Any) -> WireJsonValue:",
+        '    """Return public JSON values without losing decimal precision."""',
+        "    if isinstance(value, Decimal):",
+        "        if not value.is_finite():",
+        '            raise ValueError("wire decimal must be finite")',
+        "        number = float(value)",
+        "        return number if math.isfinite(number) and Decimal.from_float(number) == value else value",
+        "    if isinstance(value, WireDecimal):",
+        "        return value",
+        "    if isinstance(value, list):",
+        "        return [materialize_wire_value(item) for item in value]",
+        "    if isinstance(value, Mapping):",
+        "        return {str(key): materialize_wire_value(item) for key, item in value.items()}",
+        "    if value is None or isinstance(value, (bool, str, int, float)):",
+        "        return value",
+        '    raise TypeError(f"unsupported wire JSON value: {type(value).__name__}")',
+        "",
+        "def decode_wire_json(text: str) -> WireJsonValue:",
+        '    """Decode JSON into the stable public lossless value model."""',
+        "    def parse_decimal(lexeme: str) -> Decimal | WireDecimal:",
+        "        try:",
+        "            return Decimal(lexeme)",
+        "        except (InvalidOperation, ValueError):",
+        "            return WireDecimal(lexeme)",
+        "    def parse_integer(lexeme: str) -> int | WireDecimal:",
+        "        digits = lexeme.lstrip(\"-\")",
+        "        return int(lexeme) if len(digits) <= _MAX_MATERIALIZED_INTEGER_DIGITS else WireDecimal(lexeme)",
+        "    decoded = json.loads(",
+        "        text,",
+        "        parse_float=parse_decimal,",
+        "        parse_int=parse_integer,",
+        "        parse_constant=_reject_json_constant,",
+        "    )",
+        "    return materialize_wire_value(decoded)",
+        "",
+        "def encode_wire_json(value: Any) -> str:",
+        '    """Serialize the public lossless value model without rounding."""',
+        "    def encode(item: Any) -> str:",
+        "        if item is None:",
+        '            return "null"',
+        "        if isinstance(item, bool):",
+        '            return "true" if item else "false"',
+        "        if isinstance(item, str):",
+        "            return json.dumps(item, ensure_ascii=True)",
+        "        if isinstance(item, int):",
+        "            return str(item)",
+        "        if isinstance(item, Decimal):",
+        "            if not item.is_finite():",
+        '                raise ValueError("wire decimal must be finite")',
+        "            return str(item)",
+        "        if isinstance(item, WireDecimal):",
+        "            _validate_wire_decimal_lexeme(item.lexeme)",
+        "            return item.lexeme",
+        "        if isinstance(item, float):",
+        "            return json.dumps(item, allow_nan=False)",
+        "        if isinstance(item, (list, tuple)):",
+        '            return "[" + ",".join(encode(child) for child in item) + "]"',
+        "        if isinstance(item, Mapping):",
+        "            fields = []",
+        "            for key, child in item.items():",
+        "                if not isinstance(key, str):",
+        '                    raise TypeError("wire JSON object keys must be strings")',
+        '                fields.append(json.dumps(key, ensure_ascii=True) + ":" + encode(child))',
+        '            return "{" + ",".join(fields) + "}"',
+        '        raise TypeError(f"unsupported wire JSON value: {type(item).__name__}")',
+        "    return encode(value)",
+        "",
+        "def _wire_decimal(value: Any) -> Decimal | None:",
+        "    if isinstance(value, bool):",
+        "        return None",
+        "    if isinstance(value, int):",
+        "        return Decimal(value)",
+        "    if isinstance(value, Decimal):",
+        "        return value if value.is_finite() else None",
+        "    if isinstance(value, float) and math.isfinite(value):",
+        "        return Decimal(str(value))",
+        "    return None",
+        "",
+        "def wire_integer_to_int(value: Any) -> int:",
+        '    """Convert a previously validated mathematical integer exactly."""',
+        "    integer = _exact_integer(value)",
+        "    if integer is None or integer.value is None:",
+        '        raise ValueError("wire value is not an exact integer")',
+        "    return integer.value",
+        "",
+        "def _wire_error(code: str, schema: str, path: str, reason: str) -> WireDecodeError:",
+        "    return WireDecodeError(code, schema, path, reason)",
+        "",
+        "def _validate_wire_schema(",
+        "    rule: Mapping[str, Any],",
+        "    root: Mapping[str, Any],",
+        "    value: Any,",
+        "    schema_name: str,",
+        "    path: str,",
+        ") -> None:",
+        '    reference = rule.get("$ref")',
+        "    if isinstance(reference, str):",
+        '        target = root.get("$defs", {}).get(reference.rsplit("/", 1)[-1])',
+        "        if not isinstance(target, Mapping):",
+        '            raise _wire_error(WIRE_TYPE, schema_name, path, f"unresolved schema reference {reference}")',
+        "        _validate_wire_schema(target, root, value, schema_name, path)",
+        "        return",
+        '    branches = rule.get("oneOf")',
+        "    if isinstance(branches, list):",
+        "        matches = 0",
+        "        for branch in branches:",
+        "            try:",
+        "                _validate_wire_schema(branch, root, value, schema_name, path)",
+        "            except WireDecodeError:",
+        "                continue",
+        "            matches += 1",
+        "        if matches != 1:",
+        '            raise _wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape")',
+        "        return",
+        "    number = _wire_decimal(value)",
+        "    integer = _exact_integer(value)",
+        '    expected = rule.get("type")',
+        "    valid = {",
+        '        "object": isinstance(value, Mapping),',
+        '        "array": isinstance(value, list),',
+        '        "string": isinstance(value, str),',
+        '        "integer": integer is not None,',
+        '        "number": number is not None or isinstance(value, WireDecimal),',
+        '        "boolean": isinstance(value, bool),',
+        '        "null": value is None,',
+        "    }",
+        "    if isinstance(expected, str) and not valid.get(expected, False):",
+        '        raise _wire_error(WIRE_TYPE, schema_name, path, f"expected {expected}")',
+        '    if "const" in rule:',
+        '        expected_const = rule["const"]',
+        "        expected_integer = _exact_integer(expected_const)",
+        "        if integer is not None and expected_integer is not None:",
+        "            equal = _compare_exact_integers(integer, expected_integer) == 0",
+        "        else:",
+        "            expected_number = _wire_decimal(expected_const)",
+        "            equal = number is not None and expected_number is not None and number == expected_number",
+        "            if number is None or expected_number is None:",
+        "                equal = value == expected_const",
+        "        if not equal:",
+        '            raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")',
+        '    allowed = rule.get("enum")',
+        "    if isinstance(allowed, list) and value not in allowed:",
+        '        raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")',
+        "    if integer is not None:",
+        '        minimum = rule.get("minimum")',
+        "        minimum_integer = _exact_integer(minimum)",
+        "        if minimum_integer is not None and _compare_exact_integers(integer, minimum_integer) < 0:",
+        '            raise _wire_error(WIRE_MINIMUM, schema_name, path, f"must be >= {minimum}")',
+        '        maximum = rule.get("maximum")',
+        "        maximum_integer = _exact_integer(maximum)",
+        "        if maximum_integer is not None and _compare_exact_integers(integer, maximum_integer) > 0:",
+        '            raise _wire_error(WIRE_MAXIMUM, schema_name, path, f"must be <= {maximum}")',
+        "    if isinstance(value, Mapping):",
+        '        required = rule.get("required", [])',
+        "        for field in required:",
+        "            if field not in value:",
+        '                raise _wire_error(WIRE_REQUIRED, schema_name, f"{path}.{field}", "field is required")',
+        '        properties = rule.get("properties")',
+        "        if isinstance(properties, Mapping):",
+        "            for field in sorted(properties):",
+        "                if field in value:",
+        "                    _validate_wire_schema(",
+        "                        properties[field], root, value[field], schema_name, f\"{path}.{field}\"",
+        "                    )",
+        "            extras = sorted(field for field in value if field not in properties)",
+        '            additional = rule.get("additionalProperties", True)',
+        "            if additional is False and extras:",
+        '                raise _wire_error(WIRE_UNKNOWN_FIELD, schema_name, f"{path}.{extras[0]}", "unknown field")',
+        "            if isinstance(additional, Mapping):",
+        "                for field in extras:",
+        "                    _validate_wire_schema(",
+        "                        additional, root, value[field], schema_name, f\"{path}.{field}\"",
+        "                    )",
+        "    if isinstance(value, list) and isinstance(rule.get(\"items\"), Mapping):",
+        '        item_rule = rule["items"]',
+        "        for index, item in enumerate(value):",
+        '            _validate_wire_schema(item_rule, root, item, schema_name, f"{path}[{index}]")',
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate_{_snake(name)}"
+        body.append("")
+        body.append(f"{const_name}: Dict[str, Any] = decode_wire_json(r'''{_schema_json(schema)}''')")
+        body.append("")
+        body.append(f"def {fn_name}(value: Any) -> None:")
+        body.append(f'    """Validate a value against wire/v1/{name}.schema.json."""')
+        body.append(f'    _validate_wire_schema({const_name}, {const_name}, value, "{_camel(name)}", "$")')
 
 
 # --- typescript --------------------------------------------------------
 
 def ts_type(schema: dict, defs: dict, ctx: str) -> str:
+    if "x-ts-type" in schema:
+        return schema["x-ts-type"]
     if "$ref" in schema:
         ref = schema["$ref"].split("/")[-1]
         return _camel(ref)
@@ -483,7 +1115,7 @@ def ts_interface(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("}")
 
 
-def emit_ts(schemas: list[tuple[str, dict]]) -> str:
+def emit_ts(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -491,7 +1123,11 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("/* eslint-disable */")
     body.append("")
-    body.append(f"export const EXPECTED_WIRE_VERSION = {EXPECTED_WIRE_VERSION} as const;")
+    body.append(
+        'import { compareNumber, isLosslessNumber, isSafeNumber, LosslessNumber, parse as parseLosslessJson, splitNumber, stringify as stringifyLosslessJson } from "lossless-json";'
+    )
+    body.append("")
+    body.append(f"export const EXPECTED_WIRE_VERSION = {contract['wire_version']} as const;")
     body.append("")
     for name, schema in schemas:
         ts_interface(name, schema, schema.get("$defs", {}), body)
@@ -501,8 +1137,324 @@ def emit_ts(schemas: list[tuple[str, dict]]) -> str:
             ts_interface(nname, nschema, schema.get("$defs", {}), body)
         for def_name, def_schema in schema.get("$defs", {}).items():
             ts_interface(def_name, def_schema, {}, body)
+    _emit_ts_validation(body, _validation_targets(schemas, contract), contract)
     body.append("")
     return "\n".join(body) + "\n"
+
+
+def _emit_ts_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "",
+        "/** Stable failure returned by generated wire validators. */",
+        "export class WireDecodeError extends Error {",
+        "  constructor(",
+        "    readonly code: string,",
+        "    readonly schema: string,",
+        "    readonly path: string,",
+        "    readonly reason: string,",
+        "  ) {",
+        "    super(`${code}: invalid ${schema} at ${path}: ${reason}`);",
+        '    this.name = "WireDecodeError";',
+        "  }",
+        "}",
+        "",
+    ])
+    for key, value in codes.items():
+        body.append(f'export const WIRE_{key.upper()} = "{value}" as const;')
+    body.extend([
+        "",
+        "type WireRule = Record<string, unknown>;",
+        "",
+        "export class WireDecimal {",
+        "  constructor(readonly lexeme: string) {}",
+        "  toString(): string { return this.lexeme; }",
+        '  toJSON(): never { throw new TypeError("use stringifyWireJson for WireDecimal values"); }',
+        "}",
+        "",
+        "export class WireJsonSerializationError extends TypeError {",
+        "  constructor(readonly code: string, message: string) {",
+        "    super(message);",
+        '    this.name = "WireJsonSerializationError";',
+        "  }",
+        "}",
+        "",
+        "const MAX_MATERIALIZED_INTEGER_DIGITS = 1024;",
+        "",
+        "export type WireJsonValue =",
+        "  | null | boolean | string | number | bigint | WireDecimal",
+        "  | WireJsonValue[] | { [key: string]: WireJsonValue };",
+        "",
+        "function isWireDecimal(value: unknown): value is WireDecimal {",
+        "  return value instanceof WireDecimal;",
+        "}",
+        "",
+        "export function decodeWireJson(text: string): WireJsonValue {",
+        "  return materializeWireValue(parseLosslessJson(text));",
+        "}",
+        "",
+        "function isRecord(value: unknown): value is Record<string, unknown> {",
+        "  return typeof value === \"object\" && value !== null && !Array.isArray(value)",
+        "    && !isLosslessNumber(value) && !isWireDecimal(value);",
+        "}",
+        "",
+        "function wireNumberLexeme(value: unknown): string | undefined {",
+        "  if (isLosslessNumber(value)) return value.value;",
+        "  if (isWireDecimal(value)) return value.lexeme;",
+        "  if (typeof value === \"bigint\") return value.toString();",
+        "  if (typeof value === \"number\" && Number.isFinite(value) && Number.isSafeInteger(value)) {",
+        "    return value.toString();",
+        "  }",
+        "  return undefined;",
+        "}",
+        "",
+        "function isMathematicalInteger(value: unknown): boolean {",
+        "  const lexeme = wireNumberLexeme(value);",
+        "  if (lexeme === undefined) return false;",
+        "  const { digits, exponent } = splitNumber(lexeme);",
+        "  return digits === \"0\" || exponent >= digits.length - 1;",
+        "}",
+        "",
+        "export function wireIntegerToJs(value: unknown): number | bigint | WireDecimal {",
+        "  const lexeme = wireNumberLexeme(value);",
+        "  if (lexeme === undefined || !isMathematicalInteger(value)) {",
+        '    throw new TypeError("wire value is not an exact integer");',
+        "  }",
+        "  const { sign, digits, exponent } = splitNumber(lexeme);",
+        "  const zeros = Math.max(0, exponent - digits.length + 1);",
+        "  if (!Number.isSafeInteger(zeros) || digits.length + zeros > MAX_MATERIALIZED_INTEGER_DIGITS) {",
+        "    return new WireDecimal(lexeme);",
+        "  }",
+        "  const integer = BigInt(`${sign}${digits}${\"0\".repeat(zeros)}`);",
+        "  return integer >= BigInt(Number.MIN_SAFE_INTEGER) && integer <= BigInt(Number.MAX_SAFE_INTEGER)",
+        "    ? Number(integer)",
+        "    : integer;",
+        "}",
+        "",
+        "export function materializeWireValue(value: unknown): WireJsonValue {",
+        "  if (isLosslessNumber(value)) {",
+        "    if (isMathematicalInteger(value)) {",
+        "      return isSafeNumber(value.value, { approx: false })",
+        "        ? Number(value.value)",
+        "        : new WireDecimal(value.value);",
+        "    }",
+        "    return isSafeNumber(value.value, { approx: false })",
+        "      ? Number(value.value)",
+        "      : new WireDecimal(value.value);",
+        "  }",
+        "  if (isWireDecimal(value) || typeof value === \"bigint\") return value;",
+        "  if (Array.isArray(value)) return value.map(materializeWireValue);",
+        "  if (isRecord(value)) {",
+        "    return Object.fromEntries(",
+        "      Object.entries(value).map(([key, item]) => [key, materializeWireValue(item)]),",
+        "    );",
+        "  }",
+        "  if (value === null || typeof value === \"boolean\" || typeof value === \"string\" || typeof value === \"number\") return value;",
+        '  throw new TypeError(`unsupported wire JSON value: ${typeof value}`);',
+        "}",
+        "",
+        "export function stringifyWireJson(value: WireJsonValue): string {",
+        "  const prepare = (item: WireJsonValue): unknown => {",
+        "    if (isWireDecimal(item)) return new LosslessNumber(item.lexeme);",
+        "    if (typeof item === \"number\") {",
+        "      if (!Number.isFinite(item)) {",
+        '        throw new WireJsonSerializationError("WIRE_JSON_NON_FINITE", "wire JSON numbers must be finite");',
+        "      }",
+        "      if (Number.isInteger(item) && !Number.isSafeInteger(item)) {",
+        '        throw new WireJsonSerializationError("WIRE_JSON_UNSAFE_INTEGER", "unsafe integer-valued numbers require bigint or WireDecimal");',
+        "      }",
+        "      return item;",
+        "    }",
+        "    if (Array.isArray(item)) return item.map(prepare);",
+        "    if (isRecord(item)) {",
+        "      return Object.fromEntries(",
+        "        Object.entries(item).map(([key, child]) => [key, prepare(child as WireJsonValue)]),",
+        "      );",
+        "    }",
+        "    return item;",
+        "  };",
+        "  const encoded = stringifyLosslessJson(prepare(value));",
+        '  if (encoded === undefined) throw new TypeError("wire JSON value is not serializable");',
+        "  return encoded;",
+        "}",
+        "",
+        "function wireError(code: string, schema: string, path: string, reason: string): WireDecodeError {",
+        "  return new WireDecodeError(code, schema, path, reason);",
+        "}",
+        "",
+        "function validateWireSchema(",
+        "  rule: WireRule,",
+        "  root: WireRule,",
+        "  value: unknown,",
+        "  schemaName: string,",
+        "  path: string,",
+        "): void {",
+        '  const reference = rule["$ref"];',
+        "  if (typeof reference === \"string\") {",
+        '    const defs = root["$defs"];',
+        "    const parts = reference.split(\"/\");",
+        "    const target = isRecord(defs) ? defs[parts[parts.length - 1]] : undefined;",
+        "    if (!isRecord(target)) {",
+        "      throw wireError(WIRE_TYPE, schemaName, path, `unresolved schema reference ${reference}`);",
+        "    }",
+        "    validateWireSchema(target, root, value, schemaName, path);",
+        "    return;",
+        "  }",
+        '  const branches = rule["oneOf"];',
+        "  if (Array.isArray(branches)) {",
+        "    let matches = 0;",
+        "    for (const branch of branches) {",
+        "      if (!isRecord(branch)) continue;",
+        "      try {",
+        "        validateWireSchema(branch, root, value, schemaName, path);",
+        "        matches += 1;",
+        "      } catch (error) {",
+        "        if (!(error instanceof WireDecodeError)) throw error;",
+        "      }",
+        "    }",
+        "    if (matches !== 1) {",
+        '      throw wireError(WIRE_ONE_OF, schemaName, path, "expected exactly one allowed shape");',
+        "    }",
+        "    return;",
+        "  }",
+        "  const numberLexeme = wireNumberLexeme(value);",
+        '  const expected = rule["type"];',
+        "  const valid =",
+        '    expected === "object" ? isRecord(value) :',
+        '    expected === "array" ? Array.isArray(value) :',
+        '    expected === "string" ? typeof value === "string" :',
+        '    expected === "integer" ? isMathematicalInteger(value) :',
+        '    expected === "number" ? numberLexeme !== undefined :',
+        '    expected === "boolean" ? typeof value === "boolean" :',
+        '    expected === "null" ? value === null : true;',
+        "  if (typeof expected === \"string\" && !valid) {",
+        "    throw wireError(WIRE_TYPE, schemaName, path, `expected ${expected}`);",
+        "  }",
+        '  if ("const" in rule) {',
+        '    const expectedConst = rule["const"];',
+        "    const expectedLexeme = wireNumberLexeme(expectedConst);",
+        "    const matches = numberLexeme !== undefined && expectedLexeme !== undefined",
+        "      ? compareNumber(numberLexeme, expectedLexeme) === 0",
+        "      : Object.is(value, expectedConst);",
+        "    if (!matches) {",
+        '      throw wireError(WIRE_CONST, schemaName, path, "value does not match const");',
+        "    }",
+        "  }",
+        '  const allowed = rule["enum"];',
+        "  if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {",
+        '    throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");',
+        "  }",
+        "  if (numberLexeme !== undefined) {",
+        '    const minimum = rule["minimum"];',
+        "    const minimumLexeme = wireNumberLexeme(minimum);",
+        "    if (minimumLexeme !== undefined && compareNumber(numberLexeme, minimumLexeme) < 0) {",
+        "      throw wireError(WIRE_MINIMUM, schemaName, path, `must be >= ${minimumLexeme}`);",
+        "    }",
+        '    const maximum = rule["maximum"];',
+        "    const maximumLexeme = wireNumberLexeme(maximum);",
+        "    if (maximumLexeme !== undefined && compareNumber(numberLexeme, maximumLexeme) > 0) {",
+        "      throw wireError(WIRE_MAXIMUM, schemaName, path, `must be <= ${maximumLexeme}`);",
+        "    }",
+        "  }",
+        "  if (isRecord(value)) {",
+        '    const required = rule["required"];',
+        "    if (Array.isArray(required)) {",
+        "      for (const field of required) {",
+        "        if (typeof field === \"string\" && !(field in value)) {",
+        '          throw wireError(WIRE_REQUIRED, schemaName, `${path}.${field}`, "field is required");',
+        "        }",
+        "      }",
+        "    }",
+        '    const properties = rule["properties"];',
+        "    if (isRecord(properties)) {",
+        "      for (const field of Object.keys(properties).sort()) {",
+        "        const fieldRule = properties[field];",
+        "        if (field in value && isRecord(fieldRule)) {",
+        "          validateWireSchema(fieldRule, root, value[field], schemaName, `${path}.${field}`);",
+        "        }",
+        "      }",
+        "      const extras = Object.keys(value).filter((field) => !(field in properties)).sort();",
+        '      const additional = rule["additionalProperties"];',
+        "      if (additional === false && extras.length > 0) {",
+        '        throw wireError(WIRE_UNKNOWN_FIELD, schemaName, `${path}.${extras[0]}`, "unknown field");',
+        "      }",
+        "      if (isRecord(additional)) {",
+        "        for (const field of extras) {",
+        "          validateWireSchema(additional, root, value[field], schemaName, `${path}.${field}`);",
+        "        }",
+        "      }",
+        "    }",
+        "  }",
+        '  const itemRule = rule["items"];',
+        "  if (Array.isArray(value) && isRecord(itemRule)) {",
+        "    value.forEach((item, index) => {",
+        "      validateWireSchema(itemRule, root, item, schemaName, `${path}[${index}]`);",
+        "    });",
+        "  }",
+        "}",
+        "",
+        "function normalizeWireIntegers(rule: WireRule, root: WireRule, value: unknown): void {",
+        '  const reference = rule["$ref"];',
+        "  if (typeof reference === \"string\") {",
+        '    const defs = root["$defs"];',
+        "    const parts = reference.split(\"/\");",
+        "    const target = isRecord(defs) ? defs[parts[parts.length - 1]] : undefined;",
+        "    if (isRecord(target)) normalizeWireIntegers(target, root, value);",
+        "    return;",
+        "  }",
+        '  const branches = rule["oneOf"];',
+        "  if (Array.isArray(branches)) {",
+        "    const branch = branches.find((candidate) => {",
+        "      if (!isRecord(candidate)) return false;",
+        "      try { validateWireSchema(candidate, root, value, \"generated\", \"$\"); return true; }",
+        "      catch (error) { if (error instanceof WireDecodeError) return false; throw error; }",
+        "    });",
+        "    if (isRecord(branch)) normalizeWireIntegers(branch, root, value);",
+        "    return;",
+        "  }",
+        "  if (isRecord(value)) {",
+        '    const properties = rule["properties"];',
+        "    if (isRecord(properties)) {",
+        "      for (const [field, fieldRule] of Object.entries(properties)) {",
+        "        if (!(field in value) || !isRecord(fieldRule)) continue;",
+        '        if (fieldRule["type"] === "integer") value[field] = wireIntegerToJs(value[field]);',
+        "        else normalizeWireIntegers(fieldRule, root, value[field]);",
+        "      }",
+        "    }",
+        "  } else if (Array.isArray(value)) {",
+        '    const itemRule = rule["items"];',
+        "    if (isRecord(itemRule)) {",
+        "      value.forEach((item, index) => {",
+        '        if (itemRule["type"] === "integer") value[index] = wireIntegerToJs(item);',
+        "        else normalizeWireIntegers(itemRule, root, item);",
+        "      });",
+        "    }",
+        "  }",
+        "}",
+    ])
+    for name, schema in schemas:
+        const_name = f"_WIRE_SCHEMA_{name.upper()}"
+        fn_name = f"validate{_camel(name)}"
+        type_name = _camel(name)
+        body.append("")
+        body.append(
+            f"const {const_name}: WireRule = decodeWireJson("
+            f"{json.dumps(_schema_json(schema))}) as WireRule;"
+        )
+        body.append("")
+        body.append(
+            f"export function {fn_name}(value: unknown): "
+            f"asserts value is {type_name} & Record<string, unknown> {{"
+        )
+        body.append(f'  validateWireSchema({const_name}, {const_name}, value, "{type_name}", "$");')
+        body.append(f"  normalizeWireIntegers({const_name}, {const_name}, value);")
+        body.append("}")
+        body.append("")
+        body.append(f"export function normalize{type_name}Integers(value: unknown): void {{")
+        body.append(f"  normalizeWireIntegers({const_name}, {const_name}, value);")
+        body.append("}")
 
 
 # --- go ----------------------------------------------------------------
@@ -565,7 +1517,7 @@ def go_struct(name: str, schema: dict, defs: dict, out: list[str]) -> None:
     out.append("")
 
 
-def emit_go(schemas: list[tuple[str, dict]]) -> str:
+def emit_go(schemas: list[tuple[str, dict]], contract: dict) -> str:
     body: list[str] = []
     body.append("// " + BANNER_LINES[0])
     for line in BANNER_LINES[1:]:
@@ -573,12 +1525,21 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
     body.append("")
     body.append("package clawossdk")
     body.append("")
-    body.append("import \"fmt\"")
+    body.append("import (")
+    body.append('\t"encoding/json"')
+    body.append('\t"fmt"')
+    body.append('\t"math"')
+    body.append('\t"math/big"')
+    body.append('\t"regexp"')
+    body.append('\t"sort"')
+    body.append('\t"strconv"')
+    body.append('\t"strings"')
+    body.append(")")
     body.append("")
     body.append(f"// ExpectedWireVersion is the wire-protocol version the kernel must")
     body.append(f"// advertise on every envelope. Mirrors generated.rs's")
     body.append(f"// EXPECTED_WIRE_VERSION.")
-    body.append(f"const ExpectedWireVersion = {EXPECTED_WIRE_VERSION}")
+    body.append(f"const ExpectedWireVersion = {contract['wire_version']}")
     body.append("")
     body.append("// CheckWireVersion reports an error when the envelope's")
     body.append("// wire_version does not match what this SDK supports.")
@@ -613,28 +1574,335 @@ def emit_go(schemas: list[tuple[str, dict]]) -> str:
         body.append(f"\treturn fmt.Errorf(\"invalid {parent}.{field_name} value: %q\", value)")
         body.append("}")
         body.append("")
+    _emit_go_validation(body, _validation_targets(schemas, contract), contract)
+    return "\n".join(body)
+
+
+def _emit_go_validation(
+    body: list[str], schemas: list[tuple[str, dict]], contract: dict
+) -> None:
+    codes = contract["validation"]["error_codes"]
+    body.extend([
+        "// WireDecodeError is the stable failure returned by generated wire validators.",
+        "type WireDecodeError struct {",
+        "\tCode string",
+        "\tSchema string",
+        "\tPath string",
+        "\tReason string",
+        "}",
+        "",
+        "func (e *WireDecodeError) Error() string {",
+        '\treturn fmt.Sprintf("%s: invalid %s at %s: %s", e.Code, e.Schema, e.Path, e.Reason)',
+        "}",
+        "",
+        "const (",
+    ])
+    for key, value in codes.items():
+        body.append(f'\tWire{_camel(key)} = "{value}"')
+    body.extend([
+        ")",
+        "",
+        "func wireError(code, schema, path, reason string) error {",
+        "\treturn &WireDecodeError{Code: code, Schema: schema, Path: path, Reason: reason}",
+        "}",
+        "",
+        "func wireRule(value any) (map[string]any, bool) {",
+        "\trule, ok := value.(map[string]any)",
+        "\treturn rule, ok",
+        "}",
+        "",
+        "const wireMaxMaterializedIntegerDigits = 1024",
+        "",
+        'var wireJSONNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)',
+        "",
+        "type wireExactIntegerValue struct {",
+        "\tvalue *big.Int",
+        "\toverflow int",
+        "}",
+        "",
+        "func wireExactInteger(value any) (wireExactIntegerValue, bool) {",
+        "\tvar lexeme string",
+        "\tswitch value := value.(type) {",
+        "\tcase json.Number:",
+        "\t\tlexeme = string(value)",
+        "\tcase float64:",
+        "\t\tif math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 9007199254740991 {",
+        "\t\t\treturn wireExactIntegerValue{}, false",
+        "\t\t}",
+        "\t\tlexeme = strconv.FormatFloat(value, 'g', -1, 64)",
+        "\tcase int:",
+        "\t\treturn wireExactIntegerValue{value: big.NewInt(int64(value))}, true",
+        "\tcase int64:",
+        "\t\treturn wireExactIntegerValue{value: big.NewInt(value)}, true",
+        "\tcase uint64:",
+        "\t\treturn wireExactIntegerValue{value: new(big.Int).SetUint64(value)}, true",
+        "\tcase uint32:",
+        "\t\treturn wireExactIntegerValue{value: big.NewInt(int64(value))}, true",
+        "\tdefault:",
+        "\t\treturn wireExactIntegerValue{}, false",
+        "\t}",
+        "\tparts := wireJSONNumberPattern.FindStringSubmatch(lexeme)",
+        "\tif parts == nil {",
+        "\t\treturn wireExactIntegerValue{}, false",
+        "\t}",
+        "\tnegative := parts[1] == \"-\"",
+        "\tdigits := strings.TrimLeft(parts[2]+parts[3], \"0\")",
+        "\tif digits == \"\" {",
+        "\t\treturn wireExactIntegerValue{value: big.NewInt(0)}, true",
+        "\t}",
+        "\texponentText := parts[4]",
+        "\tif exponentText == \"\" { exponentText = \"0\" }",
+        "\texponentDigits := strings.TrimLeft(strings.TrimLeft(exponentText, \"+-\"), \"0\")",
+        "\tif exponentDigits == \"\" { exponentDigits = \"0\" }",
+        "\tvar exponent int64",
+        "\tif len(exponentDigits) > 18 {",
+        "\t\tif strings.HasPrefix(exponentText, \"-\") { exponent = -1 << 62 } else { exponent = 1 << 62 }",
+        "\t} else {",
+        "\t\tparsed, err := strconv.ParseInt(exponentText, 10, 64)",
+        "\t\tif err != nil { return wireExactIntegerValue{}, false }",
+        "\t\tif parsed > 1<<60 { parsed = 1 << 60 }",
+        "\t\tif parsed < -(1<<60) { parsed = -(1 << 60) }",
+        "\t\texponent = parsed",
+        "\t}",
+        "\tdecimalPlaces := int64(len(parts[3])) - exponent",
+        "\tif decimalPlaces <= 0 {",
+        "\t\tzeros := -decimalPlaces",
+        "\t\tif zeros > wireMaxMaterializedIntegerDigits || int64(len(digits))+zeros > wireMaxMaterializedIntegerDigits {",
+        "\t\t\toverflow := 1",
+        "\t\t\tif negative { overflow = -1 }",
+        "\t\t\treturn wireExactIntegerValue{overflow: overflow}, true",
+        "\t\t}",
+        "\t\tdigits += strings.Repeat(\"0\", int(zeros))",
+        "\t} else {",
+        "\t\tif decimalPlaces > int64(len(digits)) { return wireExactIntegerValue{}, false }",
+        "\t\ttail := digits[len(digits)-int(decimalPlaces):]",
+        "\t\tif strings.Trim(tail, \"0\") != \"\" { return wireExactIntegerValue{}, false }",
+        "\t\tdigits = digits[:len(digits)-int(decimalPlaces)]",
+        "\t\tif digits == \"\" { digits = \"0\" }",
+        "\t}",
+        "\tinteger, ok := new(big.Int).SetString(digits, 10)",
+        "\tif !ok { return wireExactIntegerValue{}, false }",
+        "\tif negative { integer.Neg(integer) }",
+        "\treturn wireExactIntegerValue{value: integer}, true",
+        "}",
+        "",
+        "func compareWireExactIntegers(left, right wireExactIntegerValue) int {",
+        "\tif left.overflow != right.overflow {",
+        "\t\tif left.overflow < right.overflow { return -1 }",
+        "\t\treturn 1",
+        "\t}",
+        "\tif left.overflow != 0 { return 0 }",
+        "\treturn left.value.Cmp(right.value)",
+        "}",
+        "",
+        "func wireNumberValid(value any) bool {",
+        "\tswitch value := value.(type) {",
+        "\tcase json.Number:",
+        "\t\treturn wireJSONNumberPattern.MatchString(string(value))",
+        "\tcase float64:",
+        "\t\treturn !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= 9007199254740991",
+        "\tcase int, int64, uint32, uint64:",
+        "\t\treturn true",
+        "\tdefault:",
+        "\t\treturn false",
+        "\t}",
+        "}",
+        "",
+        "func validateWireSchema(rule, root map[string]any, value any, schemaName, path string) error {",
+        '\tif reference, ok := rule["$ref"].(string); ok {',
+        '\t\tdefs, _ := wireRule(root["$defs"])',
+        '\t\tparts := strings.Split(reference, "/")',
+        "\t\ttarget, found := wireRule(defs[parts[len(parts)-1]])",
+        "\t\tif !found {",
+        '\t\t\treturn wireError(WireType, schemaName, path, "unresolved schema reference "+reference)',
+        "\t\t}",
+        "\t\treturn validateWireSchema(target, root, value, schemaName, path)",
+        "\t}",
+        '\tif branches, ok := rule["oneOf"].([]any); ok {',
+        "\t\tmatches := 0",
+        "\t\tfor _, branchValue := range branches {",
+        "\t\t\tbranch, valid := wireRule(branchValue)",
+        "\t\t\tif valid && validateWireSchema(branch, root, value, schemaName, path) == nil {",
+        "\t\t\t\tmatches++",
+        "\t\t\t}",
+        "\t\t}",
+        "\t\tif matches != 1 {",
+        '\t\t\treturn wireError(WireOneOf, schemaName, path, "expected exactly one allowed shape")',
+        "\t\t}",
+        "\t\treturn nil",
+        "\t}",
+        '\tif expected, ok := rule["type"].(string); ok {',
+        "\t\tvalid := false",
+        "\t\tswitch expected {",
+        '\t\tcase "object":',
+        "\t\t\t_, valid = value.(map[string]any)",
+        '\t\tcase "array":',
+        "\t\t\t_, valid = value.([]any)",
+        '\t\tcase "string":',
+        "\t\t\t_, valid = value.(string)",
+        '\t\tcase "integer":',
+        "\t\t\t_, valid = wireExactInteger(value)",
+        '\t\tcase "number":',
+        "\t\t\tvalid = wireNumberValid(value)",
+        '\t\tcase "boolean":',
+        "\t\t\t_, valid = value.(bool)",
+        '\t\tcase "null":',
+        "\t\t\tvalid = value == nil",
+        "\t\t}",
+        "\t\tif !valid {",
+        '\t\t\treturn wireError(WireType, schemaName, path, "expected "+expected)',
+        "\t\t}",
+        "\t}",
+        '\tif expected, present := rule["const"]; present {',
+        "\t\texpectedNumber, expectedNumeric := wireExactInteger(expected)",
+        "\t\tactualNumber, actualNumeric := wireExactInteger(value)",
+        "\t\tif (expectedNumeric && (!actualNumeric || compareWireExactIntegers(expectedNumber, actualNumber) != 0)) || (!expectedNumeric && expected != value) {",
+        '\t\t\treturn wireError(WireConst, schemaName, path, "value does not match const")',
+        "\t\t}",
+        "\t}",
+        '\tif allowed, ok := rule["enum"].([]any); ok {',
+        "\t\tmatched := false",
+        "\t\tfor _, candidate := range allowed {",
+        "\t\t\tif candidate == value { matched = true; break }",
+        "\t\t}",
+        "\t\tif !matched {",
+        '\t\t\treturn wireError(WireEnum, schemaName, path, "value is not in the allowed enum")',
+        "\t\t}",
+        "\t}",
+        "\tif number, numeric := wireExactInteger(value); numeric {",
+        '\t\tif minimum, ok := wireExactInteger(rule["minimum"]); ok && compareWireExactIntegers(number, minimum) < 0 {',
+        '\t\t\treturn wireError(WireMinimum, schemaName, path, "below minimum")',
+        "\t\t}",
+        '\t\tif maximum, ok := wireExactInteger(rule["maximum"]); ok && compareWireExactIntegers(number, maximum) > 0 {',
+        '\t\t\treturn wireError(WireMaximum, schemaName, path, "above maximum")',
+        "\t\t}",
+        "\t}",
+        "\tif object, ok := value.(map[string]any); ok {",
+        '\t\tif required, ok := rule["required"].([]any); ok {',
+        "\t\t\tfor _, fieldValue := range required {",
+        "\t\t\t\tfield, _ := fieldValue.(string)",
+        "\t\t\t\tif _, present := object[field]; !present {",
+        '\t\t\t\t\treturn wireError(WireRequired, schemaName, path+"."+field, "field is required")',
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t}",
+        '\t\tif properties, ok := wireRule(rule["properties"]); ok {',
+        "\t\t\tnames := make([]string, 0, len(properties))",
+        "\t\t\tfor name := range properties { names = append(names, name) }",
+        "\t\t\tsort.Strings(names)",
+        "\t\t\tfor _, name := range names {",
+        "\t\t\t\tfieldValue, present := object[name]",
+        "\t\t\t\tfieldRule, validRule := wireRule(properties[name])",
+        "\t\t\t\tif present && validRule {",
+        "\t\t\t\t\tif err := validateWireSchema(fieldRule, root, fieldValue, schemaName, path+\".\"+name); err != nil { return err }",
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t\textras := make([]string, 0)",
+        "\t\t\tfor name := range object {",
+        "\t\t\t\tif _, known := properties[name]; !known { extras = append(extras, name) }",
+        "\t\t\t}",
+        "\t\t\tsort.Strings(extras)",
+        '\t\t\tif additional, ok := rule["additionalProperties"].(bool); ok && !additional && len(extras) > 0 {',
+        '\t\t\t\treturn wireError(WireUnknownField, schemaName, path+"."+extras[0], "unknown field")',
+        "\t\t\t}",
+        '\t\t\tif additional, ok := wireRule(rule["additionalProperties"]); ok {',
+        "\t\t\t\tfor _, name := range extras {",
+        "\t\t\t\t\tif err := validateWireSchema(additional, root, object[name], schemaName, path+\".\"+name); err != nil { return err }",
+        "\t\t\t\t}",
+        "\t\t\t}",
+        "\t\t}",
+        "\t}",
+        "\tif items, ok := value.([]any); ok {",
+        '\t\tif itemRule, ok := wireRule(rule["items"]); ok {',
+        "\t\t\tfor index, item := range items {",
+        '\t\t\t\tif err := validateWireSchema(itemRule, root, item, schemaName, fmt.Sprintf("%s[%d]", path, index)); err != nil { return err }',
+        "\t\t\t}",
+        "\t\t}",
+        "\t}",
+        "\treturn nil",
+        "}",
+        "",
+    ])
+    for name, schema in schemas:
+        const_name = f"wireSchema{_camel(name)}"
+        fn_name = f"Validate{_camel(name)}"
+        type_name = _camel(name)
+        body.append(f"const {const_name} = {json.dumps(_schema_json(schema))}")
+        body.append("")
+        body.append(f"// {fn_name} validates a value against wire/v1/{name}.schema.json.")
+        body.append(f"func {fn_name}(value any) error {{")
+        body.append("\tvar schema map[string]any")
+        body.append(f"\tdecoder := json.NewDecoder(strings.NewReader({const_name}))")
+        body.append("\tdecoder.UseNumber()")
+        body.append("\tif err := decoder.Decode(&schema); err != nil {")
+        body.append('\t\tpanic("generated wire schema is invalid: " + err.Error())')
+        body.append("\t}")
+        body.append(f'\treturn validateWireSchema(schema, schema, value, "{type_name}", "$")')
+        body.append("}")
+        body.append("")
+
+
+def emit_mcp_rust(contract: dict) -> str:
+    codes = contract["json_rpc_error_codes"]
+    body = [
+        "// " + BANNER_LINES[0],
+        "// Generated by claw-os-sdk/wire/codegen.py from wire/v1/contract.json.",
+        "// Run `python3 wire/codegen.py` from the SDK root to regenerate.",
+        "",
+    ]
+    for key, value in codes.items():
+        body.append(f"pub const ERR_{key.upper()}: i64 = {value};")
+    body.append("")
     return "\n".join(body)
 
 
 # --- main --------------------------------------------------------------
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="fail when generated outputs differ without writing them",
+    )
+    args = parser.parse_args()
     schemas = load_schemas()
     if not schemas:
         print("no schemas found in", WIRE_DIR, file=sys.stderr)
         return 1
-    RUST_OUT.parent.mkdir(parents=True, exist_ok=True)
-    PY_OUT.parent.mkdir(parents=True, exist_ok=True)
-    TS_OUT.parent.mkdir(parents=True, exist_ok=True)
-    GO_OUT.parent.mkdir(parents=True, exist_ok=True)
-    RUST_OUT.write_text(emit_rust(schemas))
-    PY_OUT.write_text(emit_python(schemas))
-    TS_OUT.write_text(emit_ts(schemas))
-    GO_OUT.write_text(emit_go(schemas))
-    print(f"wrote {RUST_OUT.relative_to(ROOT)}")
-    print(f"wrote {PY_OUT.relative_to(ROOT)}")
-    print(f"wrote {TS_OUT.relative_to(ROOT)}")
-    print(f"wrote {GO_OUT.relative_to(ROOT)}")
+    contract = load_contract()
+    envelope = dict(schemas)["envelope"]
+    envelope_version = envelope["properties"]["wire_version"]["const"]
+    if envelope_version != contract["wire_version"]:
+        print(
+            "contract wire_version does not match envelope schema const",
+            file=sys.stderr,
+        )
+        return 1
+    outputs = {
+        RUST_OUT: emit_rust(schemas, contract),
+        PY_OUT: emit_python(schemas, contract),
+        TS_OUT: emit_ts(schemas, contract),
+        GO_OUT: emit_go(schemas, contract),
+        CORE_MCP_OUT: emit_mcp_rust(contract),
+        CRATE_MCP_OUT: emit_mcp_rust(contract),
+    }
+    if args.check:
+        stale = [
+            path
+            for path, content in outputs.items()
+            if not path.exists() or path.read_text(encoding="utf-8") != content
+        ]
+        if stale:
+            for path in stale:
+                print(f"stale {path.relative_to(ROOT.parent)}", file=sys.stderr)
+            return 1
+        print("generated wire bindings are up to date")
+        return 0
+    for path, content in outputs.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        print(f"wrote {path.relative_to(ROOT.parent)}")
     return 0
 
 

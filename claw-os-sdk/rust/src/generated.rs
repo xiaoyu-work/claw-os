@@ -6,6 +6,8 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde_json;
+use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 
 /// Expected wire-version value emitted by the kernel. The
 /// generated [`Envelope`] type's runtime check accepts only
@@ -90,6 +92,15 @@ pub struct App {
     pub verb: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
+}
+
+/// AI budget show reply
+/// Shape returned by `cos agent budget show <app>`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BudgetShow {
+    pub app: String,
+    pub period: String,
+    pub units_used: u64,
 }
 
 /// Envelope
@@ -302,6 +313,24 @@ pub struct Tool {
     pub result: serde_json::Value,
 }
 
+/// Catalog tool list reply
+/// Shape returned by `cos ai tools`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCatalog {
+    pub tools: Vec<WireCatalogEntry>,
+}
+
+/// WireCatalogEntry
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct WireCatalogEntry {
+    pub name: String,
+    pub summary: String,
+    pub verb: String,
+    pub stability: String,
+    pub args_schema: serde_json::Value,
+    pub returns_schema: serde_json::Value,
+}
+
 /// Reject values outside the ai.verb enum.
 ///
 /// The wire schema lists a closed set of allowed values; a kernel
@@ -365,5 +394,310 @@ pub fn validate_tool_status(value: &str) -> Result<(), String> {
     } else {
         Err(format!("invalid tool.status value: {value}"))
     }
+}
+
+/// Stable failure returned by generated wire validators.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WireDecodeError {
+    pub code: &'static str,
+    pub schema: &'static str,
+    pub path: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for WireDecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: invalid {} at {}: {}", self.code, self.schema, self.path, self.reason)
+    }
+}
+
+impl std::error::Error for WireDecodeError {}
+
+pub const WIRE_CONST: &str = "WIRE_CONST";
+pub const WIRE_ENUM: &str = "WIRE_ENUM";
+pub const WIRE_MAXIMUM: &str = "WIRE_MAXIMUM";
+pub const WIRE_MINIMUM: &str = "WIRE_MINIMUM";
+pub const WIRE_ONE_OF: &str = "WIRE_ONE_OF";
+pub const WIRE_REQUIRED: &str = "WIRE_REQUIRED";
+pub const WIRE_TYPE: &str = "WIRE_TYPE";
+pub const WIRE_UNKNOWN_FIELD: &str = "WIRE_UNKNOWN_FIELD";
+
+fn wire_error(
+    code: &'static str,
+    schema: &'static str,
+    path: &str,
+    reason: impl Into<String>,
+) -> WireDecodeError {
+    WireDecodeError { code, schema, path: path.to_string(), reason: reason.into() }
+}
+
+#[derive(Debug, Clone)]
+enum ExactInteger {
+    Value(BigInt),
+    PositiveOverflow,
+    NegativeOverflow,
+}
+
+fn exact_integer(value: &serde_json::Value) -> Option<ExactInteger> {
+    let lexeme = value.as_number()?.to_string();
+    let (mantissa, exponent_text) = lexeme
+        .split_once(['e', 'E'])
+        .map_or((lexeme.as_str(), "0"), |parts| parts);
+    let exponent = exponent_text.parse::<i64>().unwrap_or_else(|_| {
+        if exponent_text.starts_with('-') { i64::MIN } else { i64::MAX }
+    });
+    let negative = mantissa.starts_with('-');
+    let unsigned = mantissa.trim_start_matches('-');
+    let fraction_len = unsigned
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    let digits = unsigned.replace('.', "");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(ExactInteger::Value(BigInt::from(0)));
+    }
+    let decimal_places = i128::from(fraction_len as i64) - i128::from(exponent);
+    let integer_digits = if decimal_places <= 0 {
+        let zeros = usize::try_from(-decimal_places).ok()?;
+        if zeros > 1024 {
+            return Some(if negative { ExactInteger::NegativeOverflow } else { ExactInteger::PositiveOverflow });
+        }
+        format!("{digits}{}", "0".repeat(zeros))
+    } else {
+        let places = usize::try_from(decimal_places).ok()?;
+        if places > digits.len() || !digits[digits.len() - places..].chars().all(|ch| ch == '0') {
+            return None;
+        }
+        digits[..digits.len() - places].to_string()
+    };
+    let integer_digits = if integer_digits.is_empty() { "0" } else { &integer_digits };
+    let signed = if negative { format!("-{integer_digits}") } else { integer_digits.to_string() };
+    BigInt::parse_bytes(signed.as_bytes(), 10).map(ExactInteger::Value)
+}
+
+fn compare_exact_integers(left: &ExactInteger, right: &ExactInteger) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (ExactInteger::NegativeOverflow, ExactInteger::NegativeOverflow)
+        | (ExactInteger::PositiveOverflow, ExactInteger::PositiveOverflow) => Ordering::Equal,
+        (ExactInteger::NegativeOverflow, _) | (_, ExactInteger::PositiveOverflow) => Ordering::Less,
+        (ExactInteger::PositiveOverflow, _) | (_, ExactInteger::NegativeOverflow) => Ordering::Greater,
+        (ExactInteger::Value(left), ExactInteger::Value(right)) => left.cmp(right),
+    }
+}
+
+fn validate_wire_schema(
+    rule: &serde_json::Value,
+    root: &serde_json::Value,
+    value: &serde_json::Value,
+    schema_name: &'static str,
+    path: &str,
+) -> Result<(), WireDecodeError> {
+    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference.rsplit('/').next().unwrap_or_default();
+        let target = root.get("$defs").and_then(|defs| defs.get(name)).ok_or_else(|| {
+            wire_error(WIRE_TYPE, schema_name, path, format!("unresolved schema reference {reference}"))
+        })?;
+        return validate_wire_schema(target, root, value, schema_name, path);
+    }
+    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {
+        let matches = branches.iter().filter(|branch| {
+            validate_wire_schema(branch, root, value, schema_name, path).is_ok()
+        }).count();
+        if matches != 1 {
+            return Err(wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape"));
+        }
+        return Ok(());
+    }
+    if let Some(expected) = rule.get("type").and_then(serde_json::Value::as_str) {
+        let valid = match expected {
+            "object" => value.is_object(),
+            "array" => value.is_array(),
+            "string" => value.is_string(),
+            "integer" => exact_integer(value).is_some(),
+            "number" => value.is_number(),
+            "boolean" => value.is_boolean(),
+            "null" => value.is_null(),
+            _ => false,
+        };
+        if !valid {
+            return Err(wire_error(WIRE_TYPE, schema_name, path, format!("expected {expected}")));
+        }
+    }
+    if let Some(expected) = rule.get("const") {
+        let equal = match (exact_integer(value), exact_integer(expected)) {
+            (Some(left), Some(right)) => compare_exact_integers(&left, &right).is_eq(),
+            _ => value == expected,
+        };
+        if !equal {
+            return Err(wire_error(WIRE_CONST, schema_name, path, "value does not match const"));
+        }
+    }
+    if let Some(allowed) = rule.get("enum").and_then(serde_json::Value::as_array) {
+        if !allowed.contains(value) {
+            return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));
+        }
+    }
+    if let Some(number) = exact_integer(value) {
+        if let Some(minimum) = rule.get("minimum").and_then(exact_integer) {
+            if compare_exact_integers(&number, &minimum).is_lt() {
+                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {}", rule["minimum"])));
+            }
+        }
+        if let Some(maximum) = rule.get("maximum").and_then(exact_integer) {
+            if compare_exact_integers(&number, &maximum).is_gt() {
+                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {}", rule["maximum"])));
+            }
+        }
+    }
+    if let Some(object) = value.as_object() {
+        if let Some(required) = rule.get("required").and_then(serde_json::Value::as_array) {
+            for field in required {
+                let field = field.as_str().unwrap_or_default();
+                if !object.contains_key(field) {
+                    let field_path = format!("{path}.{field}");
+                    return Err(wire_error(WIRE_REQUIRED, schema_name, &field_path, "field is required"));
+                }
+            }
+        }
+        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {
+            let mut names: Vec<&String> = properties.keys().collect();
+            names.sort();
+            for name in names {
+                if let Some(field_value) = object.get(name) {
+                    let field_path = format!("{path}.{name}");
+                    validate_wire_schema(&properties[name], root, field_value, schema_name, &field_path)?;
+                }
+            }
+            let mut extras: Vec<&String> = object.keys().filter(|name| !properties.contains_key(*name)).collect();
+            extras.sort();
+            if rule.get("additionalProperties") == Some(&serde_json::Value::Bool(false)) {
+                if let Some(name) = extras.first() {
+                    let field_path = format!("{path}.{name}");
+                    return Err(wire_error(WIRE_UNKNOWN_FIELD, schema_name, &field_path, "unknown field"));
+                }
+            } else if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {
+                for name in extras {
+                    let field_path = format!("{path}.{name}");
+                    validate_wire_schema(additional, root, &object[name], schema_name, &field_path)?;
+                }
+            }
+        }
+    }
+    if let Some(items) = value.as_array() {
+        if let Some(item_rule) = rule.get("items") {
+            for (index, item) in items.iter().enumerate() {
+                let item_path = format!("{path}[{index}]");
+                validate_wire_schema(item_rule, root, item, schema_name, &item_path)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_wire_integers(
+    rule: &serde_json::Value,
+    root: &serde_json::Value,
+    value: &mut serde_json::Value,
+) {
+    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference.rsplit('/').next().unwrap_or_default();
+        if let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) {
+            normalize_wire_integers(target, root, value);
+        }
+        return;
+    }
+    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {
+        if let Some(branch) = branches.iter().find(|branch| {
+            validate_wire_schema(branch, root, value, "generated", "$").is_ok()
+        }) {
+            normalize_wire_integers(branch, root, value);
+        }
+        return;
+    }
+    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer") {
+        if let Some(ExactInteger::Value(number)) = exact_integer(value) {
+            if let Some(number) = number.to_u64() {
+                *value = serde_json::Value::Number(serde_json::Number::from(number));
+            } else if let Some(number) = number.to_i64() {
+                *value = serde_json::Value::Number(serde_json::Number::from(number));
+            }
+        }
+        return;
+    }
+    if let Some(object) = value.as_object_mut() {
+        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {
+            for (name, field_rule) in properties {
+                if let Some(field_value) = object.get_mut(name) {
+                    normalize_wire_integers(field_rule, root, field_value);
+                }
+            }
+            if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {
+                for (name, field_value) in object {
+                    if !properties.contains_key(name) {
+                        normalize_wire_integers(additional, root, field_value);
+                    }
+                }
+            }
+        }
+    } else if let Some(items) = value.as_array_mut() {
+        if let Some(item_rule) = rule.get("items") {
+            for item in items {
+                normalize_wire_integers(item_rule, root, item);
+            }
+        }
+    }
+}
+
+const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
+pub fn validate_ai(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "Ai", "$")
+}
+
+pub fn normalize_ai_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_BUDGET_SHOW: &str = r###"{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}"###;
+pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "BudgetShow", "$")
+}
+
+pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_TOOL_CATALOG: &str = r###"{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}"###;
+pub fn validate_tool_catalog(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL_CATALOG)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "ToolCatalog", "$")
+}
+
+pub fn normalize_tool_catalog_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL_CATALOG)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_TOOL: &str = r###"{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}"###;
+pub fn validate_tool(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "Tool", "$")
+}
+
+pub fn normalize_tool_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
 }
 

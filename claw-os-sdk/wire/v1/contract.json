@@ -1,0 +1,29 @@
+{
+  "wire_version": 1,
+  "validation": {
+    "schemas": [
+      "ai",
+      "budget_show",
+      "tool_catalog",
+      "tool"
+    ],
+    "integer_semantics": "lossless JSON decimal-rational lexemes; finite mathematical integers have denominator 1; type validation precedes minimum/maximum checks",
+    "error_codes": {
+      "const": "WIRE_CONST",
+      "enum": "WIRE_ENUM",
+      "maximum": "WIRE_MAXIMUM",
+      "minimum": "WIRE_MINIMUM",
+      "one_of": "WIRE_ONE_OF",
+      "required": "WIRE_REQUIRED",
+      "type": "WIRE_TYPE",
+      "unknown_field": "WIRE_UNKNOWN_FIELD"
+    }
+  },
+  "json_rpc_error_codes": {
+    "internal": -32603,
+    "invalid_params": -32602,
+    "invalid_request": -32600,
+    "method_not_found": -32601,
+    "parse": -32700
+  }
+}

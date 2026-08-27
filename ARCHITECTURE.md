@@ -292,6 +292,8 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   case-colliding desktop symlink.
 - Public SDK wire changes regenerate every language binding and retain
   backwards-compatible serialization unless explicitly versioned.
+- SDK response validation and first-party MCP JSON-RPC error codes are
+  generated together from `claw-os-sdk/wire/v1/`.
 
 ## Related Design Documents
 

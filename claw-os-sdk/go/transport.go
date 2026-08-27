@@ -17,9 +17,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -65,8 +65,8 @@ func CosBinary() string {
 
 // cosOutcome is the parsed result of one `cos` invocation.
 type cosOutcome struct {
-	// Envelope is the top-level JSON object the kernel emitted.
-	Envelope map[string]any
+	// Envelope is the unconstrained top-level JSON value the kernel emitted.
+	Envelope any
 	// Status is the process exit code (so callers can treat a non-zero
 	// exit as failure even when stdout was valid JSON).
 	Status int
@@ -113,17 +113,25 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s output exceeded %d bytes", label, maxOutput)}
 	}
 
-	var env map[string]any
+	var env any
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber()
 	if err := decoder.Decode(&env); err != nil {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned non-JSON output: %s", label, truncate(text, 200))}
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, &UnavailableError{Msg: fmt.Sprintf("%s returned trailing JSON data", label)}
+	}
 	return &cosOutcome{Envelope: env, Status: status}, nil
 }
 
 func (o *cosOutcome) hasError() bool {
-	_, ok := o.Envelope["error"]
+	envelope, ok := o.Envelope.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = envelope["error"]
 	return ok
 }
 
@@ -143,42 +151,10 @@ func asString(v any) string {
 	return ""
 }
 
-func asFloat(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case int:
-		return float64(n)
-	case json.Number:
-		value, _ := n.Float64()
-		return value
-	}
-	return 0
-}
-
-func asInt(v any) int64 { return int64(asFloat(v)) }
-
 func asUint64(v any) uint64 {
-	switch n := v.(type) {
-	case json.Number:
-		value, _ := strconv.ParseUint(string(n), 10, 64)
-		return value
-	case uint64:
-		return n
-	case uint32:
-		return uint64(n)
-	case int64:
-		if n >= 0 {
-			return uint64(n)
-		}
-	case int:
-		if n >= 0 {
-			return uint64(n)
-		}
-	case float64:
-		if n >= 0 {
-			return uint64(n)
-		}
+	number, ok := wireExactInteger(v)
+	if ok && number.overflow == 0 && number.value.Sign() >= 0 && number.value.IsUint64() {
+		return number.value.Uint64()
 	}
 	return 0
 }

@@ -4,7 +4,16 @@
 
 package clawossdk
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+	"math"
+	"math/big"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+)
 
 // ExpectedWireVersion is the wire-protocol version the kernel must
 // advertise on every envelope. Mirrors generated.rs's
@@ -71,6 +80,14 @@ type AiToolCall struct {
 type App struct {
 	Verb string `json:"verb,omitempty"`
 	App string `json:"app,omitempty"`
+}
+
+// BudgetShow — AI budget show reply.
+// Shape returned by `cos agent budget show <app>`.
+type BudgetShow struct {
+	App string `json:"app"`
+	Period string `json:"period"`
+	UnitsUsed uint64 `json:"units_used"`
 }
 
 // Envelope — Envelope.
@@ -225,6 +242,22 @@ type Tool struct {
 	Result interface{} `json:"result"`
 }
 
+// ToolCatalog — Catalog tool list reply.
+// Shape returned by `cos ai tools`.
+type ToolCatalog struct {
+	Tools []WireCatalogEntry `json:"tools"`
+}
+
+// WireCatalogEntry — WireCatalogEntry.
+type WireCatalogEntry struct {
+	Name string `json:"name"`
+	Summary string `json:"summary"`
+	Verb string `json:"verb"`
+	Stability string `json:"stability"`
+	ArgsSchema map[string]interface{} `json:"args_schema"`
+	ReturnsSchema map[string]interface{} `json:"returns_schema"`
+}
+
 // ValidateAiVerb reports an error if value is not in the ai.verb enum.
 func ValidateAiVerb(value string) error {
 	switch value {
@@ -268,4 +301,299 @@ func ValidateToolStatus(value string) error {
 		return nil
 	}
 	return fmt.Errorf("invalid tool.status value: %q", value)
+}
+
+// WireDecodeError is the stable failure returned by generated wire validators.
+type WireDecodeError struct {
+	Code string
+	Schema string
+	Path string
+	Reason string
+}
+
+func (e *WireDecodeError) Error() string {
+	return fmt.Sprintf("%s: invalid %s at %s: %s", e.Code, e.Schema, e.Path, e.Reason)
+}
+
+const (
+	WireConst = "WIRE_CONST"
+	WireEnum = "WIRE_ENUM"
+	WireMaximum = "WIRE_MAXIMUM"
+	WireMinimum = "WIRE_MINIMUM"
+	WireOneOf = "WIRE_ONE_OF"
+	WireRequired = "WIRE_REQUIRED"
+	WireType = "WIRE_TYPE"
+	WireUnknownField = "WIRE_UNKNOWN_FIELD"
+)
+
+func wireError(code, schema, path, reason string) error {
+	return &WireDecodeError{Code: code, Schema: schema, Path: path, Reason: reason}
+}
+
+func wireRule(value any) (map[string]any, bool) {
+	rule, ok := value.(map[string]any)
+	return rule, ok
+}
+
+const wireMaxMaterializedIntegerDigits = 1024
+
+var wireJSONNumberPattern = regexp.MustCompile(`^(-?)(0|[1-9][0-9]*)(?:\.([0-9]+))?(?:[eE]([+-]?[0-9]+))?$`)
+
+type wireExactIntegerValue struct {
+	value *big.Int
+	overflow int
+}
+
+func wireExactInteger(value any) (wireExactIntegerValue, bool) {
+	var lexeme string
+	switch value := value.(type) {
+	case json.Number:
+		lexeme = string(value)
+	case float64:
+		if math.IsNaN(value) || math.IsInf(value, 0) || math.Abs(value) > 9007199254740991 {
+			return wireExactIntegerValue{}, false
+		}
+		lexeme = strconv.FormatFloat(value, 'g', -1, 64)
+	case int:
+		return wireExactIntegerValue{value: big.NewInt(int64(value))}, true
+	case int64:
+		return wireExactIntegerValue{value: big.NewInt(value)}, true
+	case uint64:
+		return wireExactIntegerValue{value: new(big.Int).SetUint64(value)}, true
+	case uint32:
+		return wireExactIntegerValue{value: big.NewInt(int64(value))}, true
+	default:
+		return wireExactIntegerValue{}, false
+	}
+	parts := wireJSONNumberPattern.FindStringSubmatch(lexeme)
+	if parts == nil {
+		return wireExactIntegerValue{}, false
+	}
+	negative := parts[1] == "-"
+	digits := strings.TrimLeft(parts[2]+parts[3], "0")
+	if digits == "" {
+		return wireExactIntegerValue{value: big.NewInt(0)}, true
+	}
+	exponentText := parts[4]
+	if exponentText == "" { exponentText = "0" }
+	exponentDigits := strings.TrimLeft(strings.TrimLeft(exponentText, "+-"), "0")
+	if exponentDigits == "" { exponentDigits = "0" }
+	var exponent int64
+	if len(exponentDigits) > 18 {
+		if strings.HasPrefix(exponentText, "-") { exponent = -1 << 62 } else { exponent = 1 << 62 }
+	} else {
+		parsed, err := strconv.ParseInt(exponentText, 10, 64)
+		if err != nil { return wireExactIntegerValue{}, false }
+		if parsed > 1<<60 { parsed = 1 << 60 }
+		if parsed < -(1<<60) { parsed = -(1 << 60) }
+		exponent = parsed
+	}
+	decimalPlaces := int64(len(parts[3])) - exponent
+	if decimalPlaces <= 0 {
+		zeros := -decimalPlaces
+		if zeros > wireMaxMaterializedIntegerDigits || int64(len(digits))+zeros > wireMaxMaterializedIntegerDigits {
+			overflow := 1
+			if negative { overflow = -1 }
+			return wireExactIntegerValue{overflow: overflow}, true
+		}
+		digits += strings.Repeat("0", int(zeros))
+	} else {
+		if decimalPlaces > int64(len(digits)) { return wireExactIntegerValue{}, false }
+		tail := digits[len(digits)-int(decimalPlaces):]
+		if strings.Trim(tail, "0") != "" { return wireExactIntegerValue{}, false }
+		digits = digits[:len(digits)-int(decimalPlaces)]
+		if digits == "" { digits = "0" }
+	}
+	integer, ok := new(big.Int).SetString(digits, 10)
+	if !ok { return wireExactIntegerValue{}, false }
+	if negative { integer.Neg(integer) }
+	return wireExactIntegerValue{value: integer}, true
+}
+
+func compareWireExactIntegers(left, right wireExactIntegerValue) int {
+	if left.overflow != right.overflow {
+		if left.overflow < right.overflow { return -1 }
+		return 1
+	}
+	if left.overflow != 0 { return 0 }
+	return left.value.Cmp(right.value)
+}
+
+func wireNumberValid(value any) bool {
+	switch value := value.(type) {
+	case json.Number:
+		return wireJSONNumberPattern.MatchString(string(value))
+	case float64:
+		return !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= 9007199254740991
+	case int, int64, uint32, uint64:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateWireSchema(rule, root map[string]any, value any, schemaName, path string) error {
+	if reference, ok := rule["$ref"].(string); ok {
+		defs, _ := wireRule(root["$defs"])
+		parts := strings.Split(reference, "/")
+		target, found := wireRule(defs[parts[len(parts)-1]])
+		if !found {
+			return wireError(WireType, schemaName, path, "unresolved schema reference "+reference)
+		}
+		return validateWireSchema(target, root, value, schemaName, path)
+	}
+	if branches, ok := rule["oneOf"].([]any); ok {
+		matches := 0
+		for _, branchValue := range branches {
+			branch, valid := wireRule(branchValue)
+			if valid && validateWireSchema(branch, root, value, schemaName, path) == nil {
+				matches++
+			}
+		}
+		if matches != 1 {
+			return wireError(WireOneOf, schemaName, path, "expected exactly one allowed shape")
+		}
+		return nil
+	}
+	if expected, ok := rule["type"].(string); ok {
+		valid := false
+		switch expected {
+		case "object":
+			_, valid = value.(map[string]any)
+		case "array":
+			_, valid = value.([]any)
+		case "string":
+			_, valid = value.(string)
+		case "integer":
+			_, valid = wireExactInteger(value)
+		case "number":
+			valid = wireNumberValid(value)
+		case "boolean":
+			_, valid = value.(bool)
+		case "null":
+			valid = value == nil
+		}
+		if !valid {
+			return wireError(WireType, schemaName, path, "expected "+expected)
+		}
+	}
+	if expected, present := rule["const"]; present {
+		expectedNumber, expectedNumeric := wireExactInteger(expected)
+		actualNumber, actualNumeric := wireExactInteger(value)
+		if (expectedNumeric && (!actualNumeric || compareWireExactIntegers(expectedNumber, actualNumber) != 0)) || (!expectedNumeric && expected != value) {
+			return wireError(WireConst, schemaName, path, "value does not match const")
+		}
+	}
+	if allowed, ok := rule["enum"].([]any); ok {
+		matched := false
+		for _, candidate := range allowed {
+			if candidate == value { matched = true; break }
+		}
+		if !matched {
+			return wireError(WireEnum, schemaName, path, "value is not in the allowed enum")
+		}
+	}
+	if number, numeric := wireExactInteger(value); numeric {
+		if minimum, ok := wireExactInteger(rule["minimum"]); ok && compareWireExactIntegers(number, minimum) < 0 {
+			return wireError(WireMinimum, schemaName, path, "below minimum")
+		}
+		if maximum, ok := wireExactInteger(rule["maximum"]); ok && compareWireExactIntegers(number, maximum) > 0 {
+			return wireError(WireMaximum, schemaName, path, "above maximum")
+		}
+	}
+	if object, ok := value.(map[string]any); ok {
+		if required, ok := rule["required"].([]any); ok {
+			for _, fieldValue := range required {
+				field, _ := fieldValue.(string)
+				if _, present := object[field]; !present {
+					return wireError(WireRequired, schemaName, path+"."+field, "field is required")
+				}
+			}
+		}
+		if properties, ok := wireRule(rule["properties"]); ok {
+			names := make([]string, 0, len(properties))
+			for name := range properties { names = append(names, name) }
+			sort.Strings(names)
+			for _, name := range names {
+				fieldValue, present := object[name]
+				fieldRule, validRule := wireRule(properties[name])
+				if present && validRule {
+					if err := validateWireSchema(fieldRule, root, fieldValue, schemaName, path+"."+name); err != nil { return err }
+				}
+			}
+			extras := make([]string, 0)
+			for name := range object {
+				if _, known := properties[name]; !known { extras = append(extras, name) }
+			}
+			sort.Strings(extras)
+			if additional, ok := rule["additionalProperties"].(bool); ok && !additional && len(extras) > 0 {
+				return wireError(WireUnknownField, schemaName, path+"."+extras[0], "unknown field")
+			}
+			if additional, ok := wireRule(rule["additionalProperties"]); ok {
+				for _, name := range extras {
+					if err := validateWireSchema(additional, root, object[name], schemaName, path+"."+name); err != nil { return err }
+				}
+			}
+		}
+	}
+	if items, ok := value.([]any); ok {
+		if itemRule, ok := wireRule(rule["items"]); ok {
+			for index, item := range items {
+				if err := validateWireSchema(itemRule, root, item, schemaName, fmt.Sprintf("%s[%d]", path, index)); err != nil { return err }
+			}
+		}
+	}
+	return nil
+}
+
+const wireSchemaAi = "{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}"
+
+// ValidateAi validates a value against wire/v1/ai.schema.json.
+func ValidateAi(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaAi))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "Ai", "$")
+}
+
+const wireSchemaBudgetShow = "{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}"
+
+// ValidateBudgetShow validates a value against wire/v1/budget_show.schema.json.
+func ValidateBudgetShow(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaBudgetShow))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "BudgetShow", "$")
+}
+
+const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"
+
+// ValidateToolCatalog validates a value against wire/v1/tool_catalog.schema.json.
+func ValidateToolCatalog(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaToolCatalog))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "ToolCatalog", "$")
+}
+
+const wireSchemaTool = "{\"$id\":\"https://claw-os.dev/wire/v1/tool.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.\",\"properties\":{\"app_id\":{\"description\":\"App identity under which the tool ran.\",\"type\":\"string\"},\"result\":{\"description\":\"Tool-specific JSON result.\"},\"status\":{\"description\":\"Execution status. Denials are returned as errors, not ToolResult values.\",\"enum\":[\"ok\"],\"type\":\"string\"},\"tool\":{\"description\":\"Catalog tool name.\",\"type\":\"string\"}},\"required\":[\"tool\",\"app_id\",\"status\",\"result\"],\"title\":\"Catalog tool invocation reply\",\"type\":\"object\"}"
+
+// ValidateTool validates a value against wire/v1/tool.schema.json.
+func ValidateTool(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaTool))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "Tool", "$")
 }
