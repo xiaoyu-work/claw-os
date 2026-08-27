@@ -55,8 +55,6 @@ def _broker(action, value=None, confirm=False):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command in ("status", "list"):
         if args:
             return {"error": f"{command} takes no arguments"}
@@ -80,13 +78,3 @@ def run(command, args):
         policy.require("sys.snapshot", wild=True)
         return _broker("rollback", ids[0], confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Detect the system snapshot backend", "parameters": []},
-        "list": {"description": "List Claw-managed system recovery points", "parameters": []},
-        "create": {"description": "Create a recovery point", "parameters": [{"name": "description", "type": "string", "required": False, "kind": "positional"}]},
-        "delete": {"description": "Delete a recovery point", "parameters": [{"name": "id", "type": "string", "required": True, "kind": "positional"}]},
-        "rollback": {"description": "Schedule rollback and require reboot", "parameters": [{"name": "id", "type": "string", "required": True, "kind": "positional"}, {"name": "--confirm", "type": "boolean", "required": True, "kind": "flag"}]}
-    }

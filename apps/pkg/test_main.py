@@ -301,11 +301,6 @@ class CmdShowTests(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class RunDispatcherTests(unittest.TestCase):
-    def test_schema_lists_new_commands(self):
-        schema = run("__schema__", [])
-        for cmd in ("need", "has", "list", "search", "show"):
-            self.assertIn(cmd, schema, f"missing schema entry: {cmd}")
-
     def test_unknown_command(self):
         result = run("flarp", [])
         self.assertIn("error", result)

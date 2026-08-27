@@ -84,8 +84,6 @@ def _broker(
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -142,39 +140,3 @@ def run(command, args):
             response=args[1],
         )
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "List BlueZ adapters and known devices", "parameters": []},
-        "power": _two("Power a Bluetooth adapter on or off", "adapter", "state"),
-        "scan": _two("Scan for nearby devices for 1-60 seconds", "adapter", "seconds"),
-        "pair": _two("Pair a device; BlueZ may request desktop confirmation", "adapter", "device"),
-        "pair-status": _one("Check an active pairing session", "pairing_id"),
-        "pair-respond": _two("Respond to a confirmation, PIN, or passkey prompt", "pairing_id", "response"),
-        "pair-cancel": _one("Cancel an active pairing session", "pairing_id"),
-        "connect": _two("Connect a paired Bluetooth device", "adapter", "device"),
-        "disconnect": _two("Disconnect a Bluetooth device", "adapter", "device"),
-        "trust": _two("Trust a Bluetooth device", "adapter", "device"),
-        "untrust": _two("Remove trust from a Bluetooth device", "adapter", "device"),
-        "forget": _two("Forget pairing and saved device state", "adapter", "device"),
-    }
-
-
-def _two(description, first, second):
-    return {
-        "description": description,
-        "parameters": [
-            {"name": first, "type": "string", "kind": "positional", "required": True},
-            {"name": second, "type": "string", "kind": "positional", "required": True},
-        ],
-    }
-
-
-def _one(description, name):
-    return {
-        "description": description,
-        "parameters": [
-            {"name": name, "type": "string", "kind": "positional", "required": True}
-        ],
-    }

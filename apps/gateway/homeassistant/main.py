@@ -43,91 +43,6 @@ PLATFORM = "homeassistant"
 USER_AGENT = "ClawOSHomeAssistant/0.1.0"
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Home Assistant gateway. ``send <service> <text>`` calls "
-            "a notify-style service; ``call <service> <json>`` calls "
-            "any HA service with arbitrary payload."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound HA events (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-homeassistant start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-homeassistant stop",
-            },
-            "status": {
-                "description": "Show whether HA base / token are configured",
-                "parameters": [],
-                "example": "cos app gateway-homeassistant status",
-            },
-            "send": {
-                "description": (
-                    "Call a notify service. Service may be 'notify' "
-                    "(short for notify.notify) or 'notify.<provider>'."
-                ),
-                "parameters": [
-                    {
-                        "name": "service",
-                        "type": "string",
-                        "required": True,
-                        "description": "notify | notify.<provider>",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Notification body",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional title",
-                        "kind": "flag",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-homeassistant send "
-                    "notify.mobile_app_pixel 'deploy ok'"
-                ),
-            },
-            "call": {
-                "description": "Call any HA service with raw JSON payload.",
-                "parameters": [
-                    {
-                        "name": "service",
-                        "type": "string",
-                        "required": True,
-                        "description": "domain.service (e.g. light.turn_on)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "json",
-                        "type": "string",
-                        "required": True,
-                        "description": "Service-data JSON object string",
-                        "kind": "positional",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-homeassistant call light.turn_on "
-                    "'{\"entity_id\":\"light.kitchen\"}'"
-                ),
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -310,8 +225,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         service = ""
         text = ""

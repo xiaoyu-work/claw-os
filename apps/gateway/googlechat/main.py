@@ -43,67 +43,6 @@ USER_AGENT = "ClawOSGoogleChat/0.1.0"
 SOFT_LEN = 4000  # Google Chat text per message
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Google Chat gateway via Incoming Webhook. ``send`` posts a "
-            "plain-text message; ``--title`` switches to cardsV2; "
-            "``--thread-key`` reuses or creates a thread."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-googlechat start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-googlechat stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL is configured",
-                "parameters": [],
-                "example": "cos app gateway-googlechat status",
-            },
-            "send": {
-                "description": "Send a message to the space the webhook is bound to",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "Informational only (Google Chat space is implicit); empty is fine",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 4000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional cardsV2 header title (switches body shape)",
-                    },
-                    {
-                        "name": "thread_key",
-                        "type": "string",
-                        "required": False,
-                        "description": "Reuse or create a named thread within the space",
-                    },
-                ],
-                "example": "cos app gateway-googlechat send '' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -263,8 +202,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""

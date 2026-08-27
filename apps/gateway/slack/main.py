@@ -31,54 +31,6 @@ USER_AGENT = "cos-gateway-slack/0.2.0"
 MAX_LEN = 4000
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.2.0",
-        "description": (
-            "Slack gateway. ``send`` works via the Web API. ``start``/``stop`` "
-            "(Socket Mode / Events HTTP) are not yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Start the gateway (Socket Mode / Events HTTP) (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-slack start",
-            },
-            "stop": {
-                "description": "Stop a running gateway service (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-slack stop",
-            },
-            "status": {
-                "description": "Show running state",
-                "parameters": [],
-                "example": "cos app gateway-slack status",
-            },
-            "send": {
-                "description": "Send a message to a channel via Slack chat.postMessage",
-                "parameters": [
-                    {
-                        "name": "channel_id",
-                        "type": "string",
-                        "required": True,
-                        "description": "Target Slack channel id (e.g. C123ABC) or user id for DM",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message text",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-slack send C123ABC 'hello'",
-            },
-        },
-    }
-
-
 def _load_token() -> tuple[str | None, str | None]:
     """Returns (token, error)."""
     env_tok = os.environ.get("COS_SLACK_TOKEN")
@@ -162,19 +114,6 @@ def _send(channel_id: str, text: str) -> dict:
     }
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Slack Socket Mode / Events HTTP loop still pending. "
-            "Use ``send <channel_id> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     return {
         "ok": True,
@@ -185,8 +124,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         if isinstance(args, list):
             channel_id = args[0] if len(args) > 0 else ""
@@ -201,8 +138,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

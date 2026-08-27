@@ -15,6 +15,7 @@
       "summary": { "en": "Start a process to run the command you specified and capture its output." },
       "args": [
         { "name": "command", "kind": "name", "required": true },
+        { "name": "timeout", "kind": "number", "required": false },
         { "name": "shell", "kind": "bool", "required": false, "default": false }
       ],
       "needs": [
@@ -32,6 +33,12 @@
     "script": {
       "label": { "en": "Run a script file or inline code in any language" },
       "summary": { "en": "Run a script inline or from a file using bash, python, or node." },
+      "args": [
+        { "name": "code", "kind": "text", "required": false },
+        { "name": "lang", "kind": "name", "required": false },
+        { "name": "file", "kind": "path", "required": false },
+        { "name": "timeout", "kind": "number", "required": false }
+      ],
       "needs": [
         {
           "verb": "proc.spawn",
@@ -43,12 +50,12 @@
     "which": {
       "label": { "en": "Check if a command exists" },
       "args": [
-        { "name": "command", "kind": "name", "required": true }
+        { "name": "name", "kind": "name", "required": true }
       ],
       "needs": [
         {
           "verb": "fs.meta",
-          "scope": { "kind": "wild" },
+          "scope": { "kind": "from-arg", "arg": "name" },
           "why": { "en": "Look up where the command lives on the filesystem." }
         }
       ]
@@ -68,6 +75,9 @@
     },
     "stop": {
       "label": { "en": "Stop a background process by PID" },
+      "args": [
+        { "name": "pid", "kind": "number", "required": true }
+      ],
       "needs": [
         {
           "verb": "proc.signal",

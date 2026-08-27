@@ -173,8 +173,8 @@ impl Tool for CosAppTool {
                 "command": {
                     "type": "string",
                     "description": format!(
-                        "Subcommand on the cos {} app. See cos app {} __schema__ for \
-                         per-command parameters.",
+                        "Subcommand on the cos {} app. Use `cos_app_catalog show {}` for \
+                         manifest-derived parameter details.",
                         self.app, self.app
                     ),
                     "enum": self.commands,

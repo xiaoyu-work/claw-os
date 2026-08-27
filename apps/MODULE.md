@@ -8,7 +8,8 @@ invoked.
 
 ## Responsibilities
 
-- Declare operations, args, dependencies, AI use, and capability needs.
+- Own every operation, argument, dependency, AI use, and capability need in
+  `app.json`; entrypoints must not implement `_schema()` or `__schema__`.
 - Validate untrusted input before requesting policy/capability authority.
 - Return structured JSON-compatible results.
 - Return constrained `setup.agent_action` metadata for Agent-resumable
@@ -21,7 +22,7 @@ invoked.
 | Path | Role |
 | --- | --- |
 | `<id>/app.json` | App identity and operation/capability contract |
-| `<id>/main.py` | `run(command, args)` implementation |
+| `<id>/main.py` | Behavior-only `run(command, args)` implementation |
 | `<id>/test_main.py` | App behavior, validation, and scope tests |
 | `_shared/` | Shared safe filesystem/HTTP/process helpers |
 | `gateway/` | External messaging gateways and shared gateway safety helpers |
@@ -32,7 +33,9 @@ invoked.
 Apps do not import model-provider SDKs or own provider credentials. AI calls go
 through the Claw OS SDK/agent gate. Bundled capability checks use
 `cos_runtime.policy`; operation `needs` in `app.json` must match runtime checks.
-Schema/listing paths must not execute `main.py`.
+Schema/listing paths are generated from `app.json` and must not execute
+`main.py`. Unknown operations are rejected by the kernel before dispatch;
+entrypoints retain an unknown-operation error for direct unit invocation.
 
 ## Tests
 

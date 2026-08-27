@@ -45,67 +45,6 @@ USER_AGENT = "ClawOSTeams/0.1.0"
 SOFT_LEN = 28000  # Adaptive Card text fields tolerate ~28k
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Microsoft Teams gateway via Incoming Webhook. ``send`` posts "
-            "an Adaptive Card v1.5 by default; ``--legacy`` sends a "
-            "MessageCard v1 fallback for the legacy connector."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-teams start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-teams stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL is configured",
-                "parameters": [],
-                "example": "cos app gateway-teams status",
-            },
-            "send": {
-                "description": "Send a text message to the channel the webhook is bound to",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "Informational only (Teams webhook channel is implicit); empty is fine",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 28000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional card title",
-                    },
-                    {
-                        "name": "legacy",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send legacy MessageCard v1 instead of Adaptive Card",
-                    },
-                ],
-                "example": "cos app gateway-teams send '' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -276,8 +215,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""

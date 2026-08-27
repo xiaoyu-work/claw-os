@@ -65,8 +65,6 @@ def _integer(raw, name, minimum=0, maximum=4096):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -124,40 +122,3 @@ def _require_direction(command):
         policy.require("device.audio", name="output")
     elif command in INPUT_COMMANDS:
         policy.require("device.microphone", name="input")
-
-
-def _schema():
-    return {
-        "status": {
-            "description": "List PipeWire devices, nodes, streams, defaults, and volume",
-            "parameters": [],
-        },
-        "output-volume": _one("Set default output volume (0-150%)", "percent"),
-        "input-volume": _one("Set default input volume (0-100%)", "percent"),
-        "output-mute": _one("Set output mute state: on, off, or toggle", "state"),
-        "input-mute": _one("Set input mute state: on, off, or toggle", "state"),
-        "output-default": _one("Set the default output node", "node_id"),
-        "input-default": _one("Set the default input node", "node_id"),
-        "output-route": _two("Set an output node route", "node_id", "route_index"),
-        "input-route": _two("Set an input node route", "node_id", "route_index"),
-        "profile": _two("Set an audio device profile", "device_id", "profile_index"),
-    }
-
-
-def _one(description, name):
-    return {
-        "description": description,
-        "parameters": [
-            {"name": name, "type": "string", "kind": "positional", "required": True}
-        ],
-    }
-
-
-def _two(description, first, second):
-    return {
-        "description": description,
-        "parameters": [
-            {"name": first, "type": "string", "kind": "positional", "required": True},
-            {"name": second, "type": "string", "kind": "positional", "required": True},
-        ],
-    }

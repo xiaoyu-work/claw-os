@@ -68,8 +68,6 @@ def _broker(action, **values):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -132,13 +130,3 @@ def run(command, args):
         policy.require("net.firewall", name="manage")
         return _broker(command, token=values[0].lower(), confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect managed nftables state and drift", "parameters": []},
-        "add": {"description": "Add a scoped allow/drop rule", "parameters": []},
-        "delete": {"description": "Delete one managed rule by id", "parameters": []},
-        "clear": {"description": "Clear all managed rules with confirmation", "parameters": []},
-        "restore": {"description": "Restore a previous managed state", "parameters": []},
-    }

@@ -587,72 +587,12 @@ def _cmd_submit(args):
 # Schema (advertised to agents via `cos app web --schema`)
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "name": "web",
-        "description": "Browser via cos-browser engine (vendored Obscura). "
-                       "Returns text/links/JSON instead of Markdown — better for LLM token use. "
-                       "Use --eval for arbitrary JS extraction. A standalone "
-                       "CDP server is also available via the cos_browser agent tool "
-                       "(start/stop/status) for external Puppeteer/Playwright clients.",
-        "commands": {
-            "read": {
-                "summary": "Fetch URL with full JS rendering and return {url,title,text,links}.",
-                "args": [
-                    {"name": "url", "required": True},
-                    {"flag": "--selector", "value": "CSS", "doc": "wait for selector before extracting"},
-                    {"flag": "--timeout", "value": "SEC", "default": str(TIMEOUT)},
-                    {"flag": "--max-length", "value": "N", "default": str(DEFAULT_MAX_LENGTH)},
-                    {"flag": "--html", "doc": "return raw HTML instead of extracted text"},
-                    {"flag": "--eval", "value": "JS", "doc": "run JS expression and return its result"},
-                ],
-            },
-            "scrape": {
-                "summary": "Fetch many URLs in parallel.",
-                "args": [
-                    {"name": "urls", "variadic": True},
-                    {"flag": "--eval", "value": "JS", "doc": "run JS per page (default: extract title/text/links)"},
-                    {"flag": "--concurrency", "value": "N", "default": "10"},
-                    {"flag": "--timeout", "value": "SEC", "default": "60"},
-                ],
-            },
-            "screenshot": {
-                "summary": "Capture page screenshot (shells out to chromium).",
-                "args": [
-                    {"name": "url", "required": True},
-                    {"flag": "--output", "value": "PATH", "required": True},
-                    {"flag": "--width", "value": "PX", "default": "1280"},
-                    {"flag": "--height", "value": "PX", "default": "720"},
-                    {"flag": "--full-page"},
-                    {"flag": "--timeout", "value": "SEC", "default": "60"},
-                ],
-            },
-            "submit": {
-                "summary": "POST form data via urllib (no JS rendering).",
-                "args": [
-                    {"name": "url", "required": True},
-                    {"flag": "--data", "value": "JSON", "doc": "JSON object or raw body"},
-                    {"flag": "--method", "value": "POST|PUT|...", "default": "POST"},
-                ],
-            },
-            "summarize": {
-                "summary": "Fetch a URL and return a 3-line summary via the AI gate.",
-                "args": [
-                    {"name": "url", "required": True},
-                ],
-            },
-        },
-    }
-
-
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     handlers = {
         "read": _cmd_read,
         "scrape": _cmd_scrape,
@@ -679,10 +619,6 @@ def main():
             "error": "usage: cos app web <read|scrape|screenshot|submit|summarize> [args...]",
             "commands": ["read", "scrape", "screenshot", "submit", "summarize"],
         }))
-        return
-
-    if argv[0] in ("--schema", "-h", "--help"):
-        print(json.dumps(_schema(), indent=2))
         return
 
     cmd, rest = argv[0], argv[1:]

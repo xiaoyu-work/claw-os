@@ -42,55 +42,6 @@ API_VERSION = "2010-04-01"
 SOFT_LEN = 1600  # Twilio caps a single Body at 1600 chars (auto-segmented)
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "SMS gateway via Twilio. ``send`` delivers one-shot text "
-            "messages. ``start``/``stop`` (inbound webhook) are not "
-            "yet implemented."
-        ),
-        "commands": {
-            "start": {
-                "description": "Start an inbound webhook receiver (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-sms start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-sms stop",
-            },
-            "status": {
-                "description": "Show running state (always 'stopped' until inbound webhook lands)",
-                "parameters": [],
-                "example": "cos app gateway-sms status",
-            },
-            "send": {
-                "description": "Send a one-shot SMS message",
-                "parameters": [
-                    {
-                        "name": "to",
-                        "type": "string",
-                        "required": True,
-                        "description": "Recipient phone in E.164 format, e.g. +14155552671",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 1600 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-sms send '+14155552671' 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -245,8 +196,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         if isinstance(args, list):
             to = args[0] if len(args) > 0 else ""

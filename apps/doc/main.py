@@ -637,59 +637,8 @@ def cmd_convert(args):
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "read": {
-            "description": "Read a document and return structured text (supports txt, md, json, csv, yaml, pdf, docx, xlsx, pptx)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
-            ],
-            "example": "cos app doc read /workspace/report.pdf",
-        },
-        "info": {
-            "description": "Get document metadata (format, size, readability)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the document file", "kind": "positional"},
-            ],
-            "example": "cos app doc info /workspace/report.pdf",
-        },
-        "convert": {
-            "description": "Convert between document formats (JSON to CSV, CSV to JSON)",
-            "parameters": [
-                {"name": "path", "type": "string", "required": True, "description": "Path to the source file", "kind": "positional"},
-                {"name": "--to", "type": "string", "required": True, "description": "Target format (e.g. csv, json)", "kind": "flag"},
-            ],
-            "example": "cos app doc convert /workspace/data.json --to csv",
-        },
-        "summarize": {
-            "description": "Summarize a document into 5 short bullet lines via the AI gate. Reads from --file or stdin.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to summarise (or omit and pipe via stdin)", "kind": "flag"},
-            ],
-            "example": "cos app doc summarize --file /workspace/report.pdf",
-        },
-        "explain": {
-            "description": "Explain the supplied content (via --file or stdin) in plain prose under 200 words.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to the document to explain (or pipe via stdin)", "kind": "flag"},
-            ],
-            "example": "echo 'fn foo()...' | cos app doc explain",
-        },
-        "rewrite": {
-            "description": "Rewrite the supplied content per --instruction. Returns rewritten text only.",
-            "parameters": [
-                {"name": "--file", "type": "string", "required": False, "description": "Path to read (or pipe via stdin)", "kind": "flag"},
-                {"name": "--instruction", "type": "string", "required": False, "description": "Rewrite instruction (e.g. 'make it more formal')", "kind": "flag"},
-            ],
-            "example": "cos app doc rewrite --file note.md --instruction 'translate to English'",
-        },
-    }
-
-
 def run(command, args):
     """Called by cos router."""
-    if command == "__schema__":
-        return _schema()
     commands = {
         "read": cmd_read,
         "info": cmd_info,

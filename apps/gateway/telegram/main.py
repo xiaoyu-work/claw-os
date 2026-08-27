@@ -500,42 +500,7 @@ def _send(args) -> dict:
     return {"ok": True, "platform": PLATFORM, "sent_to": chat_id, "len": len(text)}
 
 
-def _schema():
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.2.0",
-        "description": "Telegram bot gateway — long-poll, forward to `cos agent ask`",
-        "commands": {
-            "start": {
-                "description": "Start the long-poll loop (foreground; use under `cos service` for daemonization)",
-                "parameters": [],
-                "example": "cos app gateway-telegram start",
-            },
-            "stop": {
-                "description": "Stop the running gateway loop",
-                "parameters": [],
-                "example": "cos app gateway-telegram stop",
-            },
-            "status": {
-                "description": "Show running state + last update_id offset",
-                "parameters": [],
-                "example": "cos app gateway-telegram status",
-            },
-            "send": {
-                "description": "Send a one-shot message to a chat id",
-                "parameters": [
-                    {"name": "chat_id", "type": "string", "required": True, "kind": "positional"},
-                    {"name": "text", "type": "string", "required": True, "kind": "positional"},
-                ],
-                "example": "cos app gateway-telegram send 12345 'hello'",
-            },
-        },
-    }
-
-
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "start":
         return _start_loop()
     if command == "stop":

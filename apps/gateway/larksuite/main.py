@@ -56,72 +56,6 @@ SOFT_LEN = 30000  # Lark messages cap around 30 KB
 DEFAULT_TITLE = "ClawOS notice"
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Lark / Feishu (飞书) custom-bot gateway. ``send`` posts a "
-            "text, post (rich-text), or interactive-card message to a "
-            "custom-bot webhook URL with optional HMAC-SHA256 sign."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-larksuite start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-larksuite stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL and optional secret are configured",
-                "parameters": [],
-                "example": "cos app gateway-larksuite status",
-            },
-            "send": {
-                "description": "Send a text, post (rich-text), or card message",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~30000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "post",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as msg_type=post (rich-text)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Post title (only used with --post; defaults to first line)",
-                    },
-                    {
-                        "name": "card",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send a fully-formed interactive card (use --card-json for body)",
-                    },
-                    {
-                        "name": "card_json",
-                        "type": "string",
-                        "required": False,
-                        "description": "Raw JSON card body (only used with --card)",
-                    },
-                ],
-                "example": "cos app gateway-larksuite send 'build green'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -299,8 +233,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         post = False

@@ -96,8 +96,6 @@ def _base(args, target=True):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -186,13 +184,3 @@ def run(command, args):
             confirm=True,
         )
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        action: {
-            "description": f"{action.capitalize()} Docker, Podman, or containerd workloads",
-            "parameters": [],
-        }
-        for action in sorted(READ_ACTIONS | MUTATING)
-    }

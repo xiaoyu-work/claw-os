@@ -89,8 +89,6 @@ def _broker(action, repo, credential, **values):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     confirm = "--confirm" in args
     values = [value for value in args if value != "--confirm"]
     try:
@@ -147,10 +145,3 @@ def _require(repo, credential, other=None):
     if other is not None:
         policy.require("data.backup", path=other)
     policy.require("secret.read", name=credential)
-
-
-def _schema():
-    return {
-        command: {"description": f"Restic {command} operation", "parameters": []}
-        for command in ["init", "snapshots", "check", "backup", "restore", "forget", "retention"]
-    }

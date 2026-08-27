@@ -60,84 +60,6 @@ SOFT_LEN = 19000  # DingTalk caps message bodies around 20 KB
 DEFAULT_TITLE = "ClawOS notice"
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "DingTalk (钉钉) custom-robot gateway. ``send`` POSTs a text "
-            "or markdown message to a robot webhook URL with optional "
-            "HMAC-SHA256 sign."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL and optional secret are configured",
-                "parameters": [],
-                "example": "cos app gateway-dingtalk status",
-            },
-            "send": {
-                "description": "Send a text or markdown message to the configured robot",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~19000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "markdown",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as msgtype=markdown (default text)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Markdown title (only used with --markdown; defaults to first line)",
-                    },
-                    {
-                        "name": "keyword",
-                        "type": "string",
-                        "required": False,
-                        "description": "Keyword to prepend (for keyword-filter robots)",
-                    },
-                    {
-                        "name": "at_mobiles",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated phone numbers to @-mention",
-                    },
-                    {
-                        "name": "at_user_ids",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated DingTalk user-ids to @-mention",
-                    },
-                    {
-                        "name": "at_all",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Mention everyone in the group",
-                    },
-                ],
-                "example": "cos app gateway-dingtalk send 'build green'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -331,8 +253,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         markdown = False

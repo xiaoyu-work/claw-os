@@ -433,57 +433,8 @@ def cmd_upgrade_all(args):
     return _package_broker("upgrade-all")
 
 
-def _schema():
-    return {
-        "need": {
-            "description": "Ensure packages are installed, only installing what is missing",
-            "parameters": [
-                {"name": "packages", "type": "string", "required": True, "description": "One or more package names to ensure are installed", "kind": "positional"},
-            ],
-            "example": "cos app pkg need curl jq ripgrep",
-        },
-        "has": {
-            "description": "Check if a package or command is available on the system",
-            "parameters": [
-                {"name": "name", "type": "string", "required": True, "description": "Package or command name to check", "kind": "positional"},
-            ],
-            "example": "cos app pkg has python3",
-        },
-        "list": {
-            "description": "List all installed system packages via dpkg",
-            "parameters": [],
-            "example": "cos app pkg list",
-        },
-        "search": {
-            "description": "Search the apt catalog for packages whose name or description matches the query",
-            "parameters": [
-                {"name": "query", "type": "string", "required": True, "description": "Search term(s) to match against package names and short summaries", "kind": "positional"},
-                {"name": "--limit", "type": "int", "required": False, "description": f"Max results to return (default {DEFAULT_SEARCH_LIMIT}, capped at {MAX_SEARCH_LIMIT})", "kind": "flag"},
-            ],
-            "example": "cos app pkg search image converter --limit 10",
-        },
-        "show": {
-            "description": "Show detailed metadata (version, description, homepage, depends, size) for a single package from the apt catalog",
-            "parameters": [
-                {"name": "name", "type": "string", "required": True, "description": "Package name to describe", "kind": "positional"},
-            ],
-            "example": "cos app pkg show imagemagick",
-        },
-        "remove": {"description": "Remove one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "purge": {"description": "Purge one package and its configuration", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "upgrade": {"description": "Upgrade one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "install-version": {"description": "Install an exact package version", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}, {"name": "version", "type": "string", "required": True, "kind": "positional"}]},
-        "hold": {"description": "Prevent upgrades for one package", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "unhold": {"description": "Release a package hold", "parameters": [{"name": "package", "type": "string", "required": True, "kind": "positional"}]},
-        "update": {"description": "Refresh apt package indexes", "parameters": []},
-        "upgrade-all": {"description": "Upgrade every package with an available candidate", "parameters": []},
-    }
-
-
 def run(command, args):
     """Entry point called by the cos router."""
-    if command == "__schema__":
-        return _schema()
     commands = {
         "need": cmd_need,
         "has": cmd_has,

@@ -77,44 +77,7 @@ def _save(data):
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
-def _schema():
-    return {
-        "set": {
-            "description": "Set a key-value pair",
-            "parameters": [
-                {"name": "key", "type": "string", "required": True, "description": "Key name", "kind": "positional"},
-                {"name": "value", "type": "string", "required": True, "description": "Value to store (remaining args joined by spaces)", "kind": "positional"},
-            ],
-            "example": "cos app kv set mykey some value here",
-        },
-        "get": {
-            "description": "Get the value for a key",
-            "parameters": [
-                {"name": "key", "type": "string", "required": True, "description": "Key to look up", "kind": "positional"},
-            ],
-            "example": "cos app kv get mykey",
-        },
-        "list": {
-            "description": "List keys matching a glob pattern",
-            "parameters": [
-                {"name": "pattern", "type": "string", "required": False, "description": "Glob pattern to filter keys (default '*')", "kind": "positional", "default": "*"},
-            ],
-            "example": "cos app kv list 'user.*'",
-        },
-        "del": {
-            "description": "Delete a key",
-            "parameters": [
-                {"name": "key", "type": "string", "required": True, "description": "Key to delete", "kind": "positional"},
-            ],
-            "example": "cos app kv del mykey",
-        },
-    }
-
-
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
-
     try:
         if command == "set":
             if len(args) < 2:

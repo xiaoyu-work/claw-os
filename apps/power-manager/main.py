@@ -61,8 +61,6 @@ def _broker(action, confirm=False):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -74,25 +72,3 @@ def run(command, args):
         policy.require("sys.power", wild=True)
         return _broker(command, confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    schema = {
-        "status": {
-            "description": "Inspect UPower devices and logind power capabilities",
-            "parameters": [],
-        }
-    }
-    for action in sorted(ACTIONS):
-        schema[action] = {
-            "description": f"Request system {action} through logind",
-            "parameters": [
-                {
-                    "name": "--confirm",
-                    "type": "boolean",
-                    "kind": "flag",
-                    "required": True,
-                }
-            ],
-        }
-    return schema

@@ -37,67 +37,6 @@ USER_AGENT = "ClawOSMattermost/0.1.0"
 SOFT_LEN = 16000  # Mattermost recommends ~16k for posts
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Mattermost gateway via Incoming Webhook. ``send`` POSTs a "
-            "message; optional ``channel``/``username``/``icon`` overrides. "
-            "Inbound is not implemented (requires public endpoint)."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-mattermost start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-mattermost stop",
-            },
-            "status": {
-                "description": "Show whether the webhook URL is configured",
-                "parameters": [],
-                "example": "cos app gateway-mattermost status",
-            },
-            "send": {
-                "description": "Send a text message to the webhook channel (or override)",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "Channel name (e.g. 'town-square') or DM handle (e.g. '@alice'); empty = webhook default",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 16000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "username",
-                        "type": "string",
-                        "required": False,
-                        "description": "Override displayed username",
-                    },
-                    {
-                        "name": "icon_url",
-                        "type": "string",
-                        "required": False,
-                        "description": "Override displayed icon URL",
-                    },
-                ],
-                "example": "cos app gateway-mattermost send town-square 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -210,8 +149,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""

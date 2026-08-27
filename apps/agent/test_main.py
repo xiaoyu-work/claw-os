@@ -51,9 +51,7 @@ class AgentLauncherTests(unittest.TestCase):
         self.assertEqual(result["error"], "cos-agent-bridge is not ready")
         execv.assert_not_called()
 
-    def test_schema_documents_context_argument(self):
-        parameters = main._schema()["overlay"]["parameters"]
-        self.assertIn("--context", [parameter["name"] for parameter in parameters])
+    def test_manifest_documents_context_argument(self):
         with open(os.path.join(os.path.dirname(__file__), "app.json"), encoding="utf-8") as file:
             manifest = json.load(file)
         args = manifest["operations"]["overlay"]["args"]

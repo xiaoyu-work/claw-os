@@ -283,13 +283,5 @@ class DocsAppTests(unittest.TestCase):
         result = self.main.run("nope", [])
         self.assertIn("error", result)
 
-    def test_schema_dispatch(self):
-        schema = self.main.run("__schema__", [])
-        self.assertIn("search", schema)
-        self.assertIn("index", schema)
-        self.assertIn("status", schema)
-        self.assertIn("configure", schema)
-
-
 if __name__ == "__main__":
     unittest.main()

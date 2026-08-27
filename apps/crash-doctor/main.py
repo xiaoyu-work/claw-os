@@ -76,8 +76,6 @@ def _query_bounds(args):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command in {"recent", "diagnose"}:
         try:
             since_minutes, limit = _query_bounds(args)
@@ -96,46 +94,3 @@ def run(command, args):
         policy.require("sys.crash", name="system")
         return _broker(command, coredump_id=args[0].lower())
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    query_parameters = [
-        {
-            "name": "since_minutes",
-            "type": "integer",
-            "kind": "positional",
-            "required": False,
-            "default": 60,
-        },
-        {
-            "name": "limit",
-            "type": "integer",
-            "kind": "positional",
-            "required": False,
-            "default": 20,
-        },
-    ]
-    return {
-        "recent": {
-            "description": "List recent system coredumps",
-            "parameters": query_parameters,
-            "example": "cos app crash-doctor recent 60 20",
-        },
-        "diagnose": {
-            "description": "Correlate coredumps with OOM, segfault, and journal evidence",
-            "parameters": query_parameters,
-            "example": "cos app crash-doctor diagnose 60 20",
-        },
-        "backtrace": {
-            "description": "Return recorded and constrained live backtraces for a coredump id",
-            "parameters": [
-                {
-                    "name": "id",
-                    "type": "string",
-                    "kind": "positional",
-                    "required": True,
-                }
-            ],
-            "example": "cos app crash-doctor backtrace <boot-id>:<pid>:<timestamp-us>",
-        },
-    }

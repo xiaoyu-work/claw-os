@@ -324,11 +324,6 @@ class TestChat(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestEntryPoint(unittest.TestCase):
-    def test_schema_lists_all_ops(self):
-        schema = main.run("__schema__", [])
-        for op in ("summarize", "smart_reply", "smart_compose", "translate", "triage", "chat"):
-            self.assertIn(op, schema)
-
     def test_unknown_command(self):
         result = main.run("nope", [])
         self.assertIn("error", result)

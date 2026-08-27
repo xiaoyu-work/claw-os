@@ -615,75 +615,6 @@ def cmd_chat(args):
 
 
 # ---------------------------------------------------------------------------
-# Schema (for `cos app mail-ai __schema__`)
-# ---------------------------------------------------------------------------
-
-def _schema():
-    return {
-        "summarize": {
-            "description": "Summarize an email body into a one-line summary, key points, and action items.",
-            "parameters": [
-                {"name": "--subject", "type": "string", "required": False, "description": "Email subject line for context.", "kind": "flag"},
-                {"name": "--from", "type": "string", "required": False, "description": "Sender address for context.", "kind": "flag"},
-                {"name": "--body", "type": "string", "required": True, "description": "Email body (HTML or plain text).", "kind": "flag"},
-                {"name": "--lang", "type": "string", "required": False, "description": "Output language (default: en).", "kind": "flag", "default": "en"},
-            ],
-            "example": "cos app mail-ai summarize --body 'Long email here...' --subject 'Q3 plan'",
-        },
-        "smart_reply": {
-            "description": "Generate three reply suggestions (formal / casual / short) for an email thread.",
-            "parameters": [
-                {"name": "--subject", "type": "string", "required": False, "description": "Thread subject.", "kind": "flag"},
-                {"name": "--from", "type": "string", "required": False, "description": "Most-recent sender.", "kind": "flag"},
-                {"name": "--thread", "type": "string", "required": True, "description": "Full thread text, oldest first.", "kind": "flag"},
-                {"name": "--my-intent", "type": "string", "required": False, "description": "Hint on what the user wants to say.", "kind": "flag"},
-                {"name": "--lang", "type": "string", "required": False, "description": "Output language.", "kind": "flag", "default": "en"},
-            ],
-            "example": "cos app mail-ai smart_reply --thread '...' --my-intent 'decline politely'",
-        },
-        "smart_compose": {
-            "description": "Continue or complete a draft from a brief intent.",
-            "parameters": [
-                {"name": "--subject", "type": "string", "required": False, "description": "Subject line.", "kind": "flag"},
-                {"name": "--to", "type": "string", "required": False, "description": "Recipient address.", "kind": "flag"},
-                {"name": "--draft", "type": "string", "required": False, "description": "Current draft text (may be empty).", "kind": "flag"},
-                {"name": "--intent", "type": "string", "required": True, "description": "What the user wants to say.", "kind": "flag"},
-                {"name": "--style", "type": "string", "required": False, "description": "Tone: formal, casual, or short.", "kind": "flag", "default": "formal"},
-                {"name": "--lang", "type": "string", "required": False, "description": "Output language.", "kind": "flag", "default": "en"},
-            ],
-            "example": "cos app mail-ai smart_compose --to alex@example.com --intent 'ask for the report deadline'",
-        },
-        "translate": {
-            "description": "Translate email text into a target language.",
-            "parameters": [
-                {"name": "--text", "type": "string", "required": True, "description": "Source text.", "kind": "flag"},
-                {"name": "--target", "type": "string", "required": True, "description": "Target language code or name.", "kind": "flag"},
-            ],
-            "example": "cos app mail-ai translate --text 'Bonjour' --target 'English'",
-        },
-        "triage": {
-            "description": "Classify an incoming email into a category, suggest tags, and assign a priority.",
-            "parameters": [
-                {"name": "--subject", "type": "string", "required": False, "description": "Subject line.", "kind": "flag"},
-                {"name": "--from", "type": "string", "required": False, "description": "Sender address.", "kind": "flag"},
-                {"name": "--snippet", "type": "string", "required": False, "description": "Short body preview (first 1000 chars).", "kind": "flag"},
-                {"name": "--has-attachments", "type": "boolean", "required": False, "description": "Whether the message has attachments.", "kind": "flag", "default": False},
-            ],
-            "example": "cos app mail-ai triage --from 'noreply@stripe.com' --subject 'Your receipt'",
-        },
-        "chat": {
-            "description": "Answer a question grounded in supplied email metadata (chat with your mailbox).",
-            "parameters": [
-                {"name": "--question", "type": "string", "required": True, "description": "User question.", "kind": "flag"},
-                {"name": "--context-json", "type": "string", "required": False, "description": "JSON array of {from,subject,date,snippet} objects.", "kind": "flag", "default": "[]"},
-                {"name": "--lang", "type": "string", "required": False, "description": "Output language.", "kind": "flag", "default": "en"},
-            ],
-            "example": "cos app mail-ai chat --question 'When is the next standup?' --context-json '[{\"from\":\"alex\",\"subject\":\"Standup\",\"snippet\":\"Mondays 10am\"}]'",
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -699,8 +630,6 @@ HANDLERS = {
 
 def run(command, args):
     """Entry point called by cos."""
-    if command == "__schema__":
-        return _schema()
     handler = HANDLERS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

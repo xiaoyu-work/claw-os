@@ -45,60 +45,6 @@ USER_AGENT = "ClawOSRocketChat/0.1.0"
 SOFT_LEN = 5000
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Rocket.Chat gateway via REST chat.postMessage with "
-            "personal-access-token auth (X-Auth-Token / X-User-Id "
-            "headers)."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat stop",
-            },
-            "status": {
-                "description": "Show whether the bot is configured",
-                "parameters": [],
-                "example": "cos app gateway-rocketchat status",
-            },
-            "send": {
-                "description": "Send a markdown message",
-                "parameters": [
-                    {
-                        "name": "target",
-                        "type": "string",
-                        "required": True,
-                        "description": (
-                            "#channel | channel | @user (Rocket.Chat "
-                            "treats #general and general identically)"
-                        ),
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to ~5000 chars)",
-                        "kind": "positional",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-rocketchat send '#general' 'deploy ok'"
-                ),
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -250,8 +196,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         target = ""
         text = ""

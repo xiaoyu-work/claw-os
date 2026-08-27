@@ -417,19 +417,7 @@ def _safe_int(value):
         return None
 
 
-def _schema():
-    return {
-        "interfaces": {"description": "Inspect local network interfaces", "parameters": []},
-        "routes": {"description": "Inspect the IPv4 kernel route table", "parameters": []},
-        "dns": {"description": "Resolve a host or host:port once", "parameters": [{"name": "target", "type": "string", "required": True, "kind": "positional"}]},
-        "tcp": {"description": "Measure TCP reachability and connect latency", "parameters": [{"name": "target", "type": "string", "required": True, "kind": "positional"}, {"name": "--attempts", "type": "integer", "required": False, "kind": "flag"}, {"name": "--timeout", "type": "number", "required": False, "kind": "flag"}]},
-        "diagnose": {"description": "Run link, route, DNS, and TCP diagnosis", "parameters": [{"name": "target", "type": "string", "required": True, "kind": "positional"}]}
-    }
-
-
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     handler = {
         "interfaces": cmd_interfaces,
         "routes": cmd_routes,

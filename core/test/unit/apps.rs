@@ -75,3 +75,77 @@ fn bundled_apps_declare_their_optional_path_defaults() {
     assert_eq!(binding.prefix, "~/");
     assert_eq!(binding.fallback.as_deref(), Some("download"));
 }
+
+#[test]
+fn bundled_python_entries_do_not_own_operation_schemas() {
+    fn inspect(dir: &std::path::Path, duplicates: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir() {
+                inspect(&path, duplicates);
+            } else if path.extension().and_then(|extension| extension.to_str()) == Some("py") {
+                let source = std::fs::read_to_string(&path).unwrap();
+                if source.contains("def _schema(") || source.contains("__schema__") {
+                    duplicates.push(path.display().to_string());
+                }
+            }
+        }
+    }
+
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let mut duplicates = Vec::new();
+    inspect(&repository.join("apps"), &mut duplicates);
+    assert!(
+        duplicates.is_empty(),
+        "app.json is the sole operation schema owner; duplicate runtime schemas: {duplicates:?}"
+    );
+}
+
+#[test]
+fn known_first_party_schema_drift_is_resolved_in_manifests() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| {
+                path.join(component)
+            })
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+
+    let exec = load(&["exec"]);
+    assert_eq!(
+        exec.operations["run"]
+            .args
+            .iter()
+            .map(|arg| arg.name.as_str())
+            .collect::<Vec<_>>(),
+        ["command", "timeout", "shell"]
+    );
+    assert_eq!(
+        exec.operations["script"]
+            .args
+            .iter()
+            .map(|arg| arg.name.as_str())
+            .collect::<Vec<_>>(),
+        ["code", "lang", "file", "timeout"]
+    );
+    assert_eq!(exec.operations["which"].args[0].name, "name");
+    assert_eq!(exec.operations["stop"].args[0].name, "pid");
+
+    let slack = load(&["gateway", "slack"]);
+    assert_eq!(
+        slack
+            .operations
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        ["send", "status"]
+    );
+}

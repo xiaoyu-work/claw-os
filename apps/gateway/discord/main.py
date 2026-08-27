@@ -1354,74 +1354,7 @@ def _send(args: Any) -> dict[str, Any]:
         }
 
 
-def _schema() -> dict[str, Any]:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": VERSION,
-        "description": (
-            "Bidirectional Discord bot gateway. Routes allowlisted DMs, "
-            "guild mentions, and thread messages to the system agent."
-        ),
-        "commands": {
-            "configure": {
-                "description": "Persist allowlists and mention/rate-limit policy",
-                "parameters": [
-                    {
-                        "name": "settings",
-                        "type": "string",
-                        "required": True,
-                        "kind": "positional",
-                        "description": (
-                            "key=value settings: users, guilds, channels, "
-                            "require_mention, rpm"
-                        ),
-                    }
-                ],
-                "example": (
-                    "cos app gateway-discord configure "
-                    "'users=123 guilds=456 require_mention=true rpm=5'"
-                ),
-            },
-            "start": {
-                "description": "Start the Discord Gateway v10 loop in the foreground",
-                "parameters": [],
-                "example": "cos app gateway-discord start",
-            },
-            "stop": {
-                "description": "Stop the running Discord gateway",
-                "parameters": [],
-                "example": "cos app gateway-discord stop",
-            },
-            "status": {
-                "description": "Show connection, configuration, and session status",
-                "parameters": [],
-                "example": "cos app gateway-discord status",
-            },
-            "send": {
-                "description": "Send a message to a Discord channel",
-                "parameters": [
-                    {
-                        "name": "channel_id",
-                        "type": "string",
-                        "required": True,
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "kind": "positional",
-                    },
-                ],
-                "example": "cos app gateway-discord send 123456789 'hello'",
-            },
-        },
-    }
-
-
 def run(command: str, args: Any) -> dict[str, Any]:
-    if command == "__schema__":
-        return _schema()
     if command == "configure":
         return _configure(args)
     if command == "start":

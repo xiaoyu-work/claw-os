@@ -60,8 +60,6 @@ def _broker(action, **values):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -123,13 +121,3 @@ def run(command, args):
         policy.require("device.printer", name="control")
         return _broker(command, job_id=args[0], confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "List configured printers and default", "parameters": []},
-        "jobs": {"description": "List queued jobs, optionally for one printer", "parameters": []},
-        "capabilities": {"description": "List one printer's CUPS options", "parameters": []},
-        "print": {"description": "Print a canonical file with bounded options", "parameters": []},
-        "cancel": {"description": "Cancel an owned CUPS job", "parameters": []},
-    }

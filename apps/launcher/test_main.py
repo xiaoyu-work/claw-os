@@ -474,13 +474,6 @@ class TestRunDispatch(unittest.TestCase):
         result = main.run("totally-not-a-verb", [])
         self.assertIn("error", result)
 
-    def test_schema_returns_dict(self):
-        schema = main.run("__schema__", [])
-        self.assertIsInstance(schema, dict)
-        for op in ("list", "find", "open", "recent", "is-running"):
-            self.assertIn(op, schema)
-            self.assertIn("parameters", schema[op])
-
     def test_open_without_app_id_returns_error(self):
         # No policy.require is called yet (missing-arg check is first).
         result = main.run("open", [])

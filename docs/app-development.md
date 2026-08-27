@@ -101,7 +101,8 @@ def run(command, args):
 The bridge calls `mod.run(command, args)` exactly once per invocation
 ([`bridge.rs:64`](../core/src/bridge.rs)). Two crucial details:
 
-* `command` is a **string** — the operation name, such as `"say"`.
+* `command` is a **string** — the manifest-declared operation name, such as
+  `"say"`. The kernel rejects undeclared operations before starting the app.
 * `args` is a **list of strings**, not a dict — every CLI token after
   the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`),
   followed by any manifest defaults the bridge resolved. Apps parse their
@@ -280,8 +281,9 @@ Describe every operation in the manifest:
 }
 ```
 
-Keep the manifest schema aligned with the entry point's argument parser. There
-is no `__schema__` callback or runtime merge step.
+The manifest is the only maintained operation and argument contract. The entry
+point implements behavior for those declared operations; it must not define
+`_schema()`, handle `__schema__`, or maintain a parallel parameter list.
 
 ## 7. AI features
 

@@ -150,5 +150,5 @@ cos app gateway-matrix send '!room:example.org' "deployment finished"
 cos app gateway-ntfy send alerts "deployment finished"
 ```
 
-Run `cos app <gateway-id> __schema__` to inspect the exact credentials,
+Run `cos app <gateway-id> --schema` to inspect the exact credentials,
 arguments, and operations supported by an installed gateway.

@@ -69,8 +69,6 @@ def _manage():
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -147,14 +145,3 @@ def run(command, args):
         _manage()
         return _broker(command, token=args[0].lower(), confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        command: {"description": f"{command} local identity operation", "parameters": []}
-        for command in [
-            "status", "create-user", "delete-user", "lock-user", "unlock-user",
-            "set-shell", "set-password", "create-group", "delete-group",
-            "add-to-group", "remove-from-group", "restore",
-        ]
-    }

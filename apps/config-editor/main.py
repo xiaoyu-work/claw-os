@@ -85,8 +85,6 @@ def _broker(action, target, source=None, token=None, confirm=False):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "inspect":
         if len(args) != 1:
             return {"error": "inspect requires <target>"}
@@ -125,12 +123,3 @@ def run(command, args):
         policy.require("sys.config", path=target)
         return _broker(command, target, token=values[1].lower(), confirm=True)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "inspect": {"description": "Read a supported /etc config", "parameters": []},
-        "validate": {"description": "Validate staged content without applying it", "parameters": []},
-        "apply": {"description": "Back up, validate, and atomically apply staged content", "parameters": []},
-        "restore": {"description": "Restore a backup if the target has not changed since apply", "parameters": []},
-    }

@@ -59,84 +59,6 @@ USER_AGENT = "ClawOSWebhook/0.1.0"
 DEFAULT_TIMEOUT = 20
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Generic outbound webhook gateway. ``send`` POSTs a "
-            "JSON-wrapped (or raw) body to any HTTPS endpoint with "
-            "optional Bearer / Basic / X-API-Key / HMAC-SHA256 auth."
-        ),
-        "commands": {
-            "send": {
-                "description": "POST a message body to a webhook URL",
-                "parameters": [
-                    {
-                        "name": "target",
-                        "type": "string",
-                        "required": False,
-                        "description": (
-                            "Webhook URL. Falls back to "
-                            "``webhook_default_url`` credential / "
-                            "COS_WEBHOOK_URL env if omitted."
-                        ),
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "raw",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send body verbatim as text/plain (no JSON envelope)",
-                    },
-                    {
-                        "name": "bearer",
-                        "type": "string",
-                        "required": False,
-                        "description": "Authorization: Bearer <token>",
-                    },
-                    {
-                        "name": "basic",
-                        "type": "string",
-                        "required": False,
-                        "description": "Authorization: Basic base64(user:pass)",
-                    },
-                    {
-                        "name": "api-key",
-                        "type": "string",
-                        "required": False,
-                        "description": "X-API-Key: <key>",
-                    },
-                    {
-                        "name": "hmac-sha256",
-                        "type": "string",
-                        "required": False,
-                        "description": "X-Signature: sha256=<hex hmac>",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-webhook send "
-                    "https://hooks.example/notify 'deploy ok'"
-                ),
-            },
-            "status": {
-                "description": (
-                    "Show whether a default URL / secret is configured"
-                ),
-                "parameters": [],
-                "example": "cos app gateway-webhook status",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -389,8 +311,6 @@ def _parse_args_list(args: list) -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         if isinstance(args, dict):
             parsed = _parse_args_dict(args)

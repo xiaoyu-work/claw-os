@@ -53,114 +53,6 @@ URL_TITLE_LEN = 100
 API_URL = "https://api.pushover.net/1/messages.json"
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Pushover (pushover.net) push-notification gateway. "
-            "``send`` posts a message to the configured user / group "
-            "key with optional title, priority, sound, and URL action."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-pushover start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-pushover stop",
-            },
-            "status": {
-                "description": "Show whether the app token and default user key are configured",
-                "parameters": [],
-                "example": "cos app gateway-pushover status",
-            },
-            "send": {
-                "description": "Send a push notification to a user or group",
-                "parameters": [
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body (truncated to 1024 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": False,
-                        "description": "User or group key to receive (default: pushover_user_key credential)",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Notification title (default: app name)",
-                    },
-                    {
-                        "name": "priority",
-                        "type": "integer",
-                        "required": False,
-                        "description": "-2 .. 2 (lowest .. emergency)",
-                    },
-                    {
-                        "name": "sound",
-                        "type": "string",
-                        "required": False,
-                        "description": "Pushover named sound (e.g. magic, siren, none)",
-                    },
-                    {
-                        "name": "url",
-                        "type": "string",
-                        "required": False,
-                        "description": "Supplementary action URL (max 512 chars)",
-                    },
-                    {
-                        "name": "url_title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Title for the action URL (max 100 chars)",
-                    },
-                    {
-                        "name": "device",
-                        "type": "string",
-                        "required": False,
-                        "description": "Comma-separated device names to target",
-                    },
-                    {
-                        "name": "html",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Enable Pushover's HTML subset in the body",
-                    },
-                    {
-                        "name": "ttl",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds before auto-deletion on the device",
-                    },
-                    {
-                        "name": "retry",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds between retries (priority=2 only; >=30)",
-                    },
-                    {
-                        "name": "expire",
-                        "type": "integer",
-                        "required": False,
-                        "description": "Seconds before retries expire (priority=2 only; <=10800)",
-                    },
-                ],
-                "example": "cos app gateway-pushover send 'build green'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -334,8 +226,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         text = ""
         recipient = None

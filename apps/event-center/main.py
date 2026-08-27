@@ -56,8 +56,6 @@ def _broker(action, source=None, limit=None, pid=None):
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -94,11 +92,3 @@ def run(command, args):
         policy.require("sys.events", name="observe")
         return _broker(command, pid=pid)
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "Inspect event watcher status", "parameters": []},
-        "recent": {"description": "Read recent events, optionally filtered by source", "parameters": []},
-        "watch-pid": {"description": "Emit a persistent event when a PID exits", "parameters": []},
-    }

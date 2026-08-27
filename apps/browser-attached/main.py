@@ -382,17 +382,7 @@ HANDLERS = {
 }
 
 
-def _schema():
-    return {
-        "id": "browser-attached",
-        "commands": sorted(HANDLERS),
-        "socket": SOCK_PATH,
-    }
-
-
 def run(command, argv):
-    if command == "__schema__":
-        return _schema()
     handler = HANDLERS.get(command)
     if handler is None:
         return {"ok": False, "error": f"unknown command: {command}"}
@@ -415,9 +405,6 @@ def main():
             "commands": sorted(HANDLERS),
         }))
         sys.exit(1)
-    if argv[0] in ("--schema", "-h", "--help"):
-        print(json.dumps(_schema(), indent=2))
-        return
     cmd, rest = argv[0], argv[1:]
     result = run(cmd, rest)
     print(json.dumps(result, indent=2, ensure_ascii=False))

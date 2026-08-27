@@ -378,33 +378,8 @@ def _remember_search(kind, query, result):
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _schema():
-    return {
-        "web": {
-            "description": "Search the web with the explicitly selected Google or Brave provider",
-            "parameters": [
-                {"name": "query", "type": "string", "required": True, "description": "Search query words", "kind": "positional"},
-                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
-                {"name": "--provider", "type": "string", "required": True, "description": "Search provider: google or brave", "kind": "flag"},
-            ],
-            "example": "cos app search web 'rust programming language' --provider brave --max-results 5",
-        },
-        "image": {
-            "description": "Search for images with the explicitly selected Google or Brave provider",
-            "parameters": [
-                {"name": "query", "type": "string", "required": True, "description": "Image search query words", "kind": "positional"},
-                {"name": "--max-results", "type": "integer", "required": False, "description": "Maximum results to return (1-10)", "kind": "flag", "default": 5},
-                {"name": "--provider", "type": "string", "required": True, "description": "Search provider: google or brave", "kind": "flag"},
-            ],
-            "example": "cos app search image 'cute cats' --provider brave --max-results 3",
-        },
-    }
-
-
 def run(command, args):
     """Called by cos router."""
-    if command == "__schema__":
-        return _schema()
     commands = {
         "web": cmd_web,
         "image": cmd_image,

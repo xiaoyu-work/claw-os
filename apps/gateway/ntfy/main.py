@@ -46,121 +46,6 @@ SOFT_LEN = 4000
 ALLOWED_PRIORITIES = {"min", "low", "default", "high", "max", "urgent"}
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "ntfy.sh push-notification gateway. POSTs a plain-text "
-            "body to <server>/<topic> with optional Bearer/Basic auth "
-            "and ntfy header metadata."
-        ),
-        "commands": {
-            "start": {
-                "description": "Subscribe to a topic (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-ntfy start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-ntfy stop",
-            },
-            "status": {
-                "description": "Show whether server/topic/token are set",
-                "parameters": [],
-                "example": "cos app gateway-ntfy status",
-            },
-            "send": {
-                "description": "Send a notification to a topic.",
-                "parameters": [
-                    {
-                        "name": "topic",
-                        "type": "string",
-                        "required": False,
-                        "description": (
-                            "Topic name; defaults to ntfy_default_topic "
-                            "credential if only one positional arg is "
-                            "supplied (treated as body)."
-                        ),
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Notification body (max ~4000 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "title",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional title header",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "priority",
-                        "type": "string",
-                        "required": False,
-                        "description": "min|low|default|high|max|urgent",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "tags",
-                        "type": "string",
-                        "required": False,
-                        "description": (
-                            "Comma-separated emoji shortcodes / tags "
-                            "(e.g. 'rocket,deploy')"
-                        ),
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "click",
-                        "type": "string",
-                        "required": False,
-                        "description": "Optional click-target URL",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "markdown",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Render body as markdown",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "server",
-                        "type": "string",
-                        "required": False,
-                        "description": "Override default ntfy server",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "bearer",
-                        "type": "string",
-                        "required": False,
-                        "description": "Bearer access token (overrides creds)",
-                        "kind": "flag",
-                    },
-                    {
-                        "name": "basic",
-                        "type": "string",
-                        "required": False,
-                        "description": "Basic auth as 'user:pass'",
-                        "kind": "flag",
-                    },
-                ],
-                "example": (
-                    "cos app gateway-ntfy send my-alerts 'deploy ok' "
-                    "--priority high --tags 'rocket,deploy'"
-                ),
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -422,8 +307,6 @@ def _parse_send_args(args) -> tuple[str | None, str, dict]:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         topic, text, flags = _parse_send_args(args)
         result = _send(

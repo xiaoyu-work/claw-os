@@ -67,8 +67,6 @@ def _broker(
 
 
 def run(command, args):
-    if command == "__schema__":
-        return _schema()
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}
@@ -112,10 +110,3 @@ def run(command, args):
             height=height,
         )
     return {"error": f"unknown command: {command}"}
-
-
-def _schema():
-    return {
-        "status": {"description": "List PipeWire Video/Source nodes", "parameters": []},
-        "capture": {"description": "Capture one PNG/JPEG frame to a new file", "parameters": []},
-    }

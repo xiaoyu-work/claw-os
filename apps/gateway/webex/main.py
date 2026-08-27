@@ -43,61 +43,6 @@ API_URL = "https://webexapis.com/v1/messages"
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
-def _schema() -> dict:
-    return {
-        "name": f"gateway-{PLATFORM}",
-        "version": "0.1.0",
-        "description": (
-            "Webex gateway via REST API. ``send`` posts a markdown "
-            "message to a roomId, personEmail, or personId. Bot tokens "
-            "only (no OAuth user flow)."
-        ),
-        "commands": {
-            "start": {
-                "description": "Receive inbound messages (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-webex start",
-            },
-            "stop": {
-                "description": "Stop a running gateway (NOT IMPLEMENTED)",
-                "parameters": [],
-                "example": "cos app gateway-webex stop",
-            },
-            "status": {
-                "description": "Show whether the bot token is configured",
-                "parameters": [],
-                "example": "cos app gateway-webex status",
-            },
-            "send": {
-                "description": "Send a markdown message to a room or person",
-                "parameters": [
-                    {
-                        "name": "recipient",
-                        "type": "string",
-                        "required": True,
-                        "description": "roomId (opaque) | personEmail | personId",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "text",
-                        "type": "string",
-                        "required": True,
-                        "description": "Message body, Markdown (truncated to ~7400 chars)",
-                        "kind": "positional",
-                    },
-                    {
-                        "name": "plain",
-                        "type": "boolean",
-                        "required": False,
-                        "description": "Send as plain text only (no Markdown rendering)",
-                    },
-                ],
-                "example": "cos app gateway-webex send alice@example.com 'hello'",
-            },
-        },
-    }
-
-
 def _load_credential(name: str) -> tuple[str | None, str | None]:
     return safe_subprocess.safe_credential_load(name)
 
@@ -264,8 +209,6 @@ def _status() -> dict:
 
 
 def run(command: str, args):
-    if command == "__schema__":
-        return _schema()
     if command == "send":
         recipient = ""
         text = ""
