@@ -230,6 +230,27 @@ Registration returns an opaque, launcher-bound, single-use launch handle that
 authorises the pid bind, per-call capability updates, and teardown for that one
 session; the launched App never receives it.
 
+### Proactive scheduling
+
+`cos cron` and `cos triggers` act on the root-owned job store the `clawd`
+heartbeat drives, so a non-root CLI reaches it through the `scheduler.run`
+broker route. The daemon validates the subsystem, command, arguments, and the
+job/rule identifier before authorising anything, then resolves the caller's
+authority the same way App launches do: from the peer's uid, pid, and process
+start time, and from the nearest session `clawd` itself registered in the
+root-owned routed registry. How the caller happens to be running — terminal,
+`NoNewPrivs`, executable path — is never authority, and an App session may not
+manage proactive jobs at all.
+
+Listing, inspecting, or retiring rows the authenticated owner already owns is
+answered with the single capability that subsystem's gate requires. Creating a
+job, re-arming one, or running one now delegates authority that outlives the
+call, so it must be covered by capabilities the peer holds or by one-shot grants
+approved through the privileged approval helper and bound to that exact peer,
+verb, and scope; the caller waits on `permission.status` and retries over the
+same connection. A stored job never carries more than its creator could prove,
+bounded by the same home-scoped ceiling the executor applies before it runs.
+
 ### MCP attachment
 
 ```text

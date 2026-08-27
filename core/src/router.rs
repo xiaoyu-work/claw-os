@@ -54,26 +54,121 @@ fn run_scheduler_command(
     if !should_proxy_scheduler_command() {
         return local(command, args);
     }
+    let params = json!({
+        "subsystem": subsystem,
+        "command": command,
+        "args": args,
+    });
+    match scheduler_request(&params) {
+        Ok(result) => Ok(result),
+        Err(error) => {
+            let ids = scheduler_approval_requests(&error);
+            if ids.is_empty() {
+                return Err(error.message);
+            }
+            // Waiting in this process is what keeps the retry
+            // authentic: clawd re-derives the same uid/pid/start-time
+            // identity on the follow-up call, so no decision, token or
+            // session string has to travel between processes.
+            wait_for_scheduler_approvals(&ids)?;
+            scheduler_request(&params).map_err(|error| error.message)
+        }
+    }
+}
+
+/// A failed `scheduler.run` plus whatever structured payload the daemon
+/// attached for this caller only.
+struct SchedulerCallError {
+    message: String,
+    data: Option<Value>,
+}
+
+fn scheduler_request(params: &Value) -> Result<Value, SchedulerCallError> {
     let request = crate::clawd::protocol::Request {
         id: None,
         command: "scheduler.run".to_string(),
-        params: json!({
-            "subsystem": subsystem,
-            "command": command,
-            "args": args,
-        }),
+        params: params.clone(),
     };
     let response =
-        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
+        crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
+            .map_err(|message| SchedulerCallError {
+                message,
+                data: None,
+            })?;
     if response.ok {
-        response
-            .result
-            .ok_or_else(|| "clawd scheduler response had no result".to_string())
+        response.result.ok_or_else(|| SchedulerCallError {
+            message: "clawd scheduler response had no result".to_string(),
+            data: None,
+        })
     } else {
-        Err(response
-            .error
-            .map(|error| error.message)
-            .unwrap_or_else(|| "clawd scheduler request failed".to_string()))
+        let (message, data) = match response.error {
+            Some(error) => (error.message, error.data),
+            None => ("clawd scheduler request failed".to_string(), None),
+        };
+        Err(SchedulerCallError { message, data })
+    }
+}
+
+/// Approval request ids a denied scheduler command is waiting on, if
+/// the daemon reported any. Ids are not authority — they only say which
+/// decisions this caller needs.
+fn scheduler_approval_requests(error: &SchedulerCallError) -> Vec<String> {
+    error
+        .data
+        .as_ref()
+        .filter(|data| data.get("status").and_then(Value::as_str) == Some("approval_required"))
+        .and_then(|data| data.get("approval_requests"))
+        .and_then(Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Longest a scheduler command holds its place while the user decides.
+const SCHEDULER_APPROVAL_WAIT: std::time::Duration = std::time::Duration::from_secs(120);
+const SCHEDULER_APPROVAL_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+
+/// Block until every listed request is decided. The wait is bounded,
+/// ends immediately on a rejection, and reports a terminal error for
+/// anything that is not a clean approval.
+fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
+    let deadline = Instant::now() + SCHEDULER_APPROVAL_WAIT;
+    loop {
+        let result = request_clawd("permission.status", json!({ "ids": ids }))?;
+        let statuses = result
+            .get("statuses")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut pending = false;
+        for entry in &statuses {
+            let id = entry.get("id").and_then(Value::as_str).unwrap_or("");
+            match entry.get("status").and_then(Value::as_str) {
+                Some("approved") => {}
+                Some("pending") => pending = true,
+                Some("denied") => return Err(format!("scheduler approval {id} was denied")),
+                other => {
+                    return Err(format!(
+                        "scheduler approval {id} is no longer available ({})",
+                        other.unwrap_or("unknown")
+                    ))
+                }
+            }
+        }
+        if !pending {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out after {}s waiting for scheduler approval",
+                SCHEDULER_APPROVAL_WAIT.as_secs()
+            ));
+        }
+        std::thread::sleep(SCHEDULER_APPROVAL_POLL);
     }
 }
 

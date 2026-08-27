@@ -21,6 +21,7 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
+| `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `system_caps.rs` | System capability derivation |
 | Service modules | One privileged capability provider per domain |
 
@@ -55,6 +56,17 @@ Mutating a registered session requires the opaque launch handle issued at
 registration, bound to the launching process and single-use for the pid bind.
 It is masked in both the broker audit log and the system journal.
 Caller-supplied capabilities may only narrow the ceiling.
+
+`scheduler.rs` applies the same rule to proactive jobs, whose stored capability
+snapshot is root-owned authority the heartbeat later executes. The route
+validates the subsystem, command, arguments and job/rule id first, then resolves
+the caller from the peer and the routed registry — never from a terminal,
+`NoNewPrivs`, or anything the request carries — and refuses App sessions
+outright. Owner-scoped reads and retirements get only the capability their gate
+requires. Creating, re-arming or running a job delegates authority beyond the
+call, so it needs capabilities the peer holds or one-shot grants approved by the
+privileged helper for that exact peer, verb and scope. What a job stores is
+bounded by the same home-scoped ceiling its executor applies.
 
 ## Tests
 

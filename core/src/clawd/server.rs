@@ -176,12 +176,18 @@ async fn dispatch(request: Request, state: &DaemonState, client: &ClientIdentity
     if let Err(message) = authorize_command(&request.command, client) {
         return Response::error(id, "request_failed", message);
     }
-    // App-session routes answer denials with structured data (the
-    // approval request ids the launcher must wait on), which has to
-    // reach the peer without being flattened into the message that
-    // audit records persist.
+    // App-session and scheduler routes answer denials with structured
+    // data (the approval request ids the caller must wait on), which
+    // has to reach the peer without being flattened into the message
+    // that audit records persist.
     if app_sessions::owns_command(&request.command) {
         return match app_sessions::dispatch(&request.command, request.params, client).await {
+            Ok(result) => Response::ok(id, result),
+            Err(error) => Response::error_with_data(id, "request_failed", error),
+        };
+    }
+    if request.command == "scheduler.run" {
+        return match scheduler::run(request.params, client).await {
             Ok(result) => Response::ok(id, result),
             Err(error) => Response::error_with_data(id, "request_failed", error),
         };
@@ -261,7 +267,6 @@ async fn dispatch_result(
         "system.storage.control" => storage::control(request.params, client).await,
         "system.usb.control" => usb_guard::control(request.params, client).await,
         "system.users.control" => users::control(request.params, client).await,
-        "scheduler.run" => scheduler::run(request.params, client).await,
         "transaction.begin" => transactions::begin(state, request.params, client),
         "transaction.list" => transactions::list(state, client),
         "transaction.commit" => transactions::commit(state, request.params, client),
