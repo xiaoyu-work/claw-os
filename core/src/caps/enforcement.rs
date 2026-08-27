@@ -42,7 +42,6 @@ use serde::Deserialize;
 
 use super::cap::{Cap, CapSet};
 use super::denial::{Denial, DenialReason};
-use super::risk::Risk;
 use super::scope::Scope;
 use super::verb::Verb;
 
@@ -311,6 +310,22 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     result
 }
 
+/// File (or reuse) a pending approval request for a capability the
+/// session was denied, and point the caller at it.
+///
+/// Every strict-mode capability denial gets one, not only the
+/// high-risk ones. The system-Agent baseline
+/// ([`crate::clawd::system_caps`]) deliberately withholds low- and
+/// medium-risk authority whose *resource* is dangerous — an arbitrary
+/// host, a new process, another user's file — so a risk floor here
+/// would leave those denials with no route to consent at all, and the
+/// only remaining way to make the Agent useful would be to hand the
+/// authority back ambiently.
+///
+/// The request carries the exact verb and scope that was refused, so
+/// approving it authorises that resource and nothing adjacent, and it
+/// is spent at the gate by [`approved_grant_covers`] rather than
+/// written back into any session's capability set.
 fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&str>) {
     if mode != Mode::Strict
         || matches!(
@@ -326,9 +341,6 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
     let Some(meta) = super::catalog::lookup(denial.verb) else {
         return;
     };
-    if meta.risk < Risk::High {
-        return;
-    }
 
     let is_app = crate::proc::current_trusted_session_for_caps()
         .filter(|session| session.session_id == session_id)

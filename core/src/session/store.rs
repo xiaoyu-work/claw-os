@@ -249,6 +249,35 @@ pub fn get_meta(sid: &SessionId) -> Result<SessionMeta> {
     read_json(&meta_path(sid))
 }
 
+/// True when this session's metadata and capability records are both
+/// owned by uid 0.
+///
+/// Session directories are created `0700`, so a root-owned record can
+/// only have been produced by a privileged writer — in practice
+/// `clawd`. That is the whole authentication behind
+/// [`SessionOrigin`](super::meta::SessionOrigin): a consumer may act on
+/// a delegation marker only when the record carrying it could not have
+/// been authored by the account it would delegate authority to.
+///
+/// Returns `false` when either record is missing or unreadable, and on
+/// platforms without file ownership, so the caller fails closed.
+pub fn record_is_root_owned(sid: &SessionId) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        [meta_path(sid), caps_path(sid)].iter().all(|path| {
+            std::fs::symlink_metadata(path)
+                .map(|meta| meta.is_file() && meta.uid() == 0)
+                .unwrap_or(false)
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sid;
+        false
+    }
+}
+
 /// Read-modify-write a session's meta under a single exclusive
 /// lock. Pre-fix this function did `get_meta` (shared lock,
 /// dropped) followed by `write_json` (exclusive lock, fresh

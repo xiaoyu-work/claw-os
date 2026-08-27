@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use std::str::FromStr;
 
 use crate::caps::Role;
-use crate::session::{self, RollbackOutcome, SessionId, Status as SessionStatus};
+use crate::session::{self, RollbackOutcome, SessionId, SessionOrigin, Status as SessionStatus};
 
 use super::client_identity::ClientIdentity;
 use super::state::{DaemonState, TransactionHandle};
@@ -14,13 +14,16 @@ pub fn begin(
     client: &ClientIdentity,
 ) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
-    let owner_home = client.require_home_dir()?;
+    // Canonical, ownership-checked home — the same derivation the
+    // capability baseline and the execution-time clamp use.
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
     let purpose = required_string(&params, "purpose")?;
     let session_id = session::create(&purpose).map_err(|err| err.to_string())?;
     if let Err(error) = session::update_meta(&session_id, |meta| {
         meta.creator_runtime = Some("clawd-transaction-pending".to_string());
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
+        meta.origin = Some(SessionOrigin::SystemAgentTask);
         meta.status = SessionStatus::Running;
     }) {
         return Err(fail_new_session(
@@ -29,7 +32,7 @@ pub fn begin(
             error.to_string(),
         ));
     }
-    let caps = super::system_caps::system_agent_caps(Some(&owner_home));
+    let caps = super::system_caps::system_agent_caps(owner_uid, &owner_home);
     if let Err(error) = session::set_caps(&session_id, &caps) {
         return Err(fail_new_session(
             &session_id,

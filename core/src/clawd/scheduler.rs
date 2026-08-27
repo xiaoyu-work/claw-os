@@ -51,7 +51,11 @@ const MAX_ANCESTRY_DEPTH: usize = 64;
 
 pub async fn run(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let uid = client.require_uid()?;
-    let home = client.require_home_dir()?;
+    // Canonical, ownership-checked passwd home. The scheduled ceiling
+    // and the ceiling `cron`/`triggers` re-apply at execution are both
+    // derived from it, so a home the daemon cannot verify authorises
+    // nothing rather than falling back to a raw passwd string.
+    let home = super::system_caps::verified_owner_home(uid)?;
     let request = SchedulerCommand::parse(&params)?;
     let authority = authenticate_caller(client, uid, &home).await?;
     let caps = authorize(&request, &authority)?;

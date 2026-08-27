@@ -157,6 +157,37 @@ The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier.
 
+A daemon-backed task runs inside root `clawd` on behalf of an account that is
+usually not root, so its baseline authority is daemon policy rather than a
+consequence of that process context. `core/src/clawd/system_caps.rs` records one
+explicit decision per catalog verb — risk is an input, not the rule — and the
+default set is only what an owner-scoped conversation needs: the owner's own
+path roots, its own memory and process-registry rows, read-only status of the
+owner's own device, the owner-partitioned data stores, the model, and verbs that
+carry no resource. Global filesystem access, arbitrary hosts and browser
+navigation, process spawn/exec, credentials, system/package/service/identity/
+storage/power mutation, cron persistence, device control, cross-user local
+channels, and observation domains that describe another principal, another
+account's units, or the machine's security posture are denied and require an
+authenticated task/session delegation or an exact, one-shot approval settled at
+the gate. Resource-addressing verbs never receive an untyped wildcard, and a
+verb absent from the table is denied.
+
+Provenance decides which policy a trusted-session override is clamped by.
+`SessionMeta::origin` is a typed marker written only by the daemon-side issuer
+that already authorised the work, never copied from a request, and believed only
+when the session record is root-owned — on a `0700` session directory that means
+only `clawd` could have written it. An ambient task is clamped to the baseline.
+A `clawd`-issued scheduler snapshot additionally keeps the one executor verb its
+subsystem proved at creation (`cos cron` → `proc.spawn`, `cos triggers` →
+`agent.spawn`) plus credentials named exactly, re-admitted verbatim from the
+snapshot so nothing widens, and bounded by the same owner home the scheduler
+applied when it stored the job. Everything else the creating session happened to
+hold is dropped, so unattended work keeps running without persisting privileged
+system authority. Owner homes for every one of these derivations come from
+`paths::verified_home_for_uid`: canonical, existing, and owned by that uid, with
+no fallback.
+
 ### Agent-initiated account authorization
 
 ```text

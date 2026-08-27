@@ -111,6 +111,37 @@ pub struct Lease {
 }
 
 // ---------------------------------------------------------------------------
+// SessionOrigin
+// ---------------------------------------------------------------------------
+
+/// How a durable session came to hold its capabilities.
+///
+/// This is a *provenance marker*, not a role: it says which trusted
+/// issuer minted the session, so a reader can tell an ambient
+/// conversation apart from a snapshot of authority a user proved (or
+/// had approved) when they created an unattended job. It is written
+/// only by the daemon-side issuer that already authorised the work —
+/// never copied from a request field — and a consumer may act on a
+/// delegation variant only after confirming the record itself is
+/// root-owned (see [`super::store::record_is_root_owned`]). Absent
+/// (`None`) always means "no delegation", so an older or forged record
+/// falls back to the minimal baseline.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionOrigin {
+    /// Interactive system-Agent work: `cos agent ask/chat`, a `clawd`
+    /// transaction. Carries the minimal baseline and nothing else.
+    SystemAgentTask,
+    /// A `cos cron` job the owner created through the scheduler
+    /// authority, which proved or had approved the executor verb
+    /// (`proc.spawn`) and each named credential it injects.
+    CronDelegation,
+    /// A `cos triggers` rule the owner created the same way, whose
+    /// executor verb is `agent.spawn`.
+    TriggerDelegation,
+}
+
+// ---------------------------------------------------------------------------
 // SessionMeta
 // ---------------------------------------------------------------------------
 
@@ -160,6 +191,12 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_uid: Option<u32>,
 
+    /// Trusted issuer that minted this session's capabilities. Only a
+    /// daemon-side authority writes it, and only a root-owned record
+    /// may be believed. `None` means "no delegation".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin: Option<SessionOrigin>,
+
     /// Parent session, if this one was spawned by a sub-agent
     /// delegation. `None` for top-level user-initiated sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -193,6 +230,7 @@ impl SessionMeta {
             role: None,
             credential_tier: None,
             owner_uid: None,
+            origin: None,
             parent_session: None,
             status: Status::Pending,
             budget: Budget::default(),

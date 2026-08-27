@@ -35,6 +35,7 @@ fn meta_round_trip_full() {
         role: Some(Role::Automator),
         credential_tier: Some(Role::Automator.credential_tier()),
         owner_uid: Some(1000),
+        origin: Some(SessionOrigin::CronDelegation),
         parent_session: Some(SessionId::generate()),
         status: Status::Running,
         budget: Budget {

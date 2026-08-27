@@ -481,6 +481,18 @@ fn submit_job(
         meta.creator_runtime = Some("trigger".to_string());
         meta.role = Some(Role::AgentHost);
         meta.credential_tier = Some(owner.tier);
+        // The rule's owner, not whichever account happens to run the
+        // heartbeat. Everything downstream — path roots, memory
+        // database, the execution-time capability clamp — keys off
+        // this, so recording the daemon's own uid here would derive
+        // the wrong account's policy.
+        meta.owner_uid = Some(owner.uid);
+        // Provenance for the execution-time clamp: this snapshot is
+        // authority the owner proved (or had approved) when the rule
+        // was created, so the worker may keep its `agent.spawn` and
+        // exactly-named credentials. Only believed because `clawd`
+        // writes this record as root.
+        meta.origin = Some(crate::session::SessionOrigin::TriggerDelegation);
     })
     {
         let _ = crate::session::end(&session, crate::session::Status::Failed);

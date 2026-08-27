@@ -165,15 +165,56 @@ fn denies_with_verb_not_granted_when_verb_missing() {
     assert_eq!(pending[0].scope, Scope::path("/home/jay/x"));
 }
 
+/// Every capability denial gets an exact, one-shot request — not only
+/// the high-risk ones. The system-Agent baseline withholds low- and
+/// medium-risk verbs whose *resource* is dangerous, so a risk floor
+/// here would leave those denials with no route to consent.
 #[test]
-fn low_risk_denial_does_not_create_approval_request() {
+fn low_risk_denial_creates_an_exact_approval_request() {
     let _lock = env_lock();
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
     let err = require(Verb::NET_RESOLVE, Scope::host("example.com")).unwrap_err();
-    assert!(err.hint.is_none());
-    assert!(crate::approvals::list_pending().is_empty());
+    assert!(err.hint.as_deref().is_some_and(|hint| {
+        hint.contains("approval request") && hint.contains("pending")
+    }));
+    let pending = crate::approvals::list_pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].verb, Verb::NET_RESOLVE.as_str());
+    assert_eq!(pending[0].scope, Scope::host("example.com"));
+}
+
+/// A path denial inside a verb the session already holds is the
+/// "read exactly this one file" case: it files a request for that
+/// resource, and approving it authorises nothing adjacent.
+#[test]
+fn scope_denial_files_a_request_for_that_exact_resource() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s1", caps);
+    let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
+
+    let err = require(Verb::FS_READ, Scope::path("/etc/hosts")).unwrap_err();
+    assert!(matches!(
+        err.reason,
+        super::super::denial::DenialReason::ScopeOutOfRange
+    ));
+    let pending = crate::approvals::list_pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].scope, Scope::path("/etc/hosts"));
+    crate::approvals::approve(
+        &pending[0].id,
+        crate::approvals::GrantDuration::Once,
+        None,
+        None,
+    )
+    .unwrap();
+
+    // Spent exactly once, on exactly that path.
+    assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_ok());
+    assert!(require(Verb::FS_READ, Scope::path("/etc/shadow")).is_err());
+    assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_err());
 }
 
 #[test]
@@ -267,6 +308,210 @@ fn json_envelope_matches_denial_shape() {
     let err = require_or_json(Verb::FS_DELETE, Scope::path("/etc")).unwrap_err();
     assert_eq!(err["error"], "permission denied");
     assert_eq!(err["verb"], "fs.delete");
+}
+
+// ----- system-Agent baseline, end to end ---------------------------------
+
+/// Registry row carrying exactly what `clawd` hands a system Agent
+/// owned by an unprivileged account.
+fn system_agent_registry(owner_uid: u32, owner_home: &std::path::Path) -> String {
+    let caps = crate::clawd::system_caps::system_agent_caps(owner_uid, owner_home);
+    registry_with_caps("agent-task", &serde_json::to_string(&caps).unwrap())
+}
+
+/// Regression for the root-context ambient grant: a task owned by an
+/// unprivileged user executes inside root `clawd`, so the gate — not
+/// the process euid — is what keeps it out of `/etc/shadow`, other
+/// homes, arbitrary hosts, new processes and the credential store.
+#[test]
+fn system_agent_task_is_denied_global_files_hosts_processes_and_secrets() {
+    let _lock = env_lock();
+    let home = tempfile::tempdir().unwrap();
+    let owner_home = home.path().join("owner");
+    let neighbour = home.path().join("neighbour");
+    std::fs::create_dir_all(&owner_home).unwrap();
+    std::fs::create_dir_all(&neighbour).unwrap();
+    let reg = system_agent_registry(1001, &owner_home);
+    let _g = EnvGuard::new(&reg, Some("agent-task"), Some("strict"));
+
+    for path in [
+        "/etc/shadow",
+        "/etc/sudoers",
+        "/proc/1/environ",
+        "/root/.bashrc",
+    ] {
+        assert!(
+            require(Verb::FS_READ, Scope::path(path)).is_err(),
+            "fs.read {path} must be denied"
+        );
+    }
+    let neighbour_file = neighbour.join("private.txt").to_string_lossy().into_owned();
+    assert!(require(Verb::FS_READ, Scope::path(&neighbour_file)).is_err());
+    assert!(require(Verb::FS_WRITE, Scope::path("/etc/passwd")).is_err());
+    assert!(require(Verb::FS_EXEC, Scope::path("/bin/sh")).is_err());
+
+    assert!(require(Verb::NET_DIAL, Scope::host("evil.example.com")).is_err());
+    assert!(require(Verb::NET_DIAL, Scope::host("169.254.169.254")).is_err());
+    assert!(require(Verb::NET_DIAL, Scope::host("127.0.0.1:9200")).is_err());
+    assert!(require(Verb::NET_DIAL, Scope::Wild).is_err());
+    assert!(require(Verb::BROWSER_NAV, Scope::host("evil.example.com")).is_err());
+
+    assert!(require(Verb::PROC_SPAWN, Scope::wild()).is_err());
+    assert!(require(Verb::DESKTOP_LAUNCH, Scope::name("terminal")).is_err());
+
+    assert!(require(Verb::SECRET_READ, Scope::name("default/OPENAI_API_KEY")).is_err());
+    assert!(require(Verb::SYS_PACKAGE, Scope::name("openssh-server")).is_err());
+    assert!(require(Verb::SYS_SERVICE, Scope::name("sshd")).is_err());
+    assert!(require(Verb::SYS_IDENTITY, Scope::name("manage")).is_err());
+    assert!(require(Verb::SYS_STORAGE, Scope::name("diagnose")).is_err());
+    assert!(require(Verb::SYS_MOUNT, Scope::path("/dev/sda1")).is_err());
+    assert!(require(Verb::TIME_CRON, Scope::wild()).is_err());
+    assert!(require(Verb::IPC_SUBSCRIBE, Scope::name("someone-elses-session")).is_err());
+
+    // Read-only observation is not ambient either when the domain
+    // names another principal, another account's units, or the
+    // machine's security posture.
+    for domain in [
+        "desktop",
+        "identities",
+        "firewall",
+        "system-snapshots",
+        "user@1002.service",
+        "**",
+    ] {
+        assert!(
+            require(Verb::SYS_OBSERVE, Scope::name(domain)).is_err(),
+            "sys.observe:{domain} must be denied"
+        );
+    }
+}
+
+/// The same session still runs an ordinary owner-scoped conversation:
+/// its own files, its own memory, the model, and the verbs that
+/// address no resource at all.
+#[test]
+fn system_agent_task_keeps_owner_scoped_reads_and_resourceless_work() {
+    let _lock = env_lock();
+    let home = tempfile::tempdir().unwrap();
+    let owner_home = home.path().join("owner");
+    std::fs::create_dir_all(&owner_home).unwrap();
+    let reg = system_agent_registry(1001, &owner_home);
+    let _g = EnvGuard::new(&reg, Some("agent-task"), Some("strict"));
+
+    let notes = owner_home.join("notes.md").to_string_lossy().into_owned();
+    assert!(require(Verb::FS_READ, Scope::path(&notes)).is_ok());
+    assert!(require(Verb::FS_WRITE, Scope::path(&notes)).is_ok());
+    assert!(require(Verb::FS_META, Scope::path(&notes)).is_ok());
+    assert!(require(Verb::AI_CHAT, Scope::name("claude-sonnet-4")).is_ok());
+    assert!(require(Verb::MEMORY_READ, Scope::self_ref("web")).is_ok());
+    assert!(require(Verb::MEMORY_WRITE, Scope::self_ref("web")).is_ok());
+    assert!(require(Verb::PROC_OBSERVE, Scope::wild()).is_ok());
+    assert!(require(Verb::SYS_OBSERVE, Scope::name("power")).is_ok());
+    assert!(require(Verb::SYS_OBSERVE, Scope::name("storage")).is_ok());
+    assert!(require(Verb::UI_NOTIFY, Scope::wild()).is_ok());
+    assert!(require(Verb::TIME_DELAY, Scope::wild()).is_ok());
+    assert!(require(Verb::AGENT_INVOKE, Scope::name("web")).is_ok());
+}
+
+/// A user approval moves exactly one resource, exactly once. It never
+/// becomes standing authority for the sibling host, path or name, and
+/// it is never written back into the session's capability set.
+#[test]
+fn approved_host_grant_does_not_widen_siblings_or_persist() {
+    let _lock = env_lock();
+    let home = tempfile::tempdir().unwrap();
+    let owner_home = home.path().join("owner");
+    std::fs::create_dir_all(&owner_home).unwrap();
+    let reg = system_agent_registry(1001, &owner_home);
+    let _g = EnvGuard::new(&reg, Some("agent-task"), Some("strict"));
+
+    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
+    let pending = crate::approvals::list_pending();
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].scope, Scope::host("api.example.com"));
+    crate::approvals::approve(
+        &pending[0].id,
+        crate::approvals::GrantDuration::Once,
+        None,
+        None,
+    )
+    .unwrap();
+
+    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_ok());
+    // Siblings stay denied, and the grant is spent.
+    assert!(require(Verb::NET_DIAL, Scope::host("evil.example.com")).is_err());
+    assert!(require(Verb::NET_DIAL, Scope::Wild).is_err());
+    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
+    // Nothing was added to the session itself.
+    let caps = crate::clawd::system_caps::system_agent_caps(1001, &owner_home);
+    assert!(!caps.covers(&super::super::cap::Cap::new(
+        Verb::NET_DIAL,
+        Scope::host("api.example.com")
+    )));
+}
+
+/// End to end for an unattended scheduler snapshot: the session the
+/// daemon issued for an approved trigger clears the gate for exactly
+/// the executor verb and credential the owner delegated, and for
+/// nothing the creating session merely happened to hold.
+#[test]
+fn delegated_scheduler_session_gates_only_its_approved_authority() {
+    let _lock = env_lock();
+    let home = tempfile::tempdir().unwrap();
+    let owner_home = home.path().join("owner");
+    let neighbour = home.path().join("neighbour");
+    std::fs::create_dir_all(&owner_home).unwrap();
+    std::fs::create_dir_all(&neighbour).unwrap();
+
+    // What `triggers::submit_job` persists, before the clamp.
+    let mut stored = crate::clawd::system_caps::system_agent_caps(1001, &owner_home);
+    stored.insert(super::super::cap::Cap::new(Verb::AGENT_SPAWN, Scope::Wild));
+    stored.insert(super::super::cap::Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/SLACK_TOKEN"),
+    ));
+    stored.insert(super::super::cap::Cap::new(Verb::PROC_SPAWN, Scope::Wild));
+    stored.insert(super::super::cap::Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("**"),
+    ));
+    stored.insert(super::super::cap::Cap::new(
+        Verb::FS_READ,
+        Scope::path("/**"),
+    ));
+    stored.insert(super::super::cap::Cap::new(
+        Verb::SYS_SERVICE,
+        Scope::name("sshd"),
+    ));
+
+    let delegated = crate::clawd::system_caps::clamp_for_origin(
+        &stored,
+        crate::session::SessionOrigin::TriggerDelegation,
+        1001,
+        &owner_home,
+    );
+    let reg = registry_with_caps("trigger-job", &serde_json::to_string(&delegated).unwrap());
+    let _g = EnvGuard::new(&reg, Some("trigger-job"), Some("strict"));
+
+    // Delegated authority still works unattended.
+    assert!(require(Verb::AGENT_SPAWN, Scope::wild()).is_ok());
+    assert!(require(Verb::SECRET_READ, Scope::name("default/SLACK_TOKEN")).is_ok());
+    assert!(require(
+        Verb::FS_READ,
+        Scope::path(owner_home.join("notes.md").to_string_lossy().into_owned())
+    )
+    .is_ok());
+
+    // Everything the snapshot carried but never had reviewed is gone.
+    assert!(require(Verb::PROC_SPAWN, Scope::wild()).is_err());
+    assert!(require(Verb::SECRET_READ, Scope::name("default/OTHER")).is_err());
+    assert!(require(Verb::SYS_SERVICE, Scope::name("sshd")).is_err());
+    assert!(require(Verb::FS_READ, Scope::path("/etc/shadow")).is_err());
+    assert!(require(
+        Verb::FS_READ,
+        Scope::path(neighbour.join("private.txt").to_string_lossy().into_owned())
+    )
+    .is_err());
 }
 
 // ----- audit-record shape ------------------------------------------------

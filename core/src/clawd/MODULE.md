@@ -23,6 +23,7 @@ and agent tasks.
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `system_caps.rs` | System capability derivation |
+| `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
 
 ## Dependencies
@@ -68,6 +69,45 @@ Mutating a registered session requires the opaque launch handle issued at
 registration, bound to the launching process and single-use for the pid bind.
 It never appears in any durable record.
 Caller-supplied capabilities may only narrow the ceiling.
+
+`system_caps.rs` owns the same rule for the system Agent. `BASELINE` records one
+explicit decision per catalog verb, so a verb the catalog gains without a
+decision is denied; catalog risk is one input, not the rule. The default set is
+the owner's canonical passwd home plus that owner's daemon-side Agent state
+root, its own memory and process-registry rows, read-only status of the owner's
+own device, the owner-partitioned data stores, the model, and verbs that carry
+no resource. Global filesystem access, arbitrary hosts and browser navigation,
+process spawn/exec, credentials, system/package/service/identity/storage/mount/
+power mutation, cron persistence, device control, agent spawn/delegate, and the
+shared local IPC channels are denied. `sys.observe` is not ambient merely
+because it is read-only: `OBSERVABLE_DEVICE_DOMAINS` is exhaustive, and the
+window list, the account database, systemd units, firewall state and snapshot
+inventory all need an exact approval. A resource-addressing verb never receives
+an untyped `Scope::Wild`, and root-owned tasks get the same table bounded to
+root's own home — euid, role name, prompt text, model output, terminal, and
+socket group are never authority. Every owner root comes from
+`verified_owner_home`, which is `paths::verified_home_for_uid`: canonical,
+existing, owned by that uid, and with no fallback, so the home stamped at
+creation and the ceiling applied at execution cannot disagree.
+
+Everything above the baseline arrives one of two ways: an authenticated
+task/session delegation, or an exact one-shot grant the user approved for that
+session, verb, and scope. `caps::enforcement` files one pending request per
+capability denial and spends it at the gate, so an approval covers the resource
+that was refused and nothing adjacent, and is never written back into a
+capability set.
+
+`session_scope.rs` closes the loop and is where the two concepts stay apart. It
+reads the session's typed `SessionMeta::origin`, believes a delegation marker
+only when `session::record_is_root_owned` confirms `clawd` wrote the record, and
+then clamps the stored set with the matching policy: the minimal baseline for an
+ambient task, or the baseline plus the one executor verb that subsystem proved
+at creation (`cron` → `proc.spawn`, `triggers` → `agent.spawn`) and credentials
+named exactly. Delegated capabilities are re-admitted verbatim, so a glob
+credential or a snapshot's unreviewed `sys.*`, `net.*`, `fs.*` authority grants
+nothing, and an unattended job can never persist privileged system mutation.
+Stored authority is re-derived rather than trusted, and the result can only
+narrow.
 
 `scheduler.rs` applies the same rule to proactive jobs, whose stored capability
 snapshot is root-owned authority the heartbeat later executes. The route

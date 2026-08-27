@@ -5,13 +5,16 @@ use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
 use crate::caps::Role;
-use crate::session;
+use crate::session::{self, SessionOrigin};
 
 use super::client_identity::ClientIdentity;
 
 pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
-    let owner_home = client.require_home_dir()?;
+    // The same canonical, ownership-checked home every other
+    // system-agent policy derivation uses, so the capabilities stamped
+    // here and the ceiling applied at execution cannot disagree.
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
     let prompt = required_string(&params, "prompt")?;
     let context = params
         .get("context")
@@ -73,9 +76,10 @@ fn create_task_session(
         meta.creator_runtime = Some("clawd".to_string());
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
+        meta.origin = Some(SessionOrigin::SystemAgentTask);
     })
     .map_err(|err| err.to_string())?;
-    let caps = super::system_caps::system_agent_caps(Some(owner_home));
+    let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
     session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
     Ok(sid.into_string())
 }
@@ -89,7 +93,14 @@ fn prepare_task_session(
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;
     let meta = session::get_meta(&sid).map_err(|_| format!("task session not found: {session_id}"))?;
-    if owner_uid != 0 && meta.owner_uid != Some(owner_uid) {
+    // The capabilities below are re-derived for `owner_uid`, and the
+    // conversation history is read from that uid's memory database, so
+    // the recorded owner has to be the same account — including for
+    // root. Root peers keep an administrative *view* of every task
+    // (see `owner_filter`), but resuming one means running as its
+    // owner, and resuming somebody else's would rewrite their session
+    // to a different account's policy.
+    if meta.owner_uid != Some(owner_uid) {
         return Err(format!("task session is not owned by uid {owner_uid}: {session_id}"));
     }
     if meta.creator_runtime.as_deref() != Some("clawd") {
@@ -107,8 +118,15 @@ fn prepare_task_session(
         return Err(format!("task session has no conversation history: {session_id}"));
     }
 
-    let caps = super::system_caps::system_agent_caps(Some(owner_home));
-    session::set_caps(&sid, &caps).map_err(|err| format!("refresh task capabilities: {err}"))
+    let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
+    session::set_caps(&sid, &caps).map_err(|err| format!("refresh task capabilities: {err}"))?;
+    // A resumed task is ambient conversation, never an unattended
+    // delegation: re-stamp the provenance so a session that acquired a
+    // delegation marker cannot be replayed as one.
+    session::update_meta(&sid, |meta| {
+        meta.origin = Some(SessionOrigin::SystemAgentTask);
+    })
+    .map_err(|err| format!("refresh task provenance: {err}"))
 }
 
 fn preview(value: &str, max: usize) -> String {
