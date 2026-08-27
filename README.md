@@ -7,7 +7,7 @@
   <img src="assets/brand/clawos-wordmark.png" alt="Claw OS" width="240">
 </p>
 
-<p align="center"><strong>The first agent-native operating system — where the AI is part of the system, not an app on top of it.</strong></p>
+<p align="center"><strong>The world’s first operating system from the future.</strong></p>
 
 <p align="center">
   <a href="https://xiaoyu-work.github.io/claw-os"><img alt="Website" src="https://img.shields.io/badge/website-xiaoyu--work.github.io%2Fclaw--os-2563eb?style=flat-square"></a>
