@@ -153,7 +153,7 @@ mod sha256 {
         }
         msg.extend_from_slice(&bit_len.to_be_bytes());
         let mut h = H0;
-        for block in msg.chunks_exact(64) {
+        for block in msg.as_chunks::<64>().0 {
             let mut w = [0u32; 64];
             for t in 0..16 {
                 w[t] = u32::from_be_bytes([

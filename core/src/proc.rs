@@ -184,7 +184,7 @@ fn bound_app_session_id() -> Option<String> {
         let data = fs::read_to_string(path).ok()?;
         let registry: Registry = serde_json::from_str(&data).ok()?;
         let caller = std::process::id();
-        return registry
+        registry
             .sessions
             .into_iter()
             .find(|session| {
@@ -196,7 +196,7 @@ fn bound_app_session_id() -> Option<String> {
                     })
                     && process_descends_from(caller, session.pid)
             })
-            .map(|session| session.session_id);
+            .map(|session| session.session_id)
     }
     #[cfg(not(target_os = "linux"))]
     {

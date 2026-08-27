@@ -181,7 +181,7 @@ impl SseParser {
         // If the buffer has trailing data (no newline), treat it as
         // a final unterminated line.
         if !self.buffer.is_empty() {
-            let line_bytes: Vec<u8> = self.buffer.drain(..).collect();
+            let line_bytes = std::mem::take(&mut self.buffer);
             let line_bytes = if line_bytes.last() == Some(&b'\r') {
                 &line_bytes[..line_bytes.len() - 1]
             } else {
