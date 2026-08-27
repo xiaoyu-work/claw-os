@@ -123,6 +123,20 @@ impl McpServer {
                 t.send(encode_response(&response)).await?;
                 continue;
             }
+            if raw.get("id").is_some()
+                && raw.get("params").is_some_and(Value::is_null)
+                && matches!(
+                    raw.get("method").and_then(Value::as_str),
+                    Some("ping" | "tools/list")
+                )
+            {
+                let response = JsonRpcResponse::err(
+                    extract_id(&raw),
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
+                );
+                t.send(encode_response(&response)).await?;
+                continue;
+            }
             if raw.get("id").is_none() {
                 match serde_json::from_value::<JsonRpcNotification>(raw) {
                     Ok(_) => continue,

@@ -42,7 +42,7 @@ fractional component, including `1.0` and exponent notation. Type validation
 runs before schema minimum/maximum checks in every generated decoder. Wire
 number lexemes are preserved and evaluated as exact decimal rationals before
 conversion; u64-domain Node values materialize as `bigint` when necessary.
-Unrestricted payloads use `serde_json::Value` (Rust), `Decimal` plus
+Unrestricted payloads use `serde_json::Value` (Rust), `Decimal`/`WireDecimal` plus
 `encode_wire_json` (Python), `WireDecimal`/`bigint` plus `stringifyWireJson`
 (Node), and `json.Number` with `encoding/json` (Go).
 

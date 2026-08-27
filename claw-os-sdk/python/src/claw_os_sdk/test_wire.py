@@ -18,6 +18,7 @@ from claw_os_sdk.generated import (
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
     WireDecodeError,
+    WireDecimal,
     decode_wire_json,
     encode_wire_json,
     validate_ai,
@@ -272,6 +273,29 @@ class WireValidationTests(unittest.TestCase):
                 tools.call("echo", args, app_id="notes")
             command = run.call_args.args[0]
             self.assertEqual(command[command.index("--args") + 1], encode_wire_json(args))
+
+    def test_compact_huge_exponent_round_trip_and_typed_failure(self) -> None:
+        lexeme = "1e999999999999999999999999"
+        value = decode_wire_json(lexeme)
+        self.assertIsInstance(value, WireDecimal)
+        self.assertEqual(value.lexeme, lexeme)
+        self.assertEqual(encode_wire_json(value), lexeme)
+
+        payload_text = json.dumps(_valid_ai()).replace(
+            '"input": {"value": "ok"}',
+            f'"input": {lexeme}',
+        )
+        response = ai._parse_response(decode_wire_json(payload_text))
+        self.assertIsInstance(response.tool_calls[0].input, WireDecimal)
+        self.assertEqual(encode_wire_json(response.tool_calls[0].input), lexeme)
+
+        invalid_units = json.dumps(_valid_ai()).replace(
+            '"units": 3',
+            f'"units": {lexeme}',
+        )
+        with self.assertRaises(ai.AiUnavailable) as raised:
+            ai._parse_response(decode_wire_json(invalid_units))
+        self.assertIn("WIRE_TYPE", str(raised.exception))
 
 
 if __name__ == "__main__":

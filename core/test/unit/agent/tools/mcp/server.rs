@@ -277,7 +277,9 @@ async fn ping_and_tools_list_validate_method_specific_params() {
 
         for request in [
             r#"{"jsonrpc":"2.0","id":1,"method":"ping","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":7,"method":"ping","params":null}"#,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/list","params":[]}"#,
+            r#"{"jsonrpc":"2.0","id":8,"method":"tools/list","params":null}"#,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"cursor":7}}"#,
             r#"{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"cursor":null}}"#,
         ] {

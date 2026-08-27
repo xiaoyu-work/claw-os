@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import * as tools from "./tools";
-import { WireDecimal, stringifyWireJson } from "./generated";
+import {
+  WireDecimal,
+  WireJsonSerializationError,
+  stringifyWireJson,
+} from "./generated";
 import { installFakeCos, withCos } from "./testutil";
 
 test("call builds argv and parses the result", () => {
@@ -77,6 +81,15 @@ test("tool result preserves unsafe fractional lexemes", () => {
   const result = withCos(fake, {}, () => tools.call("echo", {}, { appId: "notes" }));
   assert.ok(result.value instanceof WireDecimal);
   assert.equal(stringifyWireJson(result.value), lexeme);
+});
+
+test("tool invocation rejects unsafe native numeric arguments", () => {
+  for (const args of [Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(
+      () => tools.call("echo", args, { appId: "notes" }),
+      WireJsonSerializationError,
+    );
+  }
 });
 
 test("forChat trims and drops empties", () => {

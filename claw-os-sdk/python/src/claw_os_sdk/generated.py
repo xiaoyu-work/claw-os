@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import json
 import math
-from decimal import Decimal
+from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 
 from typing import Any, Dict, List, Mapping, TypeAlias, TypedDict, Union
 
@@ -365,8 +366,13 @@ WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
 def _reject_json_constant(value: str) -> None:
     raise ValueError(f"invalid JSON numeric constant: {value}")
 
+@dataclass(frozen=True)
+class WireDecimal:
+    """Compact exact JSON number lexeme outside Decimal operating bounds."""
+    lexeme: str
+
 WireJsonValue: TypeAlias = Union[
-    None, bool, str, int, float, Decimal,
+    None, bool, str, int, float, Decimal, WireDecimal,
     List["WireJsonValue"], Dict[str, "WireJsonValue"],
 ]
 
@@ -377,6 +383,8 @@ def materialize_wire_value(value: Any) -> WireJsonValue:
             raise ValueError("wire decimal must be finite")
         number = float(value)
         return number if math.isfinite(number) and Decimal.from_float(number) == value else value
+    if isinstance(value, WireDecimal):
+        return value
     if isinstance(value, list):
         return [materialize_wire_value(item) for item in value]
     if isinstance(value, Mapping):
@@ -387,9 +395,14 @@ def materialize_wire_value(value: Any) -> WireJsonValue:
 
 def decode_wire_json(text: str) -> WireJsonValue:
     """Decode JSON into the stable public lossless value model."""
+    def parse_decimal(lexeme: str) -> Decimal | WireDecimal:
+        try:
+            return Decimal(lexeme)
+        except (InvalidOperation, ValueError):
+            return WireDecimal(lexeme)
     decoded = json.loads(
         text,
-        parse_float=Decimal,
+        parse_float=parse_decimal,
         parse_int=int,
         parse_constant=_reject_json_constant,
     )
@@ -410,6 +423,8 @@ def encode_wire_json(value: Any) -> str:
             if not item.is_finite():
                 raise ValueError("wire decimal must be finite")
             return str(item)
+        if isinstance(item, WireDecimal):
+            return item.lexeme
         if isinstance(item, float):
             return json.dumps(item, allow_nan=False)
         if isinstance(item, (list, tuple)):
@@ -431,14 +446,32 @@ def _wire_decimal(value: Any) -> Decimal | None:
         return Decimal(value)
     if isinstance(value, Decimal):
         return value if value.is_finite() else None
+    if isinstance(value, WireDecimal):
+        try:
+            number = Decimal(value.lexeme)
+            return number if number.is_finite() else None
+        except (InvalidOperation, ValueError):
+            return None
     if isinstance(value, float) and math.isfinite(value):
         return Decimal(str(value))
     return None
 
+def _is_wire_integer(number: Decimal | None) -> bool:
+    if number is None:
+        return False
+    try:
+        return number == number.to_integral_value()
+    except InvalidOperation:
+        return False
+
 def wire_integer_to_int(value: Any) -> int:
     """Convert a previously validated mathematical integer exactly."""
     number = _wire_decimal(value)
-    if number is None or number != number.to_integral_value():
+    try:
+        integral = number is not None and number == number.to_integral_value()
+    except InvalidOperation:
+        integral = False
+    if not integral:
         raise ValueError("wire value is not an exact integer")
     return int(number)
 
@@ -477,7 +510,7 @@ def _validate_wire_schema(
         "object": isinstance(value, Mapping),
         "array": isinstance(value, list),
         "string": isinstance(value, str),
-        "integer": number is not None and number == number.to_integral_value(),
+        "integer": _is_wire_integer(number),
         "number": number is not None,
         "boolean": isinstance(value, bool),
         "null": value is None,

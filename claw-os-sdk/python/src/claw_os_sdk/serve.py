@@ -76,6 +76,7 @@ from .generated import (
     JSONRPC_ERROR_INVALID_REQUEST as ERR_INVALID_REQUEST,
     JSONRPC_ERROR_METHOD_NOT_FOUND as ERR_METHOD_NOT_FOUND,
     JSONRPC_ERROR_PARSE as ERR_PARSE,
+    WireDecimal,
     decode_wire_json,
     encode_wire_json,
 )
@@ -218,7 +219,7 @@ class App:
             raw_id is None
             or isinstance(raw_id, str)
             or (
-                isinstance(raw_id, (int, float, Decimal))
+                isinstance(raw_id, (int, float, Decimal, WireDecimal))
                 and not isinstance(raw_id, bool)
                 and (
                     (not isinstance(raw_id, float) or math.isfinite(raw_id))
@@ -264,7 +265,7 @@ class App:
             return
 
         try:
-            result = self._handle_request(method, params)
+            result = self._handle_request(method, params, "params" in msg)
         except _RpcError as e:
             self._send_error(msg_id, e.code, e.message, data=e.data)
             return
@@ -281,17 +282,22 @@ class App:
         # produce a response and we don't want to crash on unknown
         # ones.
 
-    def _handle_request(self, method: Optional[str], params: Any) -> Any:
+    def _handle_request(
+        self,
+        method: Optional[str],
+        params: Any,
+        params_present: bool,
+    ) -> Any:
         if method == "initialize":
             if not isinstance(params, dict):
                 raise _RpcError(ERR_INVALID_PARAMS, "initialize params must be an object")
             return self._on_initialize(params)
         if method == "ping":
-            if params is not None and not isinstance(params, dict):
+            if params_present and not isinstance(params, dict):
                 raise _RpcError(ERR_INVALID_PARAMS, "ping params must be an object")
             return {}
         if method == "tools/list":
-            if params is not None:
+            if params_present:
                 if not isinstance(params, dict):
                     raise _RpcError(ERR_INVALID_PARAMS, "tools/list params must be an object")
                 if "cursor" in params and not isinstance(params["cursor"], str):
@@ -459,55 +465,36 @@ def _read_bounded_line(reader: Any, limit: int) -> tuple[str, bool]:
       * ``("", False)`` at EOF.
       * ``(text, False)`` for any line within the cap (newline stripped).
       * ``("", True)`` if the line exceeds ``limit``; in that case we
-        drain bytes up to the next newline (still bounded) so a single
-        oversize frame doesn't poison the rest of the stream.
+        drain through the actual next newline without retaining the
+        discarded bytes.
 
     Works for both binary buffered streams (production) and text
     streams (tests inject :class:`io.StringIO`).
     """
-    # Binary path — preferred in production. The buffer attribute on
-    # sys.stdin is typically a BufferedReader.
-    if hasattr(reader, "read1") or isinstance(reader, (io.RawIOBase, io.BufferedIOBase)):
-        chunks: list[bytes] = []
-        total = 0
-        while True:
-            byte = reader.read(1)
-            if not byte:
-                if chunks:
-                    return b"".join(chunks).decode("utf-8", errors="replace"), False
-                return "", False
-            if byte == b"\n":
-                return b"".join(chunks).decode("utf-8", errors="replace"), False
-            total += 1
-            if total > limit:
-                # Drain the rest of this line, still bounded, so we
-                # land cleanly at the next frame boundary.
-                drained = 0
-                while drained < limit:
-                    b = reader.read(1)
-                    if not b or b == b"\n":
-                        break
-                    drained += 1
-                return "", True
-            chunks.append(byte)
-    # Text-stream fallback — used by tests.
-    text_chunks: list[str] = []
-    total = 0
-    while True:
-        ch = reader.read(1)
-        if not ch:
-            if text_chunks:
-                return "".join(text_chunks), False
-            return "", False
-        if ch == "\n":
-            return "".join(text_chunks), False
-        total += len(ch.encode("utf-8", errors="replace"))
-        if total > limit:
-            drained = 0
-            while drained < limit:
-                c = reader.read(1)
-                if not c or c == "\n":
-                    break
-                drained += len(c.encode("utf-8", errors="replace"))
-            return "", True
-        text_chunks.append(ch)
+    binary = hasattr(reader, "read1") or isinstance(
+        reader,
+        (io.RawIOBase, io.BufferedIOBase),
+    )
+    newline = b"\n" if binary else "\n"
+    chunk = reader.readline(limit + 2)
+    if not chunk:
+        return "", False
+
+    terminated = chunk.endswith(newline)
+    content = chunk[:-1] if terminated else chunk
+    byte_length = len(content) if binary else len(
+        content.encode("utf-8", errors="replace")
+    )
+    if byte_length <= limit and (terminated or len(chunk) < limit + 2):
+        if binary:
+            return content.decode("utf-8", errors="replace"), False
+        return content, False
+
+    # The retained allocation is bounded by limit + 2. Discard the
+    # remainder in fixed-size chunks until the real frame boundary.
+    while not terminated:
+        discarded = reader.readline(64 * 1024)
+        if not discarded:
+            break
+        terminated = discarded.endswith(newline)
+    return "", True

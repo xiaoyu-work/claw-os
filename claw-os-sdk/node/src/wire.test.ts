@@ -9,7 +9,10 @@ import {
   WIRE_TYPE,
   WIRE_UNKNOWN_FIELD,
   WireDecodeError,
+  WireDecimal,
+  WireJsonSerializationError,
   decodeWireJson,
+  stringifyWireJson,
   validateAi,
   validateBudgetShow,
   validateTool,
@@ -166,4 +169,28 @@ test("root types and budget show have stable contracts", () => {
   assert.doesNotThrow(() =>
     validateBudgetShow({ app: "notes", period: "2026-08", units_used: 7 }),
   );
+});
+
+test("compact huge exponents remain compact public wrappers", () => {
+  const lexeme = "1e1000000000";
+  const value = decodeWireJson(lexeme);
+  assert.ok(value instanceof WireDecimal);
+  assert.equal(value.lexeme, lexeme);
+  assert.equal(stringifyWireJson(value), lexeme);
+});
+
+test("serializer rejects non-finite and unsafe native numbers recursively", () => {
+  for (const [value, code] of [
+    [Number.NaN, "WIRE_JSON_NON_FINITE"],
+    [Number.POSITIVE_INFINITY, "WIRE_JSON_NON_FINITE"],
+    [Number.NEGATIVE_INFINITY, "WIRE_JSON_NON_FINITE"],
+    [Number.MAX_SAFE_INTEGER + 1, "WIRE_JSON_UNSAFE_INTEGER"],
+    [{ nested: [Number.MAX_SAFE_INTEGER + 1] }, "WIRE_JSON_UNSAFE_INTEGER"],
+  ] as Array<[unknown, string]>) {
+    assert.throws(
+      () => stringifyWireJson(value as never),
+      (error: unknown) =>
+        error instanceof WireJsonSerializationError && error.code === code,
+    );
+  }
 });

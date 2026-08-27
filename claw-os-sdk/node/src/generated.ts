@@ -317,6 +317,15 @@ export class WireDecimal {
   toJSON(): never { throw new TypeError("use stringifyWireJson for WireDecimal values"); }
 }
 
+export class WireJsonSerializationError extends TypeError {
+  constructor(readonly code: string, message: string) {
+    super(message);
+    this.name = "WireJsonSerializationError";
+  }
+}
+
+const MAX_MATERIALIZED_INTEGER_DIGITS = 1024;
+
 export type WireJsonValue =
   | null | boolean | string | number | bigint | WireDecimal
   | WireJsonValue[] | { [key: string]: WireJsonValue };
@@ -351,13 +360,16 @@ function isMathematicalInteger(value: unknown): boolean {
   return digits === "0" || exponent >= digits.length - 1;
 }
 
-export function wireIntegerToJs(value: unknown): number | bigint {
+export function wireIntegerToJs(value: unknown): number | bigint | WireDecimal {
   const lexeme = wireNumberLexeme(value);
   if (lexeme === undefined || !isMathematicalInteger(value)) {
     throw new TypeError("wire value is not an exact integer");
   }
   const { sign, digits, exponent } = splitNumber(lexeme);
   const zeros = Math.max(0, exponent - digits.length + 1);
+  if (!Number.isSafeInteger(zeros) || digits.length + zeros > MAX_MATERIALIZED_INTEGER_DIGITS) {
+    return new WireDecimal(lexeme);
+  }
   const integer = BigInt(`${sign}${digits}${"0".repeat(zeros)}`);
   return integer >= BigInt(Number.MIN_SAFE_INTEGER) && integer <= BigInt(Number.MAX_SAFE_INTEGER)
     ? Number(integer)
@@ -366,7 +378,11 @@ export function wireIntegerToJs(value: unknown): number | bigint {
 
 export function materializeWireValue(value: unknown): WireJsonValue {
   if (isLosslessNumber(value)) {
-    if (isMathematicalInteger(value)) return wireIntegerToJs(value);
+    if (isMathematicalInteger(value)) {
+      return isSafeNumber(value.value, { approx: false })
+        ? Number(value.value)
+        : new WireDecimal(value.value);
+    }
     return isSafeNumber(value.value, { approx: false })
       ? Number(value.value)
       : new WireDecimal(value.value);
@@ -385,6 +401,15 @@ export function materializeWireValue(value: unknown): WireJsonValue {
 export function stringifyWireJson(value: WireJsonValue): string {
   const prepare = (item: WireJsonValue): unknown => {
     if (isWireDecimal(item)) return new LosslessNumber(item.lexeme);
+    if (typeof item === "number") {
+      if (!Number.isFinite(item)) {
+        throw new WireJsonSerializationError("WIRE_JSON_NON_FINITE", "wire JSON numbers must be finite");
+      }
+      if (Number.isInteger(item) && !Number.isSafeInteger(item)) {
+        throw new WireJsonSerializationError("WIRE_JSON_UNSAFE_INTEGER", "unsafe integer-valued numbers require bigint or WireDecimal");
+      }
+      return item;
+    }
     if (Array.isArray(item)) return item.map(prepare);
     if (isRecord(item)) {
       return Object.fromEntries(

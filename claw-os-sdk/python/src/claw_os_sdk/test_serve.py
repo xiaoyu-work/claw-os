@@ -397,7 +397,14 @@ class TransportTests(unittest.TestCase):
     def test_method_specific_params_are_validated(self) -> None:
         invalid = (
             {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": []},
+            {"jsonrpc": "2.0", "id": 7, "method": "ping", "params": None},
             {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": []},
+            {
+                "jsonrpc": "2.0",
+                "id": 8,
+                "method": "tools/list",
+                "params": None,
+            },
             {
                 "jsonrpc": "2.0",
                 "id": 3,
@@ -525,6 +532,23 @@ class FrameValidationTests(unittest.TestCase):
         self.assertIn("exceeds", frames[0]["error"]["message"])
         self.assertEqual(frames[1]["id"], 7)
         self.assertEqual(frames[1]["result"], {})
+
+    def test_more_than_twice_limit_frame_drains_to_real_newline(self) -> None:
+        limit = 64
+        followup = json.dumps({"jsonrpc": "2.0", "id": 9, "method": "ping"})
+        for reader in (
+            io.StringIO("x" * (limit * 3 + 7) + "\n" + followup + "\n"),
+            io.BytesIO(
+                ("x" * (limit * 3 + 7) + "\n" + followup + "\n").encode()
+            ),
+        ):
+            with self.subTest(reader=type(reader).__name__):
+                line, overflowed = serve._read_bounded_line(reader, limit)
+                self.assertEqual(line, "")
+                self.assertTrue(overflowed)
+                line, overflowed = serve._read_bounded_line(reader, limit)
+                self.assertEqual(line, followup)
+                self.assertFalse(overflowed)
 
 
 if __name__ == "__main__":

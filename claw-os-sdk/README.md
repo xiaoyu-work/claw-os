@@ -161,7 +161,7 @@ SDK adapters preserve accepted values. Node exposes u64-domain values as
 Unrestricted JSON payloads use a stable lossless public model:
 
 - Rust uses `serde_json::Value` and `serde_json::to_string`.
-- Python uses ordinary JSON values plus `Decimal`; use
+- Python uses ordinary JSON values plus `Decimal`/`WireDecimal`; use
   `generated.encode_wire_json`.
 - Node uses ordinary JSON values plus `bigint` and `WireDecimal`; use
   `generated.stringifyWireJson`.
@@ -170,6 +170,10 @@ Unrestricted JSON payloads use a stable lossless public model:
 Tool-call inputs may be any JSON value, including explicit `null`, scalars,
 and arrays. Passing a proposed input directly to the matching tool invocation
 preserves its exact wire representation.
+Compact exponents that are unsafe to materialize remain `WireDecimal`
+wrappers; serializers never expand them in memory. Node serialization rejects
+non-finite and unsafe integer-valued native `number` values—use `bigint` or
+`WireDecimal` instead.
 
 ## Releases
 

@@ -194,6 +194,21 @@ impl Server {
                     .await?;
                 continue;
             }
+            if raw.get("id").is_some()
+                && raw.get("params").is_some_and(Value::is_null)
+                && matches!(
+                    raw.get("method").and_then(Value::as_str),
+                    Some("ping" | "tools/list")
+                )
+            {
+                let resp = JsonRpcResponse::err(
+                    extract_id(&raw),
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
+                continue;
+            }
 
             let has_id = raw.get("id").is_some();
             if !has_id {
