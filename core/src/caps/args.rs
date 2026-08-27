@@ -139,11 +139,17 @@ pub fn bind_cli_args(
     raw: &[String],
 ) -> Result<BTreeMap<String, Value>, String> {
     let mut values = bind_supplied_cli_args(decls, raw)?;
+    if let Some(required) = decls
+        .iter()
+        .find(|decl| decl.required && !values.contains_key(&decl.name))
+    {
+        return Err(format!("argument `{}` is required", required.name));
+    }
     for decl in decls {
         if values.contains_key(&decl.name) {
             continue;
         }
-        if decl.kind == ArgKind::Bool {
+        if decl.kind == ArgKind::Bool && !decl.required {
             values.insert(
                 decl.name.clone(),
                 decl.default.clone().unwrap_or(Value::Bool(false)),

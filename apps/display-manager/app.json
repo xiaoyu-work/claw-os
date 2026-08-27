@@ -273,7 +273,8 @@
           "name": "confirm",
           "kind": "bool",
           "required": true,
-          "binding": "flag"
+          "binding": "flag",
+          "choices": [true]
         }
       ],
       "needs": [
@@ -348,7 +349,8 @@
           "name": "confirm",
           "kind": "bool",
           "required": true,
-          "binding": "flag"
+          "binding": "flag",
+          "choices": [true]
         }
       ],
       "needs": [

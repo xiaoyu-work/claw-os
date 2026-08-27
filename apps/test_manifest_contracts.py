@@ -826,6 +826,14 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown binding")
             if arg.get("default") is None and "default" in arg:
                 drift.append(f"{path}:{surface}.{arg.get('name')} null default")
+            if (
+                arg.get("kind") == "bool"
+                and arg.get("required", False)
+                and arg.get("choices") != [True]
+            ):
+                drift.append(
+                    f"{path}:{surface}.{arg.get('name')} required bool must be true-only"
+                )
             if session and (
                 "default_from" in arg
                 or "trusted_resolver" in arg

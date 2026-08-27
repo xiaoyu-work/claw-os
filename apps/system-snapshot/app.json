@@ -112,7 +112,8 @@
           "name": "confirm",
           "kind": "bool",
           "required": true,
-          "binding": "flag"
+          "binding": "flag",
+          "choices": [true]
         }
       ],
       "needs": [

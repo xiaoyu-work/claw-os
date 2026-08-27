@@ -15,6 +15,11 @@ invoked.
 - Keep optional gateway destinations as flags after required message text;
   fixed path scopes use absolute or `~/` forms, never environment placeholders.
 - Validate untrusted input before requesting policy/capability authority.
+- Derive HTTP `net.dial` scopes with `_shared.safe_http.host_scope` so App
+  checks include the same effective port as manifest `url-host` authority,
+  including redirects and bracketed IPv6.
+- Declare destructive confirmation booleans as required with `choices: [true]`;
+  omission and explicit false must fail before authority is resolved.
 - Return structured JSON-compatible results.
 - Return constrained `setup.agent_action` metadata for Agent-resumable
   authorization failures; never place credentials or tokens in that metadata.

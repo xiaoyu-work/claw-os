@@ -128,7 +128,10 @@ other kind remains positional:
 
 Use `--` to end flag parsing when a positional value itself begins with `--`.
 Any supplied number, integer, or explicit boolean literal that does not match
-its declared kind is rejected before launch.
+its declared kind is rejected before launch. Missing required booleans are
+rejected before optional booleans are materialized as `false`. A destructive
+confirmation uses `"required": true, "choices": [true]`, so omission and
+`--confirm=false` both fail before capability resolution.
 
 Use `choices` for a closed scalar enum. Set `repeatable: true` when every
 occurrence is meaningful: the bound value becomes an ordered JSON array and a
@@ -280,7 +283,8 @@ Declare it in `operations.<op>.needs[]`:
   for the exact host and effective port parsed from a text URL. `url-host`
   resolves HTTP and HTTPS defaults to ports 80 and 443, preserves explicit
   ports and bracketed IPv6, and rejects schemes without a known or explicit
-  port.
+  port. App-side URL checks must derive the identical scope; HTTP clients use
+  `_shared.safe_http.host_scope`, including for every redirect hop.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a

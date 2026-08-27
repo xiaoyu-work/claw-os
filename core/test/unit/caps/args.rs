@@ -59,6 +59,26 @@ fn legacy_boolean_binding_is_a_flag() {
 }
 
 #[test]
+fn required_true_only_boolean_must_be_present_and_true() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {
+            "name": "confirm",
+            "kind": "bool",
+            "binding": "flag",
+            "required": true,
+            "choices": [true]
+        }
+    ]))
+    .unwrap();
+    assert!(bind_cli_args(&decls, &[]).is_err());
+    assert!(bind_cli_args(&decls, &raw(&["--confirm=false"])).is_err());
+    assert_eq!(
+        bind_cli_args(&decls, &raw(&["--confirm"])).unwrap()["confirm"],
+        Value::Bool(true)
+    );
+}
+
+#[test]
 fn invalid_supplied_scalars_are_rejected() {
     for declaration in [
         serde_json::json!({"name": "value", "kind": "number"}),
@@ -190,8 +210,8 @@ fn kebab_alias_and_defaults_are_applied() {
 #[test]
 fn missing_required_argument_is_rejected() {
     let decls = decls();
-    let values = bind_cli_args(&decls, &raw(&["--recursive"])).unwrap();
-    let error = validate_bound_args(&decls, &values).expect_err("path is required");
+    let error =
+        bind_cli_args(&decls, &raw(&["--recursive"])).expect_err("path is required");
     assert!(error.contains("path"), "unexpected error: {error}");
 }
 

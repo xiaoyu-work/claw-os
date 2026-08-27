@@ -550,6 +550,40 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
 }
 
 #[test]
+fn destructive_confirmation_is_required_and_true_before_capability_resolution() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/firewall-manager/app.json")).unwrap(),
+    )
+    .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    assert!(manifest
+        .resolve_operation_call("clear", &BTreeMap::new(), &paths)
+        .is_err());
+    assert!(manifest
+        .resolve_operation_call(
+            "clear",
+            &BTreeMap::from([("confirm".to_string(), serde_json::json!(false))]),
+            &paths,
+        )
+        .is_err());
+    let confirmed = manifest
+        .resolve_operation_call(
+            "clear",
+            &BTreeMap::from([("confirm".to_string(), serde_json::json!(true))]),
+            &paths,
+        )
+        .unwrap();
+    assert_eq!(confirmed.values["confirm"], serde_json::json!(true));
+    assert_eq!(confirmed.needs[0][0].verb, Verb::NET_FIREWALL);
+}
+
+#[test]
 fn ambiguous_repeatable_declarations_are_rejected() {
     for arg in [
         r#"{"name":"toggle","kind":"bool","repeatable":true}"#,

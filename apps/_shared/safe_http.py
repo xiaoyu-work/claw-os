@@ -19,15 +19,22 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _host_scope(parsed):
+def host_scope(parsed):
+    """Return the exact host:port scope used by kernel URL authority."""
     host = parsed.hostname
     if not host:
         raise ValueError("URL has no host")
-    if parsed.port is None:
-        return host
+    port = parsed.port
+    if port is None:
+        if parsed.scheme == "http":
+            port = 80
+        elif parsed.scheme == "https":
+            port = 443
+        else:
+            raise ValueError(f"scheme {parsed.scheme!r} has no known port")
     if ":" in host:
-        return f"[{host}]:{parsed.port}"
-    return f"{host}:{parsed.port}"
+        return f"[{host}]:{port}"
+    return f"{host}:{port}"
 
 
 def _socket_host(parsed):
@@ -64,7 +71,7 @@ def resolve_public(parsed):
 
 def validate_and_authorize(url):
     parsed = parse_url(url)
-    policy.require("net.dial", host=_host_scope(parsed))
+    policy.require("net.dial", host=host_scope(parsed))
     addresses = resolve_public(parsed)
     return parsed, addresses
 

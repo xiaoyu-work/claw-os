@@ -591,8 +591,17 @@ pub(crate) fn resolve_effective_args(
 ) -> Result<(BTreeMap<String, serde_json::Value>, Vec<String>), String> {
     let mut values = supplied.clone();
     let defaulted = apply_arg_defaults(declarations, &mut values)?;
+    if let Some(required) = declarations
+        .iter()
+        .find(|declaration| declaration.required && !values.contains_key(&declaration.name))
+    {
+        return Err(format!("argument `{}` is required", required.name));
+    }
     for declaration in declarations {
-        if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
+        if declaration.kind == ArgKind::Bool
+            && !declaration.required
+            && !values.contains_key(&declaration.name)
+        {
             values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
         }
     }
