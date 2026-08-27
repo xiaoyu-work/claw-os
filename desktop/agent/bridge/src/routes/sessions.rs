@@ -11,46 +11,27 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
 };
-use serde::Serialize;
-use serde_json::{Value, json};
+use cos_agent_protocol::{ErrorCode, HistoryResponse, SessionSummary};
+use serde_json::json;
 
-use crate::state::AppState;
+use crate::{api_error::ApiError, state::AppState, translation};
 use clawd_client::Command;
 
-#[derive(Debug, Serialize)]
-pub struct Session {
-    /// Memory session id (stable across restarts; what
-    /// `task.submit { session_id }` continues into).
-    pub id: String,
-    pub title: String,
-    /// Last activity, milliseconds since epoch. Optional because
-    /// freshly-created sessions may not have any messages yet.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_ts_ms: Option<i64>,
-    pub message_count: i64,
-}
-
-pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<Session>>, StatusCode> {
+pub async fn list(State(state): State<AppState>) -> Result<Json<Vec<SessionSummary>>, ApiError> {
     let value = state
         .clawd
         .call(Command::MemorySessions, json!({ "limit": 200 }))
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let rows = value
-        .get("sessions")
-        .and_then(Value::as_array)
-        .ok_or(StatusCode::BAD_GATEWAY)?;
-    let sessions = rows
-        .iter()
-        .filter_map(session_from_memory)
-        .collect::<Vec<_>>();
-    Ok(Json(sessions))
+        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
+    translation::sessions(value)
+        .map(Json)
+        .map_err(ApiError::bad_gateway)
 }
 
 pub async fn get(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Session>, StatusCode> {
+) -> Result<Json<SessionSummary>, ApiError> {
     // No dedicated single-session lookup yet — page through the
     // recent list. 200 entries is more than the panel sidebar will
     // ever show, so this stays fast.
@@ -58,25 +39,35 @@ pub async fn get(
         .clawd
         .call(Command::MemorySessions, json!({ "limit": 200 }))
         .await
-        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-    let rows = value
-        .get("sessions")
-        .and_then(Value::as_array)
-        .ok_or(StatusCode::BAD_GATEWAY)?;
-    rows.iter()
-        .filter_map(session_from_memory)
-        .find(|s| s.id == id)
+        .map_err(|error| ApiError::service_unavailable(error.to_string()))?;
+    translation::sessions(value)
+        .map_err(ApiError::bad_gateway)?
+        .into_iter()
+        .find(|session| session.id == id)
         .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+        .ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                ErrorCode::NotFound,
+                "session not found",
+            )
+        })
 }
 
-pub async fn delete_one(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
+pub async fn delete_one(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<StatusCode, ApiError> {
     let _ = (state, id);
     // A session id is not a task id. Calling `task.cancel` here used to
     // cancel an unrelated job when the strings happened to collide and
     // never deleted the memory row. Do not advertise deletion until
     // clawd exposes an actual memory-session purge command.
-    StatusCode::NOT_IMPLEMENTED
+    Err(ApiError::new(
+        StatusCode::NOT_IMPLEMENTED,
+        ErrorCode::NotImplemented,
+        "session deletion is not implemented",
+    ))
 }
 
 /// `GET /api/sessions/:id/history` — proxy to clawd `memory.history`.
@@ -88,54 +79,16 @@ pub async fn delete_one(State(state): State<AppState>, Path(id): Path<String>) -
 pub async fn history(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<Value>, StatusCode> {
-    let mut value = state
+) -> Result<Json<HistoryResponse>, ApiError> {
+    let value = state
         .clawd
         .call(
             Command::MemoryHistory,
             json!({ "session_id": id, "limit": 500 }),
         )
         .await
-        .map_err(|_| StatusCode::BAD_GATEWAY)?;
-    if let Some(messages) = value.get_mut("messages").and_then(Value::as_array_mut) {
-        messages.retain(|message| message.get("role").and_then(Value::as_str) != Some("system"));
-    }
-    Ok(Json(value))
-}
-
-fn session_from_memory(row: &Value) -> Option<Session> {
-    let id = row.get("id")?.as_str()?.to_string();
-    let title = row
-        .get("title")
-        .and_then(Value::as_str)
-        .filter(|s| !s.trim().is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| title_from_id(&id));
-    let last_ts_ms = row.get("last_ts_ms").and_then(Value::as_i64);
-    let message_count = row
-        .get("message_count")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    Some(Session {
-        id,
-        title: title_compact(&title),
-        last_ts_ms,
-        message_count,
-    })
-}
-
-fn title_from_id(id: &str) -> String {
-    // Fallback when the session has no recorded title yet — show a
-    // short hash-y stub so the sidebar still has something readable.
-    let short: String = id.chars().take(8).collect();
-    format!("Session {short}")
-}
-
-fn title_compact(title: &str) -> String {
-    let compact = title.split_whitespace().collect::<Vec<_>>().join(" ");
-    if compact.chars().count() <= 80 {
-        compact
-    } else {
-        format!("{}...", compact.chars().take(80).collect::<String>())
-    }
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    translation::history(value)
+        .map(Json)
+        .map_err(ApiError::bad_gateway)
 }

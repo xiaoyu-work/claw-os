@@ -566,15 +566,14 @@ impl Application for App {
                 }) {
                     self.pending_cancel = None;
                 }
-                if let Err(error) = result {
-                    if let Some(message) = self
+                if let Err(error) = result
+                    && let Some(message) = self
                         .sessions
                         .get_mut(session_index)
                         .and_then(|session| session.messages.get_mut(message_index))
                         .filter(|message| message.role() == ChatRole::Assistant)
-                    {
-                        message.error = Some(error);
-                    }
+                {
+                    message.error = Some(error);
                 }
                 self.confirm_provisional_session(session_index)
             }
@@ -808,9 +807,9 @@ impl Application for App {
         if self.flags.overlay {
             subscriptions.push(event::listen_with(|event, _, _| match event {
                 cosmic::iced::Event::Keyboard(cosmic::iced::keyboard::Event::KeyPressed {
-                    key,
+                    key: Key::Named(Named::Escape),
                     ..
-                }) if matches!(key, Key::Named(Named::Escape)) => Some(Message::EscapePressed),
+                }) => Some(Message::EscapePressed),
                 cosmic::iced::Event::PlatformSpecific(PlatformSpecific::Wayland(
                     wayland::Event::Layer(layer, ..),
                 )) => Some(Message::Layer(layer)),
@@ -1149,11 +1148,12 @@ impl App {
             .as_ref()
             .map(|_| self.activation_generation);
         let request = ChatRequest {
-            prompt,
+            prompt: Some(prompt),
             session_id: remote_id,
             model: None,
             context: one_shot_context,
             branch_context: persistent_context,
+            ..ChatRequest::default()
         };
         let (abort_handle, abort_registration) = AbortHandle::new_pair();
         self.stream_abort = Some(abort_handle);
@@ -1199,15 +1199,12 @@ impl App {
     }
 
     fn handle_stream_event(&mut self, generation: u64, event: StreamEvent) -> Task<Message> {
-        if let StreamEvent::TaskStarted {
-            task_id,
-            session_id,
-        } = &event
+        if let StreamEvent::TaskStarted(started) = &event
             && let Some(pending) = self
                 .pending_cancel
                 .filter(|pending| pending.generation == generation)
         {
-            if let Some(session_id) = session_id.as_deref().filter(|id| !id.is_empty())
+            if let Some(session_id) = started.session_id.as_deref().filter(|id| !id.is_empty())
                 && let Some(session) = self.sessions.get_mut(pending.session_index)
                 && session.remote_id.is_none()
             {
@@ -1222,7 +1219,7 @@ impl App {
             let Some(endpoint) = self.bridge_endpoint.clone() else {
                 return Task::none();
             };
-            let task_id = task_id.clone();
+            let task_id = started.task_id.clone();
             return Task::perform(
                 async move {
                     cancel_task(endpoint, &task_id)
@@ -1253,13 +1250,10 @@ impl App {
         }
 
         match event {
-            StreamEvent::TaskStarted {
-                task_id,
-                session_id,
-            } => {
-                self.active_task_id = (!task_id.is_empty()).then_some(task_id);
+            StreamEvent::TaskStarted(started) => {
+                self.active_task_id = (!started.task_id.is_empty()).then_some(started.task_id);
                 self.consume_stream_context();
-                if let Some(session_id) = session_id.filter(|id| !id.is_empty())
+                if let Some(session_id) = started.session_id.filter(|id| !id.is_empty())
                     && let Some(index) = self.streaming_session
                     && let Some(session) = self.sessions.get_mut(index)
                     && session.remote_id.is_none()
@@ -1269,16 +1263,16 @@ impl App {
             }
             StreamEvent::Delta(delta) => {
                 if let Some(message) = self.streaming_assistant_mut() {
-                    message.content.push_str(&delta);
+                    message.content.push_str(&delta.text);
                 }
             }
-            StreamEvent::ToolUseStart { id, name } => {
+            StreamEvent::ToolUseStart(payload) => {
                 if let Some(message) = self.streaming_assistant_mut() {
                     upsert_tool_call(
                         message,
                         ToolCallView {
-                            id,
-                            name,
+                            id: payload.id,
+                            name: payload.name,
                             input: serde_json::Value::Null,
                             partial_json: String::new(),
                             in_progress: true,
@@ -1286,67 +1280,90 @@ impl App {
                     );
                 }
             }
-            StreamEvent::ToolInputDelta { id, delta } => {
+            StreamEvent::ToolInputDelta(payload) => {
                 if let Some(message) = self.streaming_assistant_mut() {
-                    if let Some(call) = message.tool_calls.iter_mut().find(|call| call.id == id) {
-                        call.partial_json.push_str(&delta);
+                    if let Some(call) = message
+                        .tool_calls
+                        .iter_mut()
+                        .find(|call| call.id == payload.id)
+                    {
+                        call.partial_json.push_str(&payload.delta);
                         call.in_progress = true;
                     } else {
                         upsert_tool_call(
                             message,
                             ToolCallView {
-                                id,
+                                id: payload.id,
                                 name: fl!("tool-running"),
                                 input: serde_json::Value::Null,
-                                partial_json: delta,
+                                partial_json: payload.delta,
                                 in_progress: true,
                             },
                         );
                     }
                 }
             }
-            StreamEvent::ToolUse(call) => {
-                if let Some(message) = self.streaming_assistant_mut() {
-                    upsert_tool_call(message, call);
-                }
-            }
-            StreamEvent::ToolStart { id, name, input } => {
+            StreamEvent::ToolUse(payload) => {
                 if let Some(message) = self.streaming_assistant_mut() {
                     upsert_tool_call(
                         message,
                         ToolCallView {
-                            id,
-                            name,
-                            input,
+                            id: payload.id,
+                            name: payload.name,
+                            input: payload.input.unwrap_or(serde_json::Value::Null),
+                            partial_json: String::new(),
+                            in_progress: false,
+                        },
+                    );
+                }
+            }
+            StreamEvent::ToolStart(payload) => {
+                if let Some(message) = self.streaming_assistant_mut() {
+                    upsert_tool_call(
+                        message,
+                        ToolCallView {
+                            id: payload.id,
+                            name: payload.name,
+                            input: payload.input.unwrap_or(serde_json::Value::Null),
                             partial_json: String::new(),
                             in_progress: true,
                         },
                     );
                 }
             }
-            StreamEvent::ToolResult(result) => {
+            StreamEvent::ToolResult(payload) => {
+                let text = payload.presented_text();
+                let is_error = payload.presented_is_error();
                 if let Some(message) = self.streaming_assistant_mut() {
                     if let Some(call) = message
                         .tool_calls
                         .iter_mut()
-                        .find(|call| !result.id.is_empty() && call.id == result.id)
+                        .find(|call| !payload.id.is_empty() && call.id == payload.id)
                     {
                         call.in_progress = false;
                     }
-                    upsert_tool_result(message, result);
+                    upsert_tool_result(
+                        message,
+                        ToolResultView {
+                            id: payload.id,
+                            name: payload.name,
+                            text,
+                            is_error,
+                        },
+                    );
                 }
             }
             StreamEvent::Warning(warning) => {
                 if let Some(message) = self.streaming_assistant_mut()
-                    && !message.warnings.contains(&warning)
+                    && !message.warnings.contains(&warning.message)
                 {
-                    message.warnings.push(warning);
+                    message.warnings.push(warning.message);
                 }
             }
             StreamEvent::TurnDone(_) => {}
             StreamEvent::Done(envelope) => {
                 self.capture_remote_session(&envelope);
-                let fallback = answer_from_envelope(&envelope);
+                let fallback = envelope.presented_answer();
                 self.finalize_stream(fallback, false);
                 if self.auto_submit && (!self.flags.overlay || self.overlay_visible) {
                     self.auto_submit = false;
@@ -1356,7 +1373,7 @@ impl App {
                     ]);
                 }
             }
-            StreamEvent::Error(error) => return self.fail_stream(error),
+            StreamEvent::Error(error) => return self.fail_stream(error.presented_message()),
         }
         scroll_to_bottom()
     }
@@ -1373,23 +1390,14 @@ impl App {
         })
     }
 
-    fn capture_remote_session(&mut self, envelope: &serde_json::Value) {
+    fn capture_remote_session(&mut self, envelope: &crate::bridge::DonePayload) {
         let Some(index) = self.streaming_session else {
             return;
         };
         let Some(session) = self.sessions.get_mut(index) else {
             return;
         };
-        let candidate = envelope
-            .get("session_id")
-            .and_then(serde_json::Value::as_str)
-            .or_else(|| {
-                envelope
-                    .get("job")
-                    .and_then(|job| job.get("session_id"))
-                    .and_then(serde_json::Value::as_str)
-            });
-        if let Some(id) = candidate.filter(|id| !id.is_empty()) {
+        if let Some(id) = envelope.session_id.as_deref().filter(|id| !id.is_empty()) {
             session.remote_id = Some(id.to_string());
             session.provisional_remote_id = None;
             session.persistent_context = None;
@@ -2084,25 +2092,6 @@ fn accept_voice_completion(current: u64, state: &VoiceState, generation: u64) ->
         )
 }
 
-fn answer_from_envelope(envelope: &serde_json::Value) -> Option<String> {
-    envelope
-        .get("answer")
-        .and_then(serde_json::Value::as_str)
-        .or_else(|| {
-            envelope
-                .get("result")
-                .and_then(|result| result.get("answer"))
-                .and_then(serde_json::Value::as_str)
-        })
-        .or_else(|| {
-            envelope
-                .get("message")
-                .and_then(|message| message.get("content"))
-                .and_then(serde_json::Value::as_str)
-        })
-        .map(ToOwned::to_owned)
-}
-
 fn relative_time_label(timestamp_ms: i64, current_ms: i64) -> String {
     let seconds = current_ms.saturating_sub(timestamp_ms).max(0) / 1_000;
     if seconds < 60 {
@@ -2727,8 +2716,5 @@ fn main() -> cosmic::iced::Result {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/main.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/main.rs"));
 }

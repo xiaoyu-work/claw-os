@@ -11,6 +11,7 @@ brokers a streaming JSON+SSE protocol between the UI and `clawd`.
 ```
 desktop/agent/
 ├── Cargo.toml              # workspace: bridge + ui
+├── protocol/               # shared versioned HTTP/SSE presentation contract
 ├── docs/
 │   └── design-system.md    # shared dark-surface / brand-blue accent system
 ├── bridge/                 # cos-agent-bridge — HTTP+SSE daemon
@@ -59,6 +60,19 @@ The bridge and approval applet share `crates/clawd-client` for canonical
 v1 request IDs/envelopes, `CBK1` length-prefixed framing, deadlines, bounds,
 and typed transport/protocol errors.
 
+The UI and bridge both compile against `protocol/` (`cos-agent-protocol`).
+That crate exclusively owns the desktop presentation contract: endpoint DTOs,
+named SSE payloads, stable error envelopes, discovery metadata, and protocol
+version constants. It depends only on Serde and `serde_json`. The bridge
+remains the anti-corruption layer: `bridge/src/translation.rs` decodes generic
+clawd results, removes worker/task storage details and raw memory content, and
+emits only protocol types. The UI does not deserialize clawd or core models.
+
+Tool input is the protocol's only intentionally open JSON field. Tool schemas
+are registered dynamically by the runtime, so their payload cannot be closed
+over in this dependency-light crate; the boundary is documented by
+`ToolInput`.
+
 The bridge no longer serves a static SPA — the previous React
 frontend was retired in favour of `cos-agent-ui`. Every UI surface
 talks only to the `/api/*` endpoints.
@@ -87,6 +101,43 @@ atomically writes both values to
 `$XDG_RUNTIME_DIR/cos-agent-bridge/endpoint.json` with mode `0600`.
 The native UI and `cos app agent` launcher read this file and attach
 the token to every bridge request.
+
+## Protocol compatibility
+
+Protocol v1 uses the `x-clawos-agent-protocol-version` request and response
+header. Discovery also publishes `min_protocol_version` and
+`protocol_version`. Missing, malformed, or unsupported versions fail with HTTP
+426 and a typed
+`incompatible_protocol_version` or `protocol_version_required` error; the UI
+also rejects discovery and responses outside its compiled compatibility range.
+
+The current policy supports exactly v1 (`min=1`, `current=1`). Additive fields
+within v1 must have Serde defaults so older v1 payloads remain readable.
+Renames retain a deserialization alias. Removing a field, changing its meaning
+or type, or changing an SSE event name is incompatible and requires advancing
+both minimum and current versions. UI and bridge are shipped together; there
+is no silent cross-major fallback.
+
+## Protocol coverage
+
+| HTTP surface | Shared contract |
+| --- | --- |
+| `GET /api/health` | Plain-text `ok`; version is negotiated in headers |
+| `POST /api/chat` | `ChatRequest`; typed SSE events below |
+| `POST /api/chat/:task_id/cancel` | `CancelResponse` / `ErrorEnvelope` |
+| `GET /api/sessions` | `Vec<SessionSummary>` / `ErrorEnvelope` |
+| `GET /api/sessions/:id` | `SessionSummary` / `ErrorEnvelope` |
+| `DELETE /api/sessions/:id` | `ErrorEnvelope` (not implemented) |
+| `GET /api/sessions/:id/history` | `HistoryResponse` / `ErrorEnvelope` |
+| `GET /api/models` | `ModelsResponse` / `ErrorEnvelope` |
+| `POST /api/voice/upload` | Raw audio request; `VoiceResponse` / `ErrorEnvelope` |
+
+The chat stream covers `task`, `delta` (`text` remains a decode alias),
+`tool_use_start`, `tool_use`, `tool_start`, `tool_result`, `warning`,
+`turn_done`, `done`, and `error`. The shared decoder also retains the
+`tool_input_delta` compatibility event, while the bridge continues suppressing
+live tool arguments. Unknown future event names are ignored by v1 clients;
+malformed known events fail decoding.
 
 ## License
 

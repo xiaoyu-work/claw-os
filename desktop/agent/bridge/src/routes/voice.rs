@@ -19,8 +19,8 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use serde::Serialize;
-use serde_json::Value;
+use cos_agent_protocol::{ErrorCode, ErrorEnvelope, VoiceResponse};
+use serde::Deserialize;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWriteExt},
     process::Command,
@@ -34,22 +34,6 @@ const TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(120);
 const STDOUT_LIMIT: usize = 1024 * 1024;
 const STDERR_LIMIT: usize = 64 * 1024;
 const TEMP_FILE_ATTEMPTS: usize = 16;
-
-#[derive(Debug, Serialize)]
-pub struct VoiceResponse {
-    /// Transcript text — drops into the native composer on success.
-    pub text: String,
-    pub bytes_received: usize,
-    pub mime_type: String,
-    pub placeholder: bool,
-}
-
-#[derive(Debug, Serialize)]
-struct ErrorResponse {
-    error: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    hint: Option<&'static str>,
-}
 
 #[derive(Debug)]
 pub(crate) enum VoiceApiError {
@@ -67,51 +51,73 @@ pub(crate) enum VoiceApiError {
 
 impl IntoResponse for VoiceApiError {
     fn into_response(self) -> Response {
-        let (status, error, hint) = match self {
-            Self::InvalidBody => (StatusCode::BAD_REQUEST, "invalid audio body", None),
-            Self::EmptyBody => (StatusCode::BAD_REQUEST, "audio body is empty", None),
+        let (status, code, error, hint) = match self {
+            Self::InvalidBody => (
+                StatusCode::BAD_REQUEST,
+                ErrorCode::InvalidRequest,
+                "invalid audio body",
+                None,
+            ),
+            Self::EmptyBody => (
+                StatusCode::BAD_REQUEST,
+                ErrorCode::InvalidRequest,
+                "audio body is empty",
+                None,
+            ),
             Self::PayloadTooLarge => (
                 StatusCode::PAYLOAD_TOO_LARGE,
+                ErrorCode::PayloadTooLarge,
                 "audio body exceeds 25 MiB",
                 Some("Keep recordings under two minutes."),
             ),
             Self::UnsupportedMediaType => (
                 StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                ErrorCode::UnsupportedMediaType,
                 "unsupported audio media type",
                 Some("Record or upload WAV, MP3, M4A, FLAC, OGG, or WebM audio."),
             ),
             Self::RuntimeUnavailable => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::Internal,
                 "voice upload storage is unavailable",
                 Some("Restart cos-agent-bridge.service and try again."),
             ),
             Self::BackendUnavailable => (
                 StatusCode::SERVICE_UNAVAILABLE,
+                ErrorCode::ServiceUnavailable,
                 "voice transcription service is unavailable",
                 Some("Configure speech-to-text in Agent settings."),
             ),
             Self::BackendTimeout => (
                 StatusCode::GATEWAY_TIMEOUT,
+                ErrorCode::Timeout,
                 "voice transcription timed out",
                 Some("Try a shorter recording."),
             ),
             Self::BackendFailed => (
                 StatusCode::BAD_GATEWAY,
+                ErrorCode::UpstreamError,
                 "voice transcription failed",
                 Some("Configure speech-to-text in Agent settings or retry."),
             ),
             Self::InvalidBackendResponse => (
                 StatusCode::BAD_GATEWAY,
+                ErrorCode::UpstreamError,
                 "invalid response from voice transcription service",
                 Some("Check the configured speech-to-text provider."),
             ),
             Self::CleanupFailed => (
                 StatusCode::INTERNAL_SERVER_ERROR,
+                ErrorCode::Internal,
                 "failed to clean up voice upload",
                 Some("Restart cos-agent-bridge.service and try again."),
             ),
         };
-        (status, Json(ErrorResponse { error, hint })).into_response()
+        let mut envelope = ErrorEnvelope::new(code, error);
+        if let Some(hint) = hint {
+            envelope = envelope.with_hint(hint);
+        }
+        (status, Json(envelope)).into_response()
     }
 }
 
@@ -471,18 +477,25 @@ where
 }
 
 fn parse_transcript_json(stdout: &[u8]) -> Result<String, TranscriptParseError> {
-    let value: Value =
+    #[derive(Deserialize)]
+    struct Transcript {
+        #[serde(default)]
+        text: Option<String>,
+        #[serde(default)]
+        result: Option<TranscriptResult>,
+    }
+
+    #[derive(Deserialize)]
+    struct TranscriptResult {
+        #[serde(default)]
+        text: Option<String>,
+    }
+
+    let response: Transcript =
         serde_json::from_slice(stdout).map_err(|_| TranscriptParseError::InvalidJson)?;
-    value
-        .get("text")
-        .and_then(Value::as_str)
-        .or_else(|| {
-            value
-                .get("result")
-                .and_then(|result| result.get("text"))
-                .and_then(Value::as_str)
-        })
-        .map(ToOwned::to_owned)
+    response
+        .text
+        .or_else(|| response.result.and_then(|result| result.text))
         .ok_or(TranscriptParseError::MissingText)
 }
 

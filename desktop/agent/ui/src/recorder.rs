@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-use crate::bridge::{BridgeEndpoint, bridge_url};
+use crate::bridge::{
+    BridgeEndpoint, bridge_url, response_error, validate_response_protocol, versioned_request,
+};
+pub use cos_agent_protocol::VoiceResponse;
 
 pub const TARGET_RATE: u32 = 16_000;
 pub const MAX_RECORDING_SECS: u64 = 120;
@@ -380,22 +383,6 @@ fn encode_wav(samples: &[i16]) -> Result<Vec<u8>> {
     Ok(cursor.into_inner())
 }
 
-#[derive(Debug, serde::Deserialize)]
-pub struct VoiceResponse {
-    pub text: String,
-    #[serde(default)]
-    pub placeholder: bool,
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, serde::Deserialize)]
-struct VoiceErrorResponse {
-    error: String,
-    #[serde(default)]
-    hint: Option<String>,
-}
-
 pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceResponse> {
     let url = bridge_url(&endpoint, "/api/voice/upload");
     let client = reqwest::Client::builder()
@@ -403,38 +390,21 @@ pub async fn upload(endpoint: BridgeEndpoint, wav: Vec<u8>) -> Result<VoiceRespo
         .timeout(Duration::from_secs(135))
         .build()
         .context("build voice upload client")?;
-    let response = client
-        .post(&url)
+    let response = versioned_request(client.post(&url), &endpoint)
         .bearer_auth(&endpoint.token)
         .header("Content-Type", "audio/wav")
         .body(wav)
         .send()
         .await
         .context("POST /api/voice/upload")?;
+    validate_response_protocol(&response)?;
     if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        if let Ok(error) = serde_json::from_str::<VoiceErrorResponse>(&body) {
-            let detail = error
-                .hint
-                .filter(|hint| !hint.trim().is_empty())
-                .map(|hint| format!("{} — {hint}", error.error))
-                .unwrap_or(error.error);
-            return Err(anyhow!("voice upload failed ({status}): {detail}"));
-        }
-        return Err(anyhow!(
-            "voice upload failed ({status}): {}",
-            body.chars().take(512).collect::<String>()
-        ));
+        return Err(response_error(response, &url).await);
     }
-    let response = response
+    response
         .json::<VoiceResponse>()
         .await
-        .context("decode voice upload response")?;
-    if let Some(error) = response.error.as_deref().filter(|error| !error.is_empty()) {
-        return Err(anyhow!(error.to_string()));
-    }
-    Ok(response)
+        .context("decode voice upload response")
 }
 
 #[cfg(test)]
