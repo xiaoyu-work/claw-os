@@ -25,7 +25,6 @@ use axum::{
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
-mod clawd;
 mod routes;
 mod state;
 
@@ -41,10 +40,8 @@ async fn main() -> anyhow::Result<()> {
     let state = state::AppState::from_env()?;
     let port = state.port;
 
-    let api = routes::api().route_layer(middleware::from_fn_with_state(
-        state.clone(),
-        require_auth,
-    ));
+    let api =
+        routes::api().route_layer(middleware::from_fn_with_state(state.clone(), require_auth));
     let app: Router = Router::new().nest("/api", api).with_state(state.clone());
 
     let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;

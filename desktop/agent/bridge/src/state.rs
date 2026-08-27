@@ -14,6 +14,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use clawd_client::Client;
 use serde::Serialize;
 
 const DISCOVERY_FILE: &str = "endpoint.json";
@@ -21,7 +22,7 @@ const DISCOVERY_FILE: &str = "endpoint.json";
 #[derive(Clone)]
 pub struct AppState {
     pub port: u16,
-    pub clawd_socket: PathBuf,
+    pub clawd: Client,
     pub auth_token: String,
 }
 
@@ -31,24 +32,14 @@ impl AppState {
             .ok()
             .and_then(|s| s.parse::<u16>().ok())
             .unwrap_or(0);
-        let clawd_socket = clawd_socket_path();
+        let clawd = Client::from_env().context("discovering clawd socket")?;
         let auth_token = generate_auth_token()?;
         Ok(Self {
             port,
-            clawd_socket,
+            clawd,
             auth_token,
         })
     }
-}
-
-fn clawd_socket_path() -> PathBuf {
-    if let Ok(path) = std::env::var("CLAWD_SOCKET") {
-        return PathBuf::from(path);
-    }
-    if let Ok(path) = std::env::var("COS_RUNTIME_DIR") {
-        return PathBuf::from(path).join("clawd.sock");
-    }
-    PathBuf::from("/run/cos/clawd.sock")
 }
 
 fn generate_auth_token() -> anyhow::Result<String> {
@@ -174,14 +165,14 @@ pub fn publish_endpoint(port: u16, token: &str) -> anyhow::Result<()> {
 
     if let Some(parent) = dir.parent() {
         let legacy = parent.join("cos-agent-bridge.port");
-        if let Err(error) = std::fs::remove_file(&legacy) {
-            if error.kind() != std::io::ErrorKind::NotFound {
-                tracing::warn!(
-                    path = %legacy.display(),
-                    %error,
-                    "failed to remove legacy bridge port file"
-                );
-            }
+        if let Err(error) = std::fs::remove_file(&legacy)
+            && error.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                path = %legacy.display(),
+                %error,
+                "failed to remove legacy bridge port file"
+            );
         }
     }
     Ok(())

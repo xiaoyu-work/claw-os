@@ -848,6 +848,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawd-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1055,6 +1066,7 @@ dependencies = [
  "async-stream",
  "axum",
  "bytes",
+ "clawd-client",
  "futures",
  "serde",
  "serde_json",

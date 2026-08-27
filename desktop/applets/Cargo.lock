@@ -880,6 +880,7 @@ name = "claw-applet-approval-gate"
 version = "1.0.2"
 dependencies = [
  "anyhow",
+ "clawd-client",
  "i18n-embed",
  "i18n-embed-fl",
  "libcosmic",
@@ -943,6 +944,17 @@ dependencies = [
  "tracing",
  "tracing-log",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "clawd-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

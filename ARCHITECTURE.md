@@ -442,6 +442,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   messages.
 - Broker protocol refusals carry only `&'static str` text and a stable class;
   refused frames and their ancillary data are never recorded, in any form.
+- Desktop broker consumers use the unprivileged `crates/clawd-client` library
+  for socket discovery, v1 framing, correlation, deadlines, bounds, and stable
+  errors; the library depends on neither desktop UI nor privileged core logic.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.

@@ -609,6 +609,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "clawd-client"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "cmake"
 version = "0.1.58"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -709,6 +720,7 @@ dependencies = [
  "bytes",
  "chrono",
  "claw-embed",
+ "clawd-client",
  "cosmic-client-toolkit",
  "crc32fast",
  "ed25519-dalek",
