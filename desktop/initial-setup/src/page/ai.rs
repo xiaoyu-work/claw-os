@@ -80,7 +80,7 @@ const DEFAULT_MODELS: &[&str] = &[
     // openai
     "gpt-4o-mini",
     // copilot — pin to the same default the web UI lands on after sign-in
-    "gpt-4o",
+    "claude-sonnet-4.6",
     // gemini
     "gemini-2.5-flash",
     // openrouter
@@ -297,8 +297,17 @@ impl Page {
                 }
             }
             Message::EditModel(value) => {
-                self.model = value;
-                self.model_edited = true;
+                self.model_edited = !value.trim().is_empty();
+                if self.model_edited {
+                    self.model = value;
+                } else {
+                    let default = self
+                        .selected
+                        .and_then(|idx| DEFAULT_MODELS.get(idx))
+                        .copied()
+                        .unwrap_or_default();
+                    self.model = default.to_string();
+                }
             }
             Message::EditApiKey(value) => {
                 self.api_key = value;

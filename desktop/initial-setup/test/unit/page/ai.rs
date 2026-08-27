@@ -47,6 +47,38 @@ fn explicit_edit_is_preserved_even_when_text_matches_a_default() {
 }
 
 #[test]
+fn clearing_custom_model_restores_automatic_provider_defaults() {
+    let mut ai = Page::new();
+    update(&mut ai, Message::SelectProvider(0));
+    update(&mut ai, Message::EditModel("custom-model".to_string()));
+
+    update(&mut ai, Message::EditModel(" \t ".to_string()));
+
+    assert_eq!(ai.model, DEFAULT_MODELS[0]);
+    assert!(!ai.model_edited);
+
+    update(&mut ai, Message::SelectProvider(1));
+    assert_eq!(ai.model, DEFAULT_MODELS[1]);
+    assert!(!ai.model_edited);
+}
+
+#[test]
+fn clearing_custom_model_for_provider_without_default_stays_automatic() {
+    let mut ai = Page::new();
+    update(&mut ai, Message::SelectProvider(8));
+    update(&mut ai, Message::EditModel("azure-deployment".to_string()));
+
+    update(&mut ai, Message::EditModel(String::new()));
+
+    assert!(ai.model.is_empty());
+    assert!(!ai.model_edited);
+
+    update(&mut ai, Message::SelectProvider(0));
+    assert_eq!(ai.model, DEFAULT_MODELS[0]);
+    assert!(!ai.model_edited);
+}
+
+#[test]
 fn reselecting_provider_preserves_live_automatic_model_and_oauth() {
     let mut ai = Page::new();
     update(&mut ai, Message::SelectProvider(2));
