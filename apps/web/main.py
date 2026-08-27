@@ -160,6 +160,8 @@ def _host_of(url):
     if not parsed.hostname:
         return None
     if parsed.port:
+        if ":" in parsed.hostname:
+            return f"[{parsed.hostname}]:{parsed.port}"
         return f"{parsed.hostname}:{parsed.port}"
     return parsed.hostname
 

@@ -148,11 +148,25 @@ type Arg struct {
 	Binding string `json:"binding,omitempty"`
 	Required bool `json:"required,omitempty"`
 	Repeatable bool `json:"repeatable,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
+	PositionalAlias bool `json:"positional_alias,omitempty"`
 	Choices []interface{} `json:"choices,omitempty"`
 	Default *interface{} `json:"default,omitempty"`
 	DefaultFrom *Argdefaultbinding `json:"default_from,omitempty"`
 	TrustedResolver string `json:"trusted_resolver,omitempty"`
 	Label *Localizedtext `json:"label,omitempty"`
+}
+
+// Positionalarg — positionalArg.
+type Positionalarg struct {
+}
+
+// Optionalpositionalgap — optionalPositionalGap.
+type Optionalpositionalgap struct {
+}
+
+// Defaultedpositional — defaultedPositional.
+type Defaultedpositional struct {
 }
 
 // Argdefaultbinding — argDefaultBinding.

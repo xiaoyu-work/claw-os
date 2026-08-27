@@ -125,7 +125,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 /// control pipe or service stdin through to an App.
 pub fn dispatch_with_stdin(
     args: &[String],
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     if args.is_empty() {
         return show_overview();
@@ -1236,7 +1236,7 @@ fn run_app_command(
     command: &str,
     args: &[String],
     app: &apps::App,
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let start = Instant::now();
     let audit = audit_path();

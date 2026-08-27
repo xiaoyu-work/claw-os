@@ -82,7 +82,8 @@
             "transform": "url-path-basename",
             "prefix": "~/",
             "fallback": "download"
-          }
+          },
+          "aliases": ["--output"]
         }
       ],
       "needs": [

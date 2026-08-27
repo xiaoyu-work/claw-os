@@ -23,11 +23,14 @@ class _PositionalToken(str):
         return super().startswith(prefix, *args)
 
 
-def parse_canonical_argv(args, *, value_flags=(), bool_flags=(), repeatable_flags=()):
+def parse_canonical_argv(
+    args, *, value_flags=(), bool_flags=(), repeatable_flags=(), aliases=None
+):
     """Parse the complete canonical grammar into positionals and options."""
     value_flags = {name.replace("_", "-") for name in value_flags}
     bool_flags = {name.replace("_", "-") for name in bool_flags}
     repeatable_flags = {name.replace("_", "-") for name in repeatable_flags}
+    aliases = dict(aliases or {})
     options = {}
     positionals = []
     parse_options = True
@@ -38,8 +41,9 @@ def parse_canonical_argv(args, *, value_flags=(), bool_flags=(), repeatable_flag
             parse_options = False
             index += 1
             continue
-        if parse_options and token.startswith("--"):
-            name, separator, inline = token[2:].partition("=")
+        option, separator, inline = token.partition("=")
+        if parse_options and (option.startswith("--") or option in aliases):
+            name = aliases.get(option, option.removeprefix("--"))
             if name in bool_flags:
                 if separator:
                     normalized = inline.strip().lower()

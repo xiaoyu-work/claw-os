@@ -146,6 +146,7 @@ def _parser_flags(tree: ast.Module) -> set[str]:
 
 def _gateway_list_contract(tree: ast.Module):
     positionals: list[str] = []
+    positional_aliases: list[str] = []
     flags: set[str] = set()
     for node in ast.walk(tree):
         if not (
@@ -164,10 +165,17 @@ def _gateway_list_contract(tree: ast.Module):
                         for item in keyword.value.elts
                         if isinstance(item, ast.Constant) and isinstance(item.value, str)
                     )
+            elif keyword.arg == "positional_aliases":
+                if isinstance(keyword.value, (ast.Tuple, ast.List)):
+                    positional_aliases.extend(
+                        item.value
+                        for item in keyword.value.elts
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    )
             elif keyword.arg in {"value_flags", "bool_flags"}:
                 values = _strings(keyword.value, {})
                 flags.update(value.replace("-", "_") for value in values)
-    return positionals, flags
+    return positionals, positional_aliases, flags
 
 
 def _normalized_bool_flags(tree: ast.Module) -> set[str]:
@@ -187,6 +195,32 @@ def _normalized_bool_flags(tree: ast.Module) -> set[str]:
             if keyword.arg == "bool_flags":
                 flags.update(value.replace("-", "_") for value in _strings(keyword.value, {}))
     return flags
+
+
+def _parser_aliases(tree: ast.Module) -> set[str]:
+    aliases = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if isinstance(node.func, ast.Name) and node.func.id == "parse_canonical_argv":
+            for keyword in node.keywords:
+                if keyword.arg == "aliases" and isinstance(keyword.value, ast.Dict):
+                    aliases.update(
+                        key.value
+                        for key in keyword.value.keys
+                        if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                    )
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument":
+            option_args = [
+                arg.value
+                for arg in node.args
+                if isinstance(arg, ast.Constant)
+                and isinstance(arg.value, str)
+                and arg.value.startswith("-")
+            ]
+            if option_args:
+                aliases.update(option_args)
+    return aliases
 
 
 def _function_map(tree: ast.Module) -> dict[str, ast.FunctionDef]:
@@ -385,6 +419,7 @@ def _argparse_contract(
                 {
                     "operation": operation,
                     "name": name,
+                    "option": raw_name if binding == "flag" else None,
                     "binding": binding,
                     "required": required,
                     "kind": kind,
@@ -433,10 +468,41 @@ def test_parser_flags_have_flag_bindings() -> None:
             for arg in operation.get("args", [])
             if _binding(arg) == "flag"
         }
+        declared.update(
+            alias.removeprefix("--")
+            for operation in manifest.get("operations", {}).values()
+            for arg in operation.get("args", [])
+            for alias in arg.get("aliases", [])
+            if alias.startswith("--")
+        )
         missing = _parser_flags(tree) - declared
         if missing:
             drift[str(path.relative_to(APPS_ROOT))] = sorted(missing)
     assert not drift, "\n".join(drift)
+
+
+def test_handler_option_aliases_match_manifests() -> None:
+    drift = {}
+    for path, tree, manifest in _sources():
+        declared = {
+            alias
+            for operation in manifest.get("operations", {}).values()
+            for arg in operation.get("args", [])
+            for alias in arg.get("aliases", [])
+        }
+        canonical = {
+            f"--{arg['name'].replace('_', '-')}"
+            for operation in manifest.get("operations", {}).values()
+            for arg in operation.get("args", [])
+            if _binding(arg) == "flag"
+        }
+        parsed = _parser_aliases(tree) - canonical
+        if declared != parsed:
+            drift[str(path.relative_to(APPS_ROOT))] = {
+                "manifest_only": sorted(declared - parsed),
+                "parser_only": sorted(parsed - declared),
+            }
+    assert not drift, drift
 
 
 def test_every_direct_list_handler_consumes_canonical_argv() -> None:
@@ -472,11 +538,45 @@ def test_every_direct_list_handler_consumes_canonical_argv() -> None:
     assert not drift, "\n".join(drift)
 
 
+def test_canonical_positionals_are_not_reparsed_as_options() -> None:
+    drift = []
+    for path, tree, _manifest in _sources():
+        run = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "run"
+        )
+        if not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "parse_canonical_argv"
+            for node in ast.walk(run)
+        ):
+            continue
+        for function in (
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node is not run
+        ):
+            if any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "startswith"
+                and any(
+                    isinstance(arg, ast.Constant) and arg.value == "--"
+                    for arg in node.args
+                )
+                for node in ast.walk(function)
+            ):
+                drift.append(f"{path}:{function.name} reparses canonical options")
+    assert not drift, "\n".join(drift)
+
+
 def test_gateway_list_bindings_match_manifests() -> None:
     drift = {}
     for path, tree, manifest in _sources():
-        positionals, flags = _gateway_list_contract(tree)
-        if not positionals and not flags:
+        positionals, positional_aliases, flags = _gateway_list_contract(tree)
+        if not positionals and not positional_aliases and not flags:
             continue
         declaration = manifest["operations"]["send"]
         manifest_positionals = [
@@ -489,10 +589,21 @@ def test_gateway_list_bindings_match_manifests() -> None:
             for arg in declaration.get("args", [])
             if _binding(arg) == "flag"
         }
-        if positionals != manifest_positionals or flags != manifest_flags:
+        manifest_positional_aliases = [
+            arg["name"]
+            for arg in declaration.get("args", [])
+            if arg.get("positional_alias", False)
+        ]
+        if (
+            positionals != manifest_positionals
+            or positional_aliases != manifest_positional_aliases
+            or flags != manifest_flags
+        ):
             drift[str(path.relative_to(APPS_ROOT))] = {
                 "parser_positionals": positionals,
                 "manifest_positionals": manifest_positionals,
+                "parser_positional_aliases": positional_aliases,
+                "manifest_positional_aliases": manifest_positional_aliases,
                 "parser_flags": sorted(flags),
                 "manifest_flags": sorted(manifest_flags),
             }
@@ -510,16 +621,33 @@ def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
             ),
         ]:
             optional_seen = False
+            optional_gap_seen = False
             positional_args = [
                 arg
                 for arg in declaration.get("args", [])
                 if _binding(arg) == "positional"
             ]
+            if any(
+                not arg.get("required", False)
+                and "default" not in arg
+                and "default_from" not in arg
+                for arg in positional_args
+            ) and any(
+                "default" in arg or "default_from" in arg
+                for arg in positional_args
+            ):
+                drift.append(f"{path}:{surface} mixes positional defaults and gaps")
             for index, arg in enumerate(positional_args):
                 if not arg.get("required", False):
                     optional_seen = True
+                    if "default" not in arg and "default_from" not in arg:
+                        optional_gap_seen = True
                 elif optional_seen:
                     drift.append(f"{path}:{surface} optional positional before {arg['name']}")
+                if optional_gap_seen and (
+                    "default" in arg or "default_from" in arg
+                ):
+                    drift.append(f"{path}:{surface} default follows positional gap")
                 if arg.get("repeatable") and index != len(positional_args) - 1:
                     drift.append(f"{path}:{surface} repeatable positional before {arg['name']}")
             for need in declaration.get("needs", []):
@@ -650,7 +778,8 @@ def test_argparse_contracts_match_manifests() -> None:
                 if arg is None:
                     drift.append(f"{path}:{operation} missing {parsed['name']}")
                     continue
-                if _binding(arg) != parsed["binding"]:
+                alias_binding = parsed["option"] in arg.get("aliases", [])
+                if _binding(arg) != parsed["binding"] and not alias_binding:
                     drift.append(f"{path}:{operation}.{parsed['name']} binding")
                 handler_required = bool(arg.get("required", False)) or arg.get(
                     "trusted_resolver"
@@ -698,18 +827,39 @@ def test_every_manifest_matches_published_schema_contract() -> None:
             if arg.get("default") is None and "default" in arg:
                 drift.append(f"{path}:{surface}.{arg.get('name')} null default")
             if session and (
-                "default_from" in arg or "trusted_resolver" in arg
+                "default_from" in arg
+                or "trusted_resolver" in arg
+                or "aliases" in arg
+                or "positional_alias" in arg
             ):
                 drift.append(f"{path}:{surface}.{arg.get('name')} session resolver")
+            if arg.get("positional_alias") and (
+                _binding(arg) != "flag"
+                or arg.get("required", False)
+                or arg.get("repeatable", False)
+                or arg.get("kind") == "bool"
+            ):
+                drift.append(f"{path}:{surface}.{arg.get('name')} positional alias shape")
+            aliases = arg.get("aliases", [])
+            if len(aliases) != len(set(aliases)) or any(
+                re.fullmatch(r"(?:-[A-Za-z0-9]|--[a-z][a-z0-9-]*)", alias) is None
+                for alias in aliases
+            ):
+                drift.append(f"{path}:{surface}.{arg.get('name')} invalid aliases")
             resolver_app = {
                 "email-provider": "email",
                 "email-host": "email",
                 "calendar-provider": "calendar",
+                "ntfy-server": "gateway-ntfy",
             }.get(arg.get("trusted_resolver"))
             expected_resolver_shape = (
                 ("host", "host")
                 if arg.get("trusted_resolver") == "email-host"
-                else ("provider", "name")
+                else (
+                    ("server", "text")
+                    if arg.get("trusted_resolver") == "ntfy-server"
+                    else ("provider", "name")
+                )
             )
             if arg.get("trusted_resolver") and (
                 app_id != resolver_app

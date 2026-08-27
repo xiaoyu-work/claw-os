@@ -52,6 +52,24 @@ def test_repeatable_inline_headers_reach_argparse_in_order():
     assert parsed.header == ["A: 1", "--urgent", "B: 2"]
 
 
+def test_download_accepts_output_flag_alias_and_rejects_conflicts():
+    parsed = main._build_download_parser().parse_args(
+        ["https://example.test/file", "--output", "/workspace/file"]
+    )
+    assert parsed.output is None
+    assert parsed.output_alias == "/workspace/file"
+    result = main.run(
+        "download",
+        [
+            "https://example.test/file",
+            "/workspace/a",
+            "--output",
+            "/workspace/b",
+        ],
+    )
+    assert "both positional and --output" in result["error"]
+
+
 def _run_download(response, destination):
     with mock.patch.object(main.policy, "require") as require, mock.patch.object(
         main,

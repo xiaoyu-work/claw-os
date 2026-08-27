@@ -180,11 +180,28 @@ class Arg(_ArgRequired, total=False):
     binding: str
     required: bool
     repeatable: bool
+    aliases: List[str]
+    positional_alias: bool
     choices: List[Any]
     default: Any
     default_from: "Argdefaultbinding"
     trusted_resolver: str
     label: "Localizedtext"
+
+class Positionalarg(TypedDict, total=False):
+    """positionalArg.
+    """
+    pass
+
+class Optionalpositionalgap(TypedDict, total=False):
+    """optionalPositionalGap.
+    """
+    pass
+
+class Defaultedpositional(TypedDict, total=False):
+    """defaultedPositional.
+    """
+    pass
 
 class _ArgdefaultbindingRequired(TypedDict):
     arg: str

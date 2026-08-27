@@ -264,6 +264,7 @@ def _parse_send_args(args) -> tuple[str | None, str, dict, str | None]:
     parsed, error = gateway_args.parse(
         args,
         positional=("text",),
+        positional_aliases=("topic",),
         value_flags=(
             "topic",
             "title",

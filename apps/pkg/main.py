@@ -200,7 +200,11 @@ def cmd_has(args):
 def _parse_search_args(args):
     """Pull out --limit / -n and return (query, limit)."""
     from canonical_argv import parse_canonical_argv
-    query_parts, options = parse_canonical_argv(args, value_flags={"limit"})
+    query_parts, options = parse_canonical_argv(
+        args,
+        value_flags={"limit"},
+        aliases={"-n": "limit"},
+    )
     limit = int(options.get("limit", DEFAULT_SEARCH_LIMIT))
     if limit <= 0:
         raise ValueError("--limit must be positive")

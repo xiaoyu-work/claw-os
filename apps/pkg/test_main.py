@@ -71,6 +71,11 @@ class ParseSearchArgsTests(unittest.TestCase):
         self.assertEqual(query, "--limit")
         self.assertEqual(limit, DEFAULT_SEARCH_LIMIT)
 
+    def test_short_limit_alias(self):
+        query, limit = _parse_search_args(["-n", "3", "json"])
+        self.assertEqual(query, "json")
+        self.assertEqual(limit, 3)
+
     def test_flag_limit_equals(self):
         query, limit = _parse_search_args(["--limit=7", "csv"])
         self.assertEqual(query, "csv")

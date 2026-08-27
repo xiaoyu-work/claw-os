@@ -267,6 +267,7 @@ def _parse_args_list(args: list) -> tuple[dict | None, str | None]:
     parsed, error = gateway_args.parse(
         args,
         positional=("text",),
+        positional_aliases=("target",),
         value_flags=("target", "bearer", "basic", "api-key", "hmac-sha256"),
         bool_flags=("raw",),
     )

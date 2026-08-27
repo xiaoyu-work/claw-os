@@ -137,6 +137,14 @@ last positional declaration. Repeatable booleans, derived defaults, and
 trusted resolvers are rejected because their occurrence semantics would be
 ambiguous.
 
+Use `aliases` for explicit alternate option spellings, such as
+`"aliases": ["-n"]` or a positional argument's compatibility
+`"aliases": ["--output"]`. Every spelling binds the same effective value and
+conflicting forms are rejected. `positional_alias: true` is reserved for an
+optional flag that historically occupied a surplus leading positional slot;
+the one-positional canonical form remains unambiguous and canonical argv emits
+the flag form.
+
 An optional argument may declare a non-null literal `default` matching its
 `kind`. Omit `default` when there is no default; explicit JSON `null` is
 invalid. If its default depends on an earlier string argument, use
@@ -162,7 +170,9 @@ The supported transforms are `identity` and `url-path-basename`.
 single-component fallback. `default_from` is limited to one-shot operations
 and is rejected for session-tool arguments.
 Defaulted arguments must be optional; defaulted positional arguments follow
-all required positional arguments. The bridge resolves paths before capability
+all required positional arguments. Defaulted positionals cannot be mixed with
+optional positional slots that have no default because argv cannot represent
+those gaps consistently. The bridge resolves paths before capability
 derivation and materializes defaults using their declared binding: positional
 values remain positional, non-boolean flags become `--name value` (or
 `--name=value` when the value starts with `--`), and a true boolean flag
@@ -184,15 +194,20 @@ The bundled email and calendar apps use the reserved `email-provider` and
 trusted launcher selects a provider from credential metadata, materializes
 `--provider <name>`, and the manifest grants only that provider's exact
 credential and host scopes. Calendar falls back to `local` when neither remote
-credential exists. Third-party apps and session tools cannot use trusted
-resolvers.
+credential exists. The bundled ntfy gateway similarly materializes its
+configured `NTFY_SERVER` before deriving the exact URL-host scope and falls
+back to `https://ntfy.sh` only when no server is configured. Third-party apps
+and session tools cannot use trusted resolvers.
 
 An operation may set `stdin: true` to receive explicitly forwarded caller
 input. The top-level CLI opts in with `--stdin`, for example
-`printf data | cos --stdin app fs write /workspace/out.txt`. The CLI reads
-those bytes and passes them as invocation data; the bridge never inherits or
-probes process stdin. Agent, session, service, and ordinary CLI calls therefore
-keep child stdin closed. Python list handlers use `apps/canonical_argv.py`;
+`printf data | cos app fs write /workspace/out.txt --stdin`. This switch is
+recognized only in an App operation's pre-`--` option region, so command-owned
+`--stdin` flags elsewhere remain untouched. The CLI streams at most 16 MiB
+(configurable with `COS_APP_STDIN_MAX_BYTES`) and fails before launch on
+overflow. The bridge never inherits or probes process stdin. Agent, session,
+service, and ordinary CLI calls therefore keep child stdin closed. Python list
+handlers use `apps/canonical_argv.py`;
 argparse and gateway parsers consume the same inline flags and `--` delimiter
 directly.
 

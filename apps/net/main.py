@@ -71,6 +71,7 @@ def _build_download_parser():
     p = argparse.ArgumentParser(prog="cos net download", add_help=False)
     p.add_argument("url")
     p.add_argument("output", nargs="?")
+    p.add_argument("--output", dest="output_alias", default=None)
     return p
 
 
@@ -135,7 +136,9 @@ def cmd_download(args):
     parser = _build_download_parser()
     opts = parser.parse_args(args)
 
-    output_path = opts.output
+    if opts.output is not None and opts.output_alias is not None:
+        return {"error": "download output was supplied by both positional and --output forms"}
+    output_path = opts.output_alias if opts.output_alias is not None else opts.output
     if output_path is None:
         raise ValueError("download output default was not bound by the app bridge")
     # ``realpath`` so the kernel's fs.write check sees the actual

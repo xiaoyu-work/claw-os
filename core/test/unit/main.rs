@@ -25,12 +25,23 @@ fn extract_format_recognises_compact_aliases() {
 fn stdin_request_is_explicit_and_respects_end_of_options() {
     let (args, requested) = extract_stdin_request(vec![
         "app".into(),
-        "--stdin".into(),
         "doc".into(),
         "rewrite".into(),
+        "--stdin".into(),
     ]);
     assert!(requested);
     assert_eq!(args, ["app", "doc", "rewrite"]);
+
+    for command in ["redact", "tokens", "summarise"] {
+        let original = vec![
+            "agent".to_string(),
+            command.to_string(),
+            "--stdin".to_string(),
+        ];
+        let (args, requested) = extract_stdin_request(original.clone());
+        assert!(!requested, "{command}");
+        assert_eq!(args, original, "{command}");
+    }
 
     let (args, requested) = extract_stdin_request(vec![
         "app".into(),
@@ -41,6 +52,16 @@ fn stdin_request_is_explicit_and_respects_end_of_options() {
     ]);
     assert!(!requested);
     assert_eq!(args, ["app", "doc", "rewrite", "--", "--stdin"]);
+}
+
+#[test]
+fn requested_stdin_is_streamed_with_a_hard_limit() {
+    assert_eq!(
+        read_requested_stdin(std::io::Cursor::new(b"1234"), 4).unwrap(),
+        b"1234"
+    );
+    let error = read_requested_stdin(std::io::Cursor::new(b"12345"), 4).unwrap_err();
+    assert!(error.contains("4-byte limit"), "unexpected: {error}");
 }
 
 #[test]

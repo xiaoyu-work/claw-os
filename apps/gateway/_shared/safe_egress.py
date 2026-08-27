@@ -409,7 +409,8 @@ def safe_tls_connect(
             "cos_runtime.policy unavailable; refusing outbound connection"
         )
     _ = verb_id
-    policy.require("net.dial", host=host)
+    scope_host = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    policy.require("net.dial", host=scope_host)
 
     targets = _resolve_targets(host, port)
     last_error: Optional[BaseException] = None
@@ -475,7 +476,8 @@ def safe_urlopen(
             "cos_runtime.policy unavailable; refusing outbound request"
         )
     _ = verb_id
-    policy.require("net.dial", host=host)
+    scope_host = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    policy.require("net.dial", host=scope_host)
 
     if not isinstance(method, str) or not method.strip():
         raise EgressBlocked("HTTP method must be a non-empty string")

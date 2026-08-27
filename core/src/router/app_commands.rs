@@ -24,7 +24,7 @@ fn applications_dir() -> PathBuf {
 /// Dispatch to apps under the "cos app" namespace.
 pub(super) fn dispatch_app(
     args: &[String],
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
     let discovered = apps::discover(&apps_dir);

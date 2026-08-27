@@ -24,7 +24,8 @@
           "name": "recipient",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "positional_alias": true
         },
         {
           "name": "title",

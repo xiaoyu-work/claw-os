@@ -44,48 +44,66 @@ pub fn bind_supplied_cli_args(
         if options && token == "--" {
             options = false;
         } else if options {
-            let Some(flag) = token.strip_prefix("--") else {
+            let Some((decl, inline)) = match_option_decl(decls, token) else {
+                if token.starts_with("--") {
+                    return Err(format!("unknown operation flag `{token}`"));
+                }
                 positionals.push(token.clone());
                 index += 1;
                 continue;
             };
-            let (raw_name, inline) = flag
-                .split_once('=')
-                .map(|(name, value)| (name, Some(value)))
-                .unwrap_or((flag, None));
-            let name = match_flag_name(decls, raw_name);
-            if let Some(decl) = name.and_then(|name| decls.iter().find(|decl| decl.name == name)) {
-                let value = inline.map(str::to_string).or_else(|| {
-                    if decl.kind != ArgKind::Bool {
-                        raw.get(index + 1)
-                            .filter(|next| !next.starts_with("--"))
-                            .cloned()
-                    } else {
-                        None
-                    }
-                });
-                if inline.is_none() && value.is_some() {
-                    index += 1;
+            let value = inline.map(str::to_string).or_else(|| {
+                if decl.kind != ArgKind::Bool {
+                    raw.get(index + 1)
+                        .filter(|next| !next.starts_with("--"))
+                        .cloned()
+                } else {
+                    None
                 }
-                let parsed = parse_arg_value(decl.kind, value.as_deref()).ok_or_else(|| {
-                    format!(
-                        "flag `--{}` requires a valid {} value",
-                        flag_name(decl),
-                        kind_label(decl.kind)
-                    )
-                })?;
-                insert_supplied_value(&mut values, decl, parsed)?;
-            } else {
-                return Err(format!("unknown operation flag `--{raw_name}`"));
+            });
+            if inline.is_none() && value.is_some() {
+                index += 1;
             }
+            let parsed = parse_arg_value(decl.kind, value.as_deref()).ok_or_else(|| {
+                format!(
+                    "option `{token}` requires a valid {} value",
+                    kind_label(decl.kind)
+                )
+            })?;
+            insert_supplied_value(&mut values, decl, parsed)?;
         } else {
             positionals.push(token.clone());
         }
         index += 1;
     }
 
+    let positional_decls = decls
+        .iter()
+        .filter(|decl| decl.effective_binding() == ArgBinding::Positional)
+        .collect::<Vec<_>>();
+    let positional_aliases = decls
+        .iter()
+        .filter(|decl| decl.positional_alias)
+        .collect::<Vec<_>>();
+    let alias_count = positionals
+        .len()
+        .saturating_sub(positional_decls.len())
+        .min(positional_aliases.len());
     let mut positional = positionals.into_iter();
-    for decl in decls {
+    for decl in positional_aliases.into_iter().take(alias_count) {
+        if values.contains_key(&decl.name) {
+            return Err(format!(
+                "argument `{}` was supplied by both positional and option forms",
+                decl.name
+            ));
+        }
+        let raw = positional
+            .next()
+            .expect("alias_count never exceeds positional input");
+        let parsed = parse_declared_value(decl, Some(&raw))?;
+        values.insert(decl.name.clone(), parsed);
+    }
+    for decl in positional_decls {
         if values.contains_key(&decl.name)
             || decl.effective_binding() != ArgBinding::Positional
         {
@@ -278,12 +296,19 @@ fn kind_label(kind: ArgKind) -> &'static str {
     }
 }
 
-fn match_flag_name<'a>(decls: &'a [Arg], raw: &str) -> Option<&'a str> {
+fn match_option_decl<'a>(decls: &'a [Arg], token: &'a str) -> Option<(&'a Arg, Option<&'a str>)> {
+    let (option, inline) = token
+        .split_once('=')
+        .map(|(option, value)| (option, Some(value)))
+        .unwrap_or((token, None));
     decls
         .iter()
-        .filter(|decl| decl.effective_binding() == ArgBinding::Flag)
-        .find(|decl| decl.name == raw || flag_name(decl) == raw)
-        .map(|decl| decl.name.as_str())
+        .find(|decl| {
+            (decl.effective_binding() == ArgBinding::Flag
+                && option == format!("--{}", flag_name(decl)))
+                || decl.aliases.iter().any(|alias| alias == option)
+        })
+        .map(|decl| (decl, inline))
 }
 
 pub fn flag_name(arg: &Arg) -> String {

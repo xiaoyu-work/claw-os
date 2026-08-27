@@ -979,6 +979,8 @@ fn trusted_pre_dispatch_args(
                 }
                 resolve_calendar_provider()?.to_string()
             }
+            crate::caps::manifest::TrustedArgResolver::NtfyServer => std::env::var("NTFY_SERVER")
+                .unwrap_or_else(|_| "https://ntfy.sh".to_string()),
         };
         let delimiter = resolved
             .iter()
@@ -1074,6 +1076,20 @@ fn canonical_operation_argv(
         .iter()
         .filter(|declaration| declaration.effective_binding() == ArgBinding::Positional)
         .collect::<Vec<_>>();
+    let alias_count = supplied_positionals
+        .len()
+        .saturating_sub(positional_declarations.len())
+        .min(
+            operation
+                .args
+                .iter()
+                .filter(|declaration| declaration.positional_alias)
+                .count(),
+        );
+    let supplied_positionals = supplied_positionals
+        .into_iter()
+        .skip(alias_count)
+        .collect::<Vec<_>>();
     let mut positionals = Vec::new();
     let mut supplied_count = 0;
     for declaration in positional_declarations {
@@ -1087,7 +1103,10 @@ fn canonical_operation_argv(
         } else {
             false
         };
-        if !was_supplied && !defaulted.contains(&declaration.name) {
+        if !was_supplied
+            && !defaulted.contains(&declaration.name)
+            && !supplied.contains(&declaration.name)
+        {
             continue;
         }
         let value = values
@@ -1143,17 +1162,19 @@ fn raw_operation_positionals(operation: &Operation, raw: &[String]) -> Vec<Strin
         let token = &raw[index];
         if options && token == "--" {
             options = false;
-        } else if options && token.starts_with("--") {
-            let raw_name = token[2..].split_once('=').map_or(&token[2..], |(name, _)| name);
+        } else if options && token.starts_with('-') {
+            let option = token.split_once('=').map_or(token.as_str(), |(name, _)| name);
             if let Some(declaration) = operation.args.iter().find(|declaration| {
-                declaration.effective_binding()
+                (declaration.effective_binding()
                     == crate::caps::manifest::ArgBinding::Flag
-                    && (declaration.name == raw_name
-                        || crate::caps::args::flag_name(declaration) == raw_name)
+                    && option == format!("--{}", crate::caps::args::flag_name(declaration)))
+                    || declaration.aliases.iter().any(|alias| alias == option)
             }) {
                 if declaration.kind != ArgKind::Bool && !token.contains('=') {
                     index += 1;
                 }
+            } else {
+                positionals.push(token.clone());
             }
         } else {
             positionals.push(token.clone());
@@ -1522,7 +1543,7 @@ pub fn run_python_app_with_stdin(
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
@@ -1624,11 +1645,11 @@ fn operation_forwards_stdin(app_dir: &Path, operation: &str) -> Result<bool, Str
         .unwrap_or(false))
 }
 
-fn validated_operation_stdin<'a>(
+fn validated_operation_stdin(
     app_dir: &Path,
     operation: &str,
-    stdin_data: Option<&'a [u8]>,
-) -> Result<Option<&'a [u8]>, String> {
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<Vec<u8>>, String> {
     if stdin_data.is_none() {
         return Ok(None);
     }
@@ -1642,7 +1663,7 @@ fn validated_operation_stdin<'a>(
 
 fn write_child_stdin(
     child: &mut std::process::Child,
-    data: Option<&[u8]>,
+    data: Option<Vec<u8>>,
 ) -> Result<Option<std::thread::JoinHandle<Result<(), String>>>, String> {
     let Some(data) = data else {
         return Ok(None);
@@ -1651,7 +1672,6 @@ fn write_child_stdin(
         .stdin
         .take()
         .ok_or_else(|| "App child stdin pipe is unavailable".to_string())?;
-    let data = data.to_vec();
     Ok(Some(std::thread::spawn(move || {
         let mut stdin = stdin;
         stdin
@@ -1705,7 +1725,7 @@ pub fn run_app_with_stdin(
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
-    stdin_data: Option<&[u8]>,
+    stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     // Load the manifest if present so we can pick a runtime. Apps
     // that ship without app.json default to the Python runtime — this

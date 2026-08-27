@@ -341,6 +341,11 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     assert_eq!(header["type"], "array");
     assert_eq!(header["items"]["type"], "string");
     assert_eq!(header["repeatable"], true);
+    let download = operation_schema(&net.operations["download"]);
+    assert_eq!(
+        download["parameters"][1]["aliases"],
+        serde_json::json!(["--output"])
+    );
 
     let calendar = load("calendar");
     let schema = operation_schema(&calendar.operations["today"]);
@@ -351,4 +356,14 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
 
     let doc = load("doc");
     assert_eq!(operation_schema(&doc.operations["summarize"])["stdin"], true);
+
+    let googlechat = Manifest::from_json(
+        &std::fs::read_to_string(
+            repository.join("apps/gateway/googlechat/app.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let schema = operation_schema(&googlechat.operations["send"]);
+    assert_eq!(schema["parameters"][1]["positional_alias"], true);
 }

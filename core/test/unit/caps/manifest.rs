@@ -524,6 +524,18 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
         )
         .unwrap();
     assert_eq!(fetch[0][0].scope, Scope::host("api.example.test"));
+    for (url, expected) in [
+        ("https://api.example.test:8443/v1", "api.example.test:8443"),
+        ("http://[2001:db8::1]:8080/", "[2001:db8::1]:8080"),
+    ] {
+        let fetch = manifest
+            .resolve_needs(
+                "fetch",
+                &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+            )
+            .unwrap();
+        assert_eq!(fetch[0][0].scope, Scope::host(expected));
+    }
 }
 
 #[test]
@@ -542,6 +554,32 @@ fn ambiguous_repeatable_declarations_are_rejected() {
             }}"#
         );
         assert!(Manifest::from_json(&body).is_err(), "accepted {arg}");
+    }
+}
+
+#[test]
+fn positional_default_gaps_and_alias_conflicts_are_rejected() {
+    for args in [
+        r#"[
+          {"name":"optional","kind":"text"},
+          {"name":"later","kind":"text","default":"value"}
+        ]"#,
+        r#"[
+          {"name":"first","kind":"text","binding":"flag","aliases":["-x"]},
+          {"name":"second","kind":"text","binding":"flag","aliases":["-x"]}
+        ]"#,
+        r#"[
+          {"name":"text","kind":"text","repeatable":true},
+          {"name":"target","kind":"name","binding":"flag","positional_alias":true}
+        ]"#,
+    ] {
+        let body = format!(
+            r#"{{
+              "id":"bad-layout","version":"1","name":"Bad",
+              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
     }
 }
 

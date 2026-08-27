@@ -12,6 +12,8 @@ enum OutputFormat {
     Compact,
 }
 
+const DEFAULT_APP_STDIN_MAX_BYTES: usize = 16 * 1024 * 1024;
+
 /// Pull `--plain` / `--compact` / `--json` / `--pretty` out of argv
 /// before the router sees them. Returns the kept args plus the
 /// resolved format. When neither flag is present we auto-pretty on a
@@ -38,11 +40,16 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
 }
 
 fn extract_stdin_request(argv: Vec<String>) -> (Vec<String>, bool) {
+    if argv.first().map(String::as_str) != Some("app") || argv.len() < 4 {
+        return (argv, false);
+    }
     let mut kept = Vec::with_capacity(argv.len());
     let mut requested = false;
     let mut options = true;
-    for arg in argv {
-        if options && arg == "--" {
+    for (index, arg) in argv.into_iter().enumerate() {
+        if index < 3 {
+            kept.push(arg);
+        } else if options && arg == "--" {
             options = false;
             kept.push(arg);
         } else if options && arg == "--stdin" {
@@ -52,6 +59,30 @@ fn extract_stdin_request(argv: Vec<String>) -> (Vec<String>, bool) {
         }
     }
     (kept, requested)
+}
+
+fn app_stdin_max_bytes() -> Result<usize, String> {
+    match std::env::var("COS_APP_STDIN_MAX_BYTES") {
+        Ok(raw) => raw
+            .parse::<usize>()
+            .ok()
+            .filter(|value| *value > 0)
+            .ok_or_else(|| "COS_APP_STDIN_MAX_BYTES must be a positive integer".to_string()),
+        Err(std::env::VarError::NotPresent) => Ok(DEFAULT_APP_STDIN_MAX_BYTES),
+        Err(error) => Err(format!("read COS_APP_STDIN_MAX_BYTES: {error}")),
+    }
+}
+
+fn read_requested_stdin<R: Read>(reader: R, limit: usize) -> Result<Vec<u8>, String> {
+    let mut data = Vec::new();
+    reader
+        .take(limit.saturating_add(1) as u64)
+        .read_to_end(&mut data)
+        .map_err(|error| format!("read requested stdin: {error}"))?;
+    if data.len() > limit {
+        return Err(format!("App stdin exceeds configured {limit}-byte limit"));
+    }
+    Ok(data)
 }
 
 /// Render a primitive's response string in the chosen format. If the
@@ -81,11 +112,12 @@ fn main() {
     // guard cleans up its registry row on Drop.
     let _session_guard = caps::bootstrap_user_cli_session(&args);
 
-    let mut stdin_data = Vec::new();
     let result = if stdin_requested {
-        match std::io::stdin().read_to_end(&mut stdin_data) {
-            Ok(_) => router::dispatch_with_stdin(&args, Some(&stdin_data)),
-            Err(error) => Err(format!("read requested stdin: {error}")),
+        match app_stdin_max_bytes()
+            .and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
+        {
+            Ok(stdin_data) => router::dispatch_with_stdin(&args, Some(stdin_data)),
+            Err(error) => Err(error),
         }
     } else {
         router::dispatch(&args)

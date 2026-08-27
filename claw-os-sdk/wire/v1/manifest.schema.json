@@ -41,7 +41,17 @@
         "label": { "$ref": "#/$defs/localizedText" },
         "summary": { "$ref": "#/$defs/localizedText" },
         "stdin": { "type": "boolean", "description": "Forward piped caller input. Interactive stdin is always closed." },
-        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input parameters; order is significant for the UI." },
+        "args": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/arg" },
+          "description": "Declared input parameters; order is significant for the UI.",
+          "not": {
+            "allOf": [
+              { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+              { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+            ]
+          }
+        },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
       }
     },
@@ -104,6 +114,18 @@
           "else": { "properties": { "default": { "not": { "type": "array" } } } }
         },
         {
+          "if": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] },
+          "then": {
+            "properties": {
+              "binding": { "const": "flag" },
+              "required": { "const": false },
+              "repeatable": { "const": false },
+              "kind": { "not": { "const": "bool" } }
+            },
+            "required": ["binding"]
+          }
+        },
+        {
           "if": { "required": ["trusted_resolver"] },
           "then": {
             "properties": {
@@ -123,8 +145,12 @@
           "if": { "properties": { "trusted_resolver": { "const": "email-host" } }, "required": ["trusted_resolver"] },
           "then": { "properties": { "name": { "const": "host" }, "kind": { "const": "host" } } },
           "else": {
-            "if": { "required": ["trusted_resolver"] },
-            "then": { "properties": { "name": { "const": "provider" }, "kind": { "const": "name" } } }
+            "if": { "properties": { "trusted_resolver": { "const": "ntfy-server" } }, "required": ["trusted_resolver"] },
+            "then": { "properties": { "name": { "const": "server" }, "kind": { "const": "text" } } },
+            "else": {
+              "if": { "required": ["trusted_resolver"] },
+              "then": { "properties": { "name": { "const": "provider" }, "kind": { "const": "name" } } }
+            }
           }
         }
       ],
@@ -134,12 +160,44 @@
         "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
         "required": { "type": "boolean" },
         "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
+        "aliases": { "type": "array", "items": { "type": "string", "pattern": "^(-[A-Za-z0-9]|--[a-z][a-z0-9-]*)$" }, "uniqueItems": true, "description": "Additional short or long option spellings for the same effective argument." },
+        "positional_alias": { "type": "boolean", "description": "Accept this optional flag argument as a surplus leading positional before the canonical positional grammar." },
         "choices": { "type": "array", "uniqueItems": true, "description": "Optional closed set of accepted scalar values." },
         "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
         "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
-        "trusted_resolver": { "type": "string", "enum": ["email-provider", "email-host", "calendar-provider"], "description": "Trusted pre-dispatch resolver, restricted by the kernel to its matching bundled app." },
+        "trusted_resolver": { "type": "string", "enum": ["email-provider", "email-host", "calendar-provider", "ntfy-server"], "description": "Trusted pre-dispatch resolver, restricted by the kernel to its matching bundled app." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
+    },
+    "positionalArg": {
+      "anyOf": [
+        {
+          "properties": { "binding": { "const": "positional" } },
+          "required": ["binding"]
+        },
+        {
+          "properties": { "kind": { "not": { "const": "bool" } } },
+          "not": { "required": ["binding"] }
+        }
+      ]
+    },
+    "optionalPositionalGap": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        {
+          "anyOf": [
+            { "properties": { "required": { "const": false } }, "required": ["required"] },
+            { "not": { "required": ["required"] } }
+          ]
+        },
+        { "not": { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] } }
+      ]
+    },
+    "defaultedPositional": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] }
+      ]
     },
     "argDefaultBinding": {
       "type": "object",
@@ -324,12 +382,20 @@
         "summary": { "$ref": "#/$defs/localizedText" },
         "args": {
           "type": "array",
+          "not": {
+            "allOf": [
+              { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+              { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+            ]
+          },
           "items": {
             "$ref": "#/$defs/arg",
             "not": {
               "anyOf": [
                 { "required": ["default_from"] },
-                { "required": ["trusted_resolver"] }
+                { "required": ["trusted_resolver"] },
+                { "required": ["aliases"] },
+                { "required": ["positional_alias"] }
               ]
             }
           }

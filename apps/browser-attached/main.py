@@ -344,16 +344,7 @@ def _cmd_eval(argv):
 
 def _parse_kv(argv, required=(), optional=()):
     out: dict[str, str] = {}
-    positionals: list[str] = []
-    for token in argv:
-        if token.startswith("--"):
-            if "=" in token:
-                k, v = token[2:].split("=", 1)
-            else:
-                k, v = token[2:], "true"
-            out[k] = v
-        else:
-            positionals.append(token)
+    positionals = [str(token) for token in argv]
     for name, value in zip(required, positionals):
         out.setdefault(name, value)
     for name, value in zip(optional, positionals[len(required):]):

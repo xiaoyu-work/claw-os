@@ -152,11 +152,31 @@ export interface Arg {
   binding?: "positional" | "flag";
   required?: boolean;
   repeatable?: boolean;
+  aliases?: string[];
+  positional_alias?: boolean;
   choices?: unknown[];
   default?: unknown;
   default_from?: Argdefaultbinding;
-  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider";
+  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider" | "ntfy-server";
   label?: Localizedtext;
+}
+
+/**
+ * positionalArg.
+ */
+export interface Positionalarg {
+}
+
+/**
+ * optionalPositionalGap.
+ */
+export interface Optionalpositionalgap {
+}
+
+/**
+ * defaultedPositional.
+ */
+export interface Defaultedpositional {
 }
 
 /**

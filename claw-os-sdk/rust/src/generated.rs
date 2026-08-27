@@ -188,6 +188,10 @@ pub struct Arg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeatable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aliases: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub positional_alias: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub choices: Option<Vec<serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
@@ -197,6 +201,21 @@ pub struct Arg {
     pub trusted_resolver: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<Localizedtext>,
+}
+
+/// positionalArg
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Positionalarg {
+}
+
+/// optionalPositionalGap
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Optionalpositionalgap {
+}
+
+/// defaultedPositional
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Defaultedpositional {
 }
 
 /// argDefaultBinding

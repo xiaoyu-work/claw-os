@@ -728,6 +728,32 @@ fn local_calendar_resolution_is_identical_for_in_process_caps() {
 }
 
 #[test]
+fn ntfy_server_is_resolved_before_exact_host_capability() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["send"];
+    let _server =
+        crate::test_env::TestEnvVarGuard::set("NTFY_SERVER", "https://notify.example:8443");
+    let trusted =
+        trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
+    assert!(trusted
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://notify.example:8443"]));
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let needs = manifest.resolve_needs("send", &bound.values).unwrap();
+    assert!(needs
+        .into_iter()
+        .flatten()
+        .any(|cap| cap.verb == Verb::NET_DIAL
+            && cap.scope == Scope::host("notify.example:8443")));
+}
+
+#[test]
 fn stdin_forwarding_requires_an_explicit_operation_contract() {
     let app = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -783,7 +809,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
         &[],
         &state_text,
         &state_text,
-        Some(b"python input"),
+        Some(b"python input".to_vec()),
     )
     .unwrap()
     .unwrap();
@@ -826,7 +852,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
         &[],
         &state_text,
         &state_text,
-        Some(b"shell input"),
+        Some(b"shell input".to_vec()),
     )
     .unwrap()
     .unwrap();
@@ -904,4 +930,66 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
         download.values["output"],
         serde_json::json!(output.to_string_lossy())
     );
+}
+
+#[test]
+fn bundled_legacy_aliases_canonicalize_to_one_effective_grammar() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| path.join(component))
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    for (app, alias) in [
+        ("googlechat", "recipient"),
+        ("mattermost", "recipient"),
+        ("teams", "recipient"),
+        ("webhook", "target"),
+        ("ntfy", "topic"),
+    ] {
+        let manifest = load(&["gateway", app]);
+        let operation = &manifest.operations["send"];
+        let legacy =
+            bind_operation_args(operation, &["destination".into(), "hello".into()]).unwrap();
+        let canonical = bind_operation_args(
+            operation,
+            &[
+                "hello".into(),
+                format!("--{alias}"),
+                "destination".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(legacy.values, canonical.values, "{app}");
+        assert_eq!(legacy.argv, canonical.argv, "{app}");
+    }
+
+    let net = load(&["net"]);
+    let output = effective_app_home().join("alias.bin");
+    let url = "https://example.test/alias.bin".to_string();
+    let flagged = bind_operation_args(
+        &net.operations["download"],
+        &[
+            url.clone(),
+            "--output".into(),
+            output.to_string_lossy().into_owned(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        flagged.argv,
+        [url, output.to_string_lossy().into_owned()]
+    );
+
+    let pkg = load(&["pkg"]);
+    let short = bind_operation_args(
+        &pkg.operations["search"],
+        &["editor".into(), "-n".into(), "3".into()],
+    )
+    .unwrap();
+    assert_eq!(short.argv, ["editor", "--limit", "3"]);
 }

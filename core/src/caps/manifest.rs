@@ -358,6 +358,13 @@ pub struct Arg {
     /// Bind every occurrence in order and expose the value as a JSON array.
     #[serde(default)]
     pub repeatable: bool,
+    /// Additional accepted option spellings mapped to this same value.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub aliases: Vec<String>,
+    /// Accept this flag-bound value as a surplus leading positional for
+    /// backward-compatible grammars.
+    #[serde(default)]
+    pub positional_alias: bool,
     /// Optional closed set of accepted scalar values.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<serde_json::Value>,
@@ -415,6 +422,7 @@ pub enum TrustedArgResolver {
     EmailProvider,
     EmailHost,
     CalendarProvider,
+    NtfyServer,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -1064,7 +1072,48 @@ pub enum ManifestError {
 }
 
 fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
+    let optional_gap = args.iter().any(|arg| {
+        arg.effective_binding() == ArgBinding::Positional
+            && !arg.required
+            && arg.default.is_none()
+            && arg.default_from.is_none()
+    });
+    if optional_gap {
+        if let Some(defaulted) = args.iter().find(|arg| {
+            arg.effective_binding() == ArgBinding::Positional
+                && (arg.default.is_some() || arg.default_from.is_some())
+        }) {
+            return Err((
+                defaulted.name.clone(),
+                "defaulted and omitted optional positional arguments cannot be mixed"
+                    .to_string(),
+            ));
+        }
+    }
     for (index, arg) in args.iter().enumerate() {
+        if arg.positional_alias
+            && (arg.effective_binding() != ArgBinding::Flag
+                || arg.kind == ArgKind::Bool
+                || arg.required
+                || arg.repeatable)
+        {
+            return Err((
+                arg.name.clone(),
+                "positional_alias requires an optional, non-boolean, non-repeatable flag arg"
+                    .to_string(),
+            ));
+        }
+        if arg.positional_alias
+            && args.iter().any(|candidate| {
+            candidate.effective_binding() == ArgBinding::Positional
+                && candidate.repeatable
+            })
+        {
+            return Err((
+            arg.name.clone(),
+            "positional_alias cannot be combined with repeatable positionals".to_string(),
+            ));
+        }
         if arg.repeatable && arg.kind == ArgKind::Bool {
             return Err((
                 arg.name.clone(),
@@ -1246,6 +1295,43 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
     Ok(())
 }
 
+fn validate_arg_aliases(args: &[Arg]) -> Result<(), (String, String)> {
+    let mut options = BTreeMap::<String, String>::new();
+    for arg in args {
+        if arg.effective_binding() == ArgBinding::Flag {
+            let canonical = format!("--{}", arg.name.replace('_', "-"));
+            if let Some(existing) = options.insert(canonical.clone(), arg.name.clone()) {
+                return Err((
+                    arg.name.clone(),
+                    format!("option `{canonical}` conflicts with arg `{existing}`"),
+                ));
+            }
+        }
+        for alias in &arg.aliases {
+            let valid_short = alias.len() == 2
+                && alias.starts_with('-')
+                && alias.as_bytes()[1].is_ascii_alphanumeric();
+            let valid_long = alias.strip_prefix("--").is_some_and(|name| {
+                !name.is_empty()
+                    && name.as_bytes()[0].is_ascii_lowercase()
+                    && name.bytes().all(|byte| {
+                        byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                    })
+            });
+            if !valid_short && !valid_long {
+                return Err((arg.name.clone(), format!("invalid option alias `{alias}`")));
+            }
+            if let Some(existing) = options.insert(alias.clone(), arg.name.clone()) {
+                return Err((
+                    arg.name.clone(),
+                    format!("option alias `{alias}` conflicts with arg `{existing}`"),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn is_safe_default_leaf(value: &str) -> bool {
     !value.is_empty()
         && !matches!(value, "." | "..")
@@ -1346,6 +1432,11 @@ impl Manifest {
                             && arg.name == "provider"
                             && arg.kind == ArgKind::Name
                     }
+                    Some(TrustedArgResolver::NtfyServer) => {
+                        self.id == "gateway-ntfy"
+                            && arg.name == "server"
+                            && arg.kind == ArgKind::Text
+                    }
                     None => true,
                 };
                 if arg.trusted_resolver.is_some()
@@ -1364,6 +1455,13 @@ impl Manifest {
                 }
             }
             if let Err((arg, detail)) = validate_arg_defaults(&op.args) {
+                return Err(ManifestError::ArgDefaultInvalid {
+                    op: op_name.clone(),
+                    arg,
+                    detail,
+                });
+            }
+            if let Err((arg, detail)) = validate_arg_aliases(&op.args) {
                 return Err(ManifestError::ArgDefaultInvalid {
                     op: op_name.clone(),
                     arg,
@@ -1531,15 +1629,27 @@ impl Manifest {
                         detail,
                     });
                 }
+                if let Err((arg, detail)) = validate_arg_aliases(&tool.args) {
+                    return Err(ManifestError::SessionArgDefaultInvalid {
+                        tool: tool.name.clone(),
+                        arg,
+                        detail,
+                    });
+                }
                 if let Some(arg) = tool
                     .args
                     .iter()
-                    .find(|arg| arg.default_from.is_some() || arg.trusted_resolver.is_some())
+                    .find(|arg| {
+                        arg.default_from.is_some()
+                            || arg.trusted_resolver.is_some()
+                            || !arg.aliases.is_empty()
+                            || arg.positional_alias
+                    })
                 {
                     return Err(ManifestError::SessionArgDefaultInvalid {
                         tool: tool.name.clone(),
                         arg: arg.name.clone(),
-                        detail: "`default_from` and trusted resolvers are only supported for one-shot operations"
+                        detail: "CLI aliases, default_from, and trusted resolvers are only supported for one-shot operations"
                             .to_string(),
                     });
                 }
@@ -2180,7 +2290,17 @@ fn scopes_from_arg_value(
                 &normalized
             };
             let parsed = url::Url::parse(raw).ok()?;
-            return Some(Scope::host(parsed.host_str()?));
+            let host = parsed.host()?;
+            let rendered = match host {
+                url::Host::Domain(host) => host.to_string(),
+                url::Host::Ipv4(host) => host.to_string(),
+                url::Host::Ipv6(host) => format!("[{host}]"),
+            };
+            let scope = match parsed.port() {
+                Some(port) => format!("{rendered}:{port}"),
+                None => rendered,
+            };
+            return Some(Scope::host(scope));
         }
         let scope = scope_from_arg_value(arg.kind, value)?;
         match (transform, scope) {

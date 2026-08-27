@@ -118,6 +118,50 @@ fn repeatable_flags_and_positionals_preserve_every_value_in_order() {
 }
 
 #[test]
+fn positional_aliases_bind_surplus_legacy_forms_without_ambiguity() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name":"text","kind":"text","required":true},
+        {"name":"recipient","kind":"name","binding":"flag","positional_alias":true}
+    ]))
+    .unwrap();
+    let one = bind_cli_args(&decls, &raw(&["hello"])).unwrap();
+    assert_eq!(one["text"], "hello");
+    assert!(!one.contains_key("recipient"));
+    let two = bind_cli_args(&decls, &raw(&["room", "hello"])).unwrap();
+    assert_eq!(two["recipient"], "room");
+    assert_eq!(two["text"], "hello");
+    let flagged = bind_cli_args(&decls, &raw(&["hello", "--recipient", "room"])).unwrap();
+    assert_eq!(flagged, two);
+    assert!(bind_cli_args(
+        &decls,
+        &raw(&["other-room", "hello", "--recipient", "room"])
+    )
+    .is_err());
+}
+
+#[test]
+fn option_aliases_map_to_one_value_and_reject_conflicts() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name":"url","kind":"text","required":true},
+        {"name":"output","kind":"path","aliases":["--output"]},
+        {"name":"limit","kind":"integer","binding":"flag","aliases":["-n"]}
+    ]))
+    .unwrap();
+    let aliases = bind_cli_args(
+        &decls,
+        &raw(&["https://example.test", "--output", "/a", "-n", "3"]),
+    )
+    .unwrap();
+    assert_eq!(aliases["output"], "/a");
+    assert_eq!(aliases["limit"], 3);
+    assert!(bind_cli_args(
+        &decls,
+        &raw(&["https://example.test", "/a", "--output", "/b"])
+    )
+    .is_err());
+}
+
+#[test]
 fn end_of_options_allows_flag_shaped_positionals() {
     let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "text", "kind": "text", "required": true}

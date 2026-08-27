@@ -174,6 +174,41 @@ def test_list_dispatch_forwards_manifest_options(
 
 
 @pytest.mark.parametrize(
+    ("name", "argv", "expected_args"),
+    [
+        ("googlechat", ["hello"], ("", "hello", "", "")),
+        ("googlechat", ["space", "hello"], ("space", "hello", "", "")),
+        ("mattermost", ["hello"], ("", "hello", "", "")),
+        ("mattermost", ["town-square", "hello"], ("town-square", "hello", "", "")),
+        ("teams", ["hello"], ("", "hello", "", False)),
+        ("teams", ["channel", "hello"], ("channel", "hello", "", False)),
+        ("ntfy", ["hello"], (None, "hello")),
+        ("ntfy", ["alerts", "hello"], ("alerts", "hello")),
+        (
+            "webhook",
+            ["hello"],
+            ("", "hello", False, None, None, None, None),
+        ),
+        (
+            "webhook",
+            ["https://example.test/hook", "hello"],
+            ("https://example.test/hook", "hello", False, None, None, None, None),
+        ),
+    ],
+)
+def test_list_dispatch_preserves_historical_positional_forms(
+    name, argv, expected_args
+):
+    module = _load(name)
+    with mock.patch.object(
+        module, "_send", return_value={"ok": True}
+    ) as send, mock.patch.object(module.gateway_memory, "remember_send"):
+        result = module.run("send", argv)
+    assert result == {"ok": True}
+    assert send.call_args.args == expected_args
+
+
+@pytest.mark.parametrize(
     "name",
     [
         "googlechat",

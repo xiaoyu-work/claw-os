@@ -24,7 +24,8 @@
           "name": "topic",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "positional_alias": true
         },
         {
           "name": "title",
@@ -55,7 +56,7 @@
           "kind": "text",
           "required": false,
           "binding": "flag",
-          "default": "https://ntfy.sh"
+          "trusted_resolver": "ntfy-server"
         },
         {
           "name": "bearer",

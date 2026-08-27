@@ -93,7 +93,8 @@
           "name": "limit",
           "kind": "integer",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "aliases": ["-n"]
         }
       ],
       "needs": [
