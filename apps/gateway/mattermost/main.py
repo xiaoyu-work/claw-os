@@ -123,19 +123,6 @@ def _send(recipient: str, text: str, username: str = "", icon_url: str = "") -> 
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound (outgoing webhook / slash command) requires a public "
-            "endpoint. Use ``send <channel> <text>`` for outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     url, err = _load_webhook_url()
     return {
@@ -172,8 +159,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

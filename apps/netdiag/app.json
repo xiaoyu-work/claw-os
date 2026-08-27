@@ -1,43 +1,172 @@
 {
   "id": "netdiag",
   "version": "0.1.0",
-  "name": {"en": "Network Doctor"},
-  "summary": {"en": "Diagnose local interfaces, routes, DNS, TCP reachability, and latency"},
+  "name": {
+    "en": "Network Doctor"
+  },
+  "summary": {
+    "en": "Diagnose local interfaces, routes, DNS, TCP reachability, and latency"
+  },
   "icon": "🩺",
   "runtime": "python",
   "operations": {
     "interfaces": {
-      "label": {"en": "Inspect network interfaces"},
-      "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "network"}}, "why": {"en": "Read local interface state and counters."}}]
+      "label": {
+        "en": "Inspect network interfaces"
+      },
+      "needs": [
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "network"
+            }
+          },
+          "why": {
+            "en": "Read local interface state and counters."
+          }
+        }
+      ],
+      "args": []
     },
     "routes": {
-      "label": {"en": "Inspect network routes"},
-      "needs": [{"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "network"}}, "why": {"en": "Read the kernel route table."}}]
+      "label": {
+        "en": "Inspect network routes"
+      },
+      "needs": [
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "network"
+            }
+          },
+          "why": {
+            "en": "Read the kernel route table."
+          }
+        }
+      ],
+      "args": []
     },
     "dns": {
-      "label": {"en": "Resolve a network target"},
-      "args": [{"name": "target", "kind": "host", "required": true}],
-      "needs": [{"verb": "net.resolve", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "Resolve this exact host or host:port target."}}]
-    },
-    "tcp": {
-      "label": {"en": "Test TCP reachability and latency"},
+      "label": {
+        "en": "Resolve a network target"
+      },
       "args": [
-        {"name": "target", "kind": "host", "required": true},
-        {"name": "--attempts", "kind": "number", "required": false},
-        {"name": "--timeout", "kind": "number", "required": false}
+        {
+          "name": "target",
+          "kind": "host",
+          "required": true
+        }
       ],
       "needs": [
-        {"verb": "net.resolve", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "Resolve this exact target once."}},
-        {"verb": "net.dial", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "Open bounded TCP probes to the resolved addresses."}}
+        {
+          "verb": "net.resolve",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "target"
+          },
+          "why": {
+            "en": "Resolve this exact host or host:port target."
+          }
+        }
+      ]
+    },
+    "tcp": {
+      "label": {
+        "en": "Test TCP reachability and latency"
+      },
+      "args": [
+        {
+          "name": "target",
+          "kind": "host",
+          "required": true
+        },
+        {
+          "name": "attempts",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "timeout",
+          "kind": "number",
+          "required": false,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "net.resolve",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "target"
+          },
+          "why": {
+            "en": "Resolve this exact target once."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "target"
+          },
+          "why": {
+            "en": "Open bounded TCP probes to the resolved addresses."
+          }
+        }
       ]
     },
     "diagnose": {
-      "label": {"en": "Run staged network diagnosis"},
-      "args": [{"name": "target", "kind": "host", "required": true}],
+      "label": {
+        "en": "Run staged network diagnosis"
+      },
+      "args": [
+        {
+          "name": "target",
+          "kind": "host",
+          "required": true
+        }
+      ],
       "needs": [
-        {"verb": "sys.observe", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "network"}}, "why": {"en": "Inspect interfaces and routes."}},
-        {"verb": "net.resolve", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "Resolve this exact target once."}},
-        {"verb": "net.dial", "scope": {"kind": "from-arg", "arg": "target"}, "why": {"en": "Test TCP reachability to the resolved target."}}
+        {
+          "verb": "sys.observe",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "network"
+            }
+          },
+          "why": {
+            "en": "Inspect interfaces and routes."
+          }
+        },
+        {
+          "verb": "net.resolve",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "target"
+          },
+          "why": {
+            "en": "Resolve this exact target once."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "target"
+          },
+          "why": {
+            "en": "Test TCP reachability to the resolved target."
+          }
+        }
       ]
     }
   }

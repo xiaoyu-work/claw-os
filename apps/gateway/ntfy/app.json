@@ -23,6 +23,55 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "priority",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "tags",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "click",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "markdown",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
+        },
+        {
+          "name": "server",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "bearer",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "basic",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

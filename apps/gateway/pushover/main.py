@@ -199,19 +199,6 @@ def _send(
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Pushover doesn't deliver inbound messages to apps. Use "
-            "``send <text>`` for outbound notifications only."
-        ),
-    }
-
-
 def _status() -> dict:
     app_token, app_err = _env_or_credential("COS_PUSHOVER_APP_TOKEN", "pushover_app_token")
     user_key, user_err = _env_or_credential("COS_PUSHOVER_USER_KEY", "pushover_user_key")
@@ -293,8 +280,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

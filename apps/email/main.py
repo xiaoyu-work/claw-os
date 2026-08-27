@@ -141,7 +141,7 @@ def _build_send_parser():
     p.add_argument("--subject", required=True)
     p.add_argument("--body", required=True)
     p.add_argument("--cc", default=None)
-    p.add_argument("--provider", default=None, choices=["smtp", "gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["smtp", "gmail", "outlook"])
     return p
 
 
@@ -149,7 +149,7 @@ def _build_search_parser():
     p = argparse.ArgumentParser(prog="cos email search", add_help=False)
     p.add_argument("--query", required=True)
     p.add_argument("--max-results", type=int, default=10)
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 
@@ -157,14 +157,14 @@ def _build_list_parser():
     p = argparse.ArgumentParser(prog="cos email list", add_help=False)
     p.add_argument("--max-results", type=int, default=10)
     p.add_argument("--unread", action="store_true")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 
 def _build_read_parser():
     p = argparse.ArgumentParser(prog="cos email read", add_help=False)
     p.add_argument("--id", required=True, dest="message_id")
-    p.add_argument("--provider", default=None, choices=["gmail", "outlook"])
+    p.add_argument("--provider", required=True, choices=["gmail", "outlook"])
     return p
 
 

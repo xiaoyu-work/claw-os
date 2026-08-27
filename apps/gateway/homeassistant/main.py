@@ -197,20 +197,6 @@ def _call(service: str, raw_json: str) -> dict:
     return _post_service(domain, svc, payload)
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound HA events need either WebSocket or REST event "
-            "subscription. Use ``send`` / ``call`` for outbound service "
-            "invocations."
-        ),
-    }
-
-
 def _status() -> dict:
     cfg, err = _load_config()
     return {
@@ -271,8 +257,6 @@ def run(command: str, args):
         return _call(service, raw)
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

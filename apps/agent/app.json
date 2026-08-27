@@ -11,21 +11,43 @@
   "runtime": "python",
   "operations": {
     "open": {
-      "label": { "en": "Open the native Agent window" },
+      "label": {
+        "en": "Open the native Agent window"
+      },
       "args": [],
       "needs": []
     },
     "overlay": {
-      "label": { "en": "Open the Spotlight-style Super+A quick-summon overlay" },
+      "label": {
+        "en": "Open the Spotlight-style Super+A quick-summon overlay"
+      },
       "args": [
-        { "name": "voice", "kind": "bool", "required": false, "default": false },
-        { "name": "query", "kind": "text", "required": false },
-        { "name": "context", "kind": "text", "required": false }
+        {
+          "name": "voice",
+          "kind": "bool",
+          "required": false,
+          "default": false,
+          "binding": "flag"
+        },
+        {
+          "name": "query",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "context",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": []
     },
     "url": {
-      "label": { "en": "Return the authenticated local bridge endpoint" },
+      "label": {
+        "en": "Return the authenticated local bridge endpoint"
+      },
       "args": [],
       "needs": []
     }

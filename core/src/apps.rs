@@ -150,6 +150,7 @@ fn arg_schema(arg: &Arg) -> Value {
     let value_type = match arg.kind {
         ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
         ArgKind::Number => "number",
+        ArgKind::Integer => "integer",
         ArgKind::Bool => "boolean",
     };
     let mut schema = json!({
@@ -157,7 +158,8 @@ fn arg_schema(arg: &Arg) -> Value {
         "type": value_type,
         "required": arg.required,
         "description": arg.label.current(),
-        "kind": "positional",
+        "kind": arg.binding.as_str(),
+        "binding": arg.binding.as_str(),
     });
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();

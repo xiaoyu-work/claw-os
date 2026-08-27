@@ -10,6 +10,8 @@ invoked.
 
 - Own every operation, argument, dependency, AI use, and capability need in
   `app.json`; entrypoints must not implement `_schema()` or `__schema__`.
+- Declare each argument's positional/flag binding, exact numeric kind, and
+  runtime default so validated argv and capability derivation cannot diverge.
 - Validate untrusted input before requesting policy/capability authority.
 - Return structured JSON-compatible results.
 - Return constrained `setup.agent_action` metadata for Agent-resumable
@@ -35,7 +37,8 @@ through the Claw OS SDK/agent gate. Bundled capability checks use
 `cos_runtime.policy`; operation `needs` in `app.json` must match runtime checks.
 Schema/listing paths are generated from `app.json` and must not execute
 `main.py`. Unknown operations are rejected by the kernel before dispatch;
-entrypoints retain an unknown-operation error for direct unit invocation.
+unknown flags are rejected during manifest binding; entrypoints retain an
+unknown-operation error for direct unit invocation.
 
 ## Tests
 

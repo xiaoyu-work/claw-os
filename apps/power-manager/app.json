@@ -1,50 +1,179 @@
 {
   "id": "power-manager",
   "version": "0.1.0",
-  "name": {"en": "Power Manager"},
-  "summary": {"en": "Inspect UPower state and request logind sleep, hibernate, reboot, or shutdown"},
+  "name": {
+    "en": "Power Manager"
+  },
+  "summary": {
+    "en": "Inspect UPower state and request logind sleep, hibernate, reboot, or shutdown"
+  },
   "icon": "⏻",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "Inspect batteries and power capabilities"},
+      "label": {
+        "en": "Inspect batteries and power capabilities"
+      },
       "needs": [
         {
           "verb": "sys.observe",
-          "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "power"}},
-          "why": {"en": "Read UPower device state and logind power capabilities."}
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "power"
+            }
+          },
+          "why": {
+            "en": "Read UPower device state and logind power capabilities."
+          }
+        }
+      ],
+      "args": []
+    },
+    "suspend": {
+      "label": {
+        "en": "Suspend the computer"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Suspend the whole computer immediately."
+          }
         }
       ]
     },
-    "suspend": {
-      "label": {"en": "Suspend the computer"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Suspend the whole computer immediately."}}]
-    },
     "hibernate": {
-      "label": {"en": "Hibernate the computer"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Write memory to disk and power off the whole computer."}}]
+      "label": {
+        "en": "Hibernate the computer"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Write memory to disk and power off the whole computer."
+          }
+        }
+      ]
     },
     "hybrid-sleep": {
-      "label": {"en": "Enter hybrid sleep"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Suspend while preserving a hibernation image."}}]
+      "label": {
+        "en": "Enter hybrid sleep"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Suspend while preserving a hibernation image."
+          }
+        }
+      ]
     },
     "suspend-then-hibernate": {
-      "label": {"en": "Suspend then hibernate"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Suspend now and hibernate later according to logind policy."}}]
+      "label": {
+        "en": "Suspend then hibernate"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Suspend now and hibernate later according to logind policy."
+          }
+        }
+      ]
     },
     "reboot": {
-      "label": {"en": "Reboot the computer"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Restart the whole computer immediately."}}]
+      "label": {
+        "en": "Reboot the computer"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Restart the whole computer immediately."
+          }
+        }
+      ]
     },
     "poweroff": {
-      "label": {"en": "Power off the computer"},
-      "args": [{"name": "--confirm", "kind": "bool", "required": true}],
-      "needs": [{"verb": "sys.power", "scope": {"kind": "wild"}, "why": {"en": "Shut down and power off the whole computer immediately."}}]
+      "label": {
+        "en": "Power off the computer"
+      },
+      "args": [
+        {
+          "name": "confirm",
+          "kind": "bool",
+          "required": true,
+          "binding": "flag"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.power",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Shut down and power off the whole computer immediately."
+          }
+        }
+      ]
     }
   }
 }

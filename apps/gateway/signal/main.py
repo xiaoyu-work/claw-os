@@ -183,19 +183,6 @@ def _send(recipient: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound /v1/receive polling still pending. "
-            "Use ``send <recipient> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     number, err = _load_number()
     base_url = _load_base_url()
@@ -226,8 +213,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

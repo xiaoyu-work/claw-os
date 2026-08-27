@@ -18,6 +18,62 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "recipient",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "priority",
+          "kind": "integer",
+          "required": false
+        },
+        {
+          "name": "sound",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "url",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "url_title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "device",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "html",
+          "kind": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "ttl",
+          "kind": "integer",
+          "required": false
+        },
+        {
+          "name": "retry",
+          "kind": "integer",
+          "required": false
+        },
+        {
+          "name": "expire",
+          "kind": "integer",
+          "required": false
         }
       ],
       "needs": [

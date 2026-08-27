@@ -337,6 +337,9 @@ pub struct Arg {
     /// What kind of value this arg holds; the UI uses this to pick a
     /// widget and to validate the input.
     pub kind: ArgKind,
+    /// How the value is bound on the one-shot CLI.
+    #[serde(default)]
+    pub binding: ArgBinding,
     #[serde(default)]
     pub required: bool,
     #[serde(default)]
@@ -388,8 +391,27 @@ pub enum ArgKind {
     Text,
     /// Numeric input.
     Number,
+    /// Integer input.
+    Integer,
     /// Boolean toggle.
     Bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ArgBinding {
+    #[default]
+    Positional,
+    Flag,
+}
+
+impl ArgBinding {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Positional => "positional",
+            Self::Flag => "flag",
+        }
+    }
 }
 
 impl ArgKind {
@@ -402,6 +424,7 @@ impl ArgKind {
         match self {
             ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => value.is_string(),
             ArgKind::Number => value.is_number(),
+            ArgKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
             ArgKind::Bool => value.is_boolean(),
         }
     }
@@ -813,8 +836,11 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                 "required arguments cannot declare defaults".to_string(),
             ));
         }
-        if (arg.default.is_some() || arg.default_from.is_some())
-            && args[index + 1..].iter().any(|later| later.required)
+        if arg.binding == ArgBinding::Positional
+            && (arg.default.is_some() || arg.default_from.is_some())
+            && args[index + 1..]
+                .iter()
+                .any(|later| later.binding == ArgBinding::Positional && later.required)
         {
             return Err((
                 arg.name.clone(),

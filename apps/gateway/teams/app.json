@@ -23,6 +23,17 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "legacy",
+          "kind": "bool",
+          "required": false,
+          "default": false
         }
       ],
       "needs": [

@@ -50,10 +50,23 @@
       "additionalProperties": true,
       "properties": {
         "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
-        "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/bool cannot." },
+        "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
+        "binding": { "type": "string", "enum": ["positional", "flag"], "default": "positional", "description": "How one-shot CLI argv binds this value. Flag arguments use --name value (or a bare --name for true booleans)." },
         "required": { "type": "boolean" },
         "default": { "description": "Optional default value (any JSON type)." },
+        "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
         "label": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "argDefaultBinding": {
+      "type": "object",
+      "required": ["arg"],
+      "additionalProperties": false,
+      "properties": {
+        "arg": { "type": "string", "description": "Earlier declared string argument used as input." },
+        "transform": { "type": "string", "enum": ["identity", "url-path-basename"], "default": "identity" },
+        "prefix": { "type": "string", "default": "" },
+        "fallback": { "type": "string", "description": "Safe fallback when the transform produces no value." }
       }
     },
     "need": {
@@ -94,8 +107,10 @@
       "required": ["kind"],
       "additionalProperties": true,
       "properties": {
-        "kind": { "type": "string", "enum": ["from-arg", "fixed", "wild"] },
+        "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild"] },
         "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
+        "values": { "type": "object", "additionalProperties": { "$ref": "#/$defs/scope" }, "description": "Explicit argument-value to scope mapping for kind=from-arg-map." },
+        "wild_when": { "type": "string", "description": "Boolean argument that selects wildcard scope for kind=from-arg-or-wild." },
         "scope": { "$ref": "#/$defs/scope", "description": "Hard-coded scope (kind=fixed)." }
       }
     },

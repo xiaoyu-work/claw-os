@@ -23,6 +23,37 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "raw",
+          "kind": "bool",
+          "required": false,
+          "default": false,
+          "binding": "flag"
+        },
+        {
+          "name": "bearer",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "basic",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "api-key",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "hmac-sha256",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

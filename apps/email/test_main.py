@@ -265,22 +265,21 @@ class TestSendCommand(unittest.TestCase):
     def test_send_no_provider(self):
         result = run("send", ["--to", "x@y.com", "--subject", "hi", "--body", "hello"])
         self.assertIn("error", result)
-        self.assertIn("hint", result)
-        self.assertIn("no email provider configured", result["error"])
+        self.assertIn("missing required arguments", result["error"])
 
     def test_send_missing_to(self):
         os.environ["SMTP_HOST"] = "localhost"
-        result = run("send", ["--subject", "hi", "--body", "hello"])
+        result = run("send", ["--subject", "hi", "--body", "hello", "--provider", "smtp"])
         self.assertIn("error", result)
 
     def test_send_missing_subject(self):
         os.environ["SMTP_HOST"] = "localhost"
-        result = run("send", ["--to", "x@y.com", "--body", "hello"])
+        result = run("send", ["--to", "x@y.com", "--body", "hello", "--provider", "smtp"])
         self.assertIn("error", result)
 
     def test_send_missing_body(self):
         os.environ["SMTP_HOST"] = "localhost"
-        result = run("send", ["--to", "x@y.com", "--subject", "hi"])
+        result = run("send", ["--to", "x@y.com", "--subject", "hi", "--provider", "smtp"])
         self.assertIn("error", result)
 
     @patch("claw_test_email_main.smtplib.SMTP")
@@ -297,7 +296,7 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello"],
+            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
         )
         self.assertTrue(result.get("sent"))
         self.assertEqual(result["to"], "x@y.com")
@@ -322,6 +321,7 @@ class TestSendCommand(unittest.TestCase):
                 "--subject", "hi",
                 "--body", "hello",
                 "--cc", "z@y.com",
+                "--provider", "smtp",
             ],
         )
         self.assertTrue(result.get("sent"))
@@ -341,7 +341,7 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello"],
+            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
         )
         self.assertTrue(result.get("sent"))
         mock_server.starttls.assert_not_called()
@@ -357,7 +357,7 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello"],
+            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
         )
         self.assertTrue(result.get("sent"))
         mock_server.login.assert_not_called()
@@ -436,13 +436,11 @@ class TestSearchCommand(unittest.TestCase):
     def test_search_no_provider(self):
         result = run("search", ["--query", "test"])
         self.assertIn("error", result)
-        self.assertIn("hint", result)
 
     def test_search_smtp_only(self):
         os.environ["SMTP_HOST"] = "localhost"
         result = run("search", ["--query", "test"])
         self.assertIn("error", result)
-        self.assertIn("search requires gmail or outlook provider", result["error"])
 
     @patch("claw_test_email_main._gmail_request")
     def test_search_gmail(self, mock_req):
@@ -524,13 +522,11 @@ class TestListCommand(unittest.TestCase):
     def test_list_no_provider(self):
         result = run("list", [])
         self.assertIn("error", result)
-        self.assertIn("hint", result)
 
     def test_list_smtp_only(self):
         os.environ["SMTP_HOST"] = "localhost"
         result = run("list", [])
         self.assertIn("error", result)
-        self.assertIn("list requires gmail or outlook provider", result["error"])
 
     @patch("claw_test_email_main._gmail_request")
     def test_list_gmail(self, mock_req):
@@ -583,13 +579,11 @@ class TestReadCommand(unittest.TestCase):
     def test_read_no_provider(self):
         result = run("read", ["--id", "msg123"])
         self.assertIn("error", result)
-        self.assertIn("hint", result)
 
     def test_read_smtp_only(self):
         os.environ["SMTP_HOST"] = "localhost"
         result = run("read", ["--id", "msg123"])
         self.assertIn("error", result)
-        self.assertIn("read requires gmail or outlook provider", result["error"])
 
     @patch("claw_test_email_main._gmail_request")
     def test_read_gmail(self, mock_req):

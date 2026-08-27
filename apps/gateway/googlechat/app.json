@@ -23,6 +23,16 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "thread_key",
+          "kind": "text",
+          "required": false
         }
       ],
       "needs": [

@@ -11,131 +11,473 @@
   "icon": "📁",
   "runtime": "python",
   "entry": "main.py",
-
   "operations": {
     "ls": {
-      "label": { "en": "List files", "zh-CN": "列出文件" },
-      "summary": { "en": "Show the names of files inside a folder." },
+      "label": {
+        "en": "List files",
+        "zh-CN": "列出文件"
+      },
+      "summary": {
+        "en": "Show the names of files inside a folder."
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": false, "default": "." }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": false,
+          "default": "."
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Read the contents of the folder you asked to list." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read the contents of the folder you asked to list."
+          }
         }
       ]
     },
     "read": {
-      "label": { "en": "Read a file", "zh-CN": "读取文件" },
+      "label": {
+        "en": "Read a file",
+        "zh-CN": "读取文件"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "offset",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 0
+        },
+        {
+          "name": "limit",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 1000000
+        },
+        {
+          "name": "start",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "end",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Read the file you asked to open." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read the file you asked to open."
+          }
         }
       ]
     },
     "write": {
-      "label": { "en": "Write to a file", "zh-CN": "写入文件" },
+      "label": {
+        "en": "Write to a file",
+        "zh-CN": "写入文件"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "content",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.write",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Write the content you provided to that file." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Write the content you provided to that file."
+          }
         }
       ]
     },
     "rm": {
-      "label": { "en": "Delete a file", "zh-CN": "删除文件" },
+      "label": {
+        "en": "Delete a file",
+        "zh-CN": "删除文件"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.delete",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Remove the file you specified." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Remove the file you specified."
+          }
         }
       ]
     },
     "mkdir": {
-      "label": { "en": "Create a folder", "zh-CN": "创建文件夹" },
+      "label": {
+        "en": "Create a folder",
+        "zh-CN": "创建文件夹"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.write",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Create a new folder at that path." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Create a new folder at that path."
+          }
         }
       ]
     },
     "stat": {
-      "label": { "en": "Show file info", "zh-CN": "显示文件信息" },
+      "label": {
+        "en": "Show file info",
+        "zh-CN": "显示文件信息"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.meta",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Read metadata (size, dates, tags) for the file you asked about." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read metadata (size, dates, tags) for the file you asked about."
+          }
         }
       ]
     },
     "search": {
-      "label": { "en": "Search files", "zh-CN": "搜索文件" },
+      "label": {
+        "en": "Search files",
+        "zh-CN": "搜索文件"
+      },
       "args": [
-        { "name": "query", "kind": "text", "required": true },
-        { "name": "path",  "kind": "path", "required": false, "default": "/workspace" }
+        {
+          "name": "query",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "path",
+          "kind": "path",
+          "required": false,
+          "default": "/workspace"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Scan files under the path you specified for the search query." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Scan files under the path you specified for the search query."
+          }
         }
       ]
     },
     "tag": {
-      "label": { "en": "Tag a file", "zh-CN": "标记文件" },
+      "label": {
+        "en": "Tag a file",
+        "zh-CN": "标记文件"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true },
-        { "name": "tags", "kind": "text", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "tags",
+          "kind": "text",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.write",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Update the metadata sidecar next to the file with the new tags." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Update the metadata sidecar next to the file with the new tags."
+          }
         }
       ]
     },
     "recent": {
-      "label": { "en": "Recently changed files", "zh-CN": "最近更改的文件" },
+      "label": {
+        "en": "Recently changed files",
+        "zh-CN": "最近更改的文件"
+      },
       "args": [
-        { "name": "n", "kind": "number", "required": false }
+        {
+          "name": "n",
+          "kind": "integer",
+          "required": false,
+          "default": 10
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "fixed", "scope": { "kind": "path", "value": "/workspace/**" } },
-          "why": { "en": "Walk the workspace to find recently modified files." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/workspace/**"
+            }
+          },
+          "why": {
+            "en": "Walk the workspace to find recently modified files."
+          }
+        }
+      ]
+    },
+    "rename": {
+      "label": {
+        "en": "Rename a file or folder"
+      },
+      "args": [
+        {
+          "name": "src",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "dst",
+          "kind": "path",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "fs.delete",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "src"
+          },
+          "why": {
+            "en": "Remove the source path after renaming it."
+          }
+        },
+        {
+          "verb": "fs.write",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "dst"
+          },
+          "why": {
+            "en": "Create the renamed item at the destination path."
+          }
+        }
+      ]
+    },
+    "move": {
+      "label": {
+        "en": "Move a file or folder"
+      },
+      "args": [
+        {
+          "name": "src",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "dst",
+          "kind": "path",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "fs.delete",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "src"
+          },
+          "why": {
+            "en": "Remove the item from its source path."
+          }
+        },
+        {
+          "verb": "fs.write",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "dst"
+          },
+          "why": {
+            "en": "Create the moved item at the destination path."
+          }
+        }
+      ]
+    },
+    "copy": {
+      "label": {
+        "en": "Copy a file or folder"
+      },
+      "args": [
+        {
+          "name": "src",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "dst",
+          "kind": "path",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "src"
+          },
+          "why": {
+            "en": "Read the source item you asked to copy."
+          }
+        },
+        {
+          "verb": "fs.write",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "dst"
+          },
+          "why": {
+            "en": "Create the copied item at the destination path."
+          }
+        }
+      ]
+    },
+    "read_bytes": {
+      "label": {
+        "en": "Read binary file data"
+      },
+      "args": [
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "offset",
+          "kind": "integer",
+          "binding": "flag",
+          "required": false,
+          "default": 0
+        },
+        {
+          "name": "limit",
+          "kind": "integer",
+          "binding": "flag",
+          "required": false,
+          "default": 8388608
+        }
+      ],
+      "needs": [
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read binary data from the file you specified."
+          }
+        }
+      ]
+    },
+    "write_bytes": {
+      "label": {
+        "en": "Write binary file data"
+      },
+      "args": [
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "content",
+          "kind": "text",
+          "binding": "flag",
+          "required": false
+        }
+      ],
+      "needs": [
+        {
+          "verb": "fs.write",
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Write binary data to the file you specified."
+          }
         }
       ]
     }
   },
-
   "dependencies": {
-    "system": ["coreutils", "ripgrep"]
+    "system": [
+      "coreutils",
+      "ripgrep"
+    ]
   }
 }

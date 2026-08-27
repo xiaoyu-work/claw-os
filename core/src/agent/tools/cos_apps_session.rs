@@ -791,6 +791,7 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
         let json_type = match a.kind {
             ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
             ArgKind::Number => "number",
+            ArgKind::Integer => "integer",
             ArgKind::Bool => "boolean",
         };
         let mut prop = serde_json::Map::new();

@@ -14,111 +14,216 @@
       "monthly_units": 200000
     },
     "safety": "strict",
-    "origins": ["external-content"]
+    "origins": [
+      "external-content"
+    ]
   },
   "operations": {
     "read": {
-      "label": { "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)" },
+      "label": {
+        "en": "Read document content (PDF, DOCX, XLSX, PPTX, CSV, etc.)"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Read the contents of the file you asked to open." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read the contents of the file you asked to open."
+          }
         }
       ]
     },
     "info": {
-      "label": { "en": "Get document metadata without reading full content" },
+      "label": {
+        "en": "Get document metadata without reading full content"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        }
       ],
       "needs": [
         {
           "verb": "fs.meta",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Inspect the file's metadata (size, format) without reading its content." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Inspect the file's metadata (size, format) without reading its content."
+          }
         }
       ]
     },
     "convert": {
-      "label": { "en": "Convert document to another format" },
+      "label": {
+        "en": "Convert document to another format"
+      },
       "args": [
-        { "name": "path", "kind": "path", "required": true },
-        { "name": "to",   "kind": "name", "required": true }
+        {
+          "name": "path",
+          "kind": "path",
+          "required": true
+        },
+        {
+          "name": "to",
+          "kind": "name",
+          "required": true,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "path" },
-          "why": { "en": "Read the source document so it can be converted." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "path"
+          },
+          "why": {
+            "en": "Read the source document so it can be converted."
+          }
         },
         {
           "verb": "fs.write",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Write the converted document to disk." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Write the converted document to disk."
+          }
         }
       ]
     },
     "summarize": {
-      "label": { "en": "Summarize a document into 5 short bullet lines via the AI gate" },
+      "label": {
+        "en": "Summarize a document into 5 short bullet lines via the AI gate"
+      },
       "args": [
-        { "name": "file", "kind": "path", "required": false }
+        {
+          "name": "file",
+          "kind": "path",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "file" },
-          "why": { "en": "Read the document so its contents can be summarised." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "file"
+          },
+          "why": {
+            "en": "Read the document so its contents can be summarised."
+          }
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the document text to a model so it can be summarised for you." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the document text to a model so it can be summarised for you."
+          }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "doc" } },
-          "why": { "en": "Remember the document summary so the agent can recall it later." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "doc"
+            }
+          },
+          "why": {
+            "en": "Remember the document summary so the agent can recall it later."
+          }
         }
       ]
     },
     "explain": {
-      "label": { "en": "Explain the supplied content in plain prose via the AI gate" },
+      "label": {
+        "en": "Explain the supplied content in plain prose via the AI gate"
+      },
       "args": [
-        { "name": "file", "kind": "path", "required": false }
+        {
+          "name": "file",
+          "kind": "path",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "file" },
-          "why": { "en": "Read the document so it can be explained." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "file"
+          },
+          "why": {
+            "en": "Read the document so it can be explained."
+          }
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the content to a model so it can be explained for you." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the content to a model so it can be explained for you."
+          }
         }
       ]
     },
     "rewrite": {
-      "label": { "en": "Rewrite the supplied content following an instruction" },
+      "label": {
+        "en": "Rewrite the supplied content following an instruction"
+      },
       "args": [
-        { "name": "file", "kind": "path", "required": false },
-        { "name": "instruction", "kind": "name", "required": false }
+        {
+          "name": "file",
+          "kind": "path",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "instruction",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
+        }
       ],
       "needs": [
         {
           "verb": "fs.read",
-          "scope": { "kind": "from-arg", "arg": "file" },
-          "why": { "en": "Read the document so it can be rewritten." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "file"
+          },
+          "why": {
+            "en": "Read the document so it can be rewritten."
+          }
         },
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Send the content to a model to be rewritten per your instruction." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Send the content to a model to be rewritten per your instruction."
+          }
         }
       ]
     }

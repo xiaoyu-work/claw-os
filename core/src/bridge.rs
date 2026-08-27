@@ -929,7 +929,7 @@ fn bind_operation_args(
     operation: &Operation,
     args: &[String],
 ) -> Result<BoundOperationArgs, String> {
-    let mut values = parse_supplied_operation_args(operation, args);
+    let mut values = parse_supplied_operation_args(operation, args)?;
     for declaration in &operation.args {
         if declaration.required && !values.contains_key(&declaration.name) {
             return Err(format!(
@@ -948,20 +948,28 @@ fn bind_operation_args(
         let value = values
             .get(&name)
             .ok_or_else(|| format!("resolved default for `{name}` is missing"))?;
-        // Boolean declarations are never positional, so appending a
-        // resolved default as a bare token would both hand the App an
-        // argument it never asked for and shift the next positional the
-        // authority re-binds from this argv. The value stays in
-        // `values`, and the authority fills it from the same manifest
-        // default, so both sides still agree.
-        if operation
+        let declaration = operation
             .args
             .iter()
-            .any(|declaration| declaration.name == name && declaration.kind == ArgKind::Bool)
-        {
-            continue;
+            .find(|declaration| declaration.name == name)
+            .ok_or_else(|| format!("resolved default for undeclared arg `{name}`"))?;
+        match declaration.binding {
+            crate::caps::manifest::ArgBinding::Positional => {
+                if declaration.kind != ArgKind::Bool {
+                    argv.push(arg_value_to_string(value)?);
+                }
+            }
+            crate::caps::manifest::ArgBinding::Flag => {
+                if declaration.kind == ArgKind::Bool {
+                    if value.as_bool() == Some(true) {
+                        argv.push(format!("--{}", crate::caps::args::flag_name(declaration)));
+                    }
+                } else {
+                    argv.push(format!("--{}", crate::caps::args::flag_name(declaration)));
+                    argv.push(arg_value_to_string(value)?);
+                }
+            }
         }
-        argv.push(arg_value_to_string(value)?);
     }
     for declaration in &operation.args {
         if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
@@ -974,7 +982,7 @@ fn bind_operation_args(
 fn parse_supplied_operation_args(
     operation: &Operation,
     args: &[String],
-) -> BTreeMap<String, serde_json::Value> {
+) -> Result<BTreeMap<String, serde_json::Value>, String> {
     crate::caps::args::bind_supplied_cli_args(&operation.args, args)
 }
 
@@ -1017,7 +1025,7 @@ fn scope_for_arg(kind: ArgKind, value: &serde_json::Value) -> Option<Scope> {
         ArgKind::Path => Some(Scope::path(value)),
         ArgKind::Host => Some(Scope::host(value)),
         ArgKind::Name => Some(Scope::name(value)),
-        ArgKind::Text | ArgKind::Number | ArgKind::Bool => None,
+        ArgKind::Text | ArgKind::Number | ArgKind::Integer | ArgKind::Bool => None,
     }
 }
 

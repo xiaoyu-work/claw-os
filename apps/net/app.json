@@ -11,22 +11,64 @@
   "runtime": "python",
   "operations": {
     "fetch": {
-      "label": { "en": "Make HTTP request (GET/POST/PUT/DELETE)" },
+      "label": {
+        "en": "Make HTTP request (GET/POST/PUT/DELETE)"
+      },
       "args": [
-        { "name": "url", "kind": "text", "required": true }
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        },
+        {
+          "name": "method",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "default": "GET"
+        },
+        {
+          "name": "data",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "header",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "timeout",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag",
+          "default": 30
+        }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the URL you asked to fetch." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Open a network connection to the URL you asked to fetch."
+          }
         }
       ]
     },
     "download": {
-      "label": { "en": "Download file from URL" },
+      "label": {
+        "en": "Download file from URL"
+      },
       "args": [
-        { "name": "url",    "kind": "text", "required": true },
+        {
+          "name": "url",
+          "kind": "text",
+          "required": true
+        },
         {
           "name": "output",
           "kind": "path",
@@ -36,19 +78,29 @@
             "transform": "url-path-basename",
             "prefix": "~/",
             "fallback": "download"
-          }
+          },
+          "binding": "flag"
         }
       ],
       "needs": [
         {
           "verb": "net.dial",
-          "scope": { "kind": "wild" },
-          "why": { "en": "Open a network connection to the URL you asked to download from." }
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Open a network connection to the URL you asked to download from."
+          }
         },
         {
           "verb": "fs.write",
-          "scope": { "kind": "from-arg", "arg": "output" },
-          "why": { "en": "Save the downloaded file to the path you specified." }
+          "scope": {
+            "kind": "from-arg",
+            "arg": "output"
+          },
+          "why": {
+            "en": "Save the downloaded file to the path you specified."
+          }
         }
       ]
     }

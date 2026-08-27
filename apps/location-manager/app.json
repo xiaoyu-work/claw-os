@@ -1,20 +1,62 @@
 {
   "id": "location-manager",
   "version": "0.1.0",
-  "name": {"en": "Location Manager"},
-  "summary": {"en": "Request GeoClue location fixes and offline timezone suggestions"},
+  "name": {
+    "en": "Location Manager"
+  },
+  "summary": {
+    "en": "Request GeoClue location fixes and offline timezone suggestions"
+  },
   "icon": "📍",
   "runtime": "python",
   "operations": {
     "locate": {
-      "label": {"en": "Request current location"},
-      "args": [{"name": "accuracy", "kind": "name", "required": false}],
-      "needs": [{"verb": "device.location", "scope": {"kind": "wild"}, "why": {"en": "Request geographic coordinates from the system GeoClue service."}}]
+      "label": {
+        "en": "Request current location"
+      },
+      "args": [
+        {
+          "name": "accuracy",
+          "kind": "name",
+          "required": false,
+          "default": "city"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "device.location",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Request geographic coordinates from the system GeoClue service."
+          }
+        }
+      ]
     },
     "timezone": {
-      "label": {"en": "Suggest the current timezone"},
-      "args": [{"name": "accuracy", "kind": "name", "required": false}],
-      "needs": [{"verb": "device.location", "scope": {"kind": "wild"}, "why": {"en": "Use a GeoClue fix to suggest nearby IANA timezone regions."}}]
+      "label": {
+        "en": "Suggest the current timezone"
+      },
+      "args": [
+        {
+          "name": "accuracy",
+          "kind": "name",
+          "required": false,
+          "default": "city"
+        }
+      ],
+      "needs": [
+        {
+          "verb": "device.location",
+          "scope": {
+            "kind": "wild"
+          },
+          "why": {
+            "en": "Use a GeoClue fix to suggest nearby IANA timezone regions."
+          }
+        }
+      ]
     }
   }
 }

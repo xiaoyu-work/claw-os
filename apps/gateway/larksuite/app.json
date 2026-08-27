@@ -18,6 +18,28 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "post",
+          "kind": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "card",
+          "kind": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "card_json",
+          "kind": "text",
+          "required": false
         }
       ],
       "needs": [

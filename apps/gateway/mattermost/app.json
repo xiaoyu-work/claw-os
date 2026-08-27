@@ -23,6 +23,16 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "username",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "icon_url",
+          "kind": "text",
+          "required": false
         }
       ],
       "needs": [

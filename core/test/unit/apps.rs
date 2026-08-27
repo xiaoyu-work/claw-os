@@ -12,7 +12,8 @@ fn operation_schema_preserves_literal_and_bound_defaults() {
                   "label": "Run",
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
-                    {"name": "root", "kind": "path", "default": "/workspace"},
+                    {"name": "root", "kind": "path", "binding": "flag",
+                     "default": "/workspace"},
                     {"name": "output", "kind": "path",
                      "default_from": {
                        "arg": "url",
@@ -32,7 +33,8 @@ fn operation_schema_preserves_literal_and_bound_defaults() {
 
     assert_eq!(parameters[1]["type"], "string");
     assert_eq!(parameters[1]["required"], false);
-    assert_eq!(parameters[1]["kind"], "positional");
+    assert_eq!(parameters[1]["kind"], "flag");
+    assert_eq!(parameters[1]["binding"], "flag");
     assert_eq!(parameters[1]["default"], "/workspace");
     assert_eq!(parameters[2]["type"], "string");
     assert_eq!(parameters[2]["required"], false);
@@ -138,6 +140,17 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     );
     assert_eq!(exec.operations["which"].args[0].name, "name");
     assert_eq!(exec.operations["stop"].args[0].name, "pid");
+    let timeout = &exec.operations["run"].args[1];
+    assert_eq!(timeout.kind, crate::caps::manifest::ArgKind::Integer);
+    assert_eq!(
+        timeout.binding,
+        crate::caps::manifest::ArgBinding::Flag
+    );
+    assert_eq!(timeout.default, Some(serde_json::json!(300)));
+    assert_eq!(
+        exec.operations["script"].args[1].default,
+        Some(serde_json::json!("bash"))
+    );
 
     let slack = load(&["gateway", "slack"]);
     assert_eq!(
@@ -148,4 +161,36 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
             .collect::<Vec<_>>(),
         ["send", "status"]
     );
+
+    let fs = load(&["fs"]);
+    for operation in ["rename", "move", "copy", "read_bytes", "write_bytes"] {
+        assert!(
+            fs.operations.contains_key(operation),
+            "fs manifest omitted `{operation}`"
+        );
+    }
+    assert_eq!(fs.operations["rename"].needs.len(), 2);
+    assert_eq!(fs.operations["copy"].needs.len(), 2);
+    assert_eq!(
+        fs.operations["read_bytes"].args[1].binding,
+        crate::caps::manifest::ArgBinding::Flag
+    );
+
+    let mail = load(&["mail-ai"]);
+    for (operation, required) in [
+        ("summarize", "body"),
+        ("smart_reply", "thread"),
+        ("smart_compose", "intent"),
+        ("translate", "text"),
+        ("chat", "question"),
+    ] {
+        assert!(
+            mail.operations[operation]
+                .args
+                .iter()
+                .any(|arg| arg.name == required && arg.required),
+            "mail-ai `{operation}` omitted required flag `{required}`"
+        );
+    }
+    assert_eq!(mail.operations["triage"].args.len(), 4);
 }

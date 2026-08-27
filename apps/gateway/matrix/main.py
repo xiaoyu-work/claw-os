@@ -153,19 +153,6 @@ def _send(room_id: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Matrix /sync long-poll loop still pending. "
-            "Use ``send <room_id> <text>`` for outbound until then."
-        ),
-    }
-
-
 def _status() -> dict:
     return {
         "ok": True,
@@ -191,8 +178,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

@@ -18,6 +18,38 @@
           "name": "text",
           "kind": "text",
           "required": true
+        },
+        {
+          "name": "markdown",
+          "kind": "bool",
+          "required": false,
+          "default": false
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "keyword",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "at_mobiles",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "at_user_ids",
+          "kind": "text",
+          "required": false
+        },
+        {
+          "name": "at_all",
+          "kind": "bool",
+          "required": false,
+          "default": false
         }
       ],
       "needs": [

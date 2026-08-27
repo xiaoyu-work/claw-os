@@ -654,7 +654,8 @@ fn operation_plan(
         .operations
         .get(operation)
         .ok_or_else(|| format!("App `{}` has no operation `{operation}`", app.manifest.id))?;
-    let mut values = crate::caps::args::bind_cli_args(&declared.args, args);
+    let mut values = crate::caps::args::bind_cli_args(&declared.args, args)
+        .map_err(|error| format!("App `{}` operation `{operation}`: {error}", app.manifest.id))?;
     crate::caps::args::validate_bound_args(&declared.args, &values)
         .map_err(|error| format!("App `{}` operation `{operation}`: {error}", app.manifest.id))?;
     // Resolve paths exactly as the launcher did, against the peer's own

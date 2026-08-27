@@ -1,27 +1,94 @@
 {
   "id": "event-center",
   "version": "0.1.0",
-  "name": {"en": "Event Center"},
-  "summary": {"en": "Query persistent udev, systemd, journal, storage, security, and process-exit events"},
+  "name": {
+    "en": "Event Center"
+  },
+  "summary": {
+    "en": "Query persistent udev, systemd, journal, storage, security, and process-exit events"
+  },
   "icon": "📡",
   "runtime": "python",
   "operations": {
     "status": {
-      "label": {"en": "Inspect event-source health"},
-      "needs": [{"verb": "sys.events", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "observe"}}, "why": {"en": "Read watcher status and active pidfd subscriptions."}}]
+      "label": {
+        "en": "Inspect event-source health"
+      },
+      "needs": [
+        {
+          "verb": "sys.events",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "observe"
+            }
+          },
+          "why": {
+            "en": "Read watcher status and active pidfd subscriptions."
+          }
+        }
+      ]
     },
     "recent": {
-      "label": {"en": "Read recent system events"},
+      "label": {
+        "en": "Read recent system events"
+      },
       "args": [
-        {"name": "source", "kind": "name", "required": false},
-        {"name": "limit", "kind": "number", "required": false, "default": 100}
+        {
+          "name": "source",
+          "kind": "name",
+          "required": false
+        },
+        {
+          "name": "limit",
+          "kind": "integer",
+          "required": false,
+          "default": 100
+        }
       ],
-      "needs": [{"verb": "sys.events", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "observe"}}, "why": {"en": "Read persistent system event records, including sensitive security/process context."}}]
+      "needs": [
+        {
+          "verb": "sys.events",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "observe"
+            }
+          },
+          "why": {
+            "en": "Read persistent system event records, including sensitive security/process context."
+          }
+        }
+      ]
     },
     "watch-pid": {
-      "label": {"en": "Subscribe to one process exit"},
-      "args": [{"name": "pid", "kind": "number", "required": true}],
-      "needs": [{"verb": "sys.events", "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "observe"}}, "why": {"en": "Open a pidfd and emit a race-free event when the selected process exits."}}]
+      "label": {
+        "en": "Subscribe to one process exit"
+      },
+      "args": [
+        {
+          "name": "pid",
+          "kind": "integer",
+          "required": true
+        }
+      ],
+      "needs": [
+        {
+          "verb": "sys.events",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "observe"
+            }
+          },
+          "why": {
+            "en": "Open a pidfd and emit a race-free event when the selected process exits."
+          }
+        }
+      ]
     }
   }
 }

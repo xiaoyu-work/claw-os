@@ -88,12 +88,13 @@ fn registry_name_replaces_dots_with_underscores() {
 
 #[test]
 fn build_schema_marks_required_args() {
-    use crate::caps::manifest::{Arg, ArgKind};
+    use crate::caps::manifest::{Arg, ArgBinding, ArgKind};
     use crate::i18n::LocalizedText;
     let args = vec![
         Arg {
             name: "key".into(),
             kind: ArgKind::Name,
+            binding: ArgBinding::Positional,
             required: true,
             default: None,
             default_from: None,
@@ -102,6 +103,7 @@ fn build_schema_marks_required_args() {
         Arg {
             name: "ttl".into(),
             kind: ArgKind::Number,
+            binding: ArgBinding::Positional,
             required: false,
             default: Some(serde_json::json!(60)),
             default_from: None,

@@ -103,21 +103,37 @@ The bridge calls `mod.run(command, args)` exactly once per invocation
 
 * `command` is a **string** — the manifest-declared operation name, such as
   `"say"`. The kernel rejects undeclared operations before starting the app.
-* `args` is a **list of strings**, not a dict — every CLI token after
-  the op name (`["--foo", "bar"]` for `cos app hello say --foo bar`),
-  followed by any manifest defaults the bridge resolved. Apps parse their
-  own flags; see
+* `args` is a **list of strings**, not a dict — the bridge validates every
+  declared positional and `--flag` value, rejects undeclared flags, and then
+  passes the effective argv (including manifest defaults) to the handler. Apps
+  parse the already validated values; see
   [`apps/notify/main.py:46-99`](../apps/notify/main.py) for the
   conventional positional-vs-flag style.
 
-An optional operation argument may declare a literal `default` matching its
-`kind`. If its default depends on an earlier string argument, use
+Each argument declares a value `kind`: `path`, `host`, `name`, `text`,
+`number`, `integer`, or `bool`. `number` accepts decimal values while
+`integer` rejects fractional input. `binding` is either `positional` (the
+backwards-compatible default) or `flag`:
+
+```jsonc
+{
+  "name": "timeout",
+  "kind": "integer",
+  "binding": "flag",
+  "required": false,
+  "default": 30
+}
+```
+
+An optional argument may declare a literal `default` matching its `kind`. If
+its default depends on an earlier string argument, use
 `default_from`:
 
 ```jsonc
 {
   "name": "output",
   "kind": "path",
+  "binding": "flag",
   "required": false,
   "default_from": {
     "arg": "url",
@@ -131,10 +147,11 @@ An optional operation argument may declare a literal `default` matching its
 The supported transforms are `identity` and `url-path-basename`.
 `url-path-basename` requires a text source, path destination, and safe
 single-component fallback. `default_from` is limited to one-shot operations.
-Defaulted arguments must be optional and follow every required argument.
-The bridge validates and resolves defaults, converts path values to the same
-absolute path used for capability derivation, and appends omitted values as
-positional strings in declaration order. The handler must consume that value
+Defaulted arguments must be optional; defaulted positional arguments follow
+all required positional arguments. The bridge resolves paths before capability
+derivation and materializes defaults using their declared binding: positional
+values remain positional, non-boolean flags become `--name value`, and a true
+boolean flag becomes `--name`. The handler must consume that materialized value
 rather than recompute a separate default.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
@@ -284,6 +301,9 @@ Describe every operation in the manifest:
 The manifest is the only maintained operation and argument contract. The entry
 point implements behavior for those declared operations; it must not define
 `_schema()`, handle `__schema__`, or maintain a parallel parameter list.
+Static app tests compare manifest operations with dispatcher branches, require
+parser flags to use `binding: "flag"`, and compare argparse required/default/
+integer behavior without importing entrypoints.
 
 ## 7. AI features
 

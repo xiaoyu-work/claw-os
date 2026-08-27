@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::manifest::{Arg, ArgKind};
+use super::manifest::{Arg, ArgBinding, ArgKind};
 
 /// Bind raw CLI tokens to `decls`, the operation's declared arguments.
 ///
@@ -28,22 +28,24 @@ use super::manifest::{Arg, ArgKind};
 /// [`Operation::apply_arg_defaults`](crate::caps::manifest::Operation)
 /// so the launcher can also report them back as effective argv.
 ///
-/// Unknown flags are consumed (flag and, when it looks like a value,
-/// the token after it) so an argument the manifest never declared can
-/// never slide into the next positional slot and silently become a
-/// capability scope.
-pub fn bind_supplied_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String, Value> {
+/// Unknown flags are rejected so only manifest-declared fields can reach an
+/// App. Positional tokens bind only to positional declarations; remaining
+/// tokens stay in argv for handlers with variadic positional behavior.
+pub fn bind_supplied_cli_args(
+    decls: &[Arg],
+    raw: &[String],
+) -> Result<BTreeMap<String, Value>, String> {
     let mut values = BTreeMap::new();
     let mut positionals = Vec::new();
     let mut index = 0;
     while index < raw.len() {
         let token = &raw[index];
         if let Some(flag) = token.strip_prefix("--") {
-            let (name, inline) = flag
+            let (raw_name, inline) = flag
                 .split_once('=')
                 .map(|(name, value)| (name, Some(value)))
                 .unwrap_or((flag, None));
-            let name = match_arg_name(decls, name);
+            let name = match_flag_name(decls, raw_name);
             if let Some(decl) = name.and_then(|name| decls.iter().find(|decl| decl.name == name)) {
                 let value = inline.map(str::to_string).or_else(|| {
                     if decl.kind != ArgKind::Bool {
@@ -57,15 +59,16 @@ pub fn bind_supplied_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String,
                 if inline.is_none() && value.is_some() {
                     index += 1;
                 }
-                if let Some(parsed) = parse_arg_value(decl.kind, value.as_deref()) {
-                    values.insert(decl.name.clone(), parsed);
-                }
-            } else if inline.is_none()
-                && raw
-                    .get(index + 1)
-                    .is_some_and(|next| !next.starts_with("--"))
-            {
-                index += 1;
+                let parsed = parse_arg_value(decl.kind, value.as_deref()).ok_or_else(|| {
+                    format!(
+                        "flag `--{}` requires a valid {} value",
+                        flag_name(decl),
+                        kind_label(decl.kind)
+                    )
+                })?;
+                values.insert(decl.name.clone(), parsed);
+            } else {
+                return Err(format!("unknown operation flag `--{raw_name}`"));
             }
         } else {
             positionals.push(token.clone());
@@ -75,7 +78,10 @@ pub fn bind_supplied_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String,
 
     let mut positional = positionals.into_iter();
     for decl in decls {
-        if values.contains_key(&decl.name) || decl.kind == ArgKind::Bool {
+        if values.contains_key(&decl.name)
+            || decl.binding != ArgBinding::Positional
+            || decl.kind == ArgKind::Bool
+        {
             continue;
         }
         if let Some(raw) = positional.next() {
@@ -84,7 +90,7 @@ pub fn bind_supplied_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String,
             }
         }
     }
-    values
+    Ok(values)
 }
 
 /// Bind raw CLI tokens and fill in the declared literal defaults.
@@ -93,8 +99,11 @@ pub fn bind_supplied_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String,
 /// — defaults it resolved are already present as tokens there, so this
 /// pass only backfills anything still unbound and gives booleans their
 /// declared value.
-pub fn bind_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String, Value> {
-    let mut values = bind_supplied_cli_args(decls, raw);
+pub fn bind_cli_args(
+    decls: &[Arg],
+    raw: &[String],
+) -> Result<BTreeMap<String, Value>, String> {
+    let mut values = bind_supplied_cli_args(decls, raw)?;
     for decl in decls {
         if values.contains_key(&decl.name) {
             continue;
@@ -108,7 +117,7 @@ pub fn bind_cli_args(decls: &[Arg], raw: &[String]) -> BTreeMap<String, Value> {
             values.insert(decl.name.clone(), default.clone());
         }
     }
-    values
+    Ok(values)
 }
 
 /// Where relative and `~`-prefixed path arguments resolve from.
@@ -202,6 +211,7 @@ fn value_matches_kind(kind: ArgKind, value: &Value) -> bool {
     match kind {
         ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => value.is_string(),
         ArgKind::Number => value.is_number(),
+        ArgKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
         ArgKind::Bool => value.is_boolean(),
     }
 }
@@ -213,15 +223,21 @@ fn kind_label(kind: ArgKind) -> &'static str {
         ArgKind::Name => "name",
         ArgKind::Text => "text",
         ArgKind::Number => "number",
+        ArgKind::Integer => "integer",
         ArgKind::Bool => "boolean",
     }
 }
 
-fn match_arg_name<'a>(decls: &'a [Arg], raw: &str) -> Option<&'a str> {
+fn match_flag_name<'a>(decls: &'a [Arg], raw: &str) -> Option<&'a str> {
     decls
         .iter()
-        .find(|decl| decl.name == raw || decl.name.replace('_', "-") == raw)
+        .filter(|decl| decl.binding == ArgBinding::Flag)
+        .find(|decl| decl.name == raw || flag_name(decl) == raw)
         .map(|decl| decl.name.as_str())
+}
+
+pub fn flag_name(arg: &Arg) -> String {
+    arg.name.replace('_', "-")
 }
 
 fn parse_arg_value(kind: ArgKind, raw: Option<&str>) -> Option<Value> {
@@ -238,6 +254,10 @@ fn parse_arg_value(kind: ArgKind, raw: Option<&str>) -> Option<Value> {
         ArgKind::Number => raw
             .and_then(|value| value.parse::<f64>().ok())
             .and_then(serde_json::Number::from_f64)
+            .map(Value::Number),
+        ArgKind::Integer => raw
+            .and_then(|value| value.parse::<i64>().ok())
+            .map(serde_json::Number::from)
             .map(Value::Number),
         ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => {
             raw.map(|value| Value::String(value.to_string()))

@@ -167,20 +167,6 @@ def _send(target: str, text: str) -> dict:
         raise
 
 
-def _not_yet(command: str) -> dict:
-    return {
-        "ok": False,
-        "platform": PLATFORM,
-        "command": command,
-        "status": "not_yet_implemented",
-        "note": (
-            "Inbound Rocket.Chat messages need either Realtime API "
-            "(WebSocket) or an outgoing-webhook integration. Use "
-            "``send <target> <text>`` for outbound."
-        ),
-    }
-
-
 def _status() -> dict:
     cfg, err = _load_config()
     return {
@@ -214,8 +200,6 @@ def run(command: str, args):
         return result
     if command == "status":
         return _status()
-    if command in {"start", "stop"}:
-        return _not_yet(command)
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

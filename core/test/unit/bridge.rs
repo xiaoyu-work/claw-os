@@ -243,7 +243,7 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
                   "label": "Download",
                   "args": [
                     {"name": "url", "kind": "text", "required": true},
-                    {"name": "output", "kind": "path",
+                    {"name": "output", "kind": "path", "binding": "flag",
                      "default_from": {
                        "arg": "url",
                        "transform": "url-path-basename",
@@ -301,7 +301,11 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     let default_output = home.path().join("artifact.bin");
     assert_eq!(
         download.argv,
-        vec![url.clone(), default_output.to_string_lossy().into_owned()]
+        vec![
+            url.clone(),
+            "--output".to_string(),
+            default_output.to_string_lossy().into_owned()
+        ]
     );
     let mut download_parent = CapSet::new();
     download_parent.insert(Cap::new(
@@ -411,8 +415,11 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
                 "sync": {
                   "label": "Sync",
                   "args": [
-                    {"name": "recursive", "kind": "bool", "default": true},
-                    {"name": "target", "kind": "name", "default": "primary"}
+                    {"name": "recursive", "kind": "bool", "binding": "flag",
+                     "default": true},
+                    {"name": "target", "kind": "name", "default": "primary"},
+                    {"name": "limit", "kind": "integer", "binding": "flag",
+                     "default": 10}
                   ],
                   "needs": [
                     {"verb": "data.kv.read",
@@ -429,20 +436,27 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
     let bound = bind_operation_args(operation, &[]).unwrap();
     assert_eq!(
         bound.argv,
-        vec!["primary".to_string()],
-        "a boolean default is not a positional token"
+        vec![
+            "--recursive".to_string(),
+            "primary".to_string(),
+            "--limit".to_string(),
+            "10".to_string()
+        ],
+        "flag defaults retain their declared argv binding"
     );
     assert_eq!(bound.values["recursive"], serde_json::Value::Bool(true));
     assert_eq!(
         bound.values["target"],
         serde_json::Value::String("primary".into())
     );
+    assert_eq!(bound.values["limit"], serde_json::json!(10));
 
     // The authority re-binds this argv and must reach the same values,
     // otherwise the scope it derives would name a different resource.
-    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv);
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
     assert_eq!(rebound["target"], bound.values["target"]);
     assert_eq!(rebound["recursive"], bound.values["recursive"]);
+    assert_eq!(rebound["limit"], bound.values["limit"]);
 
     let mut parent = CapSet::new();
     parent.insert(Cap::new(Verb::DATA_KV_READ, Scope::name("primary")));

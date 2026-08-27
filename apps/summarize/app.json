@@ -14,31 +14,48 @@
       "monthly_units": 100000
     },
     "safety": "strict",
-    "origins": ["external-content"]
+    "origins": [
+      "external-content"
+    ]
   },
   "operations": {
     "run": {
-      "label": { "en": "Summarize text" },
-      "summary": { "en": "Read text from --file or stdin and return a 3-line summary." },
+      "label": {
+        "en": "Summarize text"
+      },
+      "summary": {
+        "en": "Read text from --file or stdin and return a 3-line summary."
+      },
       "args": [
         {
           "name": "file",
           "kind": "path",
-          "required": false
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [
         {
           "verb": "ai.chat.untrusted",
-          "scope": { "kind": "wild" },
+          "scope": {
+            "kind": "wild"
+          },
           "why": {
             "en": "Send the text to a model so it can be condensed for you."
           }
         },
         {
           "verb": "memory.write",
-          "scope": { "kind": "fixed", "scope": { "kind": "self-ref", "value": "summarize" } },
-          "why": { "en": "Remember the summary so the agent can recall it later." }
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "self-ref",
+              "value": "summarize"
+            }
+          },
+          "why": {
+            "en": "Remember the summary so the agent can recall it later."
+          }
         }
       ]
     }
