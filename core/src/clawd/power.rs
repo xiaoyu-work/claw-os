@@ -9,23 +9,28 @@ use std::time::{Duration, Instant};
 use crate::caps::{Cap, CapSet, Scope, Verb};
 
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 1024 * 1024;
 static POWER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client);
-        return Err("Power Manager requires Linux systemd-logind".to_string());
+        return Err(BrokerError::unavailable(
+            "Power Manager requires Linux systemd-logind",
+        ));
     }
 
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("Power Manager requires root clawd".to_string());
+            return Err(BrokerError::unavailable(
+                "Power Manager requires root clawd",
+            ));
         }
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
@@ -38,7 +43,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             .get("confirm")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        validate_action(&action, confirm)?;
         let requested = if action == "status" {
             Cap::new(Verb::SYS_OBSERVE, Scope::name("power"))
         } else {
@@ -48,10 +52,12 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             authorize_session(&session_id, peer_pid, requested)
         })
         .await?;
+        validate_action(&action, confirm).map_err(BrokerError::execution)?;
 
         if action == "status" {
-            return power_status().await;
+            return power_status().await.map_err(BrokerError::execution);
         }
+        busctl_path().map_err(backend_unavailable)?;
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
             POWER_LOCK
@@ -59,38 +65,60 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
                 .lock(),
         )
         .await
-        .map_err(|_| "Power Manager is busy with another operation".to_string())?;
-        request_power_action(&action, uid, &session_id).await
+        .map_err(|_| BrokerError::unavailable("Power Manager is busy with another operation"))?;
+        request_power_action(&action, uid, &session_id)
+            .await
+            .map_err(BrokerError::execution)
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
+fn backend_unavailable(message: String) -> BrokerError {
+    BrokerError::unavailable(message)
+}
+
+fn authorize_session(
+    session_id: &str,
+    peer_pid: u32,
+    requested: Cap,
+) -> Result<(), BrokerError> {
     let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("power-manager session not found: {session_id}"))?;
+        .ok_or_else(|| {
+            BrokerError::authorization(format!("power-manager session not found: {session_id}"))
+        })?;
     if session.app_id.as_deref() != Some("power-manager") {
-        return Err("power control is restricted to the power-manager App".to_string());
+        return Err(BrokerError::authorization(
+            "power control is restricted to the power-manager App",
+        ));
     }
     if session.pending_bind || session.pid == 0 {
-        return Err("power-manager session is not bound to a process".to_string());
+        return Err(BrokerError::authorization(
+            "power-manager session is not bound to a process",
+        ));
     }
     let expected_start = session
         .start_time_ticks
-        .ok_or_else(|| "power-manager session has no process identity".to_string())?;
+        .ok_or_else(|| {
+            BrokerError::authorization("power-manager session has no process identity")
+        })?;
     if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("power-manager session process identity is stale".to_string());
+        return Err(BrokerError::authorization(
+            "power-manager session process identity is stale",
+        ));
     }
     if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("power request did not originate from the authorized session".to_string());
+        return Err(BrokerError::authorization(
+            "power request did not originate from the authorized session",
+        ));
     }
     let mut caps = session.caps.unwrap_or_else(CapSet::new);
     if let Some(transient) = session.transient_caps {
         caps.extend(transient.iter().cloned());
     }
     if !caps.covers(&requested) {
-        return Err(format!(
+        return Err(BrokerError::authorization(format!(
             "power-manager session lacks {}",
             requested.verb.as_str()
-        ));
+        )));
     }
     Ok(())
 }

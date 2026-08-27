@@ -193,7 +193,11 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
 
     let response = match admit(&frame.body, &client, &admission) {
         Ok(admitted) => {
-            let facts = audit_policy::request_facts(admitted.route.name, &admitted.params);
+            let facts = audit_policy::request_facts_for_route(
+                admitted.route.name,
+                admitted.route.audit_fields,
+                &admitted.params,
+            );
             let response = dispatch(
                 admitted.route,
                 admitted.id,
@@ -358,7 +362,7 @@ async fn dispatch(
     };
     match result {
         Ok(value) => Response::ok(id, value),
-        Err(error) => Response::error_with_data(id, "request_failed", error),
+        Err(error) => route.errors.response(id, error),
     }
 }
 

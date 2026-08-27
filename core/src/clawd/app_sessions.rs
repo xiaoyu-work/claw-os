@@ -785,7 +785,7 @@ fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
         )
         .into();
     }
-    BrokerError::with_data(
+    BrokerError::authorization_required(
         format!("launcher cannot delegate {summary}; awaiting approval"),
         json!({
             "status": "approval_required",

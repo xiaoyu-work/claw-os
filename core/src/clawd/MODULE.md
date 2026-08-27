@@ -23,7 +23,7 @@ and agent tasks.
 | `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
 | `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
 | `wire/` | Versioned envelope, bounded field types, one typed request body per route |
-| `routes.rs` | The route registry: wire name, typed decode, access class, budget, handler |
+| `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, handler |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
@@ -69,14 +69,19 @@ with `MSG_CMSG_CLOEXEC` set, and the request is refused.
 
 `routes.rs` is the only route surface. A row declares the wire name, the typed
 `deny_unknown_fields` body, the access class, whether the route mutates, its
-concurrency and time budget, and its handler; the `Command` enum, the table and
-the name lookup are all generated from those rows, so a route cannot exist
-without declaring every one of them, and an in-repo client cannot name a route
-that does not exist. Unknown commands, undeclared fields, wrong types,
-oversized strings and over-deep payloads all fail closed *before* the access
-class is consulted. Mutating routes are never cancelled by the broker: dropping
-one at an await point could leave a package half-installed, so they are bounded
-by their own tool and lock timeouts plus a per-route in-flight ceiling.
+concurrency and time budget, safe audit fields, and its handler; the `Command`
+enum, the table and the name lookup are all generated from those rows, so a
+route cannot exist without declaring every one of them, and an in-repo client
+cannot name a route that does not exist. Unknown commands, undeclared fields,
+wrong types, oversized strings and over-deep payloads all fail closed *before*
+the access class is consulted. Unknown, malformed, unauthorized, unavailable
+and handler execution failures have separate stable response codes. Subsystems
+with authorization or backend-availability decisions return typed
+`BrokerError`s at those decision points; ordinary validation/provider failures
+remain execution errors without classifying by message text. Mutating routes
+are never cancelled by the broker: dropping one at an await point could leave a
+package half-installed, so they are bounded by their own tool and lock timeouts
+plus a per-route in-flight ceiling.
 
 Resource ceilings are fixed at startup and live in `transport/limits.rs`:
 connections and in-flight requests, globally and per authenticated principal;
@@ -97,14 +102,12 @@ for identity or authority; derive them from the connection/session boundary.
 Nothing a caller sends is written to a durable record on trust.
 `server.rs` projects every dispatched request through [`crate::audit_policy`]
 before dispatch and hands the same projection to the broker audit log and the
-system operations journal, so the two sinks cannot disagree. That policy is an
-allowlist keyed by command: a route contributes only the fields it has
-classified as safe, and a command with no entry is audited by outcome alone —
-no name, no arguments. [`routes::ROUTES`](routes.rs) is the canonical route list
-a unit test checks the policy table against, so a new command cannot reach a
-sink unclassified. Handler messages are caller-derived and are stored as a
-length plus a keyed digest; a route that wants its failure named uses
-`BrokerError::classified` or `Response::error_classified`.
+system operations journal, so the two sinks cannot disagree. Each route carries
+the allowlist of fields it has classified as safe; an empty list records the
+registry-owned command name and outcome but no arguments. There is no second
+command-keyed policy table. Handler messages are caller-derived and are stored
+as a length plus a keyed digest; a route that wants its failure named uses
+`BrokerError::classified` or a typed `BrokerError` constructor.
 
 A request refused before dispatch is recorded differently and more narrowly: a
 stable class from `wire::Fault`, the byte count the daemon had accepted, and —

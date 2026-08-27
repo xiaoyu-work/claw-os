@@ -673,7 +673,7 @@ fn request_approvals(
         )
         .into();
     }
-    BrokerError::with_data(
+    BrokerError::authorization_required(
         format!("scheduler caller cannot delegate {summary}; awaiting approval"),
         json!({
             "status": "approval_required",

@@ -341,12 +341,12 @@ fn no_policy_field_is_a_known_secret_carrier() {
         "note",
         "full_name",
     ];
-    for policy in COMMAND_POLICIES {
-        for (field, rule) in policy.fields {
+    for route in crate::clawd::routes::ROUTES {
+        for (field, rule) in route.audit_fields {
             assert!(
                 !NEVER.contains(field) || matches!(rule, FieldRule::Size),
                 "{}.{field} is allowlisted as a value",
-                policy.command
+                route.name
             );
         }
     }

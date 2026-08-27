@@ -3,15 +3,15 @@
 //! One table is the whole route surface. A row ties together the wire
 //! command name, the typed request body that name decodes into, the
 //! access class that may reach it, whether it mutates, the concurrency
-//! and time budget it runs under, and the handler it dispatches to.
+//! and time budget it runs under, its safe audit fields, and the handler
+//! it dispatches to.
 //!
 //! There is no way to add a route without declaring all of them: the
 //! `routes!` macro generates the [`Command`] enum, [`ROUTES`] and the
 //! name lookup from the same rows, so a route that is not in this table
 //! does not exist on the wire, and a row that omits a field does not
-//! compile. [`crate::audit_policy`] is checked against this table by a
-//! unit test, so a new route cannot reach a durable sink unclassified
-//! either.
+//! compile. Audit field rules live in those same rows, so there is no
+//! second command-name table to synchronize.
 //!
 //! Access classes are the historical allowlist, unchanged:
 //! `context.update` is root-only and everything else is reachable by an
@@ -27,12 +27,14 @@ use serde::de::DeserializeOwned;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::audit_policy::FieldRule;
+
 use super::client_identity::ClientIdentity;
-use super::protocol::BrokerError;
+use super::protocol::{BrokerError, Response};
 use super::state::DaemonState;
 use super::wire::bounded::MAX_WAIT_MS;
 use super::wire::requests as body;
-use super::wire::Fault;
+use super::wire::{Fault, RequestId};
 use super::{
     accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
@@ -79,6 +81,22 @@ pub struct Budget {
     /// Requests of this route that may run at the same time.
     pub max_in_flight: u32,
     pub deadline: Deadline,
+}
+
+/// Translation contract for typed handler failures.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ErrorPolicy {
+    /// Map [`BrokerErrorKind`](super::protocol::BrokerErrorKind) to the
+    /// stable public code owned by the RPC boundary.
+    Typed,
+}
+
+impl ErrorPolicy {
+    pub fn response(self, id: RequestId, error: BrokerError) -> Response {
+        match self {
+            Self::Typed => Response::handler_error(id, error),
+        }
+    }
 }
 
 impl Budget {
@@ -157,6 +175,10 @@ pub struct Route {
     pub access: Access,
     pub kind: Kind,
     pub budget: Budget,
+    pub errors: ErrorPolicy,
+    /// Parameter fields this route has classified as safe to persist.
+    /// Omitted fields are never written to an audit sink.
+    pub audit_fields: &'static [(&'static str, FieldRule)],
     pub decode: RouteDecoder,
     pub handler: RouteHandler,
 }
@@ -173,11 +195,6 @@ impl Route {
             Access::Root if uid == 0 => Ok(()),
             Access::Root => Err(Fault::NotAuthorized),
         }
-    }
-
-    /// The audit policy this route's fields are projected through.
-    pub fn audit_policy(&self) -> Option<&'static crate::audit_policy::CommandPolicy> {
-        crate::audit_policy::command_policy(self.name)
     }
 }
 
@@ -214,6 +231,7 @@ macro_rules! routes {
                 kind: $kind:expr,
                 budget: $budget:expr,
                 body: $body:ty,
+                $( audit: $audit:expr, )?
                 run: |$call:ident| $run:expr,
             }
         )*
@@ -257,6 +275,8 @@ macro_rules! routes {
                     access: $access,
                     kind: $kind,
                     budget: $budget,
+                    errors: ErrorPolicy::Typed,
+                    audit_fields: routes!(@audit $( $audit )?),
                     decode: {
                         fn decode(params: Value) -> Result<Value, Fault> {
                             decode_body::<$body>(params)
@@ -272,6 +292,12 @@ macro_rules! routes {
                 },
             )*
         ];
+    };
+    (@audit $audit:expr) => {
+        $audit
+    };
+    (@audit) => {
+        &[]
     };
 }
 
@@ -337,6 +363,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::TaskSubmit,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("max_turns", FieldRule::Count),
+            ("prompt", FieldRule::Size),
+        ],
         run: |c| tasks::submit(c.params, c.client).await.map_err(BrokerError::from),
     }
     TaskList {
@@ -345,6 +376,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::TaskList,
+        audit: &[("status", FieldRule::Token)],
         run: |c| tasks::list(c.params, c.client).map_err(BrokerError::from),
     }
     TaskGet {
@@ -353,6 +385,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::TaskId,
+        audit: &[("id", FieldRule::Token)],
         run: |c| tasks::get(c.params, c.client).map_err(BrokerError::from),
     }
     TaskStatus {
@@ -361,6 +394,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::TaskId,
+        audit: &[("id", FieldRule::Token)],
         run: |c| tasks::get(c.params, c.client).map_err(BrokerError::from),
     }
     TaskCancel {
@@ -369,6 +403,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::TaskId,
+        audit: &[("id", FieldRule::Token)],
         run: |c| tasks::cancel(c.params, c.client).map_err(BrokerError::from),
     }
     TaskStream {
@@ -377,6 +412,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::poll(),
         body: body::TaskWait,
+        audit: &[("id", FieldRule::Token)],
         run: |c| tasks::result(c.params, c.client).await.map_err(BrokerError::from),
     }
     TaskResult {
@@ -385,6 +421,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::poll(),
         body: body::TaskWait,
+        audit: &[("id", FieldRule::Token)],
         run: |c| tasks::result(c.params, c.client).await.map_err(BrokerError::from),
     }
     TaskCount {
@@ -405,6 +442,10 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::MemoryHistory,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("limit", FieldRule::Count),
+        ],
         run: |c| memory::history(c.params, c.client).map_err(BrokerError::from),
     }
     MemorySessions {
@@ -413,6 +454,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::MemorySessions,
+        audit: &[("limit", FieldRule::Count)],
         run: |c| memory::sessions(c.params, c.client).map_err(BrokerError::from),
     }
     ContextSnapshot {
@@ -437,6 +479,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ContextUpdate,
+        audit: &[("source", FieldRule::Token)],
         run: |c| context::update(c.state, c.params).map_err(BrokerError::from),
     }
     ContextEventAppend {
@@ -445,6 +488,14 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ContextEventAppend,
+        audit: &[
+            ("source", FieldRule::Token),
+            ("event_type", FieldRule::Token),
+            ("app_id", FieldRule::Token),
+            ("entity_id", FieldRule::Token),
+            ("task_id", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+        ],
         run: |c| context_events::append(c.params, c.client).map_err(BrokerError::from),
     }
     ContextEventQuery {
@@ -453,6 +504,13 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::ContextEventQuery,
+        audit: &[
+            ("source", FieldRule::Token),
+            ("event_type", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+            ("order", FieldRule::Token),
+            ("limit", FieldRule::Count),
+        ],
         run: |c| context_events::query_for_client(c.params, c.client).map_err(BrokerError::from),
     }
     SystemOperations {
@@ -461,6 +519,10 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::SystemOperations,
+        audit: &[
+            ("source", FieldRule::Token),
+            ("limit", FieldRule::Count),
+        ],
         run: |c| system_journal::query_for_client(c.params, c.client).map_err(BrokerError::from),
     }
 
@@ -473,6 +535,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::PermissionList,
+        audit: &[("limit", FieldRule::Count)],
         run: |c| permissions::pending(c.params, c.client).map_err(BrokerError::from),
     }
     PermissionRecent {
@@ -481,6 +544,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::PermissionList,
+        audit: &[("limit", FieldRule::Count)],
         run: |c| permissions::recent(c.params, c.client).map_err(BrokerError::from),
     }
     PermissionStatus {
@@ -489,6 +553,7 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::PermissionStatus,
+        audit: &[("ids", FieldRule::Size)],
         run: |c| permissions::status(c.params, c.client).map_err(BrokerError::from),
     }
     PermissionRequest {
@@ -497,6 +562,10 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::PermissionRequest,
+        audit: &[
+            ("verb", FieldRule::Identifier),
+            ("session", FieldRule::Token),
+        ],
         run: |c| permissions::request(c.params, c.client).map_err(BrokerError::from),
     }
     PermissionDecide {
@@ -505,6 +574,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::PermissionDecide,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("decision", FieldRule::Token),
+            ("owner_uid", FieldRule::Count),
+        ],
         run: |c| permissions::decide(c.params, c.client).map_err(BrokerError::from),
     }
 
@@ -533,6 +607,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::TransactionId,
+        audit: &[("id", FieldRule::Token)],
         run: |c| transactions::commit(c.state, c.params, c.client).map_err(BrokerError::from),
     }
     TransactionRollback {
@@ -541,6 +616,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::TransactionId,
+        audit: &[("id", FieldRule::Token)],
         run: |c| {
             transactions::rollback(c.state, c.params, c.client)
                 .await
@@ -557,6 +633,12 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::AppSessionRegister,
+        audit: &[
+            ("app_id", FieldRule::Token),
+            ("kind", FieldRule::Token),
+            ("operation", FieldRule::Token),
+            ("args", FieldRule::Size),
+        ],
         run: |c| app_sessions::register(c.params, c.client).await,
     }
     AppSessionRegisterNative {
@@ -565,6 +647,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::AppSessionRegisterNative,
+        audit: &[("app_id", FieldRule::Token)],
         run: |c| {
             app_sessions::register_native(c.params, c.client)
                 .await
@@ -577,6 +660,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::McpSessionRegister,
+        audit: &[("command", FieldRule::Size)],
         run: |c| {
             app_sessions::register_mcp(c.params, c.client)
                 .await
@@ -589,6 +673,10 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::AppSessionBind,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("pid", FieldRule::Count),
+        ],
         run: |c| {
             app_sessions::bind(c.params, c.client)
                 .await
@@ -601,6 +689,10 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::AppSessionSetTransient,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("call", FieldRule::Size),
+        ],
         run: |c| {
             app_sessions::set_transient(c.params, c.client)
                 .await
@@ -613,6 +705,7 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::launch(),
         body: body::AppSessionDeregister,
+        audit: &[("session_id", FieldRule::Token)],
         run: |c| {
             app_sessions::deregister(c.params, c.client)
                 .await
@@ -629,6 +722,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::SchedulerRun,
+        audit: &[
+            ("subsystem", FieldRule::Enum(&["cron", "triggers"])),
+            ("command", FieldRule::Token),
+            ("args", FieldRule::Size),
+        ],
         run: |c| scheduler::run(c.params, c.client).await,
     }
 
@@ -641,10 +739,16 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::CredentialOauthRefresh,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("namespace", FieldRule::Token),
+            (
+                "credential",
+                FieldRule::Enum(&["GOOGLE_ACCESS_TOKEN", "MICROSOFT_ACCESS_TOKEN"]),
+            ),
+        ],
         run: |c| {
-            credentials::oauth_refresh(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            credentials::oauth_refresh(c.params, c.client).await
         },
     }
 
@@ -657,6 +761,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::AudioControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("target", FieldRule::Token),
+        ],
         run: |c| audio::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemAccessibilityControl {
@@ -665,11 +774,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::AccessibilityControl,
-        run: |c| {
-            accessibility::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
-        },
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+        ],
+        run: |c| accessibility::control(c.params, c.client).await,
     }
     SystemBackupControl {
         name: "system.backup.control",
@@ -677,6 +786,14 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::BackupControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("snapshot", FieldRule::Token),
+            ("keep_daily", FieldRule::Count),
+            ("keep_weekly", FieldRule::Count),
+            ("keep_monthly", FieldRule::Count),
+        ],
         run: |c| backup::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemBluetoothControl {
@@ -685,6 +802,15 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::BluetoothControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("adapter", FieldRule::Token),
+            ("device", FieldRule::Token),
+            ("pairing_id", FieldRule::Token),
+            ("state", FieldRule::Token),
+            ("seconds", FieldRule::Count),
+        ],
         run: |c| {
             bluetooth::control(c.params, c.client)
                 .await
@@ -697,6 +823,14 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::CameraControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("node_id", FieldRule::Token),
+            ("format", FieldRule::Token),
+            ("width", FieldRule::Count),
+            ("height", FieldRule::Count),
+        ],
         run: |c| camera::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemClipboardControl {
@@ -705,6 +839,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ClipboardControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("mime", FieldRule::Identifier),
+        ],
         run: |c| {
             clipboard::control(c.params, c.client)
                 .await
@@ -717,6 +856,15 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::ContainerControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("runtime", FieldRule::Token),
+            ("namespace", FieldRule::Token),
+            ("target", FieldRule::Identifier),
+            ("signal", FieldRule::Token),
+            ("lines", FieldRule::Count),
+        ],
         run: |c| {
             containers::control(c.params, c.client)
                 .await
@@ -729,6 +877,12 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ConfigControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("target", FieldRule::Identifier),
+            ("confirm", FieldRule::Flag),
+        ],
         run: |c| {
             config_editor::control(c.params, c.client)
                 .await
@@ -741,6 +895,13 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::CrashInspect,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("id", FieldRule::Token),
+            ("limit", FieldRule::Count),
+            ("since_minutes", FieldRule::Count),
+        ],
         run: |c| crash::inspect(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemDesktopControl {
@@ -749,6 +910,12 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::DesktopControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("app_id", FieldRule::Token),
+            ("identifier", FieldRule::Token),
+        ],
         run: |c| desktop::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemDisplayControl {
@@ -757,6 +924,15 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::DisplayControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("output", FieldRule::Token),
+            ("transform", FieldRule::Token),
+            ("percent", FieldRule::Count),
+            ("adaptive_sync", FieldRule::Token),
+            ("backlight", FieldRule::Token),
+        ],
         run: |c| display::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemEventsControl {
@@ -765,6 +941,13 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::EventsControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("source", FieldRule::Token),
+            ("limit", FieldRule::Count),
+            ("pid", FieldRule::Count),
+        ],
         run: |c| {
             event_center::control(c.params, c.client)
                 .await
@@ -777,6 +960,16 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::FirewallControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("direction", FieldRule::Token),
+            ("interface", FieldRule::Token),
+            ("port", FieldRule::Token),
+            ("protocol", FieldRule::Token),
+            ("rule_action", FieldRule::Token),
+            ("rule_id", FieldRule::Token),
+        ],
         run: |c| firewall::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemHardwareInspect {
@@ -785,6 +978,10 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::SessionAction,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+        ],
         run: |c| hardware::inspect(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemLocationQuery {
@@ -793,6 +990,11 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::LocationQuery,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("accuracy", FieldRule::Token),
+        ],
         run: |c| location::query(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemNetworkControl {
@@ -801,6 +1003,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::NetworkControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("state", FieldRule::Token),
+        ],
         run: |c| network::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemPackageInstall {
@@ -809,6 +1016,13 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::PackageInstall,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("mutation_session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("package", FieldRule::Identifier),
+            ("version", FieldRule::Identifier),
+        ],
         run: |c| packages::install(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemPackageControl {
@@ -817,6 +1031,13 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::PackageControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("mutation_session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("package", FieldRule::Identifier),
+            ("version", FieldRule::Identifier),
+        ],
         run: |c| packages::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemPackageRestore {
@@ -825,6 +1046,14 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::PackageRestore,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("mutation_session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("package", FieldRule::Identifier),
+            ("previous_version", FieldRule::Identifier),
+            ("was_held", FieldRule::Flag),
+        ],
         run: |c| packages::restore(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemPowerControl {
@@ -833,7 +1062,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::PowerControl,
-        run: |c| power::control(c.params, c.client).await.map_err(BrokerError::from),
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+        ],
+        run: |c| power::control(c.params, c.client).await,
     }
     SystemPrinterControl {
         name: "system.printer.control",
@@ -841,6 +1074,15 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::PrinterControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("printer", FieldRule::Token),
+            ("job_id", FieldRule::Token),
+            ("media", FieldRule::Token),
+            ("sides", FieldRule::Token),
+            ("copies", FieldRule::Count),
+        ],
         run: |c| printer::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemSecurityInspect {
@@ -849,6 +1091,10 @@ routes! {
         kind: Kind::Query,
         budget: Budget::query(),
         body: body::SessionAction,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+        ],
         run: |c| security::inspect(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemServiceControl {
@@ -857,7 +1103,13 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ServiceControl,
-        run: |c| systemd::control(c.params, c.client).await.map_err(BrokerError::from),
+        audit: &[
+            ("session", FieldRule::Token),
+            ("mutation_session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("unit", FieldRule::Identifier),
+        ],
+        run: |c| systemd::control(c.params, c.client).await,
     }
     SystemServiceRestore {
         name: "system.service.restore",
@@ -865,7 +1117,15 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::ServiceRestore,
-        run: |c| systemd::restore(c.params, c.client).await.map_err(BrokerError::from),
+        audit: &[
+            ("session", FieldRule::Token),
+            ("mutation_session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("unit", FieldRule::Identifier),
+            ("active", FieldRule::Flag),
+            ("enabled", FieldRule::Flag),
+        ],
+        run: |c| systemd::restore(c.params, c.client).await,
     }
     SystemSnapshotControl {
         name: "system.snapshot.control",
@@ -873,6 +1133,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::SnapshotControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("id", FieldRule::Token),
+        ],
         run: |c| snapshots::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemStorageControl {
@@ -881,6 +1146,11 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::heavy(),
         body: body::StorageControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("device", FieldRule::Identifier),
+        ],
         run: |c| storage::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemUsbControl {
@@ -889,6 +1159,13 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::UsbControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("device", FieldRule::Token),
+            ("rule_id", FieldRule::Token),
+            ("state", FieldRule::Token),
+        ],
         run: |c| usb_guard::control(c.params, c.client).await.map_err(BrokerError::from),
     }
     SystemUsersControl {
@@ -897,6 +1174,12 @@ routes! {
         kind: Kind::Mutation,
         budget: Budget::mutation(),
         body: body::UsersControl,
+        audit: &[
+            ("session", FieldRule::Token),
+            ("action", FieldRule::Token),
+            ("user", FieldRule::Token),
+            ("group", FieldRule::Token),
+        ],
         run: |c| users::control(c.params, c.client).await.map_err(BrokerError::from),
     }
 }

@@ -48,11 +48,36 @@ fn the_audit_projection_never_carries_the_handler_message_or_peer_payload() {
         "credential ya29.oauth-access-token was rejected",
         json!({"approval_requests": ["req-1"]}),
     );
-    let response = Response::error_with_data(RequestId::unknown(), "request_failed", error);
+    let response = Response::handler_error(RequestId::unknown(), error);
     let facts = response.audit_facts();
     let rendered = serde_json::to_string(&facts).unwrap();
     assert!(!rendered.contains("ya29.oauth-access-token"), "{rendered}");
     assert!(!rendered.contains("approval_requests"), "{rendered}");
+}
+
+#[test]
+fn handler_error_kinds_have_distinct_stable_codes() {
+    let cases = [
+        (
+            BrokerError::from("provider failed".to_string()),
+            "execution_failed",
+        ),
+        (
+            BrokerError::unavailable("provider is offline"),
+            "unavailable",
+        ),
+        (
+            BrokerError::authorization_required(
+                "approval required",
+                json!({"approval_requests": ["req-1"]}),
+            ),
+            "not_authorized",
+        ),
+    ];
+    for (error, code) in cases {
+        let response = Response::handler_error(RequestId::unknown(), error);
+        assert_eq!(response.error.expect("error body").code, code);
+    }
 }
 
 #[test]

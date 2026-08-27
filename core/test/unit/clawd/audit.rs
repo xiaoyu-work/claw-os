@@ -96,14 +96,12 @@ fn error_data_never_reaches_the_audit_record() {
     let rendered = request_audit(
         "app_session.register",
         json!({"app_id": "user-manager", "kind": "operation", "operation": "create-user"}),
-        &Response::error_with_data(
+        &Response::handler_error(
             crate::clawd::protocol::RequestId::unknown(),
-            "request_failed",
-            BrokerError::with_data(
+            BrokerError::authorization_required(
                 "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
                 json!({"status": "approval_required", "approval_requests": ["ap-1"]}),
-            )
-            .classified("approval_required"),
+            ),
         ),
     );
     assert_clean(&rendered);

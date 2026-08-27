@@ -37,17 +37,76 @@ pub struct ErrorBody {
 /// unclassified — recorded as size and digest only.
 #[derive(Debug, Clone)]
 pub struct BrokerError {
+    pub kind: BrokerErrorKind,
     pub message: String,
     pub data: Option<Value>,
     pub audit_class: Option<&'static str>,
 }
 
+/// Stable RPC category for a failure returned by a route handler.
+///
+/// Subsystems can add finer internal error types independently; this is
+/// the deliberately small classification clients may depend on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BrokerErrorKind {
+    Unauthorized,
+    Unavailable,
+    Execution,
+}
+
+impl BrokerErrorKind {
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::Unauthorized => "not_authorized",
+            Self::Unavailable => "unavailable",
+            Self::Execution => "execution_failed",
+        }
+    }
+}
+
 impl BrokerError {
+    pub fn authorization(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Unauthorized,
+            message: message.into(),
+            data: None,
+            audit_class: Some("authorization_denied"),
+        }
+    }
+
+    pub fn execution(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Execution,
+            message: message.into(),
+            data: None,
+            audit_class: None,
+        }
+    }
+
     pub fn with_data(message: impl Into<String>, data: Value) -> Self {
         Self {
+            kind: BrokerErrorKind::Execution,
             message: message.into(),
             data: Some(data),
             audit_class: None,
+        }
+    }
+
+    pub fn authorization_required(message: impl Into<String>, data: Value) -> Self {
+        Self {
+            kind: BrokerErrorKind::Unauthorized,
+            message: message.into(),
+            data: Some(data),
+            audit_class: Some("approval_required"),
+        }
+    }
+
+    pub fn unavailable(message: impl Into<String>) -> Self {
+        Self {
+            kind: BrokerErrorKind::Unavailable,
+            message: message.into(),
+            data: None,
+            audit_class: Some("subsystem_unavailable"),
         }
     }
 
@@ -62,6 +121,7 @@ impl BrokerError {
     /// construction and whose class is the fault's own name.
     pub fn fault(fault: Fault) -> Self {
         Self {
+            kind: BrokerErrorKind::Unavailable,
             message: fault.message().to_string(),
             data: None,
             audit_class: Some(fault.class()),
@@ -71,11 +131,7 @@ impl BrokerError {
 
 impl From<String> for BrokerError {
     fn from(message: String) -> Self {
-        Self {
-            message,
-            data: None,
-            audit_class: None,
-        }
+        Self::execution(message)
     }
 }
 
@@ -148,14 +204,14 @@ impl Response {
         Self::error_classified(id, fault.code(), fault.class(), fault.message())
     }
 
-    pub fn error_with_data(id: RequestId, code: impl Into<String>, error: BrokerError) -> Self {
+    pub fn handler_error(id: RequestId, error: BrokerError) -> Self {
         Self {
             v: PROTOCOL_VERSION,
             id,
             ok: false,
             result: None,
             error: Some(ErrorBody {
-                code: code.into(),
+                code: error.kind.code().to_string(),
                 message: error.message,
                 data: error.data,
                 audit_class: error.audit_class,

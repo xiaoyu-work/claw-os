@@ -268,12 +268,18 @@ impl Fault {
         }
     }
 
-    /// Response `code`. `invalid_json` keeps its historical code so the
-    /// meaning of an existing audit record does not shift.
+    /// Stable response category. Transport-specific detail remains in
+    /// [`Self::class`] while clients can branch on this smaller set.
     pub fn code(self) -> &'static str {
         match self {
             Fault::MalformedBody => "invalid_json",
-            Fault::NotAuthorized | Fault::UnknownCommand => "request_failed",
+            Fault::InvalidEnvelope | Fault::InvalidParams => "invalid_request",
+            Fault::UnknownCommand => "unknown_command",
+            Fault::NotAuthorized => "not_authorized",
+            Fault::TooManyConnections
+            | Fault::TooManyRequests
+            | Fault::RouteBusy
+            | Fault::RouteTimeout => "unavailable",
             _ => "protocol_error",
         }
     }

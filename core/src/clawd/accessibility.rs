@@ -11,23 +11,28 @@ use std::time::{Duration, Instant};
 use crate::caps::{Cap, CapSet, Scope, Verb};
 
 use super::client_identity::ClientIdentity;
+use super::protocol::BrokerError;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 1024 * 1024;
 static A11Y_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
         let _ = (params, client);
-        return Err("Accessibility Manager requires Linux COSMIC".to_string());
+        return Err(BrokerError::unavailable(
+            "Accessibility Manager requires Linux COSMIC",
+        ));
     }
 
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::geteuid() } != 0 {
-            return Err("Accessibility Manager requires root clawd".to_string());
+            return Err(BrokerError::unavailable(
+                "Accessibility Manager requires root clawd",
+            ));
         }
         let uid = client.require_uid()?;
         let gid = client
@@ -40,7 +45,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let value = optional_string(&params, "value")?;
-        validate_action(&action, value.as_deref())?;
         let requested = if action == "status" {
             Cap::new(Verb::SYS_OBSERVE, Scope::name("accessibility"))
         } else {
@@ -50,57 +54,89 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             authorize_session(&session_id, peer_pid, requested)
         })
         .await?;
+        validate_action(&action, value.as_deref()).map_err(BrokerError::execution)?;
         let environment = A11yEnvironment::new(uid, gid, home, peer_pid)?;
 
         if action == "status" {
-            return accessibility_status(&environment).await;
+            return accessibility_status(&environment)
+                .await
+                .map_err(BrokerError::execution);
+        }
+        if action == "screen-reader" {
+            busctl_path().map_err(backend_unavailable)?;
         }
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
             A11Y_LOCK.get_or_init(|| tokio::sync::Mutex::new(())).lock(),
         )
         .await
-        .map_err(|_| "Accessibility Manager is busy with another mutation".to_string())?;
+        .map_err(|_| {
+            BrokerError::unavailable("Accessibility Manager is busy with another mutation")
+        })?;
         if action == "screen-reader" {
-            set_screen_reader(&environment, value.as_deref().unwrap() == "on").await
+            set_screen_reader(&environment, value.as_deref().unwrap() == "on")
+                .await
+                .map_err(BrokerError::execution)
         } else {
-            run_helper(&environment, &[&action, value.as_deref().unwrap()]).await
+            run_helper(&environment, &[&action, value.as_deref().unwrap()])
+                .await
+                .map_err(BrokerError::execution)
         }
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
+fn backend_unavailable(message: String) -> BrokerError {
+    BrokerError::unavailable(message)
+}
+
+fn authorize_session(
+    session_id: &str,
+    peer_pid: u32,
+    requested: Cap,
+) -> Result<(), BrokerError> {
     let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("accessibility-manager session not found: {session_id}"))?;
+        .ok_or_else(|| {
+            BrokerError::authorization(format!(
+                "accessibility-manager session not found: {session_id}"
+            ))
+        })?;
     if session.app_id.as_deref() != Some("accessibility-manager") {
-        return Err(
-            "accessibility control is restricted to the accessibility-manager App".to_string(),
-        );
+        return Err(BrokerError::authorization(
+            "accessibility control is restricted to the accessibility-manager App",
+        ));
     }
     if session.pending_bind || session.pid == 0 {
-        return Err("accessibility-manager session is not bound to a process".to_string());
+        return Err(BrokerError::authorization(
+            "accessibility-manager session is not bound to a process",
+        ));
     }
     let expected_start = session
         .start_time_ticks
-        .ok_or_else(|| "accessibility-manager session has no process identity".to_string())?;
+        .ok_or_else(|| {
+            BrokerError::authorization(
+                "accessibility-manager session has no process identity",
+            )
+        })?;
     if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("accessibility-manager session process identity is stale".to_string());
+        return Err(BrokerError::authorization(
+            "accessibility-manager session process identity is stale",
+        ));
     }
     if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err(
-            "accessibility request did not originate from the authorized session".to_string(),
-        );
+        return Err(BrokerError::authorization(
+            "accessibility request did not originate from the authorized session",
+        ));
     }
     let mut caps = session.caps.unwrap_or_else(CapSet::new);
     if let Some(transient) = session.transient_caps {
         caps.extend(transient.iter().cloned());
     }
     if !caps.covers(&requested) {
-        return Err(format!(
+        return Err(BrokerError::authorization(format!(
             "accessibility-manager session lacks {}:{}",
             requested.verb.as_str(),
             requested.scope
-        ));
+        )));
     }
     Ok(())
 }

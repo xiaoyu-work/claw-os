@@ -98,5 +98,15 @@ fn broker_authorizes_only_the_session_access_token_scope() {
     }
 
     assert!(allowed.is_ok(), "{allowed:?}");
-    assert!(denied.unwrap_err().contains("lacks secret.read"));
+    let denied = denied.unwrap_err();
+    assert!(denied.message.contains("lacks secret.read"));
+    assert_eq!(
+        denied.kind,
+        crate::clawd::protocol::BrokerErrorKind::Unauthorized
+    );
+    let response = crate::clawd::protocol::Response::handler_error(
+        crate::clawd::protocol::RequestId::unknown(),
+        denied,
+    );
+    assert_eq!(response.error.unwrap().code, "not_authorized");
 }

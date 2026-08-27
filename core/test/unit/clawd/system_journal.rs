@@ -81,14 +81,12 @@ fn peer_only_denial_data_never_reaches_the_system_journal() {
     let record = journal_record(
         "app_session.register",
         json!({"app_id": "user-manager", "handle": "d34db33f-launch-handle"}),
-        &Response::error_with_data(
+        &Response::handler_error(
             crate::clawd::protocol::RequestId::unknown(),
-            "request_failed",
-            BrokerError::with_data(
+            BrokerError::authorization_required(
                 "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
                 json!({"status": "approval_required", "approval_requests": ["ap-1"]}),
-            )
-            .classified("approval_required"),
+            ),
         ),
     );
     assert_eq!(record["error"]["class"], json!("approval_required"));
