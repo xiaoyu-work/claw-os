@@ -717,6 +717,26 @@ impl Tool for CountingSideEffectTool {
     }
 }
 
+struct CountingDispatchHook {
+    calls: Arc<AtomicU32>,
+}
+
+impl Hook for CountingDispatchHook {
+    fn name(&self) -> &str {
+        "malformed-stream-dispatch-spy"
+    }
+
+    fn pre_tool(&self, _c: &HookContext, _t: &ToolCall) -> ToolDecision {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        ToolDecision::Allow
+    }
+
+    fn post_tool(&self, _c: &HookContext, _t: &ToolCall, _s: &ToolResultSummary) -> HookOutcome {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        HookOutcome::Continue
+    }
+}
+
 #[tokio::test]
 async fn unterminated_stream_never_appends_or_dispatches_completed_tool() {
     use crate::agent::llm::StreamEvent;
@@ -767,6 +787,68 @@ async fn unterminated_stream_never_appends_or_dispatches_completed_tool() {
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(messages.len(), 1, "partial assistant output was persisted");
+}
+
+#[tokio::test]
+async fn malformed_streamed_tool_input_never_runs_hooks_or_dispatch() {
+    use crate::agent::llm::StreamEvent;
+
+    let provider: Arc<dyn crate::agent::llm::Provider> = Arc::new(FixedStreamProvider::new(vec![
+        Ok(StreamEvent::ToolUseStart {
+            id: "call_1".into(),
+            name: "side_effect".into(),
+        }),
+        Ok(StreamEvent::ToolInputDelta {
+            id: "call_1".into(),
+            partial_json: "{\"value\":".into(),
+        }),
+        Err(crate::agent::llm::LlmError::UpstreamMalformed(
+            "anthropic tool_use input at content block 0".into(),
+        )),
+    ]));
+    let tool_calls = Arc::new(AtomicU32::new(0));
+    let hook_calls = Arc::new(AtomicU32::new(0));
+    let tools = registry_with(vec![Arc::new(CountingSideEffectTool {
+        calls: tool_calls.clone(),
+    })]);
+    let llm_tools = tools.as_llm_tools();
+    let mut messages = vec![Message::user_text("run it")];
+    let hook_ctx = ctx();
+    global_registry().register(Arc::new(CountingDispatchHook {
+        calls: hook_calls.clone(),
+    }));
+
+    let result = run_turn_streaming(
+        provider,
+        "fixed-stream-model",
+        "sys",
+        &mut messages,
+        &tools,
+        &llm_tools,
+        64,
+        0.0,
+        None,
+        crate::agent::llm::accumulate::null_sink(),
+        Some(&hook_ctx),
+        progress::null_progress(),
+    )
+    .await;
+
+    global_registry().unregister("malformed-stream-dispatch-spy");
+
+    assert!(matches!(
+        result,
+        Err(super::super::loop_::AgentError::Llm(
+            crate::agent::llm::LlmError::UpstreamMalformed(message)
+        )) if message.contains("tool_use input")
+    ));
+    assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(tool_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        messages.len(),
+        1,
+        "malformed assistant output was persisted"
+    );
 }
 
 #[tokio::test]

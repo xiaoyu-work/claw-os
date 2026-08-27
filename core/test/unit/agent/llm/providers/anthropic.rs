@@ -777,7 +777,7 @@ mod stream_converter {
     }
 
     #[test]
-    fn tool_use_assembles_input_json_and_emits_tool_use() {
+    fn tool_use_assembles_chunked_object_input_and_emits_tool_use() {
         let mut c = wire::StreamConverter::new("claude-x");
         let events = vec![
             ev(
@@ -844,7 +844,65 @@ mod stream_converter {
     }
 
     #[test]
-    fn tool_use_with_unparseable_json_falls_back_to_string() {
+    fn tool_use_round_trips_array_input() {
+        let mut c = wire::StreamConverter::new("m");
+        let events = vec![
+            ev(
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"batch"}}"#,
+            ),
+            ev(
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"[{\"value\":1},"}}"#,
+            ),
+            ev(
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"value\":2}]"}}"#,
+            ),
+            ev(
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+        ];
+        let out = run(&mut c, events.iter());
+        let call = out
+            .iter()
+            .find_map(|event| match event {
+                Ok(StreamEvent::ToolUse(call)) => Some(call),
+                _ => None,
+            })
+            .expect("tool use");
+
+        assert_eq!(call.input, serde_json::json!([{"value": 1}, {"value": 2}]));
+    }
+
+    #[test]
+    fn tool_use_empty_input_defaults_to_object() {
+        let mut c = wire::StreamConverter::new("m");
+        let events = vec![
+            ev(
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"t","name":"no_args"}}"#,
+            ),
+            ev(
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+        ];
+        let out = run(&mut c, events.iter());
+        let call = out
+            .iter()
+            .find_map(|event| match event {
+                Ok(StreamEvent::ToolUse(call)) => Some(call),
+                _ => None,
+            })
+            .expect("tool use");
+
+        assert_eq!(call.input, serde_json::json!({}));
+    }
+
+    #[test]
+    fn malformed_tool_input_is_terminal_and_never_emits_tool_use() {
         let mut c = wire::StreamConverter::new("m");
         let events = vec![
             ev(
@@ -859,19 +917,22 @@ mod stream_converter {
                 "content_block_stop",
                 r#"{"type":"content_block_stop","index":0}"#,
             ),
+            ev("message_stop", r#"{"type":"message_stop"}"#),
         ];
-        let out: Vec<StreamEvent> = run(&mut c, events.iter())
-            .into_iter()
-            .map(|r| r.expect("ok"))
-            .collect();
-        // Last one should be ToolUse with input as string fallback.
-        let last = out.last().unwrap();
-        match last {
-            StreamEvent::ToolUse(call) => {
-                assert_eq!(call.input.as_str(), Some("not-json"));
-            }
-            e => panic!("want ToolUse, got {e:?}"),
-        }
+        let out = run(&mut c, events.iter());
+
+        assert!(matches!(
+            out.last(),
+            Some(Err(LlmError::UpstreamMalformed(message)))
+                if message.contains("tool_use input")
+        ));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::ToolUse(_)))));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+        assert!(c.is_finished());
     }
 
     #[test]
@@ -1229,6 +1290,58 @@ mod anthropic_stream {
     }
 
     #[tokio::test]
+    async fn chunked_tool_arguments_round_trip() {
+        let body = sse_body(&[
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"weather","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"city\":\"Sea"}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"ttle\",\"units\":[\"c\",\"f\"]}"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ]);
+        let chunks: Vec<Bytes> = body
+            .as_bytes()
+            .chunks(3)
+            .map(Bytes::copy_from_slice)
+            .collect();
+        let out = collect(chunks).await;
+        let call = out
+            .iter()
+            .find_map(|event| match event {
+                Ok(StreamEvent::ToolUse(call)) => Some(call),
+                _ => None,
+            })
+            .expect("tool use");
+
+        assert_eq!(
+            call.input,
+            serde_json::json!({"city": "Seattle", "units": ["c", "f"]})
+        );
+        assert!(matches!(
+            out.last(),
+            Some(Ok(StreamEvent::Done {
+                finish: FinishReason::ToolUse,
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
     async fn unterminated_final_event_still_processed_on_eof() {
         // No trailing blank line — parser.finish() should flush.
         let body = "event: message_stop\ndata: {\"type\":\"message_stop\"}".to_string();
@@ -1339,6 +1452,50 @@ mod anthropic_stream {
             Some(Err(LlmError::UpstreamMalformed(message)))
                 if message.contains("message_stop")
         ));
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_input_terminates_stream_and_penalizes_pool() {
+        let body = sse_body(&[
+            (
+                "content_block_start",
+                r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"echo","input":{}}}"#,
+            ),
+            (
+                "content_block_delta",
+                r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"text\":"}}"#,
+            ),
+            (
+                "content_block_stop",
+                r#"{"type":"content_block_stop","index":0}"#,
+            ),
+            (
+                "message_delta",
+                r#"{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":4}}"#,
+            ),
+            ("message_stop", r#"{"type":"message_stop"}"#),
+        ]);
+        let pool = stream_test_pool("anthropic-malformed-tool-input");
+        let out = collect_with_pool(vec![Bytes::from(body)], Some(pool.clone())).await;
+
+        assert!(matches!(
+            out.last(),
+            Some(Err(LlmError::UpstreamMalformed(message)))
+                if message.contains("tool_use input")
+        ));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::ToolUse(_)))));
+        assert!(!out
+            .iter()
+            .any(|event| matches!(event, Ok(StreamEvent::Done { .. }))));
+        let stats = pool.stats();
+        assert_eq!(stats[0].successes, 0);
+        assert_eq!(stats[0].failures, 1);
+        assert_eq!(
+            stats[0].last_failure_class,
+            Some(crate::agent::llm::credential_pool::FailureClass::Transient)
+        );
     }
 
     #[tokio::test]

@@ -794,8 +794,8 @@ pub(crate) mod wire {
         usage: Usage,
         stop_reason: Option<String>,
         blocks: std::collections::HashMap<u32, BlockState>,
-        /// Set on `message_stop` so `chat_stream`'s adapter
-        /// terminates the stream with a final `Done` event.
+        /// Set when the stream reaches `message_stop` or a terminal
+        /// conversion error so `chat_stream` stops reading upstream.
         finished: bool,
     }
 
@@ -1000,7 +1000,12 @@ pub(crate) mod wire {
                     } else {
                         match serde_json::from_str(&json_accum) {
                             Ok(v) => v,
-                            Err(_) => serde_json::Value::String(json_accum),
+                            Err(e) => {
+                                self.finished = true;
+                                return vec![Err(LlmError::UpstreamMalformed(format!(
+                                    "anthropic tool_use input at content block {index}: {e}"
+                                )))];
+                            }
                         }
                     };
                     vec![Ok(StreamEvent::ToolUse(ToolCall { id, name, input }))]
