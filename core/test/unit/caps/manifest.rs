@@ -182,8 +182,11 @@ fn resolve_needs_substitutes_runtime_arg_value() {
     args.insert("path".to_string(), serde_json::json!("/home/jay/x.md"));
     let caps = m.resolve_needs("rm", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::FS_DELETE);
-    assert_eq!(caps[0].scope, Scope::path("/home/jay/x.md"));
+    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::FS_DELETE);
+    assert_eq!(
+        caps[0].as_ref().unwrap().scope,
+        Scope::path("/home/jay/x.md")
+    );
 }
 
 #[test]
@@ -215,8 +218,11 @@ fn resolve_needs_uses_literal_arg_default() {
     let caps = manifest.resolve_needs("search", &args).unwrap();
 
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::FS_READ);
-    assert_eq!(caps[0].scope, Scope::path("/workspace"));
+    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::FS_READ);
+    assert_eq!(
+        caps[0].as_ref().unwrap().scope,
+        Scope::path("/workspace")
+    );
 }
 
 #[test]
@@ -256,14 +262,20 @@ fn resolve_needs_uses_validated_default_binding() {
 
     let caps = manifest.resolve_needs("download", &args).unwrap();
 
-    assert_eq!(caps[0].scope, Scope::path("~/archive.tar"));
+    assert_eq!(
+        caps[0].as_ref().unwrap().scope,
+        Scope::path("~/archive.tar")
+    );
 
     args.insert(
         "url".to_string(),
         serde_json::json!("https://example.com/releases/"),
     );
     let fallback = manifest.resolve_needs("download", &args).unwrap();
-    assert_eq!(fallback[0].scope, Scope::path("~/download"));
+    assert_eq!(
+        fallback[0].as_ref().unwrap().scope,
+        Scope::path("~/download")
+    );
 }
 
 #[test]
@@ -366,7 +378,7 @@ fn session_tool_defaults_feed_arguments_and_capabilities() {
     let caps = manifest
         .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
         .unwrap();
-    assert_eq!(caps[0].scope, Scope::name("primary"));
+    assert_eq!(caps[0].as_ref().unwrap().scope, Scope::name("primary"));
 }
 
 #[test]
@@ -383,6 +395,87 @@ fn fixed_path_scopes_reject_environment_placeholders() {
     )
     .unwrap_err();
     assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
+fn conditional_needs_skip_only_explicit_inactive_cases() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"conditional","version":"0.1","name":"Conditional",
+            "operations":{"explain":{"label":"Explain","args":[
+                {"name":"file","kind":"path","binding":"flag"},
+                {"name":"provider","kind":"name","binding":"flag","default":"local"}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},
+                 "when":{"kind":"arg-present","arg":"file"},"why":"Read file"},
+                {"verb":"secret.read","scope":{"kind":"fixed","scope":{"kind":"name","value":"default/TOKEN"}},
+                 "when":{"kind":"arg-equals","arg":"provider","value":"cloud"},"why":"Read token"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+
+    let local = manifest
+        .resolve_needs("explain", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(local, [None, None]);
+
+    let mut cloud_file = BTreeMap::new();
+    cloud_file.insert("file".to_string(), serde_json::json!("/workspace/a.txt"));
+    cloud_file.insert("provider".to_string(), serde_json::json!("cloud"));
+    let active = manifest.resolve_needs("explain", &cloud_file).unwrap();
+    assert_eq!(
+        active[0].as_ref().unwrap().scope,
+        Scope::path("/workspace/a.txt")
+    );
+    assert_eq!(
+        active[1].as_ref().unwrap().scope,
+        Scope::name("default/TOKEN")
+    );
+}
+
+#[test]
+fn optional_capability_bindings_require_conditions() {
+    let error = Manifest::from_json(
+        r#"{
+            "id":"unsafe","version":"0.1","name":"Unsafe",
+            "operations":{"read":{"label":"Read","args":[
+                {"name":"file","kind":"path","binding":"flag"}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"file"},"why":"Read"}
+            ]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
+fn scope_binding_discriminators_reject_missing_and_unknown_payloads() {
+    for scope in [
+        r#"{"kind":"wild","arg":"path"}"#,
+        r#"{"kind":"from-arg-map","arg":"path"}"#,
+        r#"{"kind":"fixed","scope":{"kind":"path","value":"/tmp"},"values":{}}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"scope-shape","version":"0.1","name":"Scope shape",
+                "operations":{{"read":{{"label":"Read","args":[
+                    {{"name":"path","kind":"path","required":true}}
+                ],"needs":[{{"verb":"fs.read","scope":{scope},"why":"Read"}}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {scope}");
+    }
+
+    let condition_with_wrong_payload = r#"{
+        "id":"condition-shape","version":"0.1","name":"Condition shape",
+        "operations":{"read":{"label":"Read","args":[
+            {"name":"path","kind":"path","binding":"flag"}
+        ],"needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+            "when":{"kind":"arg-present","arg":"path","value":"/tmp"},"why":"Read"}]}}
+    }"#;
+    assert!(Manifest::from_json(condition_with_wrong_payload).is_err());
 }
 
 #[test]
@@ -405,8 +498,11 @@ fn resolve_needs_with_fixed_scope() {
             }"#,
     );
     let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
-    assert_eq!(caps[0].verb, Verb::DATA_LOG_READ);
-    assert_eq!(caps[0].scope, Scope::name("system/*"));
+    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::DATA_LOG_READ);
+    assert_eq!(
+        caps[0].as_ref().unwrap().scope,
+        Scope::name("system/*")
+    );
 }
 
 #[test]
@@ -781,8 +877,11 @@ fn session_tool_resolve_needs_from_arg() {
     args.insert("key".to_string(), serde_json::json!("user/jay"));
     let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].verb, Verb::DATA_KV_READ);
-    assert_eq!(caps[0].scope, Scope::name("user/jay"));
+    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::DATA_KV_READ);
+    assert_eq!(
+        caps[0].as_ref().unwrap().scope,
+        Scope::name("user/jay")
+    );
 }
 
 #[test]

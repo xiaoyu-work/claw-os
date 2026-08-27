@@ -26,8 +26,7 @@ def _load(name):
             [
                 "hello",
                 "--markdown",
-                "--title",
-                "Title",
+                "--title=--urgent",
                 "--keyword",
                 "Key",
                 "--at-mobiles",
@@ -39,7 +38,7 @@ def _load(name):
             ("hello",),
             {
                 "markdown": True,
-                "title": "Title",
+                "title": "--urgent",
                 "keyword": "Key",
                 "at_mobiles": ["1", "2"],
                 "at_user_ids": ["u1", "u2"],

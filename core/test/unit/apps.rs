@@ -197,3 +197,104 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     }
     assert_eq!(mail.operations["triage"].args.len(), 4);
 }
+
+#[test]
+fn bundled_conditional_capabilities_are_exact() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |path: &[&str]| {
+        let path = path
+            .iter()
+            .fold(repository.join("apps"), |path, component| {
+                path.join(component)
+            })
+            .join("app.json");
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
+    };
+    let active = |caps: Vec<Option<crate::caps::Cap>>| {
+        caps.into_iter().flatten().collect::<Vec<_>>()
+    };
+
+    let calendar = load(&["calendar"]);
+    let local = active(calendar.resolve_needs("today", &BTreeMap::new()).unwrap());
+    assert!(local.iter().all(|cap| cap.verb != crate::caps::Verb::SECRET_READ));
+    assert!(local.iter().all(|cap| cap.verb != crate::caps::Verb::NET_DIAL));
+    let google = active(
+        calendar
+            .resolve_needs(
+                "today",
+                &BTreeMap::from([("provider".to_string(), serde_json::json!("google"))]),
+            )
+            .unwrap(),
+    );
+    assert!(google.iter().any(|cap| {
+        cap.verb == crate::caps::Verb::SECRET_READ
+            && cap.scope == crate::caps::Scope::name("default/GOOGLE_ACCESS_TOKEN")
+    }));
+    assert!(google
+        .iter()
+        .all(|cap| cap.verb != crate::caps::Verb::DATA_DB_READ));
+    assert!(!google.iter().any(|cap| {
+        cap.scope == crate::caps::Scope::name("default/MICROSOFT_ACCESS_TOKEN")
+    }));
+
+    let doc = load(&["doc"]);
+    let stdin = active(doc.resolve_needs("summarize", &BTreeMap::new()).unwrap());
+    assert!(stdin.iter().all(|cap| cap.verb != crate::caps::Verb::FS_READ));
+    let file = active(
+        doc.resolve_needs(
+            "summarize",
+            &BTreeMap::from([("file".to_string(), serde_json::json!("/workspace/a.md"))]),
+        )
+        .unwrap(),
+    );
+    assert!(file.iter().any(|cap| {
+        cap.verb == crate::caps::Verb::FS_READ
+            && cap.scope == crate::caps::Scope::path("/workspace/a.md")
+    }));
+
+    let network = load(&["network-manager"]);
+    let open_wifi = active(
+        network
+            .resolve_needs("wifi-connect", &BTreeMap::new())
+            .unwrap(),
+    );
+    assert!(open_wifi
+        .iter()
+        .all(|cap| cap.verb != crate::caps::Verb::SECRET_READ));
+    let protected_wifi = active(
+        network
+            .resolve_needs(
+                "wifi-connect",
+                &BTreeMap::from([(
+                    "credential".to_string(),
+                    serde_json::json!("wifi/home"),
+                )]),
+            )
+            .unwrap(),
+    );
+    assert!(protected_wifi.iter().any(|cap| {
+        cap.verb == crate::caps::Verb::SECRET_READ
+            && cap.scope == crate::caps::Scope::name("wifi/home")
+    }));
+
+    let search = load(&["search"]);
+    let brave = active(
+        search
+            .resolve_needs(
+                "web",
+                &BTreeMap::from([("provider".to_string(), serde_json::json!("brave"))]),
+            )
+            .unwrap(),
+    );
+    let brave_secrets = brave
+        .iter()
+        .filter(|cap| cap.verb == crate::caps::Verb::SECRET_READ)
+        .map(|cap| cap.scope.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        brave_secrets,
+        [crate::caps::Scope::name("default/BRAVE_SEARCH_API_KEY")]
+    );
+}

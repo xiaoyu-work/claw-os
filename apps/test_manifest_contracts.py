@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
 import subprocess
 import sys
@@ -521,7 +522,10 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 if not valid:
                     drift.append(f"{path}:{surface}.{arg.get('name')} default type")
 
-    def check_needs(path, surface, needs):
+    condition_kinds = set(defs["needCondition"]["properties"]["kind"]["enum"])
+
+    def check_needs(path, surface, needs, args):
+        by_name = {arg["name"]: arg for arg in args}
         for need in needs:
             if need.get("verb") not in verbs:
                 drift.append(f"{path}:{surface} unknown verb {need.get('verb')}")
@@ -532,8 +536,52 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 continue
             required, forbidden = payloads[kind]
             fields = set(scope)
-            if not required <= fields or forbidden & fields:
+            unknown = fields - {"kind", "arg", "scope", "values", "wild_when"}
+            if not required <= fields or forbidden & fields or unknown:
                 drift.append(f"{path}:{surface} invalid {kind} payload")
+            condition = need.get("when")
+            if condition is not None:
+                condition_kind = condition.get("kind")
+                condition_arg = condition.get("arg")
+                if condition_kind not in condition_kinds or condition_arg not in by_name:
+                    drift.append(f"{path}:{surface} invalid need condition")
+                expected_fields = (
+                    {"kind", "arg"}
+                    if condition_kind == "arg-present"
+                    else {"kind", "arg", "value"}
+                )
+                if set(condition) != expected_fields:
+                    drift.append(f"{path}:{surface} invalid condition payload")
+                if condition_kind == "arg-present" and "value" in condition:
+                    drift.append(f"{path}:{surface} arg-present has value")
+                if condition_kind == "arg-equals" and "value" not in condition:
+                    drift.append(f"{path}:{surface} arg-equals missing value")
+            bound_arg = scope.get("arg")
+            if bound_arg in by_name:
+                declaration = by_name[bound_arg]
+                guaranteed = (
+                    declaration.get("required", False)
+                    or "default" in declaration
+                    or "default_from" in declaration
+                    or "trusted_resolver" in declaration
+                    or declaration.get("kind") == "bool"
+                )
+                guarded = (
+                    condition is not None and condition.get("arg") == bound_arg
+                )
+                if not guaranteed and not guarded:
+                    drift.append(
+                        f"{path}:{surface} unconditional optional binding {bound_arg}"
+                    )
+                if (
+                    kind == "from-arg-map"
+                    and condition is not None
+                    and condition.get("kind") == "arg-equals"
+                    and condition.get("value") not in scope.get("values", {})
+                ):
+                    drift.append(
+                        f"{path}:{surface} active condition is unmapped"
+                    )
 
     for manifest_path in sorted(APPS_ROOT.rglob("app.json")):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
@@ -541,7 +589,12 @@ def test_every_manifest_matches_published_schema_contract() -> None:
             check_args(
                 manifest_path, manifest["id"], name, operation.get("args", [])
             )
-            check_needs(manifest_path, name, operation.get("needs", []))
+            check_needs(
+                manifest_path,
+                name,
+                operation.get("needs", []),
+                operation.get("args", []),
+            )
         for tool in manifest.get("session", {}).get("tools", []):
             check_args(
                 manifest_path,
@@ -550,7 +603,12 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 tool.get("args", []),
                 session=True,
             )
-            check_needs(manifest_path, tool["name"], tool.get("needs", []))
+            check_needs(
+                manifest_path,
+                tool["name"],
+                tool.get("needs", []),
+                tool.get("args", []),
+            )
     assert not drift, "\n".join(drift)
 
 
@@ -641,9 +699,12 @@ def test_direct_numeric_parsers_match_manifest_kinds() -> None:
 
 def test_wire_generation_is_fresh() -> None:
     sdk_root = APPS_ROOT.parent / "claw-os-sdk"
+    environment = os.environ.copy()
+    environment["PYTHONUTF8"] = "0"
     result = subprocess.run(
         [sys.executable, "wire/codegen.py", "--check"],
         cwd=sdk_root,
+        env=environment,
         text=True,
         capture_output=True,
     )

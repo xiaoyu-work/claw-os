@@ -473,7 +473,8 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
                 {"name":"text","kind":"text","required":true},
                 {"name":"confirm","kind":"bool","binding":"flag","default":false},
                 {"name":"enabled","kind":"bool","binding":"positional","default":true},
-                {"name":"limit","kind":"integer","binding":"flag","default":10}
+                {"name":"limit","kind":"integer","binding":"flag","default":10},
+                {"name":"label","kind":"text","binding":"flag"}
             ]}}
         }"#,
     )
@@ -506,6 +507,19 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
     );
     let rebound = crate::caps::args::bind_cli_args(&operation.args, &delimited.argv).unwrap();
     assert_eq!(rebound, delimited.values);
+
+    let option_shaped_value = bind_operation_args(
+        operation,
+        &["hello".into(), "--label=--urgent".into()],
+    )
+    .unwrap();
+    assert_eq!(
+        option_shaped_value.argv,
+        ["hello", "true", "--limit", "10", "--label=--urgent"]
+    );
+    let rebound =
+        crate::caps::args::bind_cli_args(&operation.args, &option_shaped_value.argv).unwrap();
+    assert_eq!(rebound, option_shaped_value.values);
 }
 
 #[test]
@@ -537,7 +551,10 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
     assert_eq!(bound.argv, trusted);
 
     let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
-    assert_eq!(resolved[0].scope, Scope::name("default/SMTP_PASSWORD"));
+    assert_eq!(
+        resolved[0].as_ref().unwrap().scope,
+        Scope::name("default/SMTP_PASSWORD")
+    );
 }
 
 #[test]

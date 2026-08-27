@@ -165,7 +165,15 @@ type Argdefaultbinding struct {
 type Need struct {
 	Verb string `json:"verb"`
 	Scope Scopebinding `json:"scope"`
+	When *Needcondition `json:"when,omitempty"`
 	Why Localizedtext `json:"why"`
+}
+
+// Needcondition — needCondition.
+type Needcondition struct {
+	Kind string `json:"kind"`
+	Arg string `json:"arg"`
+	Value *interface{} `json:"value,omitempty"`
 }
 
 // Scopebinding — scopeBinding.

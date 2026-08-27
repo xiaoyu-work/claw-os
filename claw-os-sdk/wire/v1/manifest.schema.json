@@ -154,14 +154,35 @@
           ]
         },
         "scope": { "$ref": "#/$defs/scopeBinding" },
+        "when": { "$ref": "#/$defs/needCondition", "description": "Explicit condition under which this capability is required." },
         "why": { "$ref": "#/$defs/localizedText", "description": "Plain-language reason shown in the approval dialog." }
+      }
+    },
+    "needCondition": {
+      "type": "object",
+      "required": ["kind", "arg"],
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "arg-present" } }, "required": ["kind"] },
+          "then": { "not": { "required": ["value"] } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "arg-equals" } }, "required": ["kind"] },
+          "then": { "required": ["value"] }
+        }
+      ],
+      "properties": {
+        "kind": { "type": "string", "enum": ["arg-present", "arg-equals"] },
+        "arg": { "type": "string" },
+        "value": { "not": { "type": "null" } }
       }
     },
     "scopeBinding": {
       "type": "object",
       "description": "How an operation's scope is determined at invocation time. kind=from-arg reads a named arg at call time; kind=fixed hard-codes a scope; kind=wild is an explicit wildcard (no implicit '*').",
       "required": ["kind"],
-      "additionalProperties": true,
+      "additionalProperties": false,
       "allOf": [
         {
           "if": { "properties": { "kind": { "const": "from-arg" } }, "required": ["kind"] },

@@ -868,7 +868,7 @@ impl Tool for AppSessionTool {
             .manifest
             .resolve_session_tool_needs(&self.manifest_tool_name, &args_map)
         {
-            Ok(c) => c,
+            Ok(c) => c.into_iter().flatten().collect::<Vec<_>>(),
             Err(e) => {
                 let msg = format!("cap resolution failed: {e}");
                 emit_audit(

@@ -193,14 +193,26 @@ class Argdefaultbinding(_ArgdefaultbindingRequired, total=False):
     prefix: str
     fallback: str
 
-class Need(TypedDict):
+class _NeedRequired(TypedDict):
+    verb: str
+    scope: "Scopebinding"
+    why: "Localizedtext"
+
+class Need(_NeedRequired, total=False):
     """need.
 
     A single capability request: verb + scope binding + human reason.
     """
-    verb: str
-    scope: "Scopebinding"
-    why: "Localizedtext"
+    when: "Needcondition"
+
+class _NeedconditionRequired(TypedDict):
+    kind: str
+    arg: str
+
+class Needcondition(_NeedconditionRequired, total=False):
+    """needCondition.
+    """
+    value: Any
 
 class _ScopebindingRequired(TypedDict):
     kind: str

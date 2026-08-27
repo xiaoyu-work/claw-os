@@ -1077,8 +1077,13 @@ fn canonical_operation_argv(
                 flags.push(name);
             }
         } else {
-            flags.push(name);
-            flags.push(arg_value_to_string(value)?);
+            let value = arg_value_to_string(value)?;
+            if value.starts_with("--") {
+                flags.push(format!("{name}={value}"));
+            } else {
+                flags.push(name);
+                flags.push(value);
+            }
         }
     }
 

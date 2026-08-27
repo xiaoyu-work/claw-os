@@ -732,10 +732,20 @@ fn default_desktop_exec() -> String {
 pub struct Need {
     pub verb: Verb,
     pub scope: ScopeBinding,
+    /// Explicit condition controlling whether this need applies.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<NeedCondition>,
     /// Reason shown to the user in the approval dialog. Authors are
     /// expected to write this in plain language ("Read the file you
     /// asked me to summarise"), not jargon.
     pub why: LocalizedText,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum NeedCondition {
+    ArgPresent { arg: String },
+    ArgEquals { arg: String, value: serde_json::Value },
 }
 
 /// How an operation's scope is determined at invocation time.
@@ -748,8 +758,8 @@ pub struct Need {
 ///   per-app data directory).
 /// - [`ScopeBinding::Wild`] — explicit wildcard. The author has to spell
 ///   this out; there is no implicit `*`.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum ScopeBinding {
     FromArg {
         arg: String,
@@ -766,6 +776,110 @@ pub enum ScopeBinding {
         scope: Scope,
     },
     Wild,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum NeedConditionWire {
+    ArgPresent { arg: String },
+    ArgEquals { arg: String, value: serde_json::Value },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum ScopeBindingWire {
+    FromArg {
+        arg: String,
+    },
+    FromArgMap {
+        arg: String,
+        values: BTreeMap<String, Scope>,
+    },
+    FromArgOrWild {
+        arg: String,
+        wild_when: String,
+    },
+    Fixed {
+        scope: Scope,
+    },
+    Wild,
+}
+
+fn reject_unknown_tagged_fields<E>(
+    value: &serde_json::Value,
+    fields_by_kind: &'static [(&'static str, &'static [&'static str])],
+) -> Result<(), E>
+where
+    E: serde::de::Error,
+{
+    let Some(object) = value.as_object() else {
+        return Ok(());
+    };
+    let Some(kind) = object.get("kind").and_then(serde_json::Value::as_str) else {
+        return Ok(());
+    };
+    let Some((_, allowed)) = fields_by_kind
+        .iter()
+        .find(|(candidate, _)| *candidate == kind)
+    else {
+        return Ok(());
+    };
+    if let Some(field) = object
+        .keys()
+        .find(|field| field.as_str() != "kind" && !allowed.contains(&field.as_str()))
+    {
+        return Err(E::unknown_field(field, allowed));
+    }
+    Ok(())
+}
+
+impl<'de> Deserialize<'de> for NeedCondition {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        reject_unknown_tagged_fields::<D::Error>(
+            &value,
+            &[("arg-present", &["arg"]), ("arg-equals", &["arg", "value"])],
+        )?;
+        let wire: NeedConditionWire =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(match wire {
+            NeedConditionWire::ArgPresent { arg } => Self::ArgPresent { arg },
+            NeedConditionWire::ArgEquals { arg, value } => Self::ArgEquals { arg, value },
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for ScopeBinding {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = serde_json::Value::deserialize(deserializer)?;
+        reject_unknown_tagged_fields::<D::Error>(
+            &value,
+            &[
+                ("from-arg", &["arg"]),
+                ("from-arg-map", &["arg", "values"]),
+                ("from-arg-or-wild", &["arg", "wild_when"]),
+                ("fixed", &["scope"]),
+                ("wild", &[]),
+            ],
+        )?;
+        let wire: ScopeBindingWire =
+            serde_json::from_value(value).map_err(serde::de::Error::custom)?;
+        Ok(match wire {
+            ScopeBindingWire::FromArg { arg } => Self::FromArg { arg },
+            ScopeBindingWire::FromArgMap { arg, values } => Self::FromArgMap { arg, values },
+            ScopeBindingWire::FromArgOrWild { arg, wild_when } => {
+                Self::FromArgOrWild { arg, wild_when }
+            }
+            ScopeBindingWire::Fixed { scope } => Self::Fixed { scope },
+            ScopeBindingWire::Wild => Self::Wild,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1141,6 +1255,13 @@ impl Manifest {
             }
             // Needs must reference declared args and use compatible kinds.
             for (idx, need) in op.needs.iter().enumerate() {
+                validate_need_condition(need, &seen_args).map_err(|detail| {
+                    ManifestError::NeedInvalid {
+                        op: op_name.clone(),
+                        idx,
+                        detail,
+                    }
+                })?;
                 validate_literal_path_scopes(&need.scope).map_err(|detail| {
                     ManifestError::NeedInvalid {
                         op: op_name.clone(),
@@ -1240,6 +1361,13 @@ impl Manifest {
                     ScopeBinding::Fixed { scope: _ } => {}
                     ScopeBinding::Wild => {}
                 }
+                validate_optional_need_binding(need, &seen_args).map_err(|detail| {
+                    ManifestError::NeedInvalid {
+                        op: op_name.clone(),
+                        idx,
+                        detail,
+                    }
+                })?;
             }
         }
 
@@ -1294,6 +1422,13 @@ impl Manifest {
                     });
                 }
                 for (idx, need) in tool.needs.iter().enumerate() {
+                    validate_need_condition(need, &seen_args).map_err(|detail| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool.name.clone(),
+                            idx,
+                            detail,
+                        }
+                    })?;
                     validate_literal_path_scopes(&need.scope).map_err(|detail| {
                         ManifestError::SessionNeedInvalid {
                             tool: tool.name.clone(),
@@ -1391,6 +1526,13 @@ impl Manifest {
                         ScopeBinding::Fixed { scope: _ } => {}
                         ScopeBinding::Wild => {}
                     }
+                    validate_optional_need_binding(need, &seen_args).map_err(|detail| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool.name.clone(),
+                            idx,
+                            detail,
+                        }
+                    })?;
                 }
             }
         }
@@ -1456,7 +1598,7 @@ impl Manifest {
         &self,
         op_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<super::cap::Cap>, ManifestError> {
+    ) -> Result<Vec<Option<super::cap::Cap>>, ManifestError> {
         let op = self
             .operations
             .get(op_name)
@@ -1474,6 +1616,10 @@ impl Manifest {
             })?;
         let mut out = Vec::with_capacity(op.needs.len());
         for (idx, need) in op.needs.iter().enumerate() {
+            if !need_applies(need.when.as_ref(), &args) {
+                out.push(None);
+                continue;
+            }
             let scope = match &need.scope {
                 ScopeBinding::FromArg { arg } => {
                     let val = args.get(arg).ok_or_else(|| ManifestError::NeedInvalid {
@@ -1551,7 +1697,7 @@ impl Manifest {
                 ScopeBinding::Fixed { scope } => scope.clone(),
                 ScopeBinding::Wild => Scope::Wild,
             };
-            out.push(super::cap::Cap::new(need.verb, scope));
+            out.push(Some(super::cap::Cap::new(need.verb, scope)));
         }
         Ok(out)
     }
@@ -1565,7 +1711,7 @@ impl Manifest {
         &self,
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<super::cap::Cap>, ManifestError> {
+    ) -> Result<Vec<Option<super::cap::Cap>>, ManifestError> {
         let args = self.resolve_session_tool_args(tool_name, args)?;
         let session = self
             .session
@@ -1586,6 +1732,10 @@ impl Manifest {
             })?;
         let mut out = Vec::with_capacity(tool.needs.len());
         for (idx, need) in tool.needs.iter().enumerate() {
+            if !need_applies(need.when.as_ref(), &args) {
+                out.push(None);
+                continue;
+            }
             let scope =
                 match &need.scope {
                     ScopeBinding::FromArg { arg } => {
@@ -1666,7 +1816,7 @@ impl Manifest {
                     ScopeBinding::Fixed { scope } => scope.clone(),
                     ScopeBinding::Wild => Scope::Wild,
                 };
-            out.push(super::cap::Cap::new(need.verb, scope));
+            out.push(Some(super::cap::Cap::new(need.verb, scope)));
         }
         Ok(out)
     }
@@ -1711,6 +1861,74 @@ impl Manifest {
             }
         })?;
         Ok(resolved)
+    }
+}
+
+fn validate_need_condition(
+    need: &Need,
+    args: &BTreeMap<&str, &Arg>,
+) -> Result<(), String> {
+    let Some(condition) = &need.when else {
+        return Ok(());
+    };
+    let (arg_name, expected) = match condition {
+        NeedCondition::ArgPresent { arg } => (arg, None),
+        NeedCondition::ArgEquals { arg, value } => (arg, Some(value)),
+    };
+    let declaration = args
+        .get(arg_name.as_str())
+        .ok_or_else(|| format!("condition references undeclared arg `{arg_name}`"))?;
+    if let Some(value) = expected {
+        if value.is_null() || !declaration.kind.accepts_default(value) {
+            return Err(format!(
+                "condition value for `{arg_name}` does not match arg kind `{:?}`",
+                declaration.kind
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_optional_need_binding(
+    need: &Need,
+    args: &BTreeMap<&str, &Arg>,
+) -> Result<(), String> {
+    let bound_arg = match &need.scope {
+        ScopeBinding::FromArg { arg }
+        | ScopeBinding::FromArgMap { arg, .. }
+        | ScopeBinding::FromArgOrWild { arg, .. } => arg,
+        ScopeBinding::Fixed { .. } | ScopeBinding::Wild => return Ok(()),
+    };
+    let Some(declaration) = args.get(bound_arg.as_str()) else {
+        return Ok(());
+    };
+    let guaranteed = declaration.required
+        || declaration.default.is_some()
+        || declaration.default_from.is_some()
+        || declaration.trusted_resolver.is_some()
+        || declaration.kind == ArgKind::Bool;
+    let explicitly_guarded = matches!(
+        &need.when,
+        Some(NeedCondition::ArgPresent { arg } | NeedCondition::ArgEquals { arg, .. })
+            if arg == bound_arg
+    );
+    if guaranteed || explicitly_guarded {
+        Ok(())
+    } else {
+        Err(format!(
+            "capability binding to optional arg `{bound_arg}` requires an explicit condition"
+        ))
+    }
+}
+
+fn need_applies(
+    condition: Option<&NeedCondition>,
+    args: &BTreeMap<String, serde_json::Value>,
+) -> bool {
+    match condition {
+        None => true,
+        Some(NeedCondition::ArgPresent { arg }) => args.contains_key(arg),
+        Some(NeedCondition::ArgEquals { arg, value }) => args.get(arg) == Some(value),
     }
 }
 

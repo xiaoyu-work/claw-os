@@ -91,6 +91,11 @@
           },
           "why": {
             "en": "Load the Google Custom Search engine id when Google is selected."
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
           }
         }
       ]
@@ -176,6 +181,11 @@
           },
           "why": {
             "en": "Load the Google Custom Search engine id when Google is selected."
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
           }
         }
       ]

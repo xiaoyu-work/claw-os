@@ -109,7 +109,7 @@ def load_schemas() -> list[tuple[str, dict]]:
     schemas: list[tuple[str, dict]] = []
     for path in sorted(WIRE_DIR.glob("*.schema.json")):
         name = path.stem.replace(".schema", "")
-        with path.open() as fh:
+        with path.open(encoding="utf-8") as fh:
             schemas.append((name, json.load(fh)))
     return schemas
 

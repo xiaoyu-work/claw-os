@@ -19,7 +19,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "local"
         },
         {
           "name": "from",
@@ -44,6 +45,11 @@
               "value": "calendar"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "local"
+          },
           "why": {
             "en": "Read events from the local calendar database."
           }
@@ -53,28 +59,63 @@
           "scope": {
             "kind": "wild"
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
           "why": {
-            "en": "When using Google or Outlook, call the provider's API to list events."
+            "en": "Call the Google calendar API only when selected."
           }
         },
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
           "why": {
-            "en": "Load only the selected calendar provider's access token."
+            "en": "Read only the Google calendar credential when selected."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Call the Outlook calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Read only the Outlook calendar credential when selected."
           }
         }
       ]
@@ -88,7 +129,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "local"
         },
         {
           "name": "title",
@@ -133,37 +175,13 @@
               "value": "calendar"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "local"
+          },
           "why": {
             "en": "Write the new event into the local calendar database."
-          }
-        },
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "When using Google or Outlook, call the provider's API to create the event."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
-            }
-          },
-          "why": {
-            "en": "Load only the selected calendar provider's access token."
           }
         },
         {
@@ -178,6 +196,70 @@
           "why": {
             "en": "Remember the new event so the agent can recall it later."
           }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Call the Google calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Read only the Google calendar credential when selected."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Call the Outlook calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Read only the Outlook calendar credential when selected."
+          }
         }
       ]
     },
@@ -190,7 +272,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "local"
         },
         {
           "name": "id",
@@ -239,37 +322,13 @@
               "value": "calendar"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "local"
+          },
           "why": {
             "en": "Update the existing event in the local calendar database."
-          }
-        },
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "When using Google or Outlook, call the provider's API to update the event."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
-            }
-          },
-          "why": {
-            "en": "Load only the selected calendar provider's access token."
           }
         },
         {
@@ -284,6 +343,70 @@
           "why": {
             "en": "Remember the change so the agent can recall what was updated."
           }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Call the Google calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Read only the Google calendar credential when selected."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Call the Outlook calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Read only the Outlook calendar credential when selected."
+          }
         }
       ]
     },
@@ -296,7 +419,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "local"
         },
         {
           "name": "id",
@@ -315,37 +439,13 @@
               "value": "calendar"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "local"
+          },
           "why": {
             "en": "Remove the event from the local calendar database."
-          }
-        },
-        {
-          "verb": "net.dial",
-          "scope": {
-            "kind": "wild"
-          },
-          "why": {
-            "en": "When using Google or Outlook, call the provider's API to delete the event."
-          }
-        },
-        {
-          "verb": "secret.read",
-          "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
-            }
-          },
-          "why": {
-            "en": "Load only the selected calendar provider's access token."
           }
         },
         {
@@ -360,6 +460,70 @@
           "why": {
             "en": "Remember the deletion so the agent can recall the change later."
           }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Call the Google calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
+          "why": {
+            "en": "Read only the Google calendar credential when selected."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Call the Outlook calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Read only the Outlook calendar credential when selected."
+          }
         }
       ]
     },
@@ -372,7 +536,8 @@
           "name": "provider",
           "kind": "name",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "local"
         }
       ],
       "needs": [
@@ -385,6 +550,11 @@
               "value": "calendar"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "local"
+          },
           "why": {
             "en": "Read today's events from the local calendar database."
           }
@@ -394,28 +564,63 @@
           "scope": {
             "kind": "wild"
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
           "why": {
-            "en": "When using Google or Outlook, call the provider's API to list today's events."
+            "en": "Call the Google calendar API only when selected."
           }
         },
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "google": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
             }
           },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "google"
+          },
           "why": {
-            "en": "Load only the selected calendar provider's access token."
+            "en": "Read only the Google calendar credential when selected."
+          }
+        },
+        {
+          "verb": "net.dial",
+          "scope": {
+            "kind": "wild"
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Call the Outlook calendar API only when selected."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
+            }
+          },
+          "when": {
+            "kind": "arg-equals",
+            "arg": "provider",
+            "value": "outlook"
+          },
+          "why": {
+            "en": "Read only the Outlook calendar credential when selected."
           }
         }
       ]

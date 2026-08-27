@@ -246,6 +246,24 @@ Declare it in `operations.<op>.needs[]`:
   wildcard when it equals `wild_when`:
   `{"kind": "from-arg-or-wild", "arg": "target", "wild_when": "all"}`.
 
+Needs that apply only in one mode declare `when` explicitly:
+
+```jsonc
+{
+  "verb": "fs.read",
+  "scope": { "kind": "from-arg", "arg": "file" },
+  "when": { "kind": "arg-present", "arg": "file" },
+  "why": { "en": "Read the optional file when one was supplied." }
+}
+```
+
+`arg-equals` gates provider/mode-specific fixed needs:
+`{"kind":"arg-equals","arg":"provider","value":"google"}`. An inactive
+condition omits only that declared need. Once active, missing arguments and
+unmapped `from-arg-map` values remain errors. Binding a capability
+unconditionally to an optional argument without a default or trusted resolver
+is rejected at manifest load time.
+
 Check it at runtime by importing the internal runtime:
 
 ```python

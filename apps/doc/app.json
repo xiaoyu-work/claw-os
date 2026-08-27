@@ -127,6 +127,10 @@
           },
           "why": {
             "en": "Read the document so its contents can be summarised."
+          },
+          "when": {
+            "kind": "arg-present",
+            "arg": "file"
           }
         },
         {
@@ -174,6 +178,10 @@
           },
           "why": {
             "en": "Read the document so it can be explained."
+          },
+          "when": {
+            "kind": "arg-present",
+            "arg": "file"
           }
         },
         {
@@ -214,6 +222,10 @@
           },
           "why": {
             "en": "Read the document so it can be rewritten."
+          },
+          "when": {
+            "kind": "arg-present",
+            "arg": "file"
           }
         },
         {

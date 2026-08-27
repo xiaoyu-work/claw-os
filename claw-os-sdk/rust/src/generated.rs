@@ -211,7 +211,18 @@ pub struct Argdefaultbinding {
 pub struct Need {
     pub verb: String,
     pub scope: Scopebinding,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub when: Option<Needcondition>,
     pub why: Localizedtext,
+}
+
+/// needCondition
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Needcondition {
+    pub kind: String,
+    pub arg: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<serde_json::Value>,
 }
 
 /// scopeBinding

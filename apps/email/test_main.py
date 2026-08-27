@@ -187,6 +187,17 @@ class TestSendCommand(unittest.TestCase):
     def tearDown(self):
         _clear_provider_env()
 
+    def test_inline_option_shaped_value_is_preserved(self):
+        options = email_main._build_send_parser().parse_args(
+            [
+                "--to=x@y.com",
+                "--subject=--urgent",
+                "--body=hello",
+                "--provider=smtp",
+            ]
+        )
+        self.assertEqual(options.subject, "--urgent")
+
     def test_send_no_provider(self):
         result = run("send", ["--to", "x@y.com", "--subject", "hi", "--body", "hello"])
         self.assertIn("error", result)
