@@ -9,8 +9,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(60);
@@ -94,10 +95,14 @@ pub async fn reconcile_on_start() -> Result<(), String> {
     }
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("USB Guard requires Linux sysfs".to_string());
     }
 
@@ -107,11 +112,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             return Err("USB Guard requires root clawd".to_string());
         }
         let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let device = optional_string(&params, "device")?;
         let state = optional_string(&params, "state")?;
@@ -134,10 +134,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         } else {
             Cap::new(Verb::DEVICE_USB, Scope::name("control"))
         };
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, requested)?;
 
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
@@ -159,36 +156,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("usb-guard session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("usb-guard") {
-        return Err("USB control is restricted to the usb-guard App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("usb-guard session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "usb-guard session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("usb-guard session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("USB request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "usb-guard session lacks {}:{}",
-            requested.verb.as_str(),
-            requested.scope
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, String> {
+    authority.require_app("usb-guard")?;
+    authority.require_all(std::slice::from_ref(&requested))
 }
 
 fn usb_status() -> Result<Value, String> {
@@ -773,8 +752,8 @@ fn reject_protected_storage(device: &UsbDevice) -> Result<(), String> {
             continue;
         };
         let path = unescape_mount(path);
-        let metadata = fs::metadata(&path)
-            .map_err(|error| format!("inspect active swap {path}: {error}"))?;
+        let metadata =
+            fs::metadata(&path).map_err(|error| format!("inspect active swap {path}: {error}"))?;
         let encoded = if metadata.file_type().is_block_device() {
             metadata.rdev()
         } else {
@@ -804,10 +783,7 @@ fn reject_protected_storage(device: &UsbDevice) -> Result<(), String> {
     Ok(())
 }
 
-fn mount_source_is_related(
-    fields: &[&str],
-    related: &BTreeSet<PathBuf>,
-) -> Result<bool, String> {
+fn mount_source_is_related(fields: &[&str], related: &BTreeSet<PathBuf>) -> Result<bool, String> {
     let Some(separator) = fields.iter().position(|field| *field == "-") else {
         return Err("malformed mountinfo entry without separator".to_string());
     };

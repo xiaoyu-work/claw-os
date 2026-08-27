@@ -29,6 +29,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::caps::{Cap, Scope, Verb};
 
+pub mod generations;
+
+pub use generations::RevocationScope;
+
 /// How long a grant lasts after the user approves it.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -81,6 +85,97 @@ pub struct Decision {
     pub duration: Option<GrantDuration>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
+    /// What the approval actually authorises.
+    ///
+    /// Absent on a record written before the capability authority
+    /// existed. Such a record is evidence that a decision was made, but
+    /// it carries no expiry, no use budget and no provenance, so it
+    /// grants nothing: [`load_matching_grant`] refuses it. See
+    /// [`GrantBinding`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grant: Option<GrantBinding>,
+}
+
+/// The bounded authority one approved record stands for.
+///
+/// A user saying "yes" to a capability is a decision about *that*
+/// capability, not a standing licence, so every approval carries a
+/// deadline, a use budget and a revocation generation even when the
+/// user picked "for this session" or "always". `Once` spends exactly
+/// one use; the longer choices bound the same grant by wall-clock time
+/// and stay revocable through [`generations`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GrantBinding {
+    /// Wall-clock deadline, seconds since the epoch.
+    pub expires_at: u64,
+    /// Uses the grant still has. `0` means spent.
+    pub uses_remaining: u32,
+    /// The revocation generation current for this owner and grant
+    /// session when the approval was made.
+    ///
+    /// Compared against [`generations::current`] on every load, so an
+    /// increment retires this grant immediately and a record restored
+    /// from a backup taken before the increment stays dead. Optional on
+    /// the wire and *required* in practice: a binding without one fails
+    /// closed, because there is nothing to compare.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generation: Option<u32>,
+    /// Keyed, non-reversible reference shared with the audit trail.
+    pub reference: String,
+}
+
+/// Longest a `session`-scoped approval may stand.
+const SESSION_GRANT_SECS: u64 = 8 * 60 * 60;
+/// Longest a `forever` approval may stand before the user is asked
+/// again. "Forever" is a UX promise about not being re-prompted during
+/// ordinary use, not a promise that authority never expires.
+const FOREVER_GRANT_SECS: u64 = 30 * 24 * 60 * 60;
+/// Uses a non-one-shot approval carries before it must be renewed.
+const REPEATABLE_GRANT_USES: u32 = 512;
+
+impl GrantBinding {
+    fn mint(duration: GrantDuration, id: &str, now: u64, generation: u32) -> Self {
+        let (lifetime, uses) = match duration {
+            GrantDuration::Once => (SESSION_GRANT_SECS, 1),
+            GrantDuration::Session => (SESSION_GRANT_SECS, REPEATABLE_GRANT_USES),
+            GrantDuration::Forever => (FOREVER_GRANT_SECS, REPEATABLE_GRANT_USES),
+        };
+        Self {
+            expires_at: now.saturating_add(lifetime),
+            uses_remaining: uses,
+            generation: Some(generation),
+            reference: crate::audit_policy::text_digest(id).digest,
+        }
+    }
+
+    /// Is this binding still authority for `(owner_uid, session)`?
+    ///
+    /// Three independent conditions, each of which alone kills the
+    /// grant: the use budget, the deadline, and the revocation
+    /// generation. The generation lookup reads root-owned state, and an
+    /// error there is a refusal — an authority that cannot tell whether
+    /// something was revoked must assume it was.
+    fn is_live(&self, now: u64, owner_uid: Option<u32>, session: &str) -> bool {
+        if self.uses_remaining == 0 || now >= self.expires_at {
+            return false;
+        }
+        let Some(generation) = self.generation else {
+            // Written before revocation generations existed. The
+            // decision was real; the standing authority it implies was
+            // never bounded, so it is refused until re-approved.
+            return false;
+        };
+        match generations::current(owner_uid, session) {
+            Ok(current) => generation == current,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "approval revocation state is unreadable; refusing the grant"
+                );
+                false
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -177,9 +272,6 @@ fn validate_approval_id(id: &str) -> Result<(), String> {
 /// `.tmp.<nonce>` file, are fsynced, and are then renamed over the
 /// final path. On Linux + POSIX this guarantees a reader sees either
 /// the previous bytes or the new bytes — never a truncated payload.
-/// The parent directory is also fsynced so the rename survives an
-/// abrupt power loss on filesystems where directory metadata is not
-/// auto-flushed (ext4 with `data=writeback`, xfs, …).
 ///
 /// Why we need this: the approval queue is the trust boundary
 /// between a gated agent action and the user's consent. A partial
@@ -187,7 +279,32 @@ fn validate_approval_id(id: &str) -> Result<(), String> {
 /// leave a non-parseable file; the read side filters parse errors
 /// silently, so the user's request would just disappear. With the
 /// tmp-write + rename pattern that scenario is impossible.
+///
+/// `durability` decides what happens to the parent-directory `fsync`
+/// that commits the rename itself. Most records here are re-derivable
+/// or re-requestable, so losing one to a power cut is recoverable and
+/// the sync is advisory. A revocation counter is not: losing its
+/// increment silently re-arms authority the user retired, so
+/// [`Durability::Committed`] makes the directory sync mandatory and
+/// reports failure rather than success.
 fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    write_atomic_with(path, data, Durability::BestEffort)
+}
+
+/// How firmly a write must be committed before it may be called done.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Durability {
+    /// The directory entry is synced if the kernel lets us, and a
+    /// failure is ignored. Correct for records whose loss is
+    /// recoverable by asking again.
+    BestEffort,
+    /// The directory entry must be durably committed. A failure is
+    /// returned, so the caller cannot report success for a change that
+    /// may not have survived.
+    Committed,
+}
+
+fn write_atomic_with(path: &Path, data: &[u8], durability: Durability) -> std::io::Result<()> {
     let parent = path.parent().ok_or_else(|| {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no parent")
     })?;
@@ -225,14 +342,46 @@ fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     }
     crate::storage::set_private_file(path)?;
 
-    // Best-effort: fsync the parent directory so the rename
-    // survives a crash. Not all filesystems require this but it
-    // costs ~one syscall and makes the durability guarantee
-    // unambiguous.
-    if let Ok(dir) = fs::File::open(parent) {
-        let _ = dir.sync_all();
+    // Commit the directory entry the rename created. Without this the
+    // new bytes are on disk but the name may still point at the old
+    // inode after a power cut, on filesystems where directory metadata
+    // is not auto-flushed (ext4 with `data=writeback`, xfs, …).
+    match durability {
+        Durability::BestEffort => {
+            if let Ok(dir) = fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+        Durability::Committed => {
+            let dir = fs::File::open(parent)?;
+            dir.sync_all()?;
+            // A test hook, compiled out of release builds, so the
+            // failure path can be exercised without an unmountable
+            // filesystem.
+            #[cfg(test)]
+            fail_parent_sync_if_requested()?;
+        }
     }
     Ok(())
+}
+
+/// Test-only injection point for a parent-directory sync failure.
+#[cfg(test)]
+fn fail_parent_sync_if_requested() -> std::io::Result<()> {
+    if PARENT_SYNC_FAILS.load(std::sync::atomic::Ordering::SeqCst) {
+        return Err(std::io::Error::other(
+            "injected parent directory sync failure",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+static PARENT_SYNC_FAILS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(crate) fn set_parent_sync_failure(fails: bool) {
+    PARENT_SYNC_FAILS.store(fails, std::sync::atomic::Ordering::SeqCst);
 }
 
 fn sync_dir(path: &Path) {
@@ -393,12 +542,33 @@ fn resolve(
         ));
     }
 
+    let decided_at = now_secs();
+    // The generation is captured from root-owned state at decision
+    // time, so a later revocation of this owner or this grant session
+    // retires the record without touching it — and a restore of this
+    // very file from an older backup cannot bring it back.
+    let generation = match outcome {
+        Outcome::Approved => Some(
+            generations::current(request.owner_uid, &request.session)
+                .map_err(|error| format!("could not read approval revocation state: {error}"))?,
+        ),
+        Outcome::Denied => None,
+    };
     let decision = Decision {
         outcome,
-        decided_at: now_secs(),
+        decided_at,
         decided_by,
         duration,
         note,
+        // Only an approval carries authority, and only a bounded one.
+        grant: generation.map(|generation| {
+            GrantBinding::mint(
+                duration.unwrap_or(GrantDuration::Once),
+                id,
+                decided_at,
+                generation,
+            )
+        }),
     };
     let resolved = Resolved { request, decision };
     let dest_dir = match outcome {
@@ -499,22 +669,43 @@ pub fn consume_matching_grant_for_owner(
     owner_uid: Option<u32>,
 ) -> Result<Option<GrantDuration>, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
-    for path in list_dir(&approved_dir()) {
-        let Some(resolved) = load_matching_grant(&path, session, verb, requested_scope, owner_uid)
-        else {
-            continue;
-        };
-
-        let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
-        if duration != GrantDuration::Once {
-            return Ok(Some(duration));
+    // The scan, the budget decrement and the retirement all happen
+    // under one store-wide lock, so two callers cannot both spend the
+    // last use of the same grant.
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        for path in list_dir(&approved_dir()) {
+            let Some(resolved) =
+                load_matching_grant(&path, session, verb, requested_scope, owner_uid)
+            else {
+                continue;
+            };
+            let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
+            if spend_grant(&path, resolved)? {
+                return Ok(Some(duration));
+            }
         }
+        Ok(None)
+    })
+}
 
-        if consume_grant_file(&path)? {
-            return Ok(Some(duration));
-        }
+/// Spend one use of an approved grant, retiring it when the budget runs
+/// out.
+///
+/// Called with the store lock held. Returns `Ok(false)` when another
+/// caller won the race and the record is already gone.
+fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<bool, String> {
+    let Some(binding) = resolved.decision.grant.as_mut() else {
+        // Refused by `load_matching_grant`; belt and braces.
+        return Ok(false);
+    };
+    binding.uses_remaining = binding.uses_remaining.saturating_sub(1);
+    if binding.uses_remaining == 0 {
+        return consume_grant_file(path);
     }
-    Ok(None)
+    let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
+    write_atomic(path, payload.as_bytes())
+        .map_err(|e| format!("spend approved grant {}: {e}", path.display()))?;
+    Ok(true)
 }
 
 /// True when an approved, unconsumed grant already covers this exact
@@ -527,9 +718,9 @@ pub fn has_approved_grant_for_owner(
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
-    Ok(list_dir(&approved_dir()).into_iter().any(|path| {
-        load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()
-    }))
+    Ok(list_dir(&approved_dir())
+        .into_iter()
+        .any(|path| load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()))
 }
 
 /// Decision state of one request, as reported to the requester.
@@ -617,8 +808,7 @@ pub fn consume_grant_set_once_for_owner(
         for cap in required {
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
                 !claimed.contains(path)
-                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid)
-                        .is_some()
+                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid).is_some()
             });
             match found {
                 Some(path) => claimed.push(path),
@@ -662,6 +852,14 @@ fn grant_lock_path() -> PathBuf {
 
 /// Load `path` when it holds an approved grant covering this exact
 /// session, owner, verb and scope.
+///
+/// A record with no [`GrantBinding`] is refused. Those are the records
+/// written before approvals carried an expiry, a use budget and a
+/// revocation generation: the decision they describe was real, but the
+/// file alone is not authority, and re-arming one would turn a
+/// historical "yes" into standing permission the user was never asked
+/// for. An expired, spent or revoked binding is refused the same way,
+/// and so is one the revocation state cannot be read for.
 fn load_matching_grant(
     path: &Path,
     session: &str,
@@ -681,6 +879,16 @@ fn load_matching_grant(
         return None;
     }
     if resolved.decision.outcome != Outcome::Approved {
+        return None;
+    }
+    // Generations are keyed by the *record's* owner, not the caller's
+    // filter, so a lookup with no owner filter still compares against
+    // the counter the approval was minted under.
+    if !resolved.decision.grant.as_ref()?.is_live(
+        now_secs(),
+        resolved.request.owner_uid,
+        &resolved.request.session,
+    ) {
         return None;
     }
     if !resolved.request.scope.covers(requested_scope) {

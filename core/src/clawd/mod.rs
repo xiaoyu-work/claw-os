@@ -4,6 +4,7 @@ pub mod accessibility;
 pub mod a11y_wayland;
 pub mod audio;
 pub mod audit;
+pub mod authority;
 pub mod backup;
 pub mod bluetooth;
 pub mod camera;

@@ -11,8 +11,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const STORAGE_SCOPE: &str = "diagnose";
@@ -26,10 +27,14 @@ const STORAGE_JOURNAL_FIELDS: &str =
     "__REALTIME_TIMESTAMP,_BOOT_ID,PRIORITY,SYSLOG_IDENTIFIER,MESSAGE";
 static STORAGE_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Storage Manager requires Linux".to_string());
     }
 
@@ -43,10 +48,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let device = optional_string(&params, "device")?;
         validate_action(&action, device.as_deref())?;
@@ -67,10 +68,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             ),
             _ => unreachable!("validated storage action"),
         };
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, verb, scope)
-        })
-        .await?;
+        let authorized = authorize_session(authority, verb, scope)?;
         let mount_session_cgroup = if action == "mount" && uid != 0 {
             Some(active_session_cgroup(uid)?)
         } else {
@@ -95,6 +93,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             "check" => filesystem_check(canonical_device.as_deref().unwrap()).await,
             "mount" | "unmount" | "eject" => {
                 mutate(
+                    &authorized,
                     &action,
                     canonical_device.as_deref().unwrap(),
                     uid,
@@ -109,37 +108,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
-    verb: Verb,
-    scope: Scope,
-) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("storage-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("storage-manager") {
-        return Err("storage control is restricted to the storage-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("storage-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "storage-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("storage-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("storage request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&Cap::new(verb, scope)) {
-        return Err(format!("storage-manager session lacks {}", verb.as_str()));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, verb: Verb, scope: Scope) -> Result<Authorized, String> {
+    authority.require_app("storage-manager")?;
+    authority.require(Cap::new(verb, scope))
 }
 
 async fn storage_status() -> Result<Value, String> {
@@ -177,6 +157,7 @@ async fn storage_status() -> Result<Value, String> {
 }
 
 async fn mutate(
+    _authorized: &Authorized,
     action: &str,
     device: &Path,
     uid: u32,

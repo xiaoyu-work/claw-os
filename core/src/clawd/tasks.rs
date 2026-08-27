@@ -52,11 +52,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
             prepare_task_session(&session_id, owner_uid, &owner_home)?;
             Some(session_id)
         }
-        None => Some(create_task_session(
-            &prompt,
-            owner_uid,
-            &owner_home,
-        )?),
+        None => Some(create_task_session(&prompt, owner_uid, &owner_home)?),
     };
     let job = store
         .submit_with_context(
@@ -99,7 +95,8 @@ fn prepare_task_session(
     let sid = session_id
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;
-    let meta = session::get_meta(&sid).map_err(|_| format!("task session not found: {session_id}"))?;
+    let meta =
+        session::get_meta(&sid).map_err(|_| format!("task session not found: {session_id}"))?;
     // The capabilities below are re-derived for `owner_uid`, and the
     // conversation history is read from that uid's memory database, so
     // the recorded owner has to be the same account — including for
@@ -108,7 +105,9 @@ fn prepare_task_session(
     // owner, and resuming somebody else's would rewrite their session
     // to a different account's policy.
     if meta.owner_uid != Some(owner_uid) {
-        return Err(format!("task session is not owned by uid {owner_uid}: {session_id}"));
+        return Err(format!(
+            "task session is not owned by uid {owner_uid}: {session_id}"
+        ));
     }
     if meta.creator_runtime.as_deref() != Some("clawd") {
         return Err(format!("session is not a system-agent task: {session_id}"));
@@ -122,7 +121,9 @@ fn prepare_task_session(
         .has_session(session_id)
         .map_err(|err| format!("read memory session: {err}"))?
     {
-        return Err(format!("task session has no conversation history: {session_id}"));
+        return Err(format!(
+            "task session has no conversation history: {session_id}"
+        ));
     }
 
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
@@ -153,18 +154,42 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let mut jobs = Vec::new();
 
     match status {
-        Some(JobStatus::Pending) => {
-            collect_jobs(&store, JobStatus::Pending, status, limit, owner_uid, &mut jobs)?
-        }
-        Some(JobStatus::Running) => {
-            collect_jobs(&store, JobStatus::Running, status, limit, owner_uid, &mut jobs)?
-        }
+        Some(JobStatus::Pending) => collect_jobs(
+            &store,
+            JobStatus::Pending,
+            status,
+            limit,
+            owner_uid,
+            &mut jobs,
+        )?,
+        Some(JobStatus::Running) => collect_jobs(
+            &store,
+            JobStatus::Running,
+            status,
+            limit,
+            owner_uid,
+            &mut jobs,
+        )?,
         Some(JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled) => {
             collect_jobs(&store, JobStatus::Ok, status, limit, owner_uid, &mut jobs)?
         }
         None => {
-            collect_jobs(&store, JobStatus::Pending, None, limit, owner_uid, &mut jobs)?;
-            collect_jobs(&store, JobStatus::Running, None, limit, owner_uid, &mut jobs)?;
+            collect_jobs(
+                &store,
+                JobStatus::Pending,
+                None,
+                limit,
+                owner_uid,
+                &mut jobs,
+            )?;
+            collect_jobs(
+                &store,
+                JobStatus::Running,
+                None,
+                limit,
+                owner_uid,
+                &mut jobs,
+            )?;
             collect_jobs(&store, JobStatus::Ok, None, limit, owner_uid, &mut jobs)?;
         }
     }
@@ -280,6 +305,16 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     {
         if !immediate {
             crate::agent::runtime::interrupt::signal(&id);
+        }
+        // Cancelling a task ends the authority its session carried.
+        // Doing it here rather than only at teardown means a cancel
+        // that races a tool call cannot leave the tool holding a live
+        // grant while the task is already being reported cancelled.
+        if let Some(session_id) = job.session_id.as_deref() {
+            match job.owner_uid {
+                Some(uid) => super::authority::revoke_session_for_owner(session_id, uid),
+                None => super::authority::revoke_session(session_id),
+            }
         }
         let mut value = job_value(job);
         value["cancelled"] = json!(immediate);

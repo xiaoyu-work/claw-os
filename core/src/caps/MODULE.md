@@ -29,6 +29,13 @@ Capability definitions are stable inputs to `clawd`, app discovery, sessions,
 and agent tools. Validation occurs before side effects. Consumers request the
 narrowest scope and do not reinterpret scope strings independently.
 
+`caps/` is the *vocabulary*, not the authority. A `CapSet` describes what some
+principal may do; it never establishes that they may do it. The thing that
+decides is `clawd::authority`, which holds grants bound to an authenticated
+process and hands each broker route one decision. A serialized `CapSet` found on
+disk, in a request body, or in a session row is a description to be re-derived
+and clamped — never promoted.
+
 ## Tests
 
 ```bash

@@ -11,9 +11,9 @@ use tokio::io::{AsyncBufRead, AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::{broadcast, Mutex, RwLock};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
-use super::client_identity::ClientIdentity;
+use super::authority::{Authorized, Decision};
 
 const MAX_EVENT_LINE: usize = 1024 * 1024;
 const MAX_EVENT_DATA_TEXT: usize = 4096;
@@ -47,10 +47,10 @@ pub fn start() -> Arc<EventCenter> {
         .clone()
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(params: Value, authority: &Decision) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err("Event Center requires Linux".to_string());
     }
 
@@ -59,21 +59,12 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         if unsafe { libc::geteuid() } != 0 {
             return Err("Event Center requires root clawd".to_string());
         }
-        let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let source = optional_string(&params, "source")?;
         let limit = optional_u64(&params, "limit")?.unwrap_or(100);
         let pid = optional_u64(&params, "pid")?;
         validate_action(&action, source.as_deref(), limit, pid)?;
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid)
-        })
-        .await?;
+        let _authorized = authorize_session(authority)?;
         let center = start();
         match action.as_str() {
             "status" => center.status().await,
@@ -91,33 +82,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("event-center session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("event-center") {
-        return Err("event subscriptions are restricted to the event-center App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("event-center session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "event-center session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("event-center session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("event request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    let requested = Cap::new(Verb::SYS_EVENTS, Scope::name("observe"));
-    if !caps.covers(&requested) {
-        return Err("event-center session lacks sys.events:observe".to_string());
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision) -> Result<Authorized, String> {
+    authority.require_app("event-center")?;
+    authority.require(Cap::new(Verb::SYS_EVENTS, Scope::name("observe")))
 }
 
 impl EventCenter {

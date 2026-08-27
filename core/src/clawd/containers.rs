@@ -8,8 +8,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -19,10 +20,14 @@ const STREAM_CAP_BYTES: usize = 2 * 1024 * 1024;
 const MAX_LOG_LINES: u64 = 1000;
 static CONTAINER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Container Manager requires Linux".to_string());
     }
 
@@ -36,10 +41,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let runtime = optional_string(&params, "runtime")?;
         let target = optional_string(&params, "target")?;
@@ -75,10 +76,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             "observe"
         };
         let requested = Cap::new(Verb::SYS_CONTAINER, Scope::name(scope));
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, requested)?;
         let user = UserEnvironment::new(uid, gid, home)?;
 
         if !is_mutating(&action) {
@@ -113,36 +111,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("container-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("container-manager") {
-        return Err("container control is restricted to the container-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("container-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "container-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("container-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("container request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "container-manager session lacks {}:{}",
-            requested.verb.as_str(),
-            requested.scope
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, String> {
+    authority.require_app("container-manager")?;
+    authority.require_all(std::slice::from_ref(&requested))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]

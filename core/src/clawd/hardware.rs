@@ -6,17 +6,17 @@ use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
-use super::client_identity::ClientIdentity;
+use super::authority::{Authorized, Decision};
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 const STREAM_CAP_BYTES: usize = 2 * 1024 * 1024;
 
-pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn inspect(params: Value, authority: &Decision) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err("Hardware Center requires Linux".to_string());
     }
 
@@ -25,18 +25,9 @@ pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, St
         if unsafe { libc::geteuid() } != 0 {
             return Err("Hardware Center requires root clawd".to_string());
         }
-        let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         validate_action(&action)?;
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid)
-        })
-        .await?;
+        let _authorized = authorize_session(authority)?;
 
         match action.as_str() {
             "summary" => summary().await,
@@ -53,33 +44,18 @@ pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("hardware-center session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("hardware-center") {
-        return Err("hardware inventory is restricted to the hardware-center App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("hardware-center session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "hardware-center session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("hardware-center session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("hardware request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    let requested = Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"));
-    if !caps.covers(&requested) {
-        return Err("hardware-center session lacks sys.observe:hardware".to_string());
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision) -> Result<Authorized, String> {
+    authority.require_app("hardware-center")?;
+    authority.require(Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware")))
 }
 
 async fn summary() -> Result<Value, String> {

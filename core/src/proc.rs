@@ -542,18 +542,37 @@ pub fn set_app_session_transient_caps(
     session_id: &str,
     caps: Option<crate::caps::CapSet>,
 ) -> Result<(), String> {
+    swap_app_session_transient_caps(session_id, caps).map(|_| ())
+}
+
+/// Replace an App session's transient capabilities and return what was
+/// there before.
+///
+/// The read and the write happen inside one locked registry update, so
+/// the returned value is exactly the state a caller has to restore if a
+/// later step of the same operation fails. Widening a session's
+/// capabilities and then failing to re-derive the matching authority
+/// grant must not leave the wider set behind, and a caller cannot
+/// reconstruct the previous value safely by reading first — another
+/// call could land between the read and the write.
+pub fn swap_app_session_transient_caps(
+    session_id: &str,
+    caps: Option<crate::caps::CapSet>,
+) -> Result<Option<crate::caps::CapSet>, String> {
     let mut found = false;
+    let mut previous: Option<crate::caps::CapSet> = None;
     update_registry(|mut registry| {
         if let Some(session) = registry.sessions.iter_mut().find(|session| {
             session.session_id == session_id && session.app_id.is_some()
         }) {
+            previous = session.transient_caps.take();
             session.transient_caps = caps;
             found = true;
         }
         registry
     })?;
     if found {
-        Ok(())
+        Ok(previous)
     } else {
         Err(format!(
             "App session not found while updating transient caps: {session_id}"

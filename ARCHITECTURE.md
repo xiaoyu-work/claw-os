@@ -40,7 +40,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
-| `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs` |
+| `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
@@ -146,7 +146,10 @@ client (cos / bridge / rollback / approval helper)
   -> route lookup -> typed deny_unknown_fields decode
   -> access class -> global / per-principal / per-route slots
   -> duplicate check for mutations
-  -> handler under the route's budget
+  -> capability authority: resolve the route's grant, verify the principal,
+     audience and subject, spend the required capabilities
+  -> handler under the route's budget, re-checking through the same decision
+  -> refuse the answer if the route owed a capability check and skipped it
   -> typed boundary error mapping and route-owned audit projection
   -> one bounded response frame, then close
 ```
@@ -158,10 +161,11 @@ allocated, and a short read is a truncation rather than a record the daemon
 waits on. `core/src/clawd/wire/` owns the envelope and the bounded field types;
 `core/src/clawd/routes.rs` is the single table that ties a wire command name to
 its typed body, access class, mutation kind, concurrency and time budget, safe
-audit fields, and handler. It also drives stable unknown, malformed,
-unauthorized, unavailable and execution-failure responses;
+audit fields, authorization descriptor, and handler. It also drives stable
+unknown, malformed, unauthorized, unavailable and execution-failure responses;
 `core/src/clawd/transport/` owns framing, per-message credentials and admission
-control.
+control; `core/src/clawd/authority/` owns the grants every privileged route is
+authorized against.
 
 Identity comes from the credentials Linux stamps onto each message when
 `SO_PASSCRED` is set on the listener — not from `SO_PEERCRED` captured at
@@ -169,6 +173,46 @@ connect, and never from a request field. A peer that attaches descriptors has
 them closed and its request refused. One request is served per connection, so
 responses cannot be crossed and a replayed frame cannot chain a second
 privileged call behind an authenticated one.
+
+### Capability authority
+
+Authority lives in one place and is held rather than described.
+`core/src/clawd/authority/` issues **grants**: daemon-owned records that bind an
+authenticated principal (uid, pid, that pid's start time, cgroup), a subject
+(session, App, task), an audience, an exact `CapSet`, an issuer, issue and
+expiry instants, a use budget, revocation state, and lineage.
+
+```text
+register / approve / delegate
+  -> Authority::issue          (root grant, bound to the launcher process)
+  -> opaque handle to the one legitimate holder
+       |
+       +-- Authority::attenuate  (child ⊆ parent in caps, audience,
+       |                          expiry, use budget; depth/count bounded)
+       |
+       +-- authority::authorize  (per request: kernel credentials, audience,
+                                  subject, capability spend) -> Decision
+                                    -> handler re-checks through the Decision
+```
+
+Two things are deliberately *not* authority. A handle is not a bearer token:
+possession is necessary and insufficient, because every resolve re-checks the
+principal against the credentials the kernel stamped on that message, so a
+same-uid sibling, an fd recipient, a recycled pid or a re-`exec`ed process
+cannot use it. A session id is not authority either: it is an index into the
+store, and naming somebody else's session fails exactly the way naming a session
+that does not exist does.
+
+The store is in memory and dies with the daemon, so ephemeral grants fail closed
+across a restart. Scheduled work that must outlive one is re-issued from
+root-owned durable provenance through `core/src/clawd/session_scope.rs` and the
+narrow delegation policy in `core/src/clawd/system_caps.rs` — never from a
+serialized handle or a promoted `CapSet`. Grants are bounded per owner, session
+and process, and swept when a process exits, a session finishes or is cancelled,
+a worker lease lapses, or a deadline passes.
+
+`core/src/caps/` remains the vocabulary: verbs, scopes, catalog, manifests and
+the `require` gate. It describes authority; the broker authority decides it.
 
 ### Agent ask/chat turn
 
@@ -273,6 +317,20 @@ system authority. Owner homes for every one of these derivations come from
 `paths::verified_home_for_uid`: canonical, existing, and owned by that uid, with
 no fallback.
 
+An approval is likewise a bounded decision rather than a licence.
+`core/src/approvals.rs` stamps every approved record with a wall-clock deadline,
+a use budget, a revocation generation and a keyed audit reference, and spends it
+atomically under a store-wide lock, so `once` cannot be double-spent and
+`session`/`forever` still expire. Revocation lives in
+`core/src/approvals/generations.rs`: a monotonic counter in root-owned state
+that a binding captures at approval time and every load compares against, so
+retiring authority is an increment no restored backup can undo. `permission.revoke`
+is the root-only route that performs it, and session finish, task cancellation
+and worker-lease teardown call it for the session they tear down. A record with
+no such provenance — one written before the binding existed — is evidence that a
+decision happened, not authority: it authorises nothing until the owner is asked
+again.
+
 ### Agent-initiated account authorization
 
 ```text
@@ -343,9 +401,13 @@ approved permission grant bound to that exact peer process. A launch that needs
 consent is answered with the ids of the requests the daemon filed; the launcher
 process waits on `permission.status` with a bounded timeout and retries over the
 same connection, and grants are settled all-or-none and retired on first use.
-Registration returns an opaque, launcher-bound, single-use launch handle that
-authorises the pid bind, per-call capability updates, and teardown for that one
-session; the launched App never receives it.
+Registration returns an opaque handle to a launch grant the capability authority
+holds. The grant is bound to the launching process, expires, and authorises the
+pid bind, per-call capability updates, and teardown for that one session; the
+launched App never receives it. Binding derives a strictly narrower session
+grant — launch authority dropped, bound to the App's own process tree — which is
+what every privileged provider route the App later calls is authorized against.
+Deregistration revokes the launch grant, and the session grant with it.
 
 ### Proactive scheduling
 

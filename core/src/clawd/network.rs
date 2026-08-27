@@ -4,18 +4,23 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 use crate::proc::SessionInfo;
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const NMCLI_TIMEOUT: Duration = Duration::from_secs(120);
 static NETWORK_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("NetworkManager control requires Linux".to_string());
     }
 
@@ -26,10 +31,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         }
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let target = optional_string(&params, "target")?;
         let state = optional_string(&params, "state")?;
@@ -46,10 +47,8 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         } else {
             (Verb::NET_MANAGE, Scope::name(action_scope(&action)))
         };
-        let session = crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, verb, scope, credential.as_deref())
-        })
-        .await?;
+        let (session, _authorized) =
+            authorize_session(authority, verb, scope, credential.as_deref())?;
 
         if is_read_action(&action) {
             return read_action(&action).await;
@@ -207,50 +206,35 @@ async fn device_state(device: &str) -> Result<Value, String> {
     }))
 }
 
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
 fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
+    authority: &Decision,
     verb: Verb,
     scope: Scope,
     credential: Option<&str>,
-) -> Result<SessionInfo, String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("network-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("network-manager") {
-        return Err("NetworkManager control is restricted to the network-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("network-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "network-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("network-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("network request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.clone().unwrap_or_else(CapSet::new);
-    if let Some(transient) = &session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&Cap::new(verb, scope)) {
-        return Err(format!("network-manager session lacks {}", verb.as_str()));
-    }
+) -> Result<(SessionInfo, Authorized), String> {
+    authority.require_app("network-manager")?;
+    let mut requested = vec![Cap::new(verb, scope)];
     if let Some(credential) = credential {
         let (namespace, name) = parse_credential_ref(credential)?;
-        let secret = Cap::new(
+        requested.push(Cap::new(
             Verb::SECRET_READ,
             Scope::name(format!("{namespace}/{name}")),
-        );
-        if !caps.covers(&secret) {
-            return Err(format!(
-                "network-manager session lacks secret.read for {namespace}/{name}"
-            ));
-        }
+        ));
     }
-    Ok(session)
+    // One spend for the whole request: a connection that needs a
+    // credential it cannot prove authorises nothing at all, rather
+    // than burning the network capability first.
+    let proof = authority.require_all(&requested)?;
+    Ok((authority.session()?.clone(), proof))
 }
 
 fn require_wifi_device(state: &Value) -> Result<(), String> {

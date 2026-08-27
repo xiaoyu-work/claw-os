@@ -275,7 +275,6 @@ fn list_pending_ignores_tmp_files() {
     );
 }
 
-
 const LAUNCHER: &str = "app-launch:uid=1000:pid=42:start=7";
 
 fn approve_for(verb: Verb, scope: Scope, duration: GrantDuration) -> String {
@@ -315,10 +314,30 @@ fn grant_set_consumption_requires_an_exact_session_owner_verb_and_scope() {
     );
 
     let cases = [
-        ("app-launch:uid=1000:pid=43:start=9", Verb::SYS_IDENTITY, Scope::name("accounts"), Some(1000)),
-        (LAUNCHER, Verb::SYS_CONFIG, Scope::name("accounts"), Some(1000)),
-        (LAUNCHER, Verb::SYS_IDENTITY, Scope::name("other"), Some(1000)),
-        (LAUNCHER, Verb::SYS_IDENTITY, Scope::name("accounts"), Some(1001)),
+        (
+            "app-launch:uid=1000:pid=43:start=9",
+            Verb::SYS_IDENTITY,
+            Scope::name("accounts"),
+            Some(1000),
+        ),
+        (
+            LAUNCHER,
+            Verb::SYS_CONFIG,
+            Scope::name("accounts"),
+            Some(1000),
+        ),
+        (
+            LAUNCHER,
+            Verb::SYS_IDENTITY,
+            Scope::name("other"),
+            Some(1000),
+        ),
+        (
+            LAUNCHER,
+            Verb::SYS_IDENTITY,
+            Scope::name("accounts"),
+            Some(1001),
+        ),
     ];
     for (session, verb, scope, owner) in cases {
         let required = vec![Cap::new(verb, scope.clone())];
@@ -391,18 +410,42 @@ fn status_reports_the_decision_state_for_the_owner_only() {
         Some(1000),
     )
     .unwrap();
-    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Pending);
-    assert_eq!(status_for_owner(&pending, Some(1001)), RequestStatus::Unknown);
-    assert_eq!(status_for_owner("ap-missing", Some(1000)), RequestStatus::Unknown);
-    assert_eq!(status_for_owner("../escape", Some(1000)), RequestStatus::Unknown);
+    assert_eq!(
+        status_for_owner(&pending, Some(1000)),
+        RequestStatus::Pending
+    );
+    assert_eq!(
+        status_for_owner(&pending, Some(1001)),
+        RequestStatus::Unknown
+    );
+    assert_eq!(
+        status_for_owner("ap-missing", Some(1000)),
+        RequestStatus::Unknown
+    );
+    assert_eq!(
+        status_for_owner("../escape", Some(1000)),
+        RequestStatus::Unknown
+    );
 
-    approve_for_owner(&pending, GrantDuration::Once, Some("uid:0".into()), None, Some(1000))
-        .unwrap();
-    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Approved);
+    approve_for_owner(
+        &pending,
+        GrantDuration::Once,
+        Some("uid:0".into()),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    assert_eq!(
+        status_for_owner(&pending, Some(1000)),
+        RequestStatus::Approved
+    );
 
     let required = vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"))];
     assert!(consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
-    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Consumed);
+    assert_eq!(
+        status_for_owner(&pending, Some(1000)),
+        RequestStatus::Consumed
+    );
 
     let denied = submit_owned(
         Verb::SYS_CONFIG,
@@ -415,4 +458,375 @@ fn status_reports_the_decision_state_for_the_owner_only() {
     .unwrap();
     deny_for_owner(&denied, Some("uid:0".into()), None, Some(1000)).unwrap();
     assert_eq!(status_for_owner(&denied, Some(1000)), RequestStatus::Denied);
+}
+
+// ---------------------------------------------------------------------------
+// What an approval actually authorises
+// ---------------------------------------------------------------------------
+
+#[test]
+fn an_approval_carries_a_bounded_grant() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-bound",
+        "install git",
+        None,
+    )
+    .unwrap();
+    let resolved = approve(&id, GrantDuration::Forever, None, None).unwrap();
+    let grant = resolved
+        .decision
+        .grant
+        .expect("an approval mints a bounded grant");
+
+    assert!(grant.expires_at > resolved.decision.decided_at);
+    assert!(
+        grant.expires_at <= resolved.decision.decided_at + FOREVER_GRANT_SECS,
+        "`forever` still has a deadline"
+    );
+    assert_eq!(grant.uses_remaining, REPEATABLE_GRANT_USES);
+    assert!(!grant.reference.is_empty());
+    assert!(
+        !grant.reference.contains(&id),
+        "the audit reference is keyed, not the request id"
+    );
+}
+
+#[test]
+fn a_denial_mints_nothing() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-denied",
+        "install git",
+        None,
+    )
+    .unwrap();
+    let resolved = deny(&id, None, None).unwrap();
+    assert!(resolved.decision.grant.is_none());
+}
+
+#[test]
+fn a_record_with_no_grant_provenance_authorises_nothing() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-legacy",
+        "install git",
+        None,
+    )
+    .unwrap();
+    let mut resolved = approve(&id, GrantDuration::Forever, None, None).unwrap();
+
+    // Exactly what a record written before the authority existed looks
+    // like: a real decision, no expiry, no budget, no provenance.
+    resolved.decision.grant = None;
+    let path = approved_dir().join(format!("{id}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&resolved).unwrap()).unwrap();
+
+    assert_eq!(
+        consume_matching_grant("sess-legacy", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None,
+        "a historical yes is evidence, not standing authority"
+    );
+    assert!(!has_approved_grant_for_owner(
+        "sess-legacy",
+        &Cap::new(Verb::SYS_PACKAGE, Scope::name("git")),
+        None,
+    )
+    .unwrap());
+}
+
+#[test]
+fn a_forged_record_with_an_expired_binding_authorises_nothing() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-expired",
+        "install git",
+        None,
+    )
+    .unwrap();
+    let mut resolved = approve(&id, GrantDuration::Forever, None, None).unwrap();
+    resolved.decision.grant.as_mut().unwrap().expires_at = 1;
+    let path = approved_dir().join(format!("{id}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&resolved).unwrap()).unwrap();
+
+    assert_eq!(
+        consume_matching_grant("sess-expired", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn a_repeatable_grant_still_spends_its_budget() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-budget",
+        "install git",
+        None,
+    )
+    .unwrap();
+    let mut resolved = approve(&id, GrantDuration::Session, None, None).unwrap();
+    resolved.decision.grant.as_mut().unwrap().uses_remaining = 2;
+    let path = approved_dir().join(format!("{id}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&resolved).unwrap()).unwrap();
+
+    for expected in [Some(GrantDuration::Session), Some(GrantDuration::Session)] {
+        assert_eq!(
+            consume_matching_grant("sess-budget", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+            expected
+        );
+    }
+    assert_eq!(
+        consume_matching_grant("sess-budget", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None,
+        "an exhausted approval stops authorising"
+    );
+    assert!(consumed_dir().join(format!("{id}.json")).exists());
+}
+
+#[test]
+fn concurrent_consumers_of_a_one_shot_approval_produce_one_winner() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-race",
+        "install git",
+        None,
+    )
+    .unwrap();
+    approve(&id, GrantDuration::Once, None, None).unwrap();
+
+    let winners = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut threads = Vec::new();
+    for _ in 0..6 {
+        let winners = std::sync::Arc::clone(&winners);
+        threads.push(std::thread::spawn(move || {
+            if matches!(
+                consume_matching_grant("sess-race", Verb::SYS_PACKAGE, &Scope::name("git")),
+                Ok(Some(_))
+            ) {
+                winners.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    assert_eq!(winners.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Revocation
+// ---------------------------------------------------------------------------
+
+fn approve_reusable(session: &str, duration: GrantDuration) -> String {
+    let id = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        session,
+        "install git",
+        None,
+    )
+    .unwrap();
+    approve(&id, duration, None, None).unwrap();
+    id
+}
+
+#[test]
+fn an_approval_captures_the_current_revocation_generation() {
+    let _tmp = isolated_env();
+    generations::revoke(&RevocationScope::Session {
+        uid: None,
+        session: "sess-gen".to_string(),
+    })
+    .unwrap();
+    let id = approve_reusable("sess-gen", GrantDuration::Forever);
+    let resolved: Resolved = serde_json::from_str(
+        &std::fs::read_to_string(approved_dir().join(format!("{id}.json"))).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        resolved.decision.grant.unwrap().generation,
+        Some(1),
+        "the binding records the generation in force when it was approved"
+    );
+}
+
+#[test]
+fn revoking_a_session_kills_its_reusable_approvals_immediately() {
+    let _tmp = isolated_env();
+    approve_reusable("sess-revoke", GrantDuration::Forever);
+    assert_eq!(
+        consume_matching_grant("sess-revoke", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        Some(GrantDuration::Forever)
+    );
+
+    generations::revoke(&RevocationScope::Session {
+        uid: None,
+        session: "sess-revoke".to_string(),
+    })
+    .unwrap();
+
+    assert_eq!(
+        consume_matching_grant("sess-revoke", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None,
+        "a 30-day approval stops being authority the moment it is revoked"
+    );
+}
+
+#[test]
+fn revoking_an_owner_kills_every_session_it_approved() {
+    let _tmp = isolated_env();
+    for session in ["sess-one", "sess-two"] {
+        let id = submit(
+            Verb::SYS_PACKAGE,
+            Scope::name("git"),
+            session,
+            "install git",
+            Some("uid:1000".to_string()),
+        )
+        .unwrap();
+        approve_for_owner(&id, GrantDuration::Session, None, None, None).unwrap();
+    }
+    // The requests were filed without an owner, so they live under the
+    // system scope; revoke that and both die.
+    generations::revoke(&RevocationScope::Owner { uid: None }).unwrap();
+    for session in ["sess-one", "sess-two"] {
+        assert_eq!(
+            consume_matching_grant(session, Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+            None
+        );
+    }
+}
+
+#[test]
+fn a_restored_backup_cannot_revive_a_revoked_approval() {
+    let _tmp = isolated_env();
+    let id = approve_reusable("sess-backup", GrantDuration::Forever);
+    let path = approved_dir().join(format!("{id}.json"));
+    // Exactly what a backup taken before the revocation contains.
+    let backup = std::fs::read_to_string(&path).unwrap();
+
+    generations::revoke(&RevocationScope::Session {
+        uid: None,
+        session: "sess-backup".to_string(),
+    })
+    .unwrap();
+    std::fs::write(&path, &backup).unwrap();
+
+    assert_eq!(
+        consume_matching_grant("sess-backup", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None,
+        "the generation lives outside the record, so restoring the record changes nothing"
+    );
+}
+
+#[test]
+fn a_binding_without_a_generation_fails_closed_on_every_path() {
+    let _tmp = isolated_env();
+    let id = approve_reusable("sess-nogen", GrantDuration::Forever);
+    let path = approved_dir().join(format!("{id}.json"));
+    let mut resolved: Resolved =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    // Exactly the shape of a record written before revocation
+    // generations existed: a real approval, a live expiry, a use budget
+    // left — and nothing to compare against.
+    resolved.decision.grant.as_mut().unwrap().generation = None;
+    assert!(resolved.decision.grant.as_ref().unwrap().uses_remaining > 0);
+    assert!(resolved.decision.grant.as_ref().unwrap().expires_at > now_secs());
+    std::fs::write(&path, serde_json::to_string_pretty(&resolved).unwrap()).unwrap();
+
+    let cap = Cap::new(Verb::SYS_PACKAGE, Scope::name("git"));
+
+    // 1. The gate's own spend.
+    assert_eq!(
+        consume_matching_grant("sess-nogen", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None,
+        "a binding with nothing to compare against is not authority"
+    );
+    // 2. The owner-scoped spend the agentd gateway uses.
+    assert_eq!(
+        consume_matching_grant_for_owner(
+            "sess-nogen",
+            Verb::SYS_PACKAGE,
+            &Scope::name("git"),
+            None,
+        )
+        .unwrap(),
+        None
+    );
+    // 3. The non-consuming probe that decides whether to re-prompt.
+    assert!(!has_approved_grant_for_owner("sess-nogen", &cap, None).unwrap());
+    // 4. The all-or-none set consumption an App launch settles with.
+    assert!(!consume_grant_set_once_for_owner("sess-nogen", &[cap], None).unwrap());
+
+    // The record is still on disk and still readable as history: it is
+    // evidence a decision happened, not authority.
+    assert!(path.exists());
+    assert!(list_recent(10).iter().any(|entry| entry.request.id == id));
+}
+
+#[test]
+fn a_revocation_that_races_a_spend_leaves_no_use_behind() {
+    let _tmp = isolated_env();
+    approve_reusable("sess-race-revoke", GrantDuration::Session);
+
+    let spends = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut threads = Vec::new();
+    for index in 0..6 {
+        let spends = std::sync::Arc::clone(&spends);
+        threads.push(std::thread::spawn(move || {
+            if index == 3 {
+                let _ = generations::revoke(&RevocationScope::Session {
+                    uid: None,
+                    session: "sess-race-revoke".to_string(),
+                });
+            } else if matches!(
+                consume_matching_grant("sess-race-revoke", Verb::SYS_PACKAGE, &Scope::name("git")),
+                Ok(Some(_))
+            ) {
+                spends.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    // Whatever the interleaving, nothing may be spent afterwards.
+    assert_eq!(
+        consume_matching_grant("sess-race-revoke", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        None
+    );
+}
+
+#[test]
+fn one_owners_revocation_does_not_touch_another() {
+    let _tmp = isolated_env();
+    let mine = submit(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-mine",
+        "install git",
+        None,
+    )
+    .unwrap();
+    approve_for_owner(&mine, GrantDuration::Session, None, None, None).unwrap();
+
+    generations::revoke(&RevocationScope::Owner { uid: Some(1000) }).unwrap();
+
+    assert_eq!(
+        consume_matching_grant("sess-mine", Verb::SYS_PACKAGE, &Scope::name("git")).unwrap(),
+        Some(GrantDuration::Session),
+        "revoking uid 1000 must not retire an unattributed approval"
+    );
 }

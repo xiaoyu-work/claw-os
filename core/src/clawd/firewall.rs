@@ -8,8 +8,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TABLE_FAMILY: &str = "inet";
@@ -65,10 +66,14 @@ pub async fn reconcile_on_start() -> Result<(), String> {
     apply_live_state(&state).await
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Firewall Manager requires Linux nftables".to_string());
     }
 
@@ -78,11 +83,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             return Err("Firewall Manager requires root clawd".to_string());
         }
         let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let rule_action = optional_string(&params, "rule_action")?;
         let direction = optional_string(&params, "direction")?;
@@ -113,10 +113,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         } else {
             Cap::new(Verb::NET_FIREWALL, Scope::name("manage"))
         };
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, requested)?;
 
         if action == "status" {
             return firewall_status().await;
@@ -150,36 +147,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("firewall-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("firewall-manager") {
-        return Err("firewall control is restricted to the firewall-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("firewall-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "firewall-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("firewall-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("firewall request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "firewall-manager session lacks {}:{}",
-            requested.verb.as_str(),
-            requested.scope
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, String> {
+    authority.require_app("firewall-manager")?;
+    authority.require_all(std::slice::from_ref(&requested))
 }
 
 async fn firewall_status() -> Result<Value, String> {

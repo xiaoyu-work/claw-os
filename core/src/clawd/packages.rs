@@ -4,10 +4,11 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 use crate::proc::SessionInfo;
 use crate::session::{Mutation, MutationRecord, SessionId};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const PACKAGE_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -21,16 +22,24 @@ pub struct PackageState {
     pub held: bool,
 }
 
-pub async fn install(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn install(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     let mut params = params;
     params["action"] = Value::String("install".to_string());
-    control(params, client).await
+    control(params, client, authority).await
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err("system package control requires Linux".to_string());
     }
 
@@ -41,10 +50,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         }
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let package = optional_string(&params, "package")?;
         let version = optional_string(&params, "version")?;
@@ -55,10 +60,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         } else {
             Scope::name(package.as_deref().unwrap_or_default())
         };
-        let session = crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_package_session(&session_id, peer_pid, requested_scope, true)
-        })
-        .await?;
+        let (session, authorized) = authorize_package_session(authority, requested_scope, true)?;
 
         let _guard = APT_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -87,7 +89,9 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
                 "Global apt index and upgrade operations require a system snapshot for rollback.",
             )
         };
-        let output = run_package_action(&action, package.as_deref(), version.as_deref()).await?;
+        let output =
+            run_package_action(&authorized, &action, package.as_deref(), version.as_deref())
+                .await?;
         let after = match package.as_deref() {
             Some(package) => match query_package_state(package).await {
                 Ok(state) => Some(state),
@@ -123,10 +127,10 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn restore(params: Value, authority: &Decision) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err("system package restore requires Linux".to_string());
     }
 
@@ -135,12 +139,6 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, St
         if unsafe { libc::geteuid() } != 0 {
             return Err("system package restore requires root clawd".to_string());
         }
-        let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let mutation_session = required_string(&params, "mutation_session")?;
         let mutation_seq = required_u64(&params, "mutation_seq")?;
         let package = required_string(&params, "package")?;
@@ -151,23 +149,22 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, St
         }
         let was_held = required_bool(&params, "was_held")?;
 
-        crate::paths::with_user_override(uid, home, async {
-            authorize_package_session(&session_id, peer_pid, Scope::name(&package), false)?;
-            validate_restore_record(
-                &mutation_session,
-                mutation_seq,
-                &package,
-                previous_version.as_deref(),
-                was_held,
-            )
-        })
-        .await?;
+        let (_session, authorized) =
+            authorize_package_session(authority, Scope::name(&package), false)?;
+        validate_restore_record(
+            &mutation_session,
+            mutation_seq,
+            &package,
+            previous_version.as_deref(),
+            was_held,
+        )?;
 
         let _guard = APT_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
-        restore_package_state_async(&package, previous_version.as_deref(), was_held).await?;
+        restore_package_state_async(&authorized, &package, previous_version.as_deref(), was_held)
+            .await?;
         Ok(json!({
             "package": package,
             "restored": true,
@@ -224,42 +221,25 @@ pub fn restore_package_state(
     }
 }
 
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
 fn authorize_package_session(
-    session_id: &str,
-    peer_pid: u32,
+    authority: &Decision,
     scope: Scope,
     require_pkg_app: bool,
-) -> Result<SessionInfo, String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("package session not found: {session_id}"))?;
-    if require_pkg_app && session.app_id.as_deref() != Some("pkg") {
-        return Err("system package control is restricted to the pkg App".to_string());
+) -> Result<(SessionInfo, Authorized), String> {
+    if require_pkg_app {
+        authority.require_app("pkg")?;
     }
-    if session.pending_bind || session.pid == 0 {
-        return Err("package session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "package session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("package session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("package request did not originate from the authorized session".to_string());
-    }
-
-    let mut caps = session.caps.clone().unwrap_or_else(CapSet::new);
-    if let Some(transient) = &session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    let requested = Cap::new(Verb::SYS_PACKAGE, scope);
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "session lacks sys.package permission for {}",
-            requested.scope
-        ));
-    }
-    Ok(session)
+    let proof = authority.require(Cap::new(Verb::SYS_PACKAGE, scope))?;
+    Ok((authority.session()?.clone(), proof))
 }
 
 async fn query_package_state(package: &str) -> Result<PackageState, String> {
@@ -288,6 +268,7 @@ async fn query_package_state(package: &str) -> Result<PackageState, String> {
 }
 
 async fn run_package_action(
+    _authorized: &Authorized,
     action: &str,
     package: Option<&str>,
     version: Option<&str>,
@@ -339,6 +320,7 @@ async fn run_package_action(
 }
 
 async fn restore_package_state_async(
+    _authorized: &Authorized,
     package: &str,
     previous_version: Option<&str>,
     was_held: bool,

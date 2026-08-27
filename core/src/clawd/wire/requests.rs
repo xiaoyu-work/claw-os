@@ -223,6 +223,24 @@ pub struct PermissionDecide {
     pub note: Option<Text<LABEL_BYTES>>,
 }
 
+/// Retire reusable approvals for an owner or one of their grant
+/// sessions.
+///
+/// Root-only at the route's access class, because `owner_uid` names
+/// whose authority is being retired and a non-root peer must not be
+/// able to choose another account — in either direction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PermissionRevoke {
+    /// The account whose approvals are retired. Absent means the
+    /// unattributed, system-scoped ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_uid: Option<u32>,
+    /// One grant session. Absent retires everything the owner holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<Token>,
+}
+
 // ---------------------------------------------------------------------------
 // App / MCP sessions
 // ---------------------------------------------------------------------------

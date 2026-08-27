@@ -11,8 +11,9 @@ use std::time::{Duration, Instant};
 use zbus::blocking::{Connection, Proxy};
 use zbus::zvariant::OwnedObjectPath;
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const HELPER_TIMEOUT: Duration = Duration::from_secs(35);
@@ -25,10 +26,14 @@ const GEOCLUE_CLIENT_INTERFACE: &str = "org.freedesktop.GeoClue2.Client";
 const GEOCLUE_LOCATION_INTERFACE: &str = "org.freedesktop.GeoClue2.Location";
 const GEOCLUE_DESKTOP_ID: &str = "com.clawos.Agent";
 
-pub async fn query(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn query(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Location Manager requires Linux GeoClue".to_string());
     }
 
@@ -39,29 +44,17 @@ pub async fn query(params: Value, client: &ClientIdentity) -> Result<Value, Stri
         }
         let uid = client.require_uid()?;
         if uid == 0 {
-            return Err(
-                "Location Manager requires a non-root desktop user session".to_string(),
-            );
+            return Err("Location Manager requires a non-root desktop user session".to_string());
         }
         let gid = client
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let accuracy = optional_string(&params, "accuracy")?.unwrap_or_else(|| "city".to_string());
         validate_action(&action, &accuracy)?;
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(
-                &session_id,
-                peer_pid,
-                Cap::new(Verb::DEVICE_LOCATION, Scope::Wild),
-            )
-        })
-        .await?;
+        let _authorized =
+            authorize_session(authority, Cap::new(Verb::DEVICE_LOCATION, Scope::Wild))?;
 
         let environment = UserEnvironment::new(uid, gid, home)?;
         let location = run_helper(&environment, accuracy_level(&accuracy)?).await?;
@@ -90,35 +83,18 @@ pub async fn query(params: Value, client: &ClientIdentity) -> Result<Value, Stri
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("location-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("location-manager") {
-        return Err("location access is restricted to the location-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("location-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "location-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("location-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("location request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "location-manager session lacks {}",
-            requested.verb.as_str()
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, String> {
+    authority.require_app("location-manager")?;
+    authority.require_all(std::slice::from_ref(&requested))
 }
 
 pub fn helper(args: &[String]) -> Result<Value, String> {

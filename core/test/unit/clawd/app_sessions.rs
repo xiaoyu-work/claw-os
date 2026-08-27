@@ -133,11 +133,9 @@ fn daemon_plan_skips_inactive_calendar_provider_needs() {
         .parent()
         .unwrap()
         .join("apps/calendar/app.json");
-    let manifest =
-        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let manifest = Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
     let operation = &manifest.operations["today"];
-    let values =
-        BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]);
+    let values = BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]);
     let resolved = manifest.resolve_needs("today", &values).unwrap();
 
     let local = Cap::new(Verb::DATA_DB_READ, Scope::name("calendar"));
@@ -181,12 +179,19 @@ fn with_invoke_cap(
 ) -> Result<CapSet, BrokerError> {
     let mut plan = LaunchPlan::default();
     plan.inherit(caps.iter().cloned());
-    plan.require(Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)), delegation);
+    plan.require(
+        Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)),
+        delegation,
+    );
     authorize_plan(delegation, plan)
 }
 
 /// Launcher authority for a synthetic peer process.
-fn authority_for(pid: u32, start_time_ticks: Option<u64>, parent: Option<&str>) -> LauncherAuthority {
+fn authority_for(
+    pid: u32,
+    start_time_ticks: Option<u64>,
+    parent: Option<&str>,
+) -> LauncherAuthority {
     LauncherAuthority {
         pid,
         start_time_ticks,
@@ -202,8 +207,13 @@ fn authority_for(pid: u32, start_time_ticks: Option<u64>, parent: Option<&str>) 
 /// Delegation for an unregistered launcher, exactly as egister
 /// builds it.
 fn launcher_delegation(pid: u32, ticks: u64) -> Delegation {
-    Delegation::new(&authority_for(pid, Some(ticks), None), 1000, &home(), &serde_json::json!({}))
-        .expect("delegation")
+    Delegation::new(
+        &authority_for(pid, Some(ticks), None),
+        1000,
+        &home(),
+        &serde_json::json!({}),
+    )
+    .expect("delegation")
 }
 
 fn session_row(session_id: &str, pid: u32, app_id: Option<&str>, caps: CapSet) -> SessionInfo {
@@ -283,7 +293,10 @@ fn approve_only_pending(uid: u32, duration: crate::approvals::GrantDuration) -> 
 
 /// Approval request ids a denial reported, as the launcher sees them.
 fn approval_requests(error: &BrokerError) -> Vec<String> {
-    let data = error.data.as_ref().expect("a denial must report its requests");
+    let data = error
+        .data
+        .as_ref()
+        .expect("a denial must report its requests");
     assert_eq!(data["status"], Value::String("approval_required".into()));
     data["approval_requests"]
         .as_array()
@@ -385,7 +398,10 @@ fn unregistered_launcher_cannot_reach_privileged_first_party_apps() {
         &delegation,
     )
     .expect_err("sys.identity must not be delegated without a grant");
-    assert!(error.message.contains("sys.identity"), "unexpected: {error}");
+    assert!(
+        error.message.contains("sys.identity"),
+        "unexpected: {error}"
+    );
 
     let error = operation_caps(&test_app(), "install", &args(&["vim"]), &delegation)
         .expect_err("argument-bound sys.package must not be delegated either");
@@ -444,7 +460,10 @@ fn approved_grant_authorizes_one_privileged_launch() {
 
     let error = operation_caps(&app, "create-user", &args(&["attacker"]), &delegation)
         .expect_err("the grant is single use");
-    assert!(error.message.contains("sys.identity"), "unexpected: {error}");
+    assert!(
+        error.message.contains("sys.identity"),
+        "unexpected: {error}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -540,7 +559,10 @@ fn another_same_uid_launcher_cannot_consume_an_approved_request() {
     // own connection.
     let error = operation_caps(&app, "create-user", &args(&["alice"]), &attacker)
         .expect_err("a sibling process must not consume someone else's approval");
-    assert!(error.message.contains("sys.identity"), "unexpected: {error}");
+    assert!(
+        error.message.contains("sys.identity"),
+        "unexpected: {error}"
+    );
 
     let caps = operation_caps(&app, "create-user", &args(&["alice"]), &victim)
         .expect("the launcher the grant was issued to may use it");
@@ -578,7 +600,10 @@ fn approved_grant_matching_stays_exact() {
 
     let error = operation_caps(&app, "create-user", &args(&["alice"]), &delegation)
         .expect_err("neither a different scope nor a different verb may authorise the launch");
-    assert!(error.message.contains("sys.identity"), "unexpected: {error}");
+    assert!(
+        error.message.contains("sys.identity"),
+        "unexpected: {error}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -651,7 +676,10 @@ fn a_launch_short_several_capabilities_requests_them_all_at_once() {
         &launcher,
     )
     .expect("the complete set settles the launch");
-    assert!(caps.covers(&Cap::new(Verb::SYS_CONFIG, Scope::path("/etc/cos/agent.toml"))));
+    assert!(caps.covers(&Cap::new(
+        Verb::SYS_CONFIG,
+        Scope::path("/etc/cos/agent.toml")
+    )));
     assert!(caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/etc/other.toml"))));
     for id in &ids {
         assert_eq!(
@@ -731,7 +759,10 @@ fn an_approved_scope_does_not_settle_a_different_one() {
         &launcher,
     )
     .expect_err("another resource is not covered");
-    assert!(denial.message.contains("/etc/passwd"), "unexpected: {denial}");
+    assert!(
+        denial.message.contains("/etc/passwd"),
+        "unexpected: {denial}"
+    );
     assert_eq!(
         crate::approvals::status_for_owner(&ids[0], Some(1000)),
         crate::approvals::RequestStatus::Approved
@@ -748,8 +779,8 @@ fn reusable_grant_durations_do_not_create_ambient_launch_authority() {
         let app = app_from(USER_MANAGER_MANIFEST);
         let launcher = launcher_delegation(4242, 91_234);
 
-        let denial = operation_caps(&app, "create-user", &args(&["alice"]), &launcher)
-            .expect_err("denied");
+        let denial =
+            operation_caps(&app, "create-user", &args(&["alice"]), &launcher).expect_err("denied");
         let ids = approval_requests(&denial);
         crate::approvals::approve_for_owner(
             &ids[0],
@@ -795,8 +826,8 @@ fn registered_parent_row_is_the_ceiling() {
 fn an_app_session_cannot_mint_further_sessions() {
     let (pid, ticks) = this_process();
     let rows = vec![session_row("app-1", pid, Some("fs"), home_reader_ceiling())];
-    let error = launcher_authority(&rows, pid, ticks, &home())
-        .expect_err("App launchers are rejected");
+    let error =
+        launcher_authority(&rows, pid, ticks, &home()).expect_err("App launchers are rejected");
     assert!(error.contains("app-1"), "unexpected error: {error}");
 }
 
@@ -1079,7 +1110,7 @@ fn app_session_tier_is_floored_at_worker() {
 }
 
 // ---------------------------------------------------------------------------
-// Launch handles
+// Launch grants
 // ---------------------------------------------------------------------------
 
 fn test_authority() -> LauncherAuthority {
@@ -1096,63 +1127,148 @@ fn test_authority() -> LauncherAuthority {
     }
 }
 
-#[test]
-fn handle_is_bound_to_its_session_launcher_and_owner() {
-    let authority = test_authority();
-    let token = issue_handle("app-handle-1", 4242, &authority);
-
-    assert!(authorize_handle(&token, "app-handle-1", 4242, authority.pid, false).is_ok());
-    assert!(authorize_handle(&token, "app-other", 4242, authority.pid, false).is_err());
-    assert!(authorize_handle(&token, "app-handle-1", 4343, authority.pid, false).is_err());
-    assert!(authorize_handle(&token, "app-handle-1", 4242, authority.pid + 1, false).is_err());
-    assert!(authorize_handle("not-a-handle", "app-handle-1", 4242, authority.pid, false).is_err());
-
-    release_handle(&token);
-    assert!(authorize_handle(&token, "app-handle-1", 4242, authority.pid, false).is_err());
-}
-
-#[test]
-fn handle_binds_a_process_only_once() {
-    let authority = test_authority();
-    let token = issue_handle("app-handle-2", 4242, &authority);
-
-    assert!(authorize_handle(&token, "app-handle-2", 4242, authority.pid, true).is_ok());
-    mark_handle_bound(&token);
-    assert!(
-        authorize_handle(&token, "app-handle-2", 4242, authority.pid, true).is_err(),
-        "the bind grant must be single use"
-    );
-    assert!(
-        authorize_handle(&token, "app-handle-2", 4242, authority.pid, false).is_ok(),
-        "control operations remain available to the same launcher"
-    );
-    release_handle(&token);
-}
-
-#[test]
-fn expired_unbound_handle_is_pruned() {
-    let authority = test_authority();
-    let token = issue_handle("app-handle-3", 4242, &authority);
-    {
-        let mut store = handles();
-        let handle = store.get_mut(&token).expect("issued handle");
-        handle.bind_deadline = Instant::now() - Duration::from_secs(1);
+fn test_client() -> ClientIdentity {
+    let (pid, start_time_ticks) = this_process();
+    ClientIdentity {
+        pid: Some(pid),
+        uid: Some(this_uid()),
+        gid: Some(0),
+        start_time_ticks,
     }
-    let error = authorize_handle(&token, "app-handle-3", 4242, authority.pid, false)
-        .expect_err("expired handle");
-    assert!(error.contains("unknown or expired"), "unexpected: {error}");
+}
+
+#[cfg(unix)]
+fn this_uid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+fn this_uid() -> u32 {
+    0
 }
 
 #[test]
-fn handle_for_an_exited_launcher_is_refused() {
-    let mut authority = test_authority();
-    // A pid/start-time pair that cannot be alive: pid 0 is never a
-    // real process for `kill(0)` aliveness purposes.
-    authority.pid = 0;
-    authority.start_time_ticks = Some(1);
-    let token = issue_handle("app-handle-4", 4242, &authority);
-    assert!(authorize_handle(&token, "app-handle-4", 4242, 0, false).is_err());
-    release_handle(&token);
+fn a_launch_grant_is_bound_to_its_session_and_launcher() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let caps = home_reader_ceiling();
+    let handle = issue_launch_grant(
+        "app-grant-1",
+        Some("power-manager"),
+        this_uid(),
+        &launcher,
+        &caps,
+    )
+    .expect("mint a launch grant");
+
+    require_launch_grant(&test_client(), &handle, "app-grant-1", this_uid())
+        .expect("the launcher resolves its own grant");
+    require_launch_grant(&test_client(), &handle, "app-other", this_uid())
+        .expect_err("a handle does not cover another session");
+
+    // A same-uid sibling that stole the characters cannot use them:
+    // the grant is bound to the launcher process, not to possession.
+    let mut sibling = test_client();
+    sibling.pid = Some(1);
+    require_launch_grant(&sibling, &handle, "app-grant-1", this_uid())
+        .expect_err("a sibling process cannot exercise the grant");
+
+    // Nor can another uid.
+    require_launch_grant(
+        &test_client(),
+        &handle,
+        "app-grant-1",
+        this_uid().wrapping_add(1),
+    )
+    .expect_err("another owner cannot exercise the grant");
+
+    require_launch_grant(&test_client(), &"a".repeat(64), "app-grant-1", this_uid())
+        .expect_err("a guessed handle resolves nothing");
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let caps = home_reader_ceiling();
+    let handle = issue_launch_grant(
+        "app-grant-2",
+        Some("power-manager"),
+        this_uid(),
+        &launcher,
+        &caps,
+    )
+    .expect("mint a launch grant");
+
+    issue_session_grant(
+        &handle,
+        "app-grant-2",
+        Some("power-manager"),
+        this_uid(),
+        std::process::id(),
+        &caps,
+    )
+    .expect("bind derives the session grant");
+
+    let error = issue_session_grant(
+        &handle,
+        "app-grant-2",
+        Some("power-manager"),
+        this_uid(),
+        std::process::id(),
+        &caps,
+    )
+    .expect_err("bind is one-shot");
+    assert!(error.contains("ceiling"), "unexpected: {error}");
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_session_grant_cannot_widen_the_launch_grant() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let handle = issue_launch_grant(
+        "app-grant-3",
+        Some("power-manager"),
+        this_uid(),
+        &launcher,
+        &home_reader_ceiling(),
+    )
+    .expect("mint a launch grant");
+
+    let mut wider = home_reader_ceiling();
+    wider.insert(Cap::new(Verb::SYS_PACKAGE, Scope::name("nano")));
+    let error = issue_session_grant(
+        &handle,
+        "app-grant-3",
+        Some("power-manager"),
+        this_uid(),
+        std::process::id(),
+        &wider,
+    )
+    .expect_err("a bind cannot mint authority the launcher never had");
+    assert!(error.contains("widen"), "unexpected: {error}");
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
+    authority::authority().clear_for_test();
+    let mut launcher = test_authority();
+    // A pid that cannot be read from `/proc`: without a start time
+    // there is no way to detect the pid being recycled.
+    launcher.pid = u32::MAX - 1;
+    launcher.start_time_ticks = Some(1);
+    issue_launch_grant(
+        "app-grant-4",
+        Some("power-manager"),
+        this_uid(),
+        &launcher,
+        &home_reader_ceiling(),
+    )
+    .expect_err("an unverifiable launcher gets no grant");
+    authority::authority().clear_for_test();
 }
 
 // ---------------------------------------------------------------------------
@@ -1191,4 +1307,591 @@ fn argument_arrays_must_be_strings() {
         .is_empty());
     assert!(string_array(&serde_json::json!({"args": [1]}), "args").is_err());
     assert!(string_array(&serde_json::json!({"args": "a"}), "args").is_err());
+}
+
+// ---------------------------------------------------------------------------
+// Transient capabilities, end to end
+// ---------------------------------------------------------------------------
+//
+// Transient capabilities are the one place the daemon deliberately
+// widens a running App, so the registry write and the re-derivation of
+// the authority grant have to stay in step. If they can drift apart, a
+// failed call leaves the registry wider than the authority — and
+// `caps::require` inside the App, plus any later peer-session grant,
+// would honour the leftover set.
+//
+// These drive the real thing: the owner-routed registry under
+// `/run/cos/caps/<uid>/proc`, real grants in the authority store, and a
+// real child process for the App. Preparing that partition is a
+// root-only operation by design (`storage::ensure_routed_caps_dir`
+// refuses otherwise), so each test reports and skips when it is not run
+// as root rather than pretending to cover the path.
+
+const E2E_UID: u32 = 0;
+
+fn e2e_is_root() -> bool {
+    #[cfg(unix)]
+    {
+        unsafe { libc::geteuid() == 0 }
+    }
+    #[cfg(not(unix))]
+    {
+        false
+    }
+}
+
+fn e2e_routed_registry() -> std::path::PathBuf {
+    std::path::PathBuf::from("/run/cos/caps")
+        .join(E2E_UID.to_string())
+        .join("proc")
+        .join("registry.json")
+}
+
+struct TransientHarness {
+    _lock: std::sync::MutexGuard<'static, ()>,
+    _data: tempfile::TempDir,
+    prev_data: Option<std::ffi::OsString>,
+    children: Vec<std::process::Child>,
+}
+
+impl Drop for TransientHarness {
+    fn drop(&mut self) {
+        for child in &mut self.children {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = std::fs::remove_file(e2e_routed_registry());
+        authority::authority().clear_for_test();
+        match self.prev_data.take() {
+            Some(value) => std::env::set_var("COS_DATA_DIR", value),
+            None => std::env::remove_var("COS_DATA_DIR"),
+        }
+    }
+}
+
+fn transient_harness() -> TransientHarness {
+    let lock = crate::caps::test_env_lock::env_lock();
+    let data = tempfile::tempdir().expect("tempdir");
+    let prev_data = std::env::var_os("COS_DATA_DIR");
+    std::env::set_var("COS_DATA_DIR", data.path());
+    let _ = std::fs::remove_file(e2e_routed_registry());
+    authority::authority().clear_for_test();
+    TransientHarness {
+        _lock: lock,
+        _data: data,
+        prev_data,
+        children: Vec::new(),
+    }
+}
+
+fn e2e_app_caps() -> CapSet {
+    CapSet::from_caps([
+        Cap::new(Verb::FS_READ, Scope::path("/root/**")),
+        Cap::new(Verb::AGENT_INVOKE, Scope::name("fs")),
+    ])
+}
+
+fn e2e_call_caps() -> CapSet {
+    // Deliberately outside the App's base set, so "did the call scope
+    // survive?" is a real question rather than one the base answers.
+    CapSet::from_caps([Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/**"))])
+}
+
+fn e2e_client() -> ClientIdentity {
+    let (pid, start_time_ticks) = this_process();
+    ClientIdentity {
+        pid: Some(pid),
+        uid: Some(E2E_UID),
+        gid: Some(0),
+        start_time_ticks,
+    }
+}
+
+fn e2e_row(session_id: &str, pid: u32, transient: Option<CapSet>) -> SessionInfo {
+    SessionInfo {
+        session_id: session_id.to_string(),
+        pid,
+        command: vec!["app".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("app".to_string()),
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: Some(2),
+        scope: None,
+        priority: None,
+        caps: Some(e2e_app_caps()),
+        transient_caps: transient,
+        role: Some(Role::Worker.name().to_string()),
+        app_id: Some("fs".to_string()),
+        pending_bind: false,
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+    }
+}
+
+fn e2e_runtime() -> tokio::runtime::Runtime {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+}
+
+fn e2e_install_row(info: SessionInfo) {
+    e2e_runtime().block_on(crate::paths::with_user_override(
+        E2E_UID,
+        std::path::PathBuf::from("/root"),
+        async move {
+            crate::proc::register_session(info).expect("register routed session");
+        },
+    ));
+}
+
+fn e2e_read_transient(session_id: &str) -> Option<CapSet> {
+    e2e_read_row(session_id).and_then(|row| row.transient_caps)
+}
+
+fn e2e_read_row(session_id: &str) -> Option<SessionInfo> {
+    let id = session_id.to_string();
+    e2e_runtime().block_on(crate::paths::with_user_override(
+        E2E_UID,
+        std::path::PathBuf::from("/root"),
+        async move { crate::proc::session_info_by_id(&id) },
+    ))
+}
+
+/// Mint the launch grant a launcher holds, and the session grant a
+/// bound App runs under, exactly as `register` and `bind` do.
+fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
+    let (pid, ticks) = this_process();
+    let launcher = LauncherAuthority {
+        pid,
+        start_time_ticks: ticks,
+        parent: None,
+        caps: e2e_app_caps(),
+        tier: None,
+        scope: None,
+        priority: None,
+        role: None,
+    };
+    let handle = issue_launch_grant(session_id, Some("fs"), E2E_UID, &launcher, &e2e_app_caps())
+        .expect("launch grant");
+    // Present only when the App process can be identified; the rollback
+    // test deliberately uses a pid that cannot.
+    let _ = issue_session_grant(
+        &handle,
+        session_id,
+        Some("fs"),
+        E2E_UID,
+        child_pid,
+        &e2e_app_caps(),
+    );
+    handle
+}
+
+fn e2e_spawn_child(harness: &mut TransientHarness) -> u32 {
+    let child = std::process::Command::new("sleep")
+        .arg("120")
+        .spawn()
+        .expect("spawn child");
+    let pid = child.id();
+    harness.children.push(child);
+    pid
+}
+
+fn e2e_set_transient(handle: &str, session_id: &str) -> Result<Value, String> {
+    e2e_runtime().block_on(set_transient(
+        json!({"session_id": session_id, "handle": handle}),
+        &e2e_client(),
+    ))
+}
+
+fn e2e_session_grant_is_live(session_id: &str, pid: u32) -> bool {
+    authority::authority()
+        .resolve_session(
+            session_id,
+            &authority::Presentation {
+                uid: E2E_UID,
+                pid,
+                start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+                audience: authority::Audience::SystemService,
+                route: "test",
+                session_id: Some(session_id.to_string()),
+            },
+        )
+        .is_ok()
+}
+
+#[test]
+fn clearing_a_call_scope_updates_registry_and_authority_together() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-e2e-clear";
+    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    let handle = e2e_install_grants(session_id, child);
+
+    assert_eq!(e2e_read_transient(session_id), Some(e2e_call_caps()));
+    e2e_set_transient(&handle, session_id).expect("clearing a call scope succeeds");
+
+    assert_eq!(
+        e2e_read_transient(session_id),
+        None,
+        "the registry must record the narrowed set"
+    );
+    assert!(
+        e2e_session_grant_is_live(session_id, child),
+        "the session grant is re-derived, not left revoked"
+    );
+    let caps = authority::authority()
+        .resolve_session(
+            session_id,
+            &authority::Presentation {
+                uid: E2E_UID,
+                pid: child,
+                start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
+                audience: authority::Audience::SystemService,
+                route: "test",
+                session_id: Some(session_id.to_string()),
+            },
+        )
+        .expect("live grant")
+        .caps;
+    assert!(
+        !caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/x"))),
+        "a cleared call scope must not survive in the authority"
+    );
+}
+
+#[test]
+fn a_failed_reissue_restores_the_previous_call_scope() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let _harness = transient_harness();
+    let session_id = "app-e2e-rollback";
+    // A pid nothing can be identified from: the registry write lands,
+    // and re-deriving the grant then fails.
+    let dead_pid = u32::MAX - 1;
+    e2e_install_row(e2e_row(session_id, dead_pid, Some(e2e_call_caps())));
+    let handle = e2e_install_grants(session_id, dead_pid);
+
+    let error = e2e_set_transient(&handle, session_id).expect_err("re-deriving the grant fails");
+    assert!(
+        error.contains("could not be identified"),
+        "unexpected: {error}"
+    );
+    assert_eq!(
+        e2e_read_transient(session_id),
+        Some(e2e_call_caps()),
+        "a route error must leave the registry exactly as it found it"
+    );
+    assert!(
+        !e2e_session_grant_is_live(session_id, std::process::id()),
+        "no authority may outlive the transient state it was derived from"
+    );
+}
+
+#[test]
+fn a_session_that_disappeared_is_refused_before_anything_is_written() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-e2e-gone";
+    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    let handle = e2e_install_grants(session_id, child);
+
+    let remove = session_id.to_string();
+    e2e_runtime().block_on(crate::paths::with_user_override(
+        E2E_UID,
+        std::path::PathBuf::from("/root"),
+        async move {
+            crate::proc::deregister_session(&remove);
+        },
+    ));
+
+    let error = e2e_set_transient(&handle, session_id).expect_err("a missing session is refused");
+    assert!(
+        error.contains("App session not found"),
+        "unexpected: {error}"
+    );
+}
+
+#[test]
+fn an_unbound_session_cannot_be_re_scoped() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let _harness = transient_harness();
+    let session_id = "app-e2e-unbound";
+    let mut pending = e2e_row(session_id, 0, Some(e2e_call_caps()));
+    pending.pending_bind = true;
+    e2e_install_row(pending);
+    let handle = e2e_install_grants(session_id, std::process::id());
+
+    let error = e2e_set_transient(&handle, session_id).expect_err("an unbound session is refused");
+    assert!(
+        error.contains("not bound to a process"),
+        "unexpected: {error}"
+    );
+    assert_eq!(
+        e2e_read_transient(session_id),
+        Some(e2e_call_caps()),
+        "a refusal before the write leaves the registry untouched"
+    );
+}
+
+#[test]
+fn a_handle_for_another_session_cannot_re_scope_this_one() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    e2e_install_row(e2e_row("app-e2e-a", child, Some(e2e_call_caps())));
+    let handle = e2e_install_grants("app-e2e-a", child);
+    e2e_install_row(e2e_row("app-e2e-b", child, Some(e2e_call_caps())));
+
+    let error = e2e_set_transient(&handle, "app-e2e-b").expect_err("cross-session use is refused");
+    assert!(
+        error.contains("does not cover this session"),
+        "unexpected: {error}"
+    );
+    assert_eq!(
+        e2e_read_transient("app-e2e-b"),
+        Some(e2e_call_caps()),
+        "a refused call writes nothing"
+    );
+}
+
+#[test]
+fn concurrent_calls_leave_the_registry_and_the_authority_agreeing() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-e2e-race";
+    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    let handle = e2e_install_grants(session_id, child);
+
+    let mut threads = Vec::new();
+    for _ in 0..4 {
+        let handle = handle.clone();
+        threads.push(std::thread::spawn(move || {
+            e2e_set_transient(&handle, session_id).is_ok()
+        }));
+    }
+    let outcomes: Vec<bool> = threads
+        .into_iter()
+        .map(|thread| thread.join().expect("join"))
+        .collect();
+    assert!(
+        outcomes.iter().any(|ok| *ok),
+        "at least one concurrent call must succeed"
+    );
+    assert_eq!(
+        e2e_read_transient(session_id),
+        None,
+        "every successful call narrows to the same state"
+    );
+}
+
+#[test]
+fn a_re_scope_racing_a_teardown_never_strands_a_grant() {
+    // The reachable interleaving with only route entry points: one
+    // caller re-scopes while another tears the session down. Without a
+    // per-session serializer the row can be removed between the
+    // registry swap and the grant re-derivation, leaving a live grant
+    // for a session that no longer exists — authority with nothing left
+    // to bound it.
+    //
+    // Racing threads hit that window only by luck, so the exclusion is
+    // proved directly: the test holds the session's serializer and
+    // asserts each route blocks on it, then releases and asserts both
+    // complete and agree. A route that skipped the lock would finish
+    // while the guard is still held and fail the first assertion.
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let child = e2e_spawn_child(&mut harness);
+    let session_id = "app-e2e-teardown-race";
+    e2e_install_row(e2e_row(session_id, child, Some(e2e_call_caps())));
+    let handle = e2e_install_grants(session_id, child);
+
+    let blocker = session_lock(session_id);
+    let guard = e2e_runtime().block_on(async { blocker.clone().lock_owned().await });
+
+    let rescope_handle = handle.clone();
+    let rescope =
+        std::thread::spawn(move || e2e_set_transient(&rescope_handle, session_id).map(|_| ()));
+    let teardown_handle = handle.clone();
+    let teardown = std::thread::spawn(move || {
+        e2e_runtime()
+            .block_on(deregister(
+                json!({"session_id": session_id, "handle": teardown_handle}),
+                &e2e_client(),
+            ))
+            .map(|_| ())
+    });
+
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(
+        !rescope.is_finished(),
+        "a re-scope must wait for the session's transition lock"
+    );
+    assert!(
+        !teardown.is_finished(),
+        "a teardown must wait for the session's transition lock"
+    );
+    assert_eq!(
+        e2e_read_transient(session_id),
+        Some(e2e_call_caps()),
+        "nothing may be written while another transition holds the session"
+    );
+
+    drop(guard);
+    let rescope = rescope.join().expect("rescope");
+    let teardown = teardown.join().expect("teardown");
+    assert!(
+        rescope.is_ok() || teardown.is_ok(),
+        "one of the two transitions must land: {rescope:?} / {teardown:?}"
+    );
+
+    // Whichever order they landed in, the registry and the authority
+    // must describe the same world.
+    let row_exists = e2e_read_row(session_id).is_some();
+    let grant_live = e2e_session_grant_is_live(session_id, child);
+    assert!(
+        !grant_live || row_exists,
+        "a live grant outlived the session row it was derived from"
+    );
+    if row_exists {
+        assert_eq!(
+            e2e_read_transient(session_id),
+            None,
+            "a surviving row must not keep a call scope the grant lost"
+        );
+    }
+}
+
+#[test]
+fn one_session_serializes_its_capability_transitions() {
+    // Portable: the serializer is what makes the two halves of a
+    // transition one transaction. Overlapping holders on one session
+    // would be the registry/authority mismatch; blocking on *different*
+    // sessions would make one App's tool call wait on another's.
+    let runtime = e2e_runtime();
+    runtime.block_on(async {
+        let first = session_lock("serial-a");
+        let held = first.lock().await;
+
+        let same = session_lock("serial-a");
+        assert!(
+            same.try_lock().is_err(),
+            "a second transition on the same session must wait"
+        );
+
+        let other = session_lock("serial-b");
+        assert!(
+            other.try_lock().is_ok(),
+            "an unrelated session must not be blocked"
+        );
+
+        drop(held);
+        assert!(
+            session_lock("serial-a").try_lock().is_ok(),
+            "the lock is released with the transition"
+        );
+    });
+
+    release_session_lock("serial-a");
+    release_session_lock("serial-b");
+    assert!(
+        !session_locks().lock().unwrap().contains_key("serial-a"),
+        "a finished session leaves no entry behind"
+    );
+}
+
+#[test]
+fn a_serializer_someone_is_waiting_on_is_not_recycled() {
+    // Dropping the entry while another caller still holds the old Arc
+    // would hand the next caller a *different* mutex, and the two would
+    // run concurrently on one session — the exact overlap the
+    // serializer exists to prevent.
+    //
+    // At the point `deregister` collects the entry it holds its own
+    // reference, so "idle" is the map plus that one. A second caller
+    // waiting to run pushes the count above it.
+    let deregistering_caller = session_lock("serial-busy");
+    let a_waiting_caller = session_lock("serial-busy");
+    release_session_lock("serial-busy");
+    assert!(
+        session_locks().lock().unwrap().contains_key("serial-busy"),
+        "an entry another caller is waiting on stays put"
+    );
+    assert!(
+        Arc::ptr_eq(&session_lock("serial-busy"), &a_waiting_caller),
+        "the next caller must get the same mutex, not a fresh one"
+    );
+
+    drop(a_waiting_caller);
+    release_session_lock("serial-busy");
+    assert!(
+        !session_locks().lock().unwrap().contains_key("serial-busy"),
+        "once nobody else is waiting, the entry is collected"
+    );
+    drop(deregistering_caller);
+}
+
+#[test]
+fn swapping_a_call_scope_returns_the_exact_previous_set() {
+    // Portable: this is the primitive the transaction rolls back with,
+    // and it must report what was there under the same lock that
+    // replaced it, because a read-then-write could race another call.
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let previous_data = std::env::var_os("COS_DATA_DIR");
+    std::env::set_var("COS_DATA_DIR", tmp.path());
+
+    let session_id = format!("app-swap-{}", std::process::id());
+    crate::proc::register_session(e2e_row(&session_id, std::process::id(), None))
+        .expect("register");
+
+    let first = crate::proc::swap_app_session_transient_caps(&session_id, Some(e2e_call_caps()))
+        .expect("swap");
+    assert_eq!(first, None, "the row started with no call scope");
+
+    let replaced = CapSet::from_caps([Cap::new(Verb::FS_READ, Scope::path("/srv/other/**"))]);
+    let second = crate::proc::swap_app_session_transient_caps(&session_id, Some(replaced.clone()))
+        .expect("swap");
+    assert_eq!(
+        second,
+        Some(e2e_call_caps()),
+        "a replacement reports exactly the set it displaced"
+    );
+
+    let third = crate::proc::swap_app_session_transient_caps(&session_id, None).expect("swap");
+    assert_eq!(third, Some(replaced));
+    assert!(crate::proc::swap_app_session_transient_caps("app-missing", None).is_err());
+
+    crate::proc::deregister_session(&session_id);
+    match previous_data {
+        Some(value) => std::env::set_var("COS_DATA_DIR", value),
+        None => std::env::remove_var("COS_DATA_DIR"),
+    }
 }

@@ -9,8 +9,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -19,10 +20,14 @@ const MAX_CLIPBOARD_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WRITE_BYTES: u64 = 16 * 1024 * 1024;
 static CLIPBOARD_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Clipboard Manager requires Linux Wayland".to_string());
     }
 
@@ -39,7 +44,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         let peer_pid = client
             .pid
             .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let mime = optional_string(&params, "mime")?;
         let source = optional_string(&params, "source")?;
@@ -60,10 +64,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         )?;
         let source = source.as_deref().map(resolve_source).transpose()?;
         let requested = requested_caps(&action, source.as_deref());
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, &requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, &requested)?;
         let environment = ClipboardEnvironment::new(uid, gid, home, peer_pid)?;
 
         if matches!(action.as_str(), "status" | "types" | "read") {
@@ -107,38 +108,18 @@ fn requested_caps(action: &str, source: Option<&Path>) -> Vec<Cap> {
     caps
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: &[Cap]) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("clipboard-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("clipboard-manager") {
-        return Err("clipboard access is restricted to the clipboard-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("clipboard-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "clipboard-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("clipboard-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("clipboard request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    for cap in requested {
-        if !caps.covers(cap) {
-            return Err(format!(
-                "clipboard-manager session lacks {}:{}",
-                cap.verb.as_str(),
-                cap.scope
-            ));
-        }
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
+    authority.require_app("clipboard-manager")?;
+    authority.require_all(requested)
 }
 
 async fn read_action(

@@ -33,8 +33,35 @@ fn admission() -> Arc<Admission> {
 // Admission order
 // ---------------------------------------------------------------------------
 
-#[test]
-fn a_well_formed_request_is_admitted_with_its_typed_body() {
+#[tokio::test]
+async fn a_well_formed_request_is_admitted_with_its_typed_body() {
+    let admission = admission();
+    let body = envelope(
+        "r-1",
+        "memory.history",
+        json!({
+            "session_id": "sess-1",
+            "limit": 5,
+        }),
+    );
+    let admitted = admit(&body, &peer(1000), &admission)
+        .await
+        .unwrap_or_else(|error| {
+            panic!("expected admission, got {:?}", error.fault);
+        });
+    assert_eq!(admitted.route.name, "memory.history");
+    assert_eq!(admitted.id.as_str(), "r-1");
+    assert_eq!(admitted.params, json!({"session_id": "sess-1", "limit": 5}));
+    assert!(
+        admitted.decision.is_none(),
+        "a peer-scoped route resolves no capability grant"
+    );
+}
+
+#[tokio::test]
+async fn a_privileged_provider_request_without_a_grant_is_refused() {
+    // Naming a session is not authority: with no grant behind the id,
+    // the request never reaches the provider.
     let admission = admission();
     let body = envelope(
         "r-1",
@@ -45,19 +72,16 @@ fn a_well_formed_request_is_admitted_with_its_typed_body() {
             "package": "nano",
         }),
     );
-    let admitted = admit(&body, &peer(1000), &admission).unwrap_or_else(|error| {
-        panic!("expected admission, got {:?}", error.fault);
-    });
-    assert_eq!(admitted.route.name, "system.package.control");
-    assert_eq!(admitted.id.as_str(), "r-1");
-    assert_eq!(
-        admitted.params,
-        json!({"session": "sess-1", "action": "remove", "package": "nano"})
-    );
+    let refusal = admit(&body, &peer(1000), &admission)
+        .await
+        .err()
+        .expect("refused");
+    assert_eq!(refusal.fault, Fault::NotAuthorized);
+    assert_eq!(refusal.command, Some("system.package.control"));
 }
 
-#[test]
-fn an_envelope_from_another_protocol_version_fails_closed() {
+#[tokio::test]
+async fn an_envelope_from_another_protocol_version_fails_closed() {
     let admission = admission();
     let body = serde_json::to_vec(&json!({
         "v": 2,
@@ -67,6 +91,7 @@ fn an_envelope_from_another_protocol_version_fails_closed() {
     }))
     .unwrap();
     let refusal = admit(&body, &peer(1000), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::UnsupportedVersion);
@@ -74,28 +99,32 @@ fn an_envelope_from_another_protocol_version_fails_closed() {
     assert!(refusal.command.is_none());
 }
 
-#[test]
-fn a_pre_v1_body_is_refused_rather_than_downgraded() {
+#[tokio::test]
+async fn a_pre_v1_body_is_refused_rather_than_downgraded() {
     let admission = admission();
     // Exactly what an out-of-date client used to send: no version, an
     // untyped id, and a bare command string.
     let body = br#"{"id":1,"command":"daemon.health","params":{}}"#;
-    let refusal = admit(body, &peer(1000), &admission).err().expect("refused");
+    let refusal = admit(body, &peer(1000), &admission)
+        .await
+        .err()
+        .expect("refused");
     assert_eq!(refusal.fault, Fault::InvalidEnvelope);
 }
 
-#[test]
-fn a_body_that_is_not_json_is_refused_as_malformed() {
+#[tokio::test]
+async fn a_body_that_is_not_json_is_refused_as_malformed() {
     let admission = admission();
     let refusal = admit(b"\x00\x01\x02not json", &peer(1000), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::MalformedBody);
     assert_eq!(refusal.id.as_str(), "unknown");
 }
 
-#[test]
-fn deeply_nested_json_is_refused_before_a_route_sees_it() {
+#[tokio::test]
+async fn deeply_nested_json_is_refused_before_a_route_sees_it() {
     let admission = admission();
     let deep = format!(
         "{}{}{}",
@@ -104,6 +133,7 @@ fn deeply_nested_json_is_refused_before_a_route_sees_it() {
         "]".repeat(400)
     ) + "}}";
     let refusal = admit(deep.as_bytes(), &peer(0), &admission)
+        .await
         .err()
         .expect("refused");
     assert!(
@@ -113,8 +143,8 @@ fn deeply_nested_json_is_refused_before_a_route_sees_it() {
     );
 }
 
-#[test]
-fn a_structurally_deep_payload_inside_the_parser_limit_is_still_refused() {
+#[tokio::test]
+async fn a_structurally_deep_payload_inside_the_parser_limit_is_still_refused() {
     let admission = admission();
     let mut payload = json!(1);
     for _ in 0..40 {
@@ -125,16 +155,20 @@ fn a_structurally_deep_payload_inside_the_parser_limit_is_still_refused() {
         "context.update",
         json!({"source": "s", "payload": payload}),
     );
-    let refusal = admit(&body, &peer(0), &admission).err().expect("refused");
+    let refusal = admit(&body, &peer(0), &admission)
+        .await
+        .err()
+        .expect("refused");
     assert_eq!(refusal.fault, Fault::InvalidParams);
     assert_eq!(refusal.command, Some("context.update"));
 }
 
-#[test]
-fn an_unknown_command_fails_closed_before_authorization() {
+#[tokio::test]
+async fn an_unknown_command_fails_closed_before_authorization() {
     let admission = admission();
     let body = envelope("r-1", "vendor.debug.dump", json!({}));
     let refusal = admit(&body, &peer(1000), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::UnknownCommand);
@@ -145,8 +179,8 @@ fn an_unknown_command_fails_closed_before_authorization() {
     );
 }
 
-#[test]
-fn an_undeclared_field_fails_closed_before_dispatch() {
+#[tokio::test]
+async fn an_undeclared_field_fails_closed_before_dispatch() {
     let admission = admission();
     let body = envelope(
         "r-1",
@@ -154,6 +188,7 @@ fn an_undeclared_field_fails_closed_before_dispatch() {
         json!({"session": "s", "action": "off", "owner_uid": 0}),
     );
     let refusal = admit(&body, &peer(1000), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::InvalidParams);
@@ -161,79 +196,83 @@ fn an_undeclared_field_fails_closed_before_dispatch() {
     assert_eq!(refusal.command, Some("system.power.control"));
 }
 
-#[test]
-fn a_user_peer_cannot_reach_a_root_route() {
+#[tokio::test]
+async fn a_user_peer_cannot_reach_a_root_route() {
     let admission = admission();
     let body = envelope("r-1", "context.update", json!({"source": "probe"}));
     let refusal = admit(&body, &peer(1000), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::NotAuthorized);
     assert_eq!(refusal.fault.code(), "not_authorized");
 
     let admitted = admit(&body, &peer(0), &admission)
+        .await
         .unwrap_or_else(|error| panic!("root must reach a root route, got {:?}", error.fault));
     assert_eq!(admitted.route.name, "context.update");
 }
 
-#[test]
-fn a_request_without_verified_credentials_is_refused() {
+#[tokio::test]
+async fn a_request_without_verified_credentials_is_refused() {
     let admission = admission();
     let body = envelope("r-1", "daemon.health", json!({}));
     let refusal = admit(&body, &ClientIdentity::unknown(), &admission)
+        .await
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::MissingCredentials);
 }
 
-#[test]
-fn a_replayed_mutation_is_refused_but_a_replayed_query_is_not() {
+#[tokio::test]
+async fn a_replayed_mutation_is_refused_but_a_replayed_query_is_not() {
     let admission = admission();
     let mutation = envelope("r-dup", "task.cancel", json!({"id": "task-1"}));
-    assert!(admit(&mutation, &peer(1000), &admission).is_ok());
+    assert!(admit(&mutation, &peer(1000), &admission).await.is_ok());
     let refusal = admit(&mutation, &peer(1000), &admission)
+        .await
         .err()
         .expect("a repeated mutation id must be refused");
     assert_eq!(refusal.fault, Fault::DuplicateRequest);
 
     let query = envelope("r-dup", "task.get", json!({"id": "task-1"}));
-    assert!(admit(&query, &peer(1000), &admission).is_ok());
+    assert!(admit(&query, &peer(1000), &admission).await.is_ok());
     assert!(
-        admit(&query, &peer(1000), &admission).is_ok(),
+        admit(&query, &peer(1000), &admission).await.is_ok(),
         "an idempotent read may be repeated"
     );
 }
 
-#[test]
-fn a_route_flood_is_refused_once_its_budget_is_full() {
+#[tokio::test]
+async fn a_route_flood_is_refused_once_its_budget_is_full() {
     let admission = admission();
-    let route = Command::SystemPackageInstall.route();
+    let route = Command::TransactionRollback.route();
     let mut held = Vec::new();
     for index in 0..route.budget.max_in_flight {
         let body = envelope(
             &format!("r-{index}"),
-            "system.package.install",
-            json!({"session": "s", "package": "nano"}),
+            "transaction.rollback",
+            json!({"id": "tx-1"}),
         );
         held.push(
             admit(&body, &peer(1000), &admission)
+                .await
                 .unwrap_or_else(|error| panic!("within budget, got {:?}", error.fault)),
         );
     }
-    let body = envelope(
-        "r-over",
-        "system.package.install",
-        json!({"session": "s", "package": "nano"}),
-    );
+    let body = envelope("r-over", "transaction.rollback", json!({"id": "tx-1"}));
     assert_eq!(
-        admit(&body, &peer(1000), &admission).err().map(|r| r.fault),
+        admit(&body, &peer(1000), &admission)
+            .await
+            .err()
+            .map(|r| r.fault),
         Some(Fault::RouteBusy)
     );
     drop(held);
 }
 
-#[test]
-fn one_principal_cannot_hold_every_in_flight_slot() {
+#[tokio::test]
+async fn one_principal_cannot_hold_every_in_flight_slot() {
     let admission = Admission::new(Limits {
         max_in_flight_per_user: 2,
         ..Limits::default()
@@ -241,16 +280,23 @@ fn one_principal_cannot_hold_every_in_flight_slot() {
     let mut held = Vec::new();
     for index in 0..2 {
         let body = envelope(&format!("r-{index}"), "task.list", json!({}));
-        held.push(admit(&body, &peer(1000), &admission).expect("within budget"));
+        held.push(
+            admit(&body, &peer(1000), &admission)
+                .await
+                .expect("within budget"),
+        );
     }
     let body = envelope("r-over", "task.list", json!({}));
     assert_eq!(
-        admit(&body, &peer(1000), &admission).err().map(|r| r.fault),
+        admit(&body, &peer(1000), &admission)
+            .await
+            .err()
+            .map(|r| r.fault),
         Some(Fault::TooManyRequests)
     );
     // A different principal is unaffected.
     let other = envelope("r-other", "task.list", json!({}));
-    assert!(admit(&other, &peer(1001), &admission).is_ok());
+    assert!(admit(&other, &peer(1001), &admission).await.is_ok());
     drop(held);
 }
 

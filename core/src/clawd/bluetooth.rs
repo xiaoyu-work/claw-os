@@ -8,8 +8,9 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -23,10 +24,14 @@ const MAX_PAIR_SESSIONS: usize = 8;
 static BLUETOOTH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static PAIR_SESSIONS: OnceLock<StdMutex<BTreeMap<String, PairingSession>>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Bluetooth Manager requires Linux BlueZ".to_string());
     }
 
@@ -36,11 +41,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             return Err("Bluetooth Manager requires root clawd".to_string());
         }
         let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let adapter = optional_string(&params, "adapter")?;
         let device = optional_string(&params, "device")?;
@@ -64,10 +64,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         } else {
             Cap::new(Verb::DEVICE_BLUETOOTH, Scope::name("control"))
         };
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, requested)?;
 
         if action == "status" {
             return bluetooth_status().await;
@@ -110,36 +107,18 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: Cap) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("bluetooth-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("bluetooth-manager") {
-        return Err("Bluetooth control is restricted to the bluetooth-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("bluetooth-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "bluetooth-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("bluetooth-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("Bluetooth request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "bluetooth-manager session lacks {}:{}",
-            requested.verb.as_str(),
-            requested.scope
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, String> {
+    authority.require_app("bluetooth-manager")?;
+    authority.require_all(std::slice::from_ref(&requested))
 }
 
 async fn bluetooth_status() -> Result<Value, String> {

@@ -29,6 +29,7 @@ use serde_json::{json, Value};
 
 use crate::audit_policy::FieldRule;
 
+use super::authority::{self, Approval, Audience, RouteAuthority, SubjectSource, TransientCaps};
 use super::client_identity::ClientIdentity;
 use super::protocol::{BrokerError, Response};
 use super::state::DaemonState;
@@ -153,6 +154,88 @@ impl Budget {
     }
 }
 
+/// A route that acts only for the connecting peer.
+///
+/// No grant is resolved: the access class the registry enforces plus
+/// the credentials the kernel stamped on the message are the whole
+/// decision. A peer-scoped route may not declare a capability
+/// requirement — there is no grant to spend it against — and a unit
+/// test asserts it.
+const fn peer(audience: Audience) -> RouteAuthority {
+    RouteAuthority {
+        audience,
+        subject: SubjectSource::Peer,
+        requirement: authority::no_requirement,
+        approval: Approval::Ineligible,
+        transient: TransientCaps::Excluded,
+    }
+}
+
+/// A route addressed by an opaque grant handle the daemon minted
+/// earlier. The handle is resolved against the process presenting it,
+/// so a leaked handle is inert in another process.
+const fn handle(audience: Audience) -> RouteAuthority {
+    RouteAuthority {
+        audience,
+        subject: SubjectSource::Handle,
+        requirement: authority::no_requirement,
+        approval: Approval::Ineligible,
+        transient: TransientCaps::Excluded,
+    }
+}
+
+/// A route addressed by the session named in its typed body.
+///
+/// The id is an index, never authority: the grant behind it is bound to
+/// a process, so naming somebody else's session fails exactly the way
+/// naming a session that does not exist does. The owning provider
+/// canonicalizes the exact capability from its own validated body and
+/// must spend it through the decision before it may answer.
+///
+/// Transient capabilities are already folded into the session grant by
+/// `app_session.set_transient`, which re-derives it under attenuation,
+/// so the flag here is not consulted for this subject.
+const fn session(audience: Audience) -> RouteAuthority {
+    RouteAuthority {
+        audience,
+        subject: SubjectSource::Session,
+        requirement: authority::route_derived,
+        approval: Approval::Eligible,
+        transient: TransientCaps::Excluded,
+    }
+}
+
+/// A route addressed by the caller's *own* registered session, whose
+/// authority is the session's base capabilities only.
+///
+/// This is what the credential broker had before the authority existed:
+/// it read `session.caps` and deliberately not `transient_caps`, so an
+/// MCP tool call that was granted a secret for one invocation cannot be
+/// turned into a token refresh for a different one.
+const fn peer_session(audience: Audience) -> RouteAuthority {
+    RouteAuthority {
+        audience,
+        subject: SubjectSource::PeerSession,
+        requirement: authority::route_derived,
+        approval: Approval::Eligible,
+        transient: TransientCaps::Excluded,
+    }
+}
+
+/// A peer-session route that also honours the current tool call's
+/// transient capabilities, matching what the rollback providers did
+/// before: `packages` and `systemd` both merged `transient_caps` into
+/// the set they checked.
+const fn peer_session_with_transient(audience: Audience) -> RouteAuthority {
+    RouteAuthority {
+        audience,
+        subject: SubjectSource::PeerSession,
+        requirement: authority::route_derived,
+        approval: Approval::Eligible,
+        transient: TransientCaps::Included,
+    }
+}
+
 /// Everything a handler is given.
 pub struct RouteCall<'a> {
     pub state: &'a DaemonState,
@@ -161,6 +244,22 @@ pub struct RouteCall<'a> {
     /// key in it was declared and validated by
     /// [`super::wire::requests`].
     pub params: Value,
+    /// The authority decision the middleware took before dispatch.
+    /// `None` only for peer-scoped routes, which resolve no grant.
+    pub authority: Option<&'a authority::Decision>,
+}
+
+impl<'a> RouteCall<'a> {
+    /// The decision this route runs under.
+    ///
+    /// A route whose descriptor names a subject always has one; the
+    /// error is only reachable if a handler asks for it on a
+    /// peer-scoped row, which is a programming mistake rather than a
+    /// caller's doing.
+    pub fn authority(&self) -> Result<&'a authority::Decision, String> {
+        self.authority
+            .ok_or_else(|| "this route resolves no capability grant".to_string())
+    }
 }
 
 pub type RouteFuture<'a> = Pin<Box<dyn Future<Output = Result<Value, BrokerError>> + Send + 'a>>;
@@ -176,6 +275,9 @@ pub struct Route {
     pub kind: Kind,
     pub budget: Budget,
     pub errors: ErrorPolicy,
+    /// The route's authorization contract. Declared positionally by the
+    /// `routes!` macro, so a row that omits it does not compile.
+    pub authority: RouteAuthority,
     /// Parameter fields this route has classified as safe to persist.
     /// Omitted fields are never written to an audit sink.
     pub audit_fields: &'static [(&'static str, FieldRule)],
@@ -230,6 +332,7 @@ macro_rules! routes {
                 access: $access:expr,
                 kind: $kind:expr,
                 budget: $budget:expr,
+                authority: $authority:expr,
                 body: $body:ty,
                 $( audit: $audit:expr, )?
                 run: |$call:ident| $run:expr,
@@ -276,6 +379,7 @@ macro_rules! routes {
                     kind: $kind,
                     budget: $budget,
                     errors: ErrorPolicy::Typed,
+                    authority: $authority,
                     audit_fields: routes!(@audit $( $audit )?),
                     decode: {
                         fn decode(params: Value) -> Result<Value, Fault> {
@@ -329,6 +433,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::fast(),
+        authority: peer(Audience::Daemon),
         body: body::NoBody,
         run: |c| Ok(json!({
             "status": "ok",
@@ -342,6 +447,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Daemon),
         body: body::NoBody,
         run: |c| Ok(json!({
             "status": "running",
@@ -362,6 +468,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Task),
         body: body::TaskSubmit,
         audit: &[
             ("session_id", FieldRule::Token),
@@ -375,6 +482,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Task),
         body: body::TaskList,
         audit: &[("status", FieldRule::Token)],
         run: |c| tasks::list(c.params, c.client).map_err(BrokerError::from),
@@ -384,6 +492,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Task),
         body: body::TaskId,
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::get(c.params, c.client).map_err(BrokerError::from),
@@ -393,6 +502,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Task),
         body: body::TaskId,
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::get(c.params, c.client).map_err(BrokerError::from),
@@ -402,6 +512,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Task),
         body: body::TaskId,
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::cancel(c.params, c.client).map_err(BrokerError::from),
@@ -411,6 +522,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::poll(),
+        authority: peer(Audience::Task),
         body: body::TaskWait,
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::result(c.params, c.client).await.map_err(BrokerError::from),
@@ -420,6 +532,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::poll(),
+        authority: peer(Audience::Task),
         body: body::TaskWait,
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::result(c.params, c.client).await.map_err(BrokerError::from),
@@ -429,6 +542,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::fast(),
+        authority: peer(Audience::Task),
         body: body::NoBody,
         run: |c| tasks::counts(c.client).map_err(BrokerError::from),
     }
@@ -441,6 +555,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::MemoryHistory,
         audit: &[
             ("session_id", FieldRule::Token),
@@ -453,6 +568,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::MemorySessions,
         audit: &[("limit", FieldRule::Count)],
         run: |c| memory::sessions(c.params, c.client).map_err(BrokerError::from),
@@ -462,6 +578,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::NoBody,
         run: |c| context::snapshot_for_client(c.state, c.client).map_err(BrokerError::from),
     }
@@ -470,6 +587,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::NoBody,
         run: |c| context::sources_for_client(c.state, c.client).map_err(BrokerError::from),
     }
@@ -478,6 +596,7 @@ routes! {
         access: Access::Root,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Context),
         body: body::ContextUpdate,
         audit: &[("source", FieldRule::Token)],
         run: |c| context::update(c.state, c.params).map_err(BrokerError::from),
@@ -487,6 +606,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Context),
         body: body::ContextEventAppend,
         audit: &[
             ("source", FieldRule::Token),
@@ -503,6 +623,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::ContextEventQuery,
         audit: &[
             ("source", FieldRule::Token),
@@ -518,6 +639,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Context),
         body: body::SystemOperations,
         audit: &[
             ("source", FieldRule::Token),
@@ -534,6 +656,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Permission),
         body: body::PermissionList,
         audit: &[("limit", FieldRule::Count)],
         run: |c| permissions::pending(c.params, c.client).map_err(BrokerError::from),
@@ -543,6 +666,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Permission),
         body: body::PermissionList,
         audit: &[("limit", FieldRule::Count)],
         run: |c| permissions::recent(c.params, c.client).map_err(BrokerError::from),
@@ -552,6 +676,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Permission),
         body: body::PermissionStatus,
         audit: &[("ids", FieldRule::Size)],
         run: |c| permissions::status(c.params, c.client).map_err(BrokerError::from),
@@ -561,6 +686,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
         body: body::PermissionRequest,
         audit: &[
             ("verb", FieldRule::Identifier),
@@ -573,6 +699,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
         body: body::PermissionDecide,
         audit: &[
             ("id", FieldRule::Token),
@@ -580,6 +707,23 @@ routes! {
             ("owner_uid", FieldRule::Count),
         ],
         run: |c| permissions::decide(c.params, c.client).map_err(BrokerError::from),
+    }
+    PermissionRevoke {
+        name: "permission.revoke",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Permission),
+        body: body::PermissionRevoke,
+        // The scope of a revocation is safe to name: an owner uid is
+        // already recorded on every request, and the grant session is a
+        // caller-derived string, so it is stored as a token or as
+        // `unloggable`.
+        audit: &[
+            ("owner_uid", FieldRule::Count),
+            ("session", FieldRule::Token),
+        ],
+        run: |c| permissions::revoke(c.params, c.client).map_err(BrokerError::from),
     }
 
     // -----------------------------------------------------------------
@@ -590,6 +734,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Transaction),
         body: body::TransactionBegin,
         run: |c| transactions::begin(c.state, c.params, c.client).map_err(BrokerError::from),
     }
@@ -598,6 +743,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: peer(Audience::Transaction),
         body: body::NoBody,
         run: |c| transactions::list(c.state, c.client).map_err(BrokerError::from),
     }
@@ -606,6 +752,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Transaction),
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
         run: |c| transactions::commit(c.state, c.params, c.client).map_err(BrokerError::from),
@@ -615,6 +762,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Transaction),
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
         run: |c| {
@@ -632,6 +780,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
         body: body::AppSessionRegister,
         audit: &[
             ("app_id", FieldRule::Token),
@@ -646,6 +795,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
         body: body::AppSessionRegisterNative,
         audit: &[("app_id", FieldRule::Token)],
         run: |c| {
@@ -659,6 +809,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: peer(Audience::AppLaunch),
         body: body::McpSessionRegister,
         audit: &[("command", FieldRule::Size)],
         run: |c| {
@@ -672,6 +823,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: handle(Audience::AppLaunch),
         body: body::AppSessionBind,
         audit: &[
             ("session_id", FieldRule::Token),
@@ -688,6 +840,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: handle(Audience::AppLaunch),
         body: body::AppSessionSetTransient,
         audit: &[
             ("session_id", FieldRule::Token),
@@ -704,6 +857,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::launch(),
+        authority: handle(Audience::AppLaunch),
         body: body::AppSessionDeregister,
         audit: &[("session_id", FieldRule::Token)],
         run: |c| {
@@ -721,6 +875,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer(Audience::Scheduler),
         body: body::SchedulerRun,
         audit: &[
             ("subsystem", FieldRule::Enum(&["cron", "triggers"])),
@@ -738,6 +893,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer_session(Audience::Credential),
         body: body::CredentialOauthRefresh,
         audit: &[
             ("session", FieldRule::Token),
@@ -748,7 +904,8 @@ routes! {
             ),
         ],
         run: |c| {
-            credentials::oauth_refresh(c.params, c.client).await
+            let authority = c.authority()?;
+        credentials::oauth_refresh(c.params, c.client, authority).await
         },
     }
 
@@ -760,31 +917,40 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::AudioControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("target", FieldRule::Token),
         ],
-        run: |c| audio::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    audio::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemAccessibilityControl {
         name: "system.accessibility.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::AccessibilityControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| accessibility::control(c.params, c.client).await,
+        run: |c| {
+            let authority = c.authority()?;
+    accessibility::control(c.params, c.client, authority).await
+        },
     }
     SystemBackupControl {
         name: "system.backup.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::BackupControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -794,13 +960,17 @@ routes! {
             ("keep_weekly", FieldRule::Count),
             ("keep_monthly", FieldRule::Count),
         ],
-        run: |c| backup::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    backup::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemBluetoothControl {
         name: "system.bluetooth.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::BluetoothControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -812,9 +982,10 @@ routes! {
             ("seconds", FieldRule::Count),
         ],
         run: |c| {
-            bluetooth::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            let authority = c.authority()?;
+        bluetooth::control(c.params, c.client, authority)
+            .await
+            .map_err(BrokerError::from)
         },
     }
     SystemCameraControl {
@@ -822,6 +993,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::CameraControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -831,13 +1003,17 @@ routes! {
             ("width", FieldRule::Count),
             ("height", FieldRule::Count),
         ],
-        run: |c| camera::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    camera::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemClipboardControl {
         name: "system.clipboard.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::ClipboardControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -845,9 +1021,10 @@ routes! {
             ("mime", FieldRule::Identifier),
         ],
         run: |c| {
-            clipboard::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            let authority = c.authority()?;
+        clipboard::control(c.params, c.client, authority)
+            .await
+            .map_err(BrokerError::from)
         },
     }
     SystemContainerControl {
@@ -855,6 +1032,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::ContainerControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -866,9 +1044,10 @@ routes! {
             ("lines", FieldRule::Count),
         ],
         run: |c| {
-            containers::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            let authority = c.authority()?;
+        containers::control(c.params, c.client, authority)
+            .await
+            .map_err(BrokerError::from)
         },
     }
     SystemConfigControl {
@@ -876,6 +1055,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::ConfigControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -884,9 +1064,10 @@ routes! {
             ("confirm", FieldRule::Flag),
         ],
         run: |c| {
-            config_editor::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            let authority = c.authority()?;
+        config_editor::control(c.params, c.client, authority)
+            .await
+            .map_err(BrokerError::from)
         },
     }
     SystemCrashInspect {
@@ -894,6 +1075,7 @@ routes! {
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: session(Audience::SystemService),
         body: body::CrashInspect,
         audit: &[
             ("session", FieldRule::Token),
@@ -902,13 +1084,17 @@ routes! {
             ("limit", FieldRule::Count),
             ("since_minutes", FieldRule::Count),
         ],
-        run: |c| crash::inspect(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    crash::inspect(c.params, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemDesktopControl {
         name: "system.desktop.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::DesktopControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -916,13 +1102,17 @@ routes! {
             ("app_id", FieldRule::Token),
             ("identifier", FieldRule::Token),
         ],
-        run: |c| desktop::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    desktop::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemDisplayControl {
         name: "system.display.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::DisplayControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -933,13 +1123,17 @@ routes! {
             ("adaptive_sync", FieldRule::Token),
             ("backlight", FieldRule::Token),
         ],
-        run: |c| display::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    display::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemEventsControl {
         name: "system.events.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::EventsControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -949,9 +1143,10 @@ routes! {
             ("pid", FieldRule::Count),
         ],
         run: |c| {
-            event_center::control(c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            let authority = c.authority()?;
+        event_center::control(c.params, authority)
+            .await
+            .map_err(BrokerError::from)
         },
     }
     SystemFirewallControl {
@@ -959,6 +1154,7 @@ routes! {
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::FirewallControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -970,51 +1166,67 @@ routes! {
             ("rule_action", FieldRule::Token),
             ("rule_id", FieldRule::Token),
         ],
-        run: |c| firewall::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    firewall::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemHardwareInspect {
         name: "system.hardware.inspect",
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: session(Audience::SystemService),
         body: body::SessionAction,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| hardware::inspect(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    hardware::inspect(c.params, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemLocationQuery {
         name: "system.location.query",
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: session(Audience::SystemService),
         body: body::LocationQuery,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("accuracy", FieldRule::Token),
         ],
-        run: |c| location::query(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    location::query(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemNetworkControl {
         name: "system.network.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::NetworkControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("state", FieldRule::Token),
         ],
-        run: |c| network::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    network::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemPackageInstall {
         name: "system.package.install",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::PackageInstall,
         audit: &[
             ("session", FieldRule::Token),
@@ -1023,13 +1235,17 @@ routes! {
             ("package", FieldRule::Identifier),
             ("version", FieldRule::Identifier),
         ],
-        run: |c| packages::install(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    packages::install(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemPackageControl {
         name: "system.package.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::PackageControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -1038,13 +1254,17 @@ routes! {
             ("package", FieldRule::Identifier),
             ("version", FieldRule::Identifier),
         ],
-        run: |c| packages::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    packages::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemPackageRestore {
         name: "system.package.restore",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: peer_session_with_transient(Audience::SystemService),
         body: body::PackageRestore,
         audit: &[
             ("session", FieldRule::Token),
@@ -1054,25 +1274,33 @@ routes! {
             ("previous_version", FieldRule::Identifier),
             ("was_held", FieldRule::Flag),
         ],
-        run: |c| packages::restore(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    packages::restore(c.params, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemPowerControl {
         name: "system.power.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::PowerControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| power::control(c.params, c.client).await,
+        run: |c| {
+            let authority = c.authority()?;
+    power::control(c.params, c.client, authority).await
+        },
     }
     SystemPrinterControl {
         name: "system.printer.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::PrinterControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -1083,25 +1311,33 @@ routes! {
             ("sides", FieldRule::Token),
             ("copies", FieldRule::Count),
         ],
-        run: |c| printer::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    printer::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemSecurityInspect {
         name: "system.security.inspect",
         access: Access::User,
         kind: Kind::Query,
         budget: Budget::query(),
+        authority: session(Audience::SystemService),
         body: body::SessionAction,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
         ],
-        run: |c| security::inspect(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    security::inspect(c.params, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemServiceControl {
         name: "system.service.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::ServiceControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -1109,13 +1345,17 @@ routes! {
             ("action", FieldRule::Token),
             ("unit", FieldRule::Identifier),
         ],
-        run: |c| systemd::control(c.params, c.client).await,
+        run: |c| {
+            let authority = c.authority()?;
+    systemd::control(c.params, c.client, authority).await
+        },
     }
     SystemServiceRestore {
         name: "system.service.restore",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: peer_session_with_transient(Audience::SystemService),
         body: body::ServiceRestore,
         audit: &[
             ("session", FieldRule::Token),
@@ -1125,39 +1365,51 @@ routes! {
             ("active", FieldRule::Flag),
             ("enabled", FieldRule::Flag),
         ],
-        run: |c| systemd::restore(c.params, c.client).await,
+        run: |c| {
+            let authority = c.authority()?;
+    systemd::restore(c.params, authority).await
+        },
     }
     SystemSnapshotControl {
         name: "system.snapshot.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::SnapshotControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("id", FieldRule::Token),
         ],
-        run: |c| snapshots::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    snapshots::control(c.params, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemStorageControl {
         name: "system.storage.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::heavy(),
+        authority: session(Audience::SystemService),
         body: body::StorageControl,
         audit: &[
             ("session", FieldRule::Token),
             ("action", FieldRule::Token),
             ("device", FieldRule::Identifier),
         ],
-        run: |c| storage::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    storage::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemUsbControl {
         name: "system.usb.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::UsbControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -1166,13 +1418,17 @@ routes! {
             ("rule_id", FieldRule::Token),
             ("state", FieldRule::Token),
         ],
-        run: |c| usb_guard::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    usb_guard::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
     SystemUsersControl {
         name: "system.users.control",
         access: Access::User,
         kind: Kind::Mutation,
         budget: Budget::mutation(),
+        authority: session(Audience::SystemService),
         body: body::UsersControl,
         audit: &[
             ("session", FieldRule::Token),
@@ -1180,7 +1436,10 @@ routes! {
             ("user", FieldRule::Token),
             ("group", FieldRule::Token),
         ],
-        run: |c| users::control(c.params, c.client).await.map_err(BrokerError::from),
+        run: |c| {
+            let authority = c.authority()?;
+    users::control(c.params, c.client, authority).await.map_err(BrokerError::from)
+        },
     }
 }
 

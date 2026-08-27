@@ -5,10 +5,11 @@ use std::process::Stdio;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 use crate::proc::SessionInfo;
 use crate::session::{Mutation, MutationRecord, SessionId};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 
@@ -61,10 +62,14 @@ fn validate_restore_record(
     }
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err(BrokerError::unavailable(
             "native systemd control requires Linux",
         ));
@@ -80,11 +85,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
 
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
         let action = required_string(&params, "action")?;
-        let session_id = required_string(&params, "session")?;
         let unit = required_string(&params, "unit")?;
 
         let verb = if action == "status" {
@@ -92,10 +93,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         } else {
             Verb::SYS_SERVICE
         };
-        let session = crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, &unit, verb, true)
-        })
-        .await?;
+        let (session, authorized) = authorize_session(authority, &unit, verb, true)?;
         prepare_control(&action, &unit, || systemctl_path().map(|_| ()))?;
 
         if action == "status" {
@@ -119,7 +117,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         } else {
             RollbackRecord::not_applicable()
         };
-        let output = run_systemctl_action(&action, &unit).await?;
+        let output = run_systemctl_action(&authorized, &action, &unit).await?;
         let after = match read_unit_state(&unit).await {
             Ok(after) => after,
             Err(error) => {
@@ -150,10 +148,10 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
     }
 }
 
-pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+pub async fn restore(params: Value, authority: &Decision) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err(BrokerError::unavailable(
             "native systemd restore requires Linux",
         ));
@@ -166,32 +164,23 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, Br
                 "native systemd restore requires root clawd",
             ));
         }
-        let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let unit = required_string(&params, "unit")?;
         let active = required_bool(&params, "active")?;
         let enabled = optional_bool(&params, "enabled")?;
         let mutation_session = required_string(&params, "mutation_session")?;
         let mutation_seq = required_u64(&params, "mutation_seq")?;
 
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, &unit, Verb::SYS_SERVICE, false)?;
-            validate_unit_name(&unit).map_err(BrokerError::execution)?;
-            validate_restore_record(&mutation_session, mutation_seq, &unit, active, enabled)
-                .map_err(BrokerError::execution)
-        })
-        .await?;
+        let (_session, authorized) = authorize_session(authority, &unit, Verb::SYS_SERVICE, false)?;
+        validate_unit_name(&unit).map_err(BrokerError::execution)?;
+        validate_restore_record(&mutation_session, mutation_seq, &unit, active, enabled)
+            .map_err(BrokerError::execution)?;
         systemctl_path().map_err(backend_unavailable)?;
 
         let _guard = SYSTEMD_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
             .await;
-        restore_state_async(&unit, active, enabled).await?;
+        restore_state_async(&authorized, &unit, active, enabled).await?;
         Ok(json!({
             "unit": unit,
             "restored": true,
@@ -266,53 +255,44 @@ pub fn restore_unit_state(
     }
 }
 
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice. A refusal is an authorization failure, so
+/// it carries the same stable code every other one does.
 fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
+    authority: &Decision,
     unit: &str,
     verb: Verb,
     require_systemd_app: bool,
-) -> Result<SessionInfo, BrokerError> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| {
-            BrokerError::authorization(format!("systemd session not found: {session_id}"))
-        })?;
-    if require_systemd_app && session.app_id.as_deref() != Some("systemd") {
-        return Err(BrokerError::authorization(
-            "native systemd control is restricted to the systemd App",
-        ));
+) -> Result<(SessionInfo, Authorized), BrokerError> {
+    if require_systemd_app {
+        authority
+            .require_app("systemd")
+            .map_err(BrokerError::authorization)?;
     }
-    if session.pending_bind || session.pid == 0 {
-        return Err(BrokerError::authorization(
-            "systemd session is not bound to a process",
-        ));
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| BrokerError::authorization("systemd session has no process identity"))?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err(BrokerError::authorization(
-            "systemd session process identity is stale",
-        ));
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err(BrokerError::authorization(
-            "systemd request did not originate from the authorized session",
-        ));
-    }
-
-    let mut caps = session.caps.clone().unwrap_or_else(CapSet::new);
-    if let Some(transient) = &session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    let requested = Cap::new(verb, Scope::name(unit));
-    if !caps.covers(&requested) {
-        return Err(BrokerError::authorization(format!(
-            "session lacks {} permission for `{unit}`",
-            verb.as_str()
-        )));
-    }
-    Ok(session)
+    let proof = authority
+        .require(Cap::new(verb, Scope::name(unit)))
+        .map_err(BrokerError::authorization)?;
+    let session = authority
+        .session()
+        .map_err(BrokerError::authorization)?
+        .clone();
+    Ok((session, proof))
 }
 
 async fn read_unit_state(unit: &str) -> Result<UnitState, String> {
@@ -381,19 +361,24 @@ fn state_from_properties(unit: &str, values: &BTreeMap<String, String>) -> UnitS
     }
 }
 
-async fn run_systemctl_action(action: &str, unit: &str) -> Result<CommandOutput, String> {
+async fn run_systemctl_action(
+    _authorized: &Authorized,
+    action: &str,
+    unit: &str,
+) -> Result<CommandOutput, String> {
     run_systemctl(&[action, "--", unit]).await
 }
 
 async fn restore_state_async(
+    authorized: &Authorized,
     unit: &str,
     active: bool,
     enabled: Option<bool>,
 ) -> Result<(), String> {
     if let Some(enabled) = enabled {
-        run_systemctl_action(if enabled { "enable" } else { "disable" }, unit).await?;
+        run_systemctl_action(authorized, if enabled { "enable" } else { "disable" }, unit).await?;
     }
-    run_systemctl_action(if active { "start" } else { "stop" }, unit).await?;
+    run_systemctl_action(authorized, if active { "start" } else { "stop" }, unit).await?;
     Ok(())
 }
 

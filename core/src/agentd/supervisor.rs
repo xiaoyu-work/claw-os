@@ -375,6 +375,14 @@ async fn supervise(
 
     reap(&mut child, pid).await;
 
+    // The worker's lease is over, so every grant its session accrued
+    // goes with it — including any reusable approval the user made
+    // "for this session". A grant outliving the process it was bound to
+    // is exactly what the authority exists to prevent.
+    if let Some(session_id) = job.session_id.as_deref() {
+        crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
+    }
+
     match outcome {
         TaskOutcome::Reported(outcome) => {
             let finish: FinishOutcome = (*outcome).into();

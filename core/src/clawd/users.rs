@@ -10,9 +10,10 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 use crate::proc::SessionInfo;
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
@@ -71,10 +72,14 @@ struct IdentityBackup {
     status: String,
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("User Manager requires Linux shadow utilities".to_string());
     }
 
@@ -85,10 +90,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         }
         let uid = client.require_uid()?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let user = optional_string(&params, "user")?;
         let group = optional_string(&params, "group")?;
@@ -132,10 +133,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             .map(parse_credential_ref)
             .transpose()?;
         let requested = requested_caps(credential_ref.as_ref());
-        let session = crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, &requested)
-        })
-        .await?;
+        let (session, authorized) = authorize_session(authority, &requested)?;
 
         if action == "status" {
             return identity_status();
@@ -164,6 +162,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         .await
         .map_err(|_| "User Manager is busy with another identity mutation".to_string())?;
         mutate(
+            &authorized,
             &action,
             user.as_deref(),
             group.as_deref(),
@@ -189,42 +188,22 @@ fn requested_caps(credential: Option<&(String, String)>) -> Vec<Cap> {
     caps
 }
 
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
 fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
+    authority: &Decision,
     requested: &[Cap],
-) -> Result<SessionInfo, String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("user-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("user-manager") {
-        return Err("identity changes are restricted to the user-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("user-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "user-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("user-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("identity request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.clone().unwrap_or_else(CapSet::new);
-    if let Some(transient) = &session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    for cap in requested {
-        if !caps.covers(cap) {
-            return Err(format!(
-                "user-manager session lacks {}:{}",
-                cap.verb.as_str(),
-                cap.scope
-            ));
-        }
-    }
-    Ok(session)
+) -> Result<(SessionInfo, Authorized), String> {
+    authority.require_app("user-manager")?;
+    let proof = authority.require_all(requested)?;
+    Ok((authority.session()?.clone(), proof))
 }
 
 fn identity_status() -> Result<Value, String> {
@@ -260,6 +239,7 @@ fn identity_status() -> Result<Value, String> {
 }
 
 async fn mutate(
+    _authorized: &Authorized,
     action: &str,
     user: Option<&str>,
     group: Option<&str>,

@@ -70,7 +70,10 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "transaction.rollback",
 ];
 
-const HISTORICAL_ROOT_COMMANDS: &[&str] = &["context.update"];
+/// Root-only routes. `permission.revoke` joins `context.update`: it
+/// retires standing authority and its `owner_uid` names whose, so a
+/// non-root peer must not reach it in either direction.
+const HISTORICAL_ROOT_COMMANDS: &[&str] = &["context.update", "permission.revoke"];
 
 #[test]
 fn the_table_and_the_command_enum_cannot_drift() {

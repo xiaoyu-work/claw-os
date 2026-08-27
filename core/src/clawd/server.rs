@@ -17,10 +17,14 @@
 //! 7. authorize the peer's access class;
 //! 8. take a global, per-principal and per-route slot, and refuse a
 //!    replayed mutation;
-//! 9. dispatch under the route's budget;
-//! 10. write one bounded response and close.
+//! 9. resolve the route's capability grant from the authority and take
+//!    its authorization decision;
+//! 10. dispatch under the route's budget;
+//! 11. refuse to release the answer if the route owed the authority a
+//!     capability check and never took one;
+//! 12. write one bounded response and close.
 //!
-//! Every refusal before step 9 is audited by its stable class and by
+//! Every refusal before step 10 is audited by its stable class and by
 //! how many bytes had been read. Nothing the caller sent — not the
 //! frame, not the ancillary data, not a `serde` message — is recorded.
 
@@ -77,6 +81,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
 
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
+    spawn_authority_sweep();
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     // Agent work runs in unprivileged `claw-agentd` processes. The
     // supervisor handle is deliberately *not* part of the daemon's
@@ -111,6 +116,24 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
         Ok::<(), String>(())
     };
     serve.await
+}
+
+/// Retire capability grants whose process, deadline or use budget is
+/// gone.
+///
+/// The store already sweeps on every entry point, but a daemon that
+/// goes quiet after a burst of launches would otherwise hold rows for
+/// processes that exited. This is what makes "cleaned up on process
+/// exit" true without waiting for the next request.
+fn spawn_authority_sweep() {
+    tokio::spawn(async {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            ticker.tick().await;
+            super::authority::sweep();
+        }
+    });
 }
 
 /// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop
@@ -191,7 +214,7 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
     };
     let client = ClientIdentity::from_peer(process);
 
-    let response = match admit(&frame.body, &client, &admission) {
+    let response = match admit(&frame.body, &client, &admission).await {
         Ok(admitted) => {
             let facts = audit_policy::request_facts_for_route(
                 admitted.route.name,
@@ -202,6 +225,7 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
                 admitted.route,
                 admitted.id,
                 admitted.params,
+                admitted.decision.as_ref(),
                 &state,
                 &client,
             )
@@ -233,6 +257,9 @@ struct Admitted {
     route: &'static Route,
     id: RequestId,
     params: Value,
+    /// The authority decision the middleware took. `None` only for
+    /// peer-scoped routes, which resolve no grant.
+    decision: Option<super::authority::Decision>,
     /// Held for the lifetime of the request; dropping them returns the
     /// global, per-principal and per-route slots.
     _request_permit: super::transport::limits::RequestPermit,
@@ -259,7 +286,7 @@ impl std::fmt::Debug for Refusal {
     }
 }
 
-fn admit(
+async fn admit(
     body: &[u8],
     client: &ClientIdentity,
     admission: &Arc<Admission>,
@@ -325,10 +352,18 @@ fn admit(
             .map_err(|fault| refuse(fault, envelope.id.clone(), Some(route.name)))?;
     }
 
+    // The single mandatory authorization step. It runs after the typed
+    // decode, so nothing unvalidated reaches a policy decision, and
+    // before dispatch, so no handler is entered without one.
+    let decision = super::authority::authorize(route.name, &route.authority, &params, client)
+        .await
+        .map_err(|fault| refuse(fault, envelope.id.clone(), Some(route.name)))?;
+
     Ok(Admitted {
         route,
         id: envelope.id,
         params,
+        decision,
         _request_permit: request_permit,
         _route_permit: route_permit,
     })
@@ -338,6 +373,7 @@ async fn dispatch(
     route: &'static Route,
     id: RequestId,
     params: Value,
+    decision: Option<&super::authority::Decision>,
     state: &DaemonState,
     client: &ClientIdentity,
 ) -> Response {
@@ -345,6 +381,7 @@ async fn dispatch(
         state,
         client,
         params,
+        authority: decision,
     };
     let running = (route.handler)(call);
     let result = match route.budget.deadline {
@@ -360,6 +397,17 @@ async fn dispatch(
         // in-flight ceiling, never by cancellation.
         Deadline::Uninterruptible => running.await,
     };
+    // A route whose descriptor says it derives its own capability owes
+    // the authority one spend. If it answered without taking one, the
+    // authority has no record that anything was authorized, so there is
+    // nothing to release.
+    if !super::authority::obligation_met(decision) {
+        tracing::error!(
+            route = route.name,
+            "route answered without exercising its capability requirement"
+        );
+        return Response::fault(id, Fault::NotAuthorized);
+    }
     match result {
         Ok(value) => Response::ok(id, value),
         Err(error) => route.errors.response(id, error),

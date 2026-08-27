@@ -25,15 +25,18 @@
 //! authenticated connection. Grants are only ever settled as a complete
 //! set, so a launch never burns part of an approval.
 //!
-//! Registration returns an opaque launch handle. It is bound to the
-//! connecting launcher process (pid + start time), single-use for the
-//! pid bind, short-lived, and never handed to the launched App — so an
-//! App cannot bind, re-scope, or drop sessions, and an unrelated local
-//! process cannot drive somebody else's launch.
+//! Registration returns an opaque grant handle. It references a grant
+//! the capability authority holds, bound to the connecting launcher
+//! process (uid, pid, start time, cgroup), short-lived for the bind
+//! step, and never handed to the launched App — so an App cannot bind,
+//! re-scope, or drop sessions, and an unrelated local process cannot
+//! drive somebody else's launch. Binding derives the narrower session
+//! grant the App itself runs under; see
+//! [`crate::clawd::authority`].
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration;
 
 use serde_json::{json, Value};
 
@@ -42,12 +45,28 @@ use crate::caps::{Cap, CapSet, Manifest, Need, Role, Scope, ScopeBinding, ScopeK
 use crate::clawd::protocol::BrokerError;
 use crate::proc::SessionInfo;
 
+use super::authority;
 use super::client_identity::ClientIdentity;
 
 /// How long an issued handle may be used to bind a child process.
 /// Long enough for a slow interpreter start, short enough that a
 /// forgotten handle is not standing authority.
 const BIND_WINDOW: Duration = Duration::from_secs(120);
+
+/// How long a launch grant may live. It outlives the bind window
+/// because the same handle is what re-scopes an MCP session and
+/// deregisters it, but it is still bounded: a launcher that never tears
+/// its session down loses the grant, and the App loses the session
+/// grant derived from it, at this deadline.
+const LAUNCH_GRANT_TTL: Duration = Duration::from_secs(12 * 60 * 60);
+
+/// How long a bound App session's own grant may live.
+///
+/// Strictly shorter than the launch grant it is derived from: an
+/// attenuation may never extend an expiry, and leaving headroom keeps
+/// a bind that happens seconds after registration from being refused
+/// for asking for exactly as long as its parent has left.
+const SESSION_GRANT_TTL: Duration = Duration::from_secs(11 * 60 * 60);
 
 /// What the launcher asked to run. The kind decides which part of the
 /// manifest the capability derivation reads.
@@ -240,6 +259,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         &delegation,
     );
     let caps = authorize_plan(&delegation, plan)?;
+    let grant_caps = caps.clone();
 
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let info = SessionInfo {
@@ -269,7 +289,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
 
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_handle(&session_id, uid, &launcher);
+    let handle = issue_launch_grant(&session_id, Some(&app_id), uid, &launcher, &grant_caps)?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -309,7 +329,7 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         tier: Some(role.credential_tier()),
         scope: Some("native-host".to_string()),
         priority: None,
-        caps: Some(caps),
+        caps: Some(caps.clone()),
         transient_caps: None,
         role: Some(role.name().to_string()),
         app_id: Some(app_id.clone()),
@@ -317,7 +337,7 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         start_time_ticks: None,
     };
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_handle(&session_id, uid, &launcher);
+    let handle = issue_launch_grant(&session_id, Some(&app_id), uid, &launcher, &caps)?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -351,7 +371,7 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
         tier: launcher.tier,
         scope: launcher.scope.clone(),
         priority: launcher.priority.clone(),
-        caps: Some(caps),
+        caps: Some(caps.clone()),
         transient_caps: None,
         role: launcher.role.clone(),
         app_id: None,
@@ -359,7 +379,7 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
         start_time_ticks: None,
     };
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_handle(&session_id, uid, &launcher);
+    let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps)?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -375,7 +395,15 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
     let launcher_pid = client
         .pid
         .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-    authorize_handle(&handle, &session_id, uid, launcher_pid, true)?;
+    // The route middleware already resolved this handle to a live
+    // grant bound to this exact launcher process; what is left is the
+    // route's own contract — the handle covers this session, it is
+    // still inside the bind window, and the process being bound really
+    // is the launcher's child.
+    let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    if launch.issued_ago > BIND_WINDOW {
+        return Err("App launch handle expired before binding a process".to_string());
+    }
     let child_pid = required_u32(&params, "pid")?;
     if child_pid == launcher_pid {
         return Err("App session must bind a child process".to_string());
@@ -389,12 +417,81 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         return Err(format!("App process {child_pid} is not owned by uid {uid}"));
     }
     let bind_id = session_id.clone();
-    crate::paths::with_user_override(uid, home, async move {
-        crate::proc::bind_session_process(&bind_id, child_pid)
+    let bound_caps = crate::paths::with_user_override(uid, home, async move {
+        crate::proc::bind_session_process(&bind_id, child_pid)?;
+        crate::proc::session_info_by_id(&bind_id)
+            .and_then(|session| session.caps)
+            .ok_or_else(|| "App session lost its capabilities during bind".to_string())
     })
     .await?;
-    mark_handle_bound(&handle);
+    // Deriving the session grant is what makes `bind` one-shot: the
+    // store refuses a second claim on a session index, so two
+    // concurrent binds cannot both install one.
+    issue_session_grant(
+        &handle,
+        &session_id,
+        launch.subject.app_id.as_deref(),
+        uid,
+        child_pid,
+        &bound_caps,
+    )?;
     Ok(json!({"bound": true}))
+}
+
+/// Serializer for one App session's capability transitions.
+///
+/// The registry swap and the grant re-derivation are two separate
+/// critical sections — one over the routed registry file, one over the
+/// authority store — and nothing in either makes them one. Two calls
+/// left to interleave produce exactly the mismatch this path exists to
+/// prevent:
+///
+/// ```text
+///   A: swap(x)                              registry = x
+///   B:          swap(y)                     registry = y
+///   B:          reissue(y)                  authority = y
+///   A: reissue(x)                           authority = x   <-- registry says y
+/// ```
+///
+/// and a teardown landing in the same window leaves a live grant for a
+/// row that no longer exists. So every transition for a given session —
+/// re-scope, clear and deregistration alike — takes this lock first and
+/// holds it across both halves, including the rollback. It is keyed by
+/// session id, so unrelated Apps never wait on each other, and the
+/// entry is dropped when the session is deregistered.
+fn session_locks() -> &'static Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn session_lock(session_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = session_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    locks
+        .entry(session_id.to_string())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
+}
+
+/// Forget a session's serializer once nothing is waiting on it.
+///
+/// Dropping the entry unconditionally would let a caller already
+/// blocked on the old mutex run alongside a later caller that got a
+/// fresh one. The strong count tells us whether that can happen: two
+/// means the map and this caller, and nobody else. Anything higher
+/// leaves the entry in place, and the next teardown collects it.
+fn release_session_lock(session_id: &str) {
+    let mut locks = session_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let is_idle = locks
+        .get(session_id)
+        .map(|lock| Arc::strong_count(lock) <= 2)
+        .unwrap_or(false);
+    if is_idle {
+        locks.remove(session_id);
+    }
 }
 
 pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Value, String> {
@@ -402,19 +499,35 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
-    let launcher_pid = client
-        .pid
-        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-    authorize_handle(&handle, &session_id, uid, launcher_pid, false)?;
+    require_launch_grant(client, &handle, &session_id, uid)?;
 
+    // Held across the read, the write and the re-derivation, so a
+    // concurrent re-scope, clear or teardown cannot land between them.
+    let serializer = session_lock(&session_id);
+    let _transition = serializer.lock().await;
+
+    // Everything the new grant needs is read under the owner's own path
+    // view — the routed registry is partitioned per uid, and reading
+    // the daemon's own partition would answer about a different
+    // session entirely.
     let lookup_id = session_id.clone();
-    let app_id = crate::paths::with_user_override(uid, home.clone(), async move {
+    let bound = crate::paths::with_user_override(uid, home.clone(), async move {
         crate::proc::session_info_by_id(&lookup_id)
-            .and_then(|session| session.app_id)
-            .ok_or_else(|| "App session not found".to_string())
     })
-    .await?;
+    .await
+    .ok_or_else(|| "App session not found".to_string())?;
+    let app_id = bound
+        .app_id
+        .clone()
+        .ok_or_else(|| "App session not found".to_string())?;
+    if bound.pending_bind || bound.pid == 0 {
+        return Err("App session is not bound to a process".to_string());
+    }
+    let child_pid = bound.pid;
 
+    // Derive and authorize the requested capabilities *before* anything
+    // is written. A launch that cannot settle its approvals leaves both
+    // the registry and the authority untouched.
     let caps = match params.get("call") {
         None | Some(Value::Null) => None,
         Some(call) => {
@@ -423,16 +536,75 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
             // process, so a denial is retried under the same
             // pid/start identity.
             let delegation = Delegation::new(&launcher, uid, &home, &params)?;
-            let plan = session_tool_plan(&app_id, call, &delegation)
-                .map_err(|error| error.message)?;
+            let plan =
+                session_tool_plan(&app_id, call, &delegation).map_err(|error| error.message)?;
             Some(authorize_plan(&delegation, plan).map_err(|error| error.message)?)
         }
     };
-    crate::paths::with_user_override(uid, home, async move {
-        crate::proc::set_app_session_transient_caps(&session_id, caps)
+
+    let mut effective = bound.caps.clone().unwrap_or_else(CapSet::new);
+    if let Some(transient) = caps.as_ref() {
+        effective.extend(transient.iter().cloned());
+    }
+
+    // Commit the two halves as one security transaction. The registry
+    // write comes first because it is the one that can be rolled back
+    // exactly; if re-deriving the grant fails for any reason — the
+    // attenuation is refused, the process disappeared, the store hit a
+    // ceiling — the previous transient set is restored before the error
+    // is returned, so a failed call never leaves widened authority
+    // behind for `caps::require` or a later peer-session grant to find.
+    let write_id = session_id.clone();
+    let write_caps = caps.clone();
+    let write_home = home.clone();
+    let previous = crate::paths::with_user_override(uid, write_home, async move {
+        crate::proc::swap_app_session_transient_caps(&write_id, write_caps)
     })
     .await?;
+
+    if let Err(error) = reissue_session_grant(
+        &handle,
+        &session_id,
+        Some(&app_id),
+        uid,
+        child_pid,
+        &effective,
+    ) {
+        rollback_transient_caps(uid, home, &session_id, previous).await;
+        return Err(error);
+    }
     Ok(json!({"updated": true}))
+}
+
+/// Put an App session's transient capabilities back the way they were.
+///
+/// Best effort by necessity — the registry write that failed the
+/// operation may also fail here — but the failure mode is deliberately
+/// loud *and* narrowing: if the restore cannot be written, the session
+/// grant is revoked outright, so the App is left with no authority
+/// rather than the widened set the caller could not be given.
+async fn rollback_transient_caps(
+    uid: u32,
+    home: std::path::PathBuf,
+    session_id: &str,
+    previous: Option<CapSet>,
+) {
+    let restore_id = session_id.to_string();
+    let restored = crate::paths::with_user_override(uid, home, async move {
+        crate::proc::set_app_session_transient_caps(&restore_id, previous)
+    })
+    .await;
+    if let Err(error) = restored {
+        tracing::error!(
+            error = %error,
+            "could not restore App session transient capabilities; revoking its authority"
+        );
+    }
+    // Either way the grant that matched the old set is gone: `bind`
+    // installed it, `reissue` revoked it, and the re-derivation is what
+    // failed. Revoking again is idempotent and guarantees no live grant
+    // outlives the transient state it was derived from.
+    authority::revoke_session(session_id);
 }
 
 pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value, String> {
@@ -440,17 +612,62 @@ pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value,
     let home = client.require_home_dir()?;
     let session_id = required_string(&params, "session_id")?;
     let handle = required_string(&params, "handle")?;
-    let launcher_pid = client
-        .pid
-        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-    authorize_handle(&handle, &session_id, uid, launcher_pid, false)?;
+    let launch = require_launch_grant(client, &handle, &session_id, uid)?;
+    // Teardown is a capability transition like any other: taking the
+    // same serializer is what stops a deregistration from racing an
+    // in-flight re-scope and leaving a grant behind for a row that is
+    // already gone.
+    let serializer = session_lock(&session_id);
+    let transition = serializer.lock().await;
     let remove_id = session_id.clone();
     crate::paths::with_user_override(uid, home, async move {
         crate::proc::deregister_session(&remove_id);
     })
     .await;
-    release_handle(&handle);
+    // Revoking the launch grant cascades to the session grant derived
+    // from it, so an App whose session row is gone also loses every
+    // provider route in the same transaction.
+    authority::authority().revoke(launch.id);
+    super::authority::audit::record_revoked("app-session", Some(&session_id), 1);
+    // Drop the guard before forgetting the entry, so a caller already
+    // waiting on it is released rather than stranded on a mutex nothing
+    // will ever unlock.
+    drop(transition);
+    release_session_lock(&session_id);
     Ok(json!({"removed": true}))
+}
+
+/// Re-resolve the launch grant this route was admitted under.
+///
+/// The middleware already proved the handle belongs to this process; a
+/// route still states its own contract, because the middleware knows
+/// nothing about which session a launch handle is allowed to name.
+fn require_launch_grant(
+    client: &ClientIdentity,
+    handle: &str,
+    session_id: &str,
+    uid: u32,
+) -> Result<authority::GrantView, String> {
+    let pid = client
+        .pid
+        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
+    let view = authority::authority()
+        .resolve(
+            handle,
+            &authority::Presentation {
+                uid,
+                pid,
+                start_time_ticks: client.start_time_ticks,
+                audience: authority::Audience::AppLaunch,
+                route: "app_session",
+                session_id: None,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    if view.subject.session_id.as_deref() != Some(session_id) {
+        return Err("App launch handle does not cover this session".to_string());
+    }
+    Ok(view)
 }
 
 // ---------------------------------------------------------------------------
@@ -484,9 +701,10 @@ async fn authenticate_launcher(
         return Err("App processes cannot manage App sessions".to_string());
     }
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
-    let sessions =
-        crate::paths::with_user_override(uid, home.clone(), async { crate::proc::registry_sessions() })
-            .await;
+    let sessions = crate::paths::with_user_override(uid, home.clone(), async {
+        crate::proc::registry_sessions()
+    })
+    .await;
     launcher_authority(&sessions, pid, start_time_ticks, &home)
 }
 
@@ -923,102 +1141,116 @@ async fn install_session(
 }
 
 // ---------------------------------------------------------------------------
-// Launch handles
+// Launch grants
 // ---------------------------------------------------------------------------
 
-struct LaunchHandle {
-    session_id: String,
-    uid: u32,
-    launcher_pid: u32,
-    launcher_start_time_ticks: Option<u64>,
-    bind_deadline: Instant,
-    bound: bool,
-}
-
-fn handles() -> MutexGuard<'static, HashMap<String, LaunchHandle>> {
-    static HANDLES: OnceLock<Mutex<HashMap<String, LaunchHandle>>> = OnceLock::new();
-    HANDLES
-        .get_or_init(|| Mutex::new(HashMap::new()))
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-fn issue_handle(session_id: &str, uid: u32, launcher: &LauncherAuthority) -> String {
-    let token = format!(
-        "{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    );
-    let mut store = handles();
-    prune_handles(&mut store);
-    store.insert(
-        token.clone(),
-        LaunchHandle {
-            session_id: session_id.to_string(),
-            uid,
-            launcher_pid: launcher.pid,
-            launcher_start_time_ticks: launcher.start_time_ticks,
-            bind_deadline: Instant::now() + BIND_WINDOW,
-            bound: false,
-        },
-    );
-    token
-}
-
-fn authorize_handle(
-    token: &str,
+/// Mint the launch grant for a freshly registered session.
+///
+/// The grant is the authority; the handle returned here is only a
+/// reference to it. It is bound to the exact launcher process — uid,
+/// pid, start time and cgroup — so a same-uid sibling that obtained the
+/// characters cannot bind, re-scope or drop the session, and a pid
+/// recycled after the launcher exits resolves to nothing.
+fn issue_launch_grant(
     session_id: &str,
+    app_id: Option<&str>,
     uid: u32,
-    launcher_pid: u32,
-    for_bind: bool,
+    launcher: &LauncherAuthority,
+    caps: &CapSet,
+) -> Result<String, String> {
+    let principal = authority::Principal::of_process(uid, launcher.pid)
+        .ok_or_else(|| "cannot bind an App launch to an unverifiable process".to_string())?;
+    if principal.start_time_ticks != launcher.start_time_ticks {
+        return Err("App launcher process identity changed during registration".to_string());
+    }
+    let (handle, view) = authority::authority()
+        .issue(authority::Issuance {
+            issuer: authority::Issuer::AppSessionAuthority,
+            principal,
+            binding: authority::Binding::Process,
+            subject: authority::Subject::session(session_id)
+                .with_app(app_id.map(ToOwned::to_owned)),
+            // The launch grant is the parent of the session grant, so
+            // it has to carry every audience that session will need;
+            // `bind` narrows it to the provider audiences and drops
+            // launch authority.
+            audience: authority::AudienceSet::of(&[
+                authority::Audience::AppLaunch,
+                authority::Audience::SystemService,
+                authority::Audience::Credential,
+            ]),
+            caps: caps.clone(),
+            lifetime: LAUNCH_GRANT_TTL,
+            uses: authority::Uses::Unbounded,
+            index_session: false,
+        })
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
+    Ok(handle.into_wire())
+}
+
+/// Derive the session grant a bound App runs under.
+///
+/// Strictly narrower than the launch grant it comes from: launch
+/// authority is dropped, the binding moves from the launcher to the App
+/// process tree, and the expiry can only move earlier. It claims the
+/// session index, and the store refuses a second claim, so `bind` is
+/// one-shot even under two concurrent callers.
+fn issue_session_grant(
+    launch_handle: &str,
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    child_pid: u32,
+    caps: &CapSet,
 ) -> Result<(), String> {
-    let mut store = handles();
-    prune_handles(&mut store);
-    let handle = store
-        .get(token)
-        .ok_or_else(|| "App launch handle is unknown or expired".to_string())?;
-    if handle.session_id != session_id || handle.uid != uid {
-        return Err("App launch handle does not cover this session".to_string());
-    }
-    if handle.launcher_pid != launcher_pid {
-        return Err("App launch handle belongs to a different launcher".to_string());
-    }
-    if !crate::proc::is_alive_with_start_time(handle.launcher_pid, handle.launcher_start_time_ticks)
-    {
-        return Err("App launch handle belongs to an exited launcher".to_string());
-    }
-    if for_bind {
-        if handle.bound {
-            return Err("App launch handle has already bound a process".to_string());
-        }
-        if Instant::now() > handle.bind_deadline {
-            return Err("App launch handle expired before binding a process".to_string());
-        }
-    }
+    let principal = authority::Principal::of_process(uid, child_pid)
+        .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
+    let (_handle, view) = authority::authority()
+        .attenuate(
+            launch_handle,
+            authority::Attenuation {
+                issuer: authority::Issuer::AppSessionAuthority,
+                principal,
+                binding: authority::Binding::ProcessTree,
+                subject: authority::Subject::session(session_id)
+                    .with_app(app_id.map(ToOwned::to_owned)),
+                audience: authority::AudienceSet::of(&[
+                    authority::Audience::SystemService,
+                    authority::Audience::Credential,
+                ]),
+                caps: caps.clone(),
+                lifetime: SESSION_GRANT_TTL,
+                uses: authority::Uses::Unbounded,
+                index_session: true,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
     Ok(())
 }
 
-fn mark_handle_bound(token: &str) {
-    if let Some(handle) = handles().get_mut(token) {
-        handle.bound = true;
-    }
-}
-
-fn release_handle(token: &str) {
-    handles().remove(token);
-}
-
-/// Drop handles whose launcher is gone and unbound handles past their
-/// bind window, so a long-lived daemon never keeps authority for a
-/// process that no longer exists.
-fn prune_handles(store: &mut HashMap<String, LaunchHandle>) {
-    let now = Instant::now();
-    store.retain(|_, handle| {
-        if !handle.bound && now > handle.bind_deadline {
-            return false;
-        }
-        crate::proc::is_alive_with_start_time(handle.launcher_pid, handle.launcher_start_time_ticks)
-    });
+/// Re-derive the session grant after a transient capability change.
+///
+/// An MCP session tool call widens what the App may do for exactly one
+/// call, so the old session grant is revoked and a new one derived from
+/// the same launch grant with the new set. Deriving rather than editing
+/// keeps the attenuation check on the path: the transient set still has
+/// to sit inside what the launcher could delegate.
+///
+/// `child_pid` is passed in rather than looked up, because the only
+/// correct place to read the routed registry is under the owner's own
+/// path view, and the caller already holds that row.
+fn reissue_session_grant(
+    launch_handle: &str,
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    child_pid: u32,
+    caps: &CapSet,
+) -> Result<(), String> {
+    authority::authority().revoke_session(session_id);
+    issue_session_grant(launch_handle, session_id, app_id, uid, child_pid, caps)
 }
 
 // ---------------------------------------------------------------------------

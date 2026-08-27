@@ -6,8 +6,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 
@@ -16,10 +17,14 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 1024 * 1024;
 static POWER_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err(BrokerError::unavailable(
             "Power Manager requires Linux systemd-logind",
         ));
@@ -33,10 +38,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             ));
         }
         let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
         let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let confirm = params
@@ -48,10 +49,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         } else {
             Cap::new(Verb::SYS_POWER, Scope::Wild)
         };
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, requested)?;
         validate_action(&action, confirm).map_err(BrokerError::execution)?;
 
         if action == "status" {
@@ -76,51 +74,23 @@ fn backend_unavailable(message: String) -> BrokerError {
     BrokerError::unavailable(message)
 }
 
-fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
-    requested: Cap,
-) -> Result<(), BrokerError> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| {
-            BrokerError::authorization(format!("power-manager session not found: {session_id}"))
-        })?;
-    if session.app_id.as_deref() != Some("power-manager") {
-        return Err(BrokerError::authorization(
-            "power control is restricted to the power-manager App",
-        ));
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err(BrokerError::authorization(
-            "power-manager session is not bound to a process",
-        ));
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| {
-            BrokerError::authorization("power-manager session has no process identity")
-        })?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err(BrokerError::authorization(
-            "power-manager session process identity is stale",
-        ));
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err(BrokerError::authorization(
-            "power request did not originate from the authorized session",
-        ));
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    if !caps.covers(&requested) {
-        return Err(BrokerError::authorization(format!(
-            "power-manager session lacks {}",
-            requested.verb.as_str()
-        )));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice. A refusal is an authorization failure, so
+/// it carries the same stable code every other one does.
+fn authorize_session(authority: &Decision, requested: Cap) -> Result<Authorized, BrokerError> {
+    authority
+        .require_app("power-manager")
+        .map_err(BrokerError::authorization)?;
+    authority
+        .require_all(std::slice::from_ref(&requested))
+        .map_err(BrokerError::authorization)
 }
 
 async fn power_status() -> Result<Value, String> {
@@ -183,10 +153,7 @@ fn parse_upower_device(object_path: &str, output: &str) -> Value {
 }
 
 fn normalize_key(value: &str) -> String {
-    value
-        .trim()
-        .to_ascii_lowercase()
-        .replace([' ', '-'], "_")
+    value.trim().to_ascii_lowercase().replace([' ', '-'], "_")
 }
 
 fn parse_upower_value(value: &str) -> Value {

@@ -11,9 +11,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
-use super::client_identity::ClientIdentity;
+use super::authority::{Authorized, Decision};
 
 const CRASH_SCOPE: &str = "system";
 const COREDUMP_MESSAGE_ID: &str = "fc2e22bc6ee647b6b90729ab34a250b1";
@@ -27,10 +27,10 @@ const MAX_SINCE_MINUTES: u64 = 7 * 24 * 60;
 const MAX_LIMIT: u64 = 100;
 static CRASH_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn inspect(params: Value, authority: &Decision) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, authority);
         return Err("Crash Doctor requires Linux systemd".to_string());
     }
 
@@ -39,18 +39,9 @@ pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, St
         if unsafe { libc::geteuid() } != 0 {
             return Err("Crash Doctor requires root clawd".to_string());
         }
-        let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
 
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid)
-        })
-        .await?;
+        let _authorized = authorize_session(authority)?;
 
         let _guard = CRASH_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
@@ -83,37 +74,18 @@ pub async fn inspect(params: Value, client: &ClientIdentity) -> Result<Value, St
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("crash-doctor session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("crash-doctor") {
-        return Err("crash inspection is restricted to the crash-doctor App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("crash-doctor session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "crash-doctor session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("crash-doctor session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("crash request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    let requested = Cap::new(Verb::SYS_CRASH, Scope::name(CRASH_SCOPE));
-    if !caps.covers(&requested) {
-        return Err(format!(
-            "crash-doctor session lacks {}:{}",
-            Verb::SYS_CRASH.as_str(),
-            CRASH_SCOPE
-        ));
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision) -> Result<Authorized, String> {
+    authority.require_app("crash-doctor")?;
+    authority.require(Cap::new(Verb::SYS_CRASH, Scope::name(CRASH_SCOPE)))
 }
 
 fn query_bounds(params: &Value) -> Result<(u64, u64), String> {

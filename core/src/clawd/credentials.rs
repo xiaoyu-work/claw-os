@@ -2,13 +2,18 @@ use serde_json::{json, Value};
 
 use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 use super::protocol::BrokerError;
 
-pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
+pub async fn oauth_refresh(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, BrokerError> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err(BrokerError::unavailable(
             "credential OAuth broker requires Linux",
         ));
@@ -26,16 +31,12 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let namespace = required_string(&params, "namespace")?;
         let credential = required_string(&params, "credential")?;
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, &namespace, &credential)
-        })
-        .await?;
+        // The authority decision the broker already took is the whole
+        // session check; what remains is this route's own contract on
+        // the values it will act with, kept ahead of any backend probe.
+        let _authorized = authorize_session(authority, &namespace, &credential)?;
         validate_component("namespace", &namespace).map_err(BrokerError::execution)?;
         if !matches!(
             credential.as_str(),
@@ -47,9 +48,8 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
         }
         crate::paths::with_user_override(uid, home, async move {
             let _identity = FsIdentityGuard::enter(uid, gid).map_err(BrokerError::execution)?;
-            let result =
-                crate::credential::broker_refresh_access_token(&credential, &namespace)
-                    .map_err(BrokerError::execution)?;
+            let result = crate::credential::broker_refresh_access_token(&credential, &namespace)
+                .map_err(BrokerError::execution)?;
             Ok(json!({
                 "credential": credential,
                 "namespace": namespace,
@@ -59,7 +59,6 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
         })
         .await
     }
-
 }
 
 #[cfg(target_os = "linux")]
@@ -101,52 +100,37 @@ impl Drop for FsIdentityGuard {
     }
 }
 
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, the process allowed to act under it, and the
+/// capabilities it holds all come from the grant `clawd` issued and the
+/// middleware resolved. The route is `PeerSession` with transient
+/// capabilities *excluded*, which preserves exactly what this broker
+/// checked before the authority existed: `session.caps` and never the
+/// set an unrelated MCP tool call was granted for one invocation. A
+/// refusal is an authorization failure, so it carries the same stable
+/// code every other one does.
 fn authorize_session(
-    session_id: &str,
-    peer_pid: u32,
+    authority: &Decision,
     namespace: &str,
     credential: &str,
-) -> Result<(), BrokerError> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| {
-            BrokerError::authorization(format!("credential session not found: {session_id}"))
-        })?;
-    if session.pending_bind || session.pid == 0 {
-        return Err(BrokerError::authorization(
-            "credential session is not bound to a process",
-        ));
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| {
-            BrokerError::authorization("credential session has no process identity")
-        })?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err(BrokerError::authorization(
-            "credential session process identity is stale",
-        ));
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err(BrokerError::authorization(
-            "credential request did not originate from the authorized session",
-        ));
-    }
-    let requested = Cap::new(
-        Verb::SECRET_READ,
-        Scope::name(format!("{namespace}/{credential}")),
-    );
-    let caps = session
-        .caps
-        .as_ref()
-        .ok_or_else(|| BrokerError::authorization("credential session has no capabilities"))?;
-    if !caps.covers(&requested) {
-        return Err(BrokerError::authorization(format!(
-            "credential session lacks {}:{}",
-            requested.verb.as_str(),
-            requested.scope
-        )));
-    }
-    Ok(())
+) -> Result<Authorized, BrokerError> {
+    authority
+        .require(Cap::new(
+            Verb::SECRET_READ,
+            Scope::name(format!("{namespace}/{credential}")),
+        ))
+        .map_err(BrokerError::authorization)
 }
 
 fn required_string(params: &Value, key: &str) -> Result<String, String> {

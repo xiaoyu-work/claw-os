@@ -41,72 +41,71 @@ fn filesystem_identity_guard_restores_calling_identity() {
 
 #[test]
 fn broker_authorizes_only_the_session_access_token_scope() {
-    use crate::caps::{CapSet, Role};
-    use crate::proc::{deregister_session, register_session, SessionInfo};
+    use crate::caps::CapSet;
+    use crate::clawd::authority::{
+        authority, Audience, AudienceSet, Binding, Decision, Issuance, Issuer, Presentation,
+        Principal, Requirement, Subject, Uses,
+    };
 
-    let _lock = crate::caps::test_env_lock::env_lock();
-    let temp = tempfile::tempdir().unwrap();
-    let previous_data = std::env::var_os("COS_DATA_DIR");
-    std::env::set_var("COS_DATA_DIR", temp.path());
+    let uid = current_uid();
+    authority().clear_for_test();
     let session_id = format!("credential-broker-test-{}", std::process::id());
     let mut caps = CapSet::new();
     caps.insert(Cap::new(
         Verb::SECRET_READ,
         Scope::name("default/GOOGLE_ACCESS_TOKEN"),
     ));
-    register_session(SessionInfo {
-        session_id: session_id.clone(),
-        pid: std::process::id(),
-        command: vec!["credential-broker-test".into()],
-        started_at: chrono::Utc::now().to_rfc3339(),
-        stdout_path: String::new(),
-        stderr_path: String::new(),
-        group: None,
-        parent: None,
-        workdir: None,
-        exit_code: None,
-        ended_at: None,
-        tier: Some(2),
-        scope: None,
-        priority: None,
-        caps: Some(caps),
-        transient_caps: None,
-        role: Some(Role::Worker.name().to_string()),
-        app_id: Some("email".to_string()),
-        pending_bind: false,
-        start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
-    })
-    .unwrap();
-
-    let allowed = authorize_session(
-        &session_id,
-        std::process::id(),
-        "default",
-        "GOOGLE_ACCESS_TOKEN",
-    );
-    let denied = authorize_session(
-        &session_id,
-        std::process::id(),
-        "default",
-        "MICROSOFT_ACCESS_TOKEN",
+    let (_handle, view) = authority()
+        .issue(Issuance {
+            issuer: Issuer::AppSessionAuthority,
+            principal: Principal::of_process(uid, std::process::id())
+                .expect("name the test process"),
+            binding: Binding::ProcessTree,
+            subject: Subject::session(session_id.clone()).with_app(Some("email".to_string())),
+            audience: AudienceSet::one(Audience::Credential),
+            caps,
+            lifetime: std::time::Duration::from_secs(60),
+            uses: Uses::Unbounded,
+            index_session: true,
+        })
+        .expect("issue the App session grant");
+    let decision = Decision::for_test(
+        view,
+        "credential.oauth-refresh",
+        Audience::Credential,
+        Presentation {
+            uid,
+            pid: std::process::id(),
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            audience: Audience::Credential,
+            route: "credential.oauth-refresh",
+            session_id: Some(session_id.clone()),
+        },
+        None,
+        &Requirement::RouteDerived,
     );
 
-    deregister_session(&session_id);
-    match previous_data {
-        Some(value) => std::env::set_var("COS_DATA_DIR", value),
-        None => std::env::remove_var("COS_DATA_DIR"),
-    }
+    let allowed = authorize_session(&decision, "default", "GOOGLE_ACCESS_TOKEN");
+    let denied = authorize_session(&decision, "default", "MICROSOFT_ACCESS_TOKEN");
+
+    authority().clear_for_test();
 
     assert!(allowed.is_ok(), "{allowed:?}");
-    let denied = denied.unwrap_err();
-    assert!(denied.message.contains("lacks secret.read"));
+    let denial = denied.expect_err("an unheld credential scope is refused");
+    assert!(denial.message.contains("secret.read"), "{denial:?}");
     assert_eq!(
-        denied.kind,
-        crate::clawd::protocol::BrokerErrorKind::Unauthorized
+        denial.kind,
+        crate::clawd::protocol::BrokerErrorKind::Unauthorized,
+        "an authority refusal keeps its stable public class"
     );
-    let response = crate::clawd::protocol::Response::handler_error(
-        crate::clawd::protocol::RequestId::unknown(),
-        denied,
-    );
-    assert_eq!(response.error.unwrap().code, "not_authorized");
+}
+
+#[cfg(unix)]
+fn current_uid() -> u32 {
+    unsafe { libc::geteuid() }
+}
+
+#[cfg(not(unix))]
+fn current_uid() -> u32 {
+    0
 }

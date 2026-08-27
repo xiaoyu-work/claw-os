@@ -10,8 +10,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const MAX_SOURCE_BYTES: u64 = 1024 * 1024;
@@ -40,10 +41,14 @@ struct TargetSnapshot {
     sha256: Option<String>,
 }
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Safe Config Editor requires Linux".to_string());
     }
 
@@ -53,11 +58,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             return Err("Safe Config Editor requires root clawd".to_string());
         }
         let uid = client.require_uid()?;
-        let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let target = optional_string(&params, "target")?;
         let source = optional_string(&params, "source")?;
@@ -76,10 +76,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
         let target = resolve_target(target.as_deref().unwrap())?;
         let source = source.as_deref().map(resolve_source).transpose()?;
         let requested = requested_caps(&target, source.as_deref());
-        crate::paths::with_user_override(uid, home, async {
-            authorize_session(&session_id, peer_pid, &requested)
-        })
-        .await?;
+        let authorized = authorize_session(authority, &requested)?;
 
         match action.as_str() {
             "inspect" => inspect_target(&target),
@@ -98,9 +95,9 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
                 .map_err(|_| "Safe Config Editor is busy with another mutation".to_string())?;
                 if action == "apply" {
                     let content = read_source(source.as_deref().unwrap())?;
-                    apply_config(&target, &content, uid).await
+                    apply_config(&authorized, &target, &content, uid).await
                 } else {
-                    restore_config(&target, token.as_deref().unwrap(), uid).await
+                    restore_config(&authorized, &target, token.as_deref().unwrap(), uid).await
                 }
             }
             _ => unreachable!("validated config action"),
@@ -122,38 +119,18 @@ fn requested_caps(target: &Path, source: Option<&Path>) -> Vec<Cap> {
     caps
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: &[Cap]) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("config-editor session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("config-editor") {
-        return Err("system config edits are restricted to the config-editor App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("config-editor session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "config-editor session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("config-editor session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("config request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    for cap in requested {
-        if !caps.covers(cap) {
-            return Err(format!(
-                "config-editor session lacks {}:{}",
-                cap.verb.as_str(),
-                cap.scope
-            ));
-        }
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
+    authority.require_app("config-editor")?;
+    authority.require_all(requested)
 }
 
 fn inspect_target(target: &Path) -> Result<Value, String> {
@@ -199,7 +176,12 @@ async fn validate_content(target: &Path, content: &[u8]) -> Result<Value, String
     }))
 }
 
-async fn apply_config(target: &Path, content: &[u8], owner_uid: u32) -> Result<Value, String> {
+async fn apply_config(
+    _authorized: &Authorized,
+    target: &Path,
+    content: &[u8],
+    owner_uid: u32,
+) -> Result<Value, String> {
     let validator = validator_for(target)?;
     let parent = target
         .parent()
@@ -347,7 +329,12 @@ async fn apply_config(target: &Path, content: &[u8], owner_uid: u32) -> Result<V
     }))
 }
 
-async fn restore_config(target: &Path, token: &str, owner_uid: u32) -> Result<Value, String> {
+async fn restore_config(
+    _authorized: &Authorized,
+    target: &Path,
+    token: &str,
+    owner_uid: u32,
+) -> Result<Value, String> {
     validate_token(token)?;
     let mut backup = load_backup(token)?;
     if backup.owner_uid != owner_uid {

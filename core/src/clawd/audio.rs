@@ -9,8 +9,9 @@ use std::process::{Command, ExitStatus, Stdio};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
+use super::authority::{Authorized, Decision};
 use super::client_identity::ClientIdentity;
 
 const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
@@ -18,10 +19,14 @@ const LOCK_TIMEOUT: Duration = Duration::from_secs(5);
 const STREAM_CAP_BYTES: usize = 4 * 1024 * 1024;
 static AUDIO_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 
-pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+pub async fn control(
+    params: Value,
+    client: &ClientIdentity,
+    authority: &Decision,
+) -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (params, client);
+        let _ = (params, client, authority);
         return Err("Audio Manager requires Linux PipeWire".to_string());
     }
 
@@ -35,19 +40,12 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, St
             .gid
             .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
         let home = client.require_home_dir()?;
-        let peer_pid = client
-            .pid
-            .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
-        let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let target = optional_string(&params, "target")?;
         let value = optional_string(&params, "value")?;
         validate_action(&action, target.as_deref(), value.as_deref())?;
         let requested = requested_caps(&action);
-        crate::paths::with_user_override(uid, home.clone(), async {
-            authorize_session(&session_id, peer_pid, &requested)
-        })
-        .await?;
+        let _authorized = authorize_session(authority, &requested)?;
         let environment = AudioEnvironment::for_user(uid, gid, home)?;
 
         if action == "status" {
@@ -81,38 +79,18 @@ fn requested_caps(action: &str) -> Vec<Cap> {
     }
 }
 
-fn authorize_session(session_id: &str, peer_pid: u32, requested: &[Cap]) -> Result<(), String> {
-    let session = crate::proc::session_info_by_id(session_id)
-        .ok_or_else(|| format!("audio-manager session not found: {session_id}"))?;
-    if session.app_id.as_deref() != Some("audio-manager") {
-        return Err("audio control is restricted to the audio-manager App".to_string());
-    }
-    if session.pending_bind || session.pid == 0 {
-        return Err("audio-manager session is not bound to a process".to_string());
-    }
-    let expected_start = session
-        .start_time_ticks
-        .ok_or_else(|| "audio-manager session has no process identity".to_string())?;
-    if crate::proc::read_start_time_ticks_pub(session.pid) != Some(expected_start) {
-        return Err("audio-manager session process identity is stale".to_string());
-    }
-    if !crate::proc::process_descends_from(peer_pid, session.pid) {
-        return Err("audio request did not originate from the authorized session".to_string());
-    }
-    let mut caps = session.caps.unwrap_or_else(CapSet::new);
-    if let Some(transient) = session.transient_caps {
-        caps.extend(transient.iter().cloned());
-    }
-    for cap in requested {
-        if !caps.covers(cap) {
-            return Err(format!(
-                "audio-manager session lacks {}:{}",
-                cap.verb.as_str(),
-                cap.scope
-            ));
-        }
-    }
-    Ok(())
+/// Final provider check, taken against the decision the broker already
+/// made.
+///
+/// The session, its App identity, the process allowed to act under it,
+/// and the capabilities it holds all come from the grant `clawd`
+/// issued and the middleware resolved. Nothing here re-reads the
+/// process registry or re-derives policy, so the two can no longer
+/// disagree; the check still runs, because a privileged mutation
+/// should be refused twice.
+fn authorize_session(authority: &Decision, requested: &[Cap]) -> Result<Authorized, String> {
+    authority.require_app("audio-manager")?;
+    authority.require_all(requested)
 }
 
 async fn audio_status(environment: &AudioEnvironment) -> Result<Value, String> {
@@ -341,12 +319,7 @@ async fn default_state(
     environment: &AudioEnvironment,
     direction: Direction,
 ) -> Result<Value, String> {
-    let inspect = run_wpctl(
-        environment,
-        &["inspect", direction.special()],
-        ChildPolicy,
-    )
-    .await?;
+    let inspect = run_wpctl(environment, &["inspect", direction.special()], ChildPolicy).await?;
     let volume = volume_state(environment, direction).await?;
     Ok(json!({
         "id": parse_inspect_id(&inspect.stdout),
@@ -384,12 +357,7 @@ fn parse_volume(output: &str) -> Result<Value, String> {
 }
 
 async fn inspect_state(environment: &AudioEnvironment, id: u32) -> Result<Value, String> {
-    let output = run_wpctl(
-        environment,
-        &["inspect", &id.to_string()],
-        ChildPolicy,
-    )
-    .await?;
+    let output = run_wpctl(environment, &["inspect", &id.to_string()], ChildPolicy).await?;
     Ok(json!({
         "id": parse_inspect_id(&output.stdout).unwrap_or(id as u64),
         "properties": parse_inspect_properties(&output.stdout),
@@ -588,9 +556,7 @@ fn validate_action(action: &str, target: Option<&str>, value: Option<&str>) -> R
         "output-default" | "input-default" if value.is_none() => {
             parse_id(target.unwrap_or_default()).map(|_| ())
         }
-        "output-route" | "input-route" | "profile"
-            if target.is_some() && value.is_some() =>
-        {
+        "output-route" | "input-route" | "profile" if target.is_some() && value.is_some() => {
             parse_id(target.unwrap_or_default())?;
             parse_index(value.unwrap_or_default(), "index").map(|_| ())
         }

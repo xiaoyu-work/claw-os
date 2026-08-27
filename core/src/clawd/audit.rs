@@ -302,6 +302,46 @@ pub fn record_worker_approval(
 }
 
 #[derive(Debug, Serialize)]
+struct ApprovalRevocationAudit {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    scope: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    owner_uid: Option<u32>,
+    /// Digest of the grant session the revocation covers. The session
+    /// name is a caller-derived string, so only its keyed digest is
+    /// stored; two records about the same session still correlate.
+    session: audit_policy::TextDigest,
+    /// The generation now in force. Monotonic and non-secret: it says
+    /// how many times this scope has been retired, nothing about what
+    /// was approved.
+    generation: u32,
+}
+
+/// Record one reusable-approval revocation.
+///
+/// Carries no verb, no scope value, no request id and no handle — a
+/// revocation is a statement about a counter, and the records it
+/// invalidates are already audited by their own decisions.
+pub fn record_approval_revocation(
+    scope: &crate::approvals::RevocationScope,
+    session: &str,
+    generation: u32,
+) {
+    let record = ApprovalRevocationAudit {
+        ts: Utc::now(),
+        event: "clawd.approval.revoked",
+        scope: scope.kind(),
+        owner_uid: scope.owner_uid(),
+        session: audit_policy::text_digest(session),
+        generation,
+    };
+    if let Err(err) = append_jsonl(&record) {
+        tracing::error!(error = %err, "failed to write approval revocation audit record");
+    }
+}
+
+#[derive(Debug, Serialize)]
 struct WorkerToolAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
@@ -473,7 +513,7 @@ fn record_tool_mutation(
     }
 }
 
-fn append_jsonl<T: Serialize>(record: &T) -> Result<(), String> {
+pub(crate) fn append_jsonl<T: Serialize>(record: &T) -> Result<(), String> {
     let path = crate::paths::data_dir().join("clawd").join("audit.jsonl");
     let line = serde_json::to_string(record).map_err(|err| err.to_string())?;
     crate::filelock::append_locked(&path, &line)

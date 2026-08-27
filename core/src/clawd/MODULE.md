@@ -23,10 +23,11 @@ and agent tasks.
 | `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
 | `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
 | `wire/` | Versioned envelope, bounded field types, one typed request body per route |
-| `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, handler |
+| `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
+| `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
-| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
+| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
@@ -69,19 +70,109 @@ with `MSG_CMSG_CLOEXEC` set, and the request is refused.
 
 `routes.rs` is the only route surface. A row declares the wire name, the typed
 `deny_unknown_fields` body, the access class, whether the route mutates, its
-concurrency and time budget, safe audit fields, and its handler; the `Command`
-enum, the table and the name lookup are all generated from those rows, so a
-route cannot exist without declaring every one of them, and an in-repo client
-cannot name a route that does not exist. Unknown commands, undeclared fields,
-wrong types, oversized strings and over-deep payloads all fail closed *before*
-the access class is consulted. Unknown, malformed, unauthorized, unavailable
-and handler execution failures have separate stable response codes. Subsystems
-with authorization or backend-availability decisions return typed
-`BrokerError`s at those decision points; ordinary validation/provider failures
-remain execution errors without classifying by message text. Mutating routes
-are never cancelled by the broker: dropping one at an await point could leave a
-package half-installed, so they are bounded by their own tool and lock timeouts
-plus a per-route in-flight ceiling.
+concurrency and time budget, safe audit fields, its authorization descriptor,
+and its handler; the `Command` enum, the table and the name lookup are all
+generated from those rows, so a route cannot exist without declaring every one
+of them, and an in-repo client cannot name a route that does not exist. Unknown
+commands, undeclared fields, wrong types, oversized strings and over-deep
+payloads all fail closed *before* the access class is consulted. Unknown,
+malformed, unauthorized, unavailable and handler execution failures have
+separate stable response codes. Subsystems with authorization or
+backend-availability decisions return typed `BrokerError`s at those decision
+points, and an authority refusal is one of them; ordinary validation/provider
+failures remain execution errors without classifying by message text. Mutating
+routes are never cancelled by the broker: dropping one at an await point could
+leave a package half-installed, so they are bounded by their own tool and lock
+timeouts plus a per-route in-flight ceiling.
+## Capability Authority
+
+`authority/` holds the one thing that decides what a request may do. A **grant**
+is the daemon's own record of authority it handed out, and it is never parsed
+from a request: it binds an authenticated principal (uid, pid, that pid's start
+time, and the cgroup `/proc` reports), a subject (session, App, task), an
+audience, an exact `CapSet`, an issuer, issue and expiry instants, a remaining
+use budget, revocation state, and lineage back to the parent it was attenuated
+from.
+
+A grant is referenced by an opaque handle: 32 bytes of kernel entropy, stored
+only as its SHA-256, rendered as `<grant-handle>` under `Debug`/`Display`, and
+implementing neither `Serialize` nor `Deserialize` so it cannot reach a log or a
+journal payload by accident. **Possession is insufficient.** Every resolve
+re-checks the principal against the credentials the kernel stamped on *that*
+message, so a same-uid sibling, an fd recipient, a recycled pid or a process
+that re-`exec`ed cannot exercise it. A session id is an index into the store,
+not authority: naming somebody else's session finds their grant and then fails
+the principal check, which is the same answer an unknown session gives.
+
+Attenuation is the only way one grant derives from another and is monotonic in
+every dimension: child caps ⊆ parent caps, audience ⊆ parent audience, expiry no
+later, use budget no larger, owner unchanged, depth bounded, children bounded.
+`Scope::Wild` cannot be introduced for a verb that addresses a real resource
+namespace even when the parent holds it — only where the catalog says `Wild` is
+the canonical scope. Revocation and expiry cascade to every descendant;
+exhausting a use budget retires only the grant that was spent, because its
+children were already clamped to it.
+
+The store is in memory and dies with the process. That is the design: a `clawd`
+that restarted can no longer prove the bindings it made, so every ephemeral
+grant fails closed rather than surviving into a daemon that cannot re-verify it.
+Work that must outlive a restart is a scheduled job, re-issued from root-owned
+durable provenance through `session_scope.rs` and `system_caps.rs`, never from a
+serialized handle. Grants are bounded globally, per owner, per session and per
+process, and are swept on every entry point plus a periodic tick, so a process
+that exits, a session that finishes, a task that is cancelled, a worker lease
+that lapses and a deadline that passes all drop their rows.
+
+`server.rs` calls `authority::authorize` after the typed decode and before
+dispatch. It is not optional: every route declares an `RouteAuthority` — an
+audience, where its subject comes from, a capability resolver over its validated
+body, and whether a denial there may become a consent prompt. A route whose
+descriptor says it derives its own exact capability must spend it through
+`Decision::require_all` before it answers; if it did not, the response is
+withheld, so "the provider forgot to check" fails closed instead of succeeding
+silently.
+
+Three subject kinds cover the surface. `Peer` routes act for the connecting
+process and resolve no grant. `Session` routes are addressed by an App/MCP
+session and run under the grant derived at bind. `Handle` routes are addressed
+by the opaque handle itself. `PeerSession` is the seam for callers that
+legitimately hold no standing grant — the rollback client finishing a mutation
+it already recorded, an agent runtime refreshing a credential its session was
+granted: the middleware authenticates the root-owned registry row from the
+peer's process ancestry and start time, then mints a single-use, two-minute
+grant so the capability spend, the audit trail and the obligation are identical
+to every other route.
+
+Whether a `PeerSession` route sees an App session's *transient* capabilities —
+the ones `app_session.set_transient` grants for exactly one MCP tool call — is
+declared per route rather than inferred. `credential.oauth-refresh` excludes
+them, matching what the credential broker checked before the authority existed,
+so a tool call granted a secret for one invocation cannot be turned into a token
+refresh for a different one. The two rollback routes include them, matching what
+`packages` and `systemd` checked. A unit test asserts both.
+
+A successful spend returns an `Authorized` proof: `#[must_use]`, constructible
+only inside the authority, and neither `Clone` nor `Copy`. The highest-risk
+privileged mutations — package install and restore, `systemctl` actions and unit
+restore, identity mutation, storage mount/unmount/eject, and config
+apply/restore — take one by reference, so the type system sequences the side
+effect after the authorization instead of trusting each call site to have done
+the check *and* handled its `Err`. An empty capability set is refused rather
+than treated as a vacuous success, and only a successful spend discharges the
+route's obligation, so a provider that ignored a denial still has its answer
+withheld.
+
+Provider-side checks remain — a privileged mutation should be refused twice —
+but they now run *through* the same decision instead of each re-reading the
+process registry and re-deriving five checks of their own. Thirty hand-copied
+policies were thirty places for one to drift.
+
+Every issuance, attenuation, use, exhaustion, expiry and revocation is recorded
+through typed facts in `authority/audit.rs`. A grant is named by a keyed,
+non-reversible reference; capabilities are recorded as verb plus scope kind plus
+a digest of the canonical scope, so `secret.read:openai/prod` is distinguishable
+from `secret.read:openai/test` in the trail without either name being written
+down. No handle, no scope value and no caller-authored string reaches a record.
 
 Resource ceilings are fixed at startup and live in `transport/limits.rs`:
 connections and in-flight requests, globally and per authenticated principal;
@@ -138,9 +229,13 @@ connection. Grants are settled all-or-none under an approvals-store lock, so a
 launch never burns part of a set, and every duration is retired on first use.
 Nothing carries between processes: knowing a request id authorises nothing.
 
-Mutating a registered session requires the opaque launch handle issued at
-registration, bound to the launching process and single-use for the pid bind.
-It never appears in any durable record.
+Mutating a registered session requires the opaque grant handle issued at
+registration. It references a launch grant bound to the launching process, is
+resolved by the route middleware against the credentials the kernel stamped on
+that message, expires, and is revoked — together with the session grant derived
+from it — when the session is deregistered. Binding is one-shot because the
+authority refuses a second claim on a live session index, not because a boolean
+was flipped. Nothing about the handle appears in any durable record.
 Caller-supplied capabilities may only narrow the ceiling.
 
 `system_caps.rs` owns the same rule for the system Agent. `BASELINE` records one
@@ -170,6 +265,32 @@ capability denial and spends it at the gate, so an approval covers the resource
 that was refused and nothing adjacent, and is never written back into a
 capability set.
 
+An approval is a decision about one capability, not a standing licence.
+`approvals.rs` stamps every approved record with a `GrantBinding`: a wall-clock
+deadline, a use budget, a revocation generation and a keyed audit reference.
+`Once` spends exactly one use; `session` and `forever` bound the same grant by
+time and stay revocable, so "always" is a promise about not being re-prompted
+during ordinary use rather than a promise that authority never expires. The
+scan, the decrement and the retirement run under one store-wide lock, so two
+callers cannot both spend the last use. A record written before the binding
+existed — a real historical decision with no expiry, no budget and no
+provenance — authorises nothing; it is evidence, and re-arming it would turn a
+past "yes" into permission the user was never asked for.
+
+Revocation is the generation counter in `approvals/generations.rs`, kept in
+root-owned state *outside* the records. A binding captures the generation
+current when it was approved; every load compares it against the generation
+current now. Retiring authority is therefore an increment, which nothing a
+record can say — including a copy restored from a backup taken before the
+increment — can undo. Counters are per owner and per grant session, with an
+owner-wide increment acting as a floor under every session it holds, so
+"retire everything this account approved" is one atomic write rather than a
+walk that could race a concurrent approval. Unreadable, unparseable or
+group-writable state fails closed, and so does a binding with no generation at
+all. `permission.revoke` is the root-only route that performs it, and session
+finish, task cancellation and worker-lease teardown all call it for the session
+they are tearing down.
+
 `session_scope.rs` closes the loop and is where the two concepts stay apart. It
 reads the session's typed `SessionMeta::origin`, believes a delegation marker
 only when `session::record_is_root_owned` confirms `clawd` wrote the record, and
@@ -197,6 +318,7 @@ bounded by the same home-scoped ceiling its executor applies.
 
 ```bash
 cargo test -p cos clawd:: -- --test-threads=1
+cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
 ```
 
@@ -207,4 +329,12 @@ For a transport or route change, `clawd_broker_socket` is the one that binds a
 real listener and connects to it, so it is the only place the `accept`-time
 inheritance of `SO_PASSCRED` and the pre-accept credential window are actually
 proved. A new route must not be able to pass `clawd::routes` without a typed
-body, an access class, a budget and an audit policy.
+body, an access class, a budget, an authorization descriptor and an audit
+policy; `clawd::authority` asserts the descriptor and the route family agree.
+
+For an authority change, cover the adversarial side explicitly: handle guessing
+and theft, a same-uid sibling, pid reuse, the wrong audience or session,
+expired/revoked/exhausted grants, parent revocation cascades, attenuation that
+widens caps/audience/expiry/budget or introduces `Wild`, lineage depth and
+count, concurrent double-use, all-or-none multi-capability spends, a forged
+persisted approval record, and a fresh daemon holding nothing.

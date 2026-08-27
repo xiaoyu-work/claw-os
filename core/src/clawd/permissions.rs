@@ -138,6 +138,55 @@ fn owner_filter(client: &ClientIdentity) -> Result<Option<u32>, String> {
     Ok((uid != 0).then_some(uid))
 }
 
+/// Retire every reusable approval in a scope.
+///
+/// Root-only, and the route's access class already enforces that, so
+/// `owner_uid` here is the privileged helper naming the account it
+/// authenticated rather than a peer choosing somebody else's authority.
+/// The check is repeated because this function decides whose standing
+/// permission disappears.
+///
+/// Revocation is an increment of a root-owned generation counter, not a
+/// flag on a record: every approval minted under an older generation
+/// stops being authority immediately, and restoring one of those files
+/// from a backup does not bring it back.
+pub fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    if client.require_uid()? != 0 {
+        return Err("permission revocation requires the privileged approval helper".to_string());
+    }
+    let owner_uid = params
+        .get("owner_uid")
+        .and_then(Value::as_u64)
+        .map(|uid| u32::try_from(uid).map_err(|_| format!("owner_uid is too large: {uid}")))
+        .transpose()?;
+    let session = params
+        .get("session")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+
+    let scope = match session.clone() {
+        Some(session) => approvals::RevocationScope::Session {
+            uid: owner_uid,
+            session,
+        },
+        None => approvals::RevocationScope::Owner { uid: owner_uid },
+    };
+    let generation = approvals::generations::revoke(&scope)?;
+    crate::clawd::audit::record_approval_revocation(
+        &scope,
+        session.as_deref().unwrap_or("*"),
+        generation,
+    );
+    Ok(json!({
+        "revoked": true,
+        "scope": scope.kind(),
+        "generation": generation,
+        "owner_uid": owner_uid,
+    }))
+}
+
 fn duration_from_params(params: &Value) -> Result<GrantDuration, String> {
     let raw = params
         .get("duration")
