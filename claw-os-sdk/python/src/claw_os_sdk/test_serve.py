@@ -259,6 +259,24 @@ class TransportTests(unittest.TestCase):
         frame = json.loads(out.strip())
         self.assertEqual(frame["error"]["code"], serve.ERR_INVALID_REQUEST)
 
+    def test_invalid_id_is_normalized_before_earlier_envelope_errors(self) -> None:
+        for invalid_id in (True, {"nested": "id"}):
+            with self.subTest(invalid_id=invalid_id):
+                out = _drive(
+                    serve.App(name="kv"),
+                    {"id": invalid_id, "method": "ping"},
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+                self.assertIsNone(out[0]["id"])
+
+    def test_malformed_idless_envelope_returns_invalid_request(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "params": {}},
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
+        self.assertIsNone(out[0]["id"])
+
     def test_garbage_line_returns_parse_error_with_null_id(self) -> None:
         app = serve.App(name="kv")
         sys.stdin_orig, sys.stdout_orig = sys.stdin, sys.stdout

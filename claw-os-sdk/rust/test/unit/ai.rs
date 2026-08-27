@@ -53,6 +53,36 @@ fn malformed_tool_call_fails_the_response() {
     ));
 }
 
+#[test]
+fn response_accepts_mathematical_integers_and_unrestricted_tool_input() {
+    let response = parse_response(
+        serde_json::from_str(
+            r#"{
+                "text":"hello","model":"m","provider":"p","verb":"ai.chat",
+                "usage":{"input_tokens":1.0,"output_tokens":1e0,"units":2.0},
+                "budget":{"period":"2026-08","units_used":2e0,"units_cap":100.0},
+                "review":{"safety":"strict","prompt_redacted":false},
+                "tool_calls":[{"id":"c1","name":"echo","input":["a",1]}]
+            }"#,
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(response.usage.input_tokens, 1);
+    assert_eq!(response.usage.output_tokens, 1);
+    assert_eq!(response.tool_calls[0].input, serde_json::json!(["a", 1]));
+}
+
+#[test]
+fn scalar_root_has_stable_decode_error() {
+    let error = parse_response(serde_json::Value::Null).unwrap_err();
+    assert!(matches!(
+        error,
+        AiError::Unavailable(message)
+            if message.contains("WIRE_TYPE") && message.contains(" at $:")
+    ));
+}
+
 // Silence unused-import warnings for HashMap when feature combos
 // exclude every consumer (current code-shape doesn't use it, but
 // we leave the import to keep the module ready for future per-call

@@ -83,13 +83,13 @@ func CallTool(name string, args map[string]any, appID string) (*ToolResult, erro
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: out.Envelope}
+		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
 	}
 
-	env := out.Envelope
-	if err := ValidateTool(env); err != nil {
+	if err := ValidateTool(out.Envelope); err != nil {
 		return nil, &ToolUnavailableError{Msg: "tool result decode failed: " + err.Error()}
 	}
+	env := asMap(out.Envelope)
 	return &ToolResult{
 		Name:   asString(env["tool"]),
 		AppID:  asString(env["app_id"]),
@@ -111,12 +111,13 @@ func Catalog() ([]CatalogEntry, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &ToolDeniedError{Payload: out.Envelope}
+		return nil, &ToolDeniedError{Payload: asMap(out.Envelope)}
 	}
 	if err := ValidateToolCatalog(out.Envelope); err != nil {
 		return nil, &ToolUnavailableError{Msg: "catalog decode failed: " + err.Error()}
 	}
-	rawRows := out.Envelope["tools"].([]any)
+	env := asMap(out.Envelope)
+	rawRows := env["tools"].([]any)
 	entries := make([]CatalogEntry, 0, len(rawRows))
 	for _, r := range rawRows {
 		row := r.(map[string]any)

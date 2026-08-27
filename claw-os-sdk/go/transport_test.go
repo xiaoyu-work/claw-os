@@ -102,6 +102,19 @@ func TestCosCallJSONNonJSON(t *testing.T) {
 	})
 }
 
+func TestCosCallJSONPreservesScalarRootForWireValidation(t *testing.T) {
+	bin, _ := fakeCos(t, "null", 0)
+	withCos(t, bin, nil, func() {
+		out, err := cosCallJSON("test", []string{"x"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if out.Envelope != nil {
+			t.Fatalf("envelope = %#v, want nil JSON root", out.Envelope)
+		}
+	})
+}
+
 func TestCosCallJSONMissingBinary(t *testing.T) {
 	withCos(t, "/nonexistent/cos-xyz", nil, func() {
 		_, err := cosCallJSON("test", []string{"x"})

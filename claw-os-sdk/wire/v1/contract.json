@@ -3,16 +3,11 @@
   "validation": {
     "schemas": [
       "ai",
+      "budget_show",
       "tool_catalog",
       "tool"
     ],
-    "targets": [
-      {
-        "name": "ai_budget",
-        "path": ["properties", "budget"],
-        "schema": "ai"
-      }
-    ],
+    "integer_semantics": "finite mathematical integers; type validation precedes minimum/maximum checks",
     "error_codes": {
       "const": "WIRE_CONST",
       "enum": "WIRE_ENUM",

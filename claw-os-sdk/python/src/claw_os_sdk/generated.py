@@ -84,7 +84,7 @@ class AiToolCall(TypedDict):
     """
     id: str
     name: str
-    input: Dict[str, Any]
+    input: Any
 
 class App(TypedDict, total=False):
     """App-verb invocation reply.
@@ -96,6 +96,15 @@ class App(TypedDict, total=False):
     """
     verb: str
     app: str
+
+class BudgetShow(TypedDict):
+    """AI budget show reply.
+
+    Shape returned by `cos agent budget show <app>`.
+    """
+    app: str
+    period: str
+    units_used: int
 
 class _EnvelopeRequired(TypedDict):
     ok: bool
@@ -386,7 +395,7 @@ def _validate_wire_schema(
         "object": isinstance(value, Mapping),
         "array": isinstance(value, list),
         "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
+        "integer": (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and math.isfinite(value) and value.is_integer()),
         "number": isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
         "boolean": isinstance(value, bool),
         "null": value is None,
@@ -431,11 +440,17 @@ def _validate_wire_schema(
         for index, item in enumerate(value):
             _validate_wire_schema(item_rule, root, item, schema_name, f"{path}[{index}]")
 
-_WIRE_SCHEMA_AI: Dict[str, Any] = json.loads(r'''{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}''')
+_WIRE_SCHEMA_AI: Dict[str, Any] = json.loads(r'''{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}''')
 
 def validate_ai(value: Any) -> None:
     """Validate a value against wire/v1/ai.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$")
+
+_WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = json.loads(r'''{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}''')
+
+def validate_budget_show(value: Any) -> None:
+    """Validate a value against wire/v1/budget_show.schema.json."""
+    _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
 
 _WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = json.loads(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 
@@ -448,10 +463,4 @@ _WIRE_SCHEMA_TOOL: Dict[str, Any] = json.loads(r'''{"$id":"https://claw-os.dev/w
 def validate_tool(value: Any) -> None:
     """Validate a value against wire/v1/tool.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$")
-
-_WIRE_SCHEMA_AI_BUDGET: Dict[str, Any] = json.loads(r'''{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"}''')
-
-def validate_ai_budget(value: Any) -> None:
-    """Validate a value against wire/v1/ai_budget.schema.json."""
-    _validate_wire_schema(_WIRE_SCHEMA_AI_BUDGET, _WIRE_SCHEMA_AI_BUDGET, value, "AiBudget", "$")
 

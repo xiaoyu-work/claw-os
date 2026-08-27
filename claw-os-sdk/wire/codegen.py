@@ -14,6 +14,8 @@ dependency. It handles the subset of JSON Schema used by wire/v1:
 
   - object with `properties` (+ `required`, `additionalProperties`)
   - primitive types: string, integer, number, boolean
+    (`integer` follows JSON Schema mathematical semantics, so finite
+    `1`, `1.0`, and `1e0` values are equivalent; bounds run afterward)
   - arrays (with `items`)
   - `enum` ⇒ becomes a string with a doc-listed allow-list (kept loose to
     stay forward-compatible with kernel additions). For Rust/Python/Go we
@@ -392,7 +394,7 @@ def _emit_rust_validation(
         '            "object" => value.is_object(),',
         '            "array" => value.is_array(),',
         '            "string" => value.is_string(),',
-        '            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),',
+        '            "integer" => value.as_i64().is_some() || value.as_u64().is_some() || value.as_f64().is_some_and(|number| number.is_finite() && number.fract() == 0.0),',
         '            "number" => value.is_number(),',
         '            "boolean" => value.is_boolean(),',
         '            "null" => value.is_null(),',
@@ -469,6 +471,63 @@ def _emit_rust_validation(
         "    Ok(())",
         "}",
         "",
+        "fn normalize_wire_integers(",
+        "    rule: &serde_json::Value,",
+        "    root: &serde_json::Value,",
+        "    value: &mut serde_json::Value,",
+        ") {",
+        '    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {',
+        "        let name = reference.rsplit('/').next().unwrap_or_default();",
+        '        if let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) {',
+        "            normalize_wire_integers(target, root, value);",
+        "        }",
+        "        return;",
+        "    }",
+        '    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {',
+        "        if let Some(branch) = branches.iter().find(|branch| {",
+        '            validate_wire_schema(branch, root, value, "generated", "$").is_ok()',
+        "        }) {",
+        "            normalize_wire_integers(branch, root, value);",
+        "        }",
+        "        return;",
+        "    }",
+        '    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer")',
+        "        && value.as_i64().is_none()",
+        "        && value.as_u64().is_none()",
+        "    {",
+        "        if let Some(number) = value.as_f64() {",
+        "            if number >= 0.0 && number <= u64::MAX as f64 {",
+        "                *value = serde_json::Value::Number(serde_json::Number::from(number as u64));",
+        "            } else if number >= i64::MIN as f64 && number <= i64::MAX as f64 {",
+        "                *value = serde_json::Value::Number(serde_json::Number::from(number as i64));",
+        "            }",
+        "        }",
+        "        return;",
+        "    }",
+        "    if let Some(object) = value.as_object_mut() {",
+        '        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {',
+        "            for (name, field_rule) in properties {",
+        "                if let Some(field_value) = object.get_mut(name) {",
+        "                    normalize_wire_integers(field_rule, root, field_value);",
+        "                }",
+        "            }",
+        '            if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {',
+        "                for (name, field_value) in object {",
+        "                    if !properties.contains_key(name) {",
+        "                        normalize_wire_integers(additional, root, field_value);",
+        "                    }",
+        "                }",
+        "            }",
+        "        }",
+        "    } else if let Some(items) = value.as_array_mut() {",
+        '        if let Some(item_rule) = rule.get("items") {',
+        "            for item in items {",
+        "                normalize_wire_integers(item_rule, root, item);",
+        "            }",
+        "        }",
+        "    }",
+        "}",
+        "",
     ])
     for name, schema in schemas:
         const_name = f"_WIRE_SCHEMA_{name.upper()}"
@@ -478,6 +537,14 @@ def _emit_rust_validation(
         body.append(f"    let schema: serde_json::Value = serde_json::from_str({const_name})")
         body.append('        .expect("generated wire schema must be valid JSON");')
         body.append(f'    validate_wire_schema(&schema, &schema, value, "{_camel(name)}", "$")')
+        body.append("}")
+        body.append("")
+        body.append(
+            f"pub fn normalize_{_snake(name)}_integers(value: &mut serde_json::Value) {{"
+        )
+        body.append(f"    let schema: serde_json::Value = serde_json::from_str({const_name})")
+        body.append('        .expect("generated wire schema must be valid JSON");')
+        body.append("    normalize_wire_integers(&schema, &schema, value);")
         body.append("}")
         body.append("")
 
@@ -674,7 +741,7 @@ def _emit_python_validation(
         '        "object": isinstance(value, Mapping),',
         '        "array": isinstance(value, list),',
         '        "string": isinstance(value, str),',
-        '        "integer": isinstance(value, int) and not isinstance(value, bool),',
+        '        "integer": (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and math.isfinite(value) and value.is_integer()),',
         '        "number": isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),',
         '        "boolean": isinstance(value, bool),',
         '        "null": value is None,',
@@ -885,7 +952,7 @@ def _emit_ts_validation(
         '    expected === "object" ? isRecord(value) :',
         '    expected === "array" ? Array.isArray(value) :',
         '    expected === "string" ? typeof value === "string" :',
-        '    expected === "integer" ? typeof value === "number" && Number.isSafeInteger(value) :',
+        '    expected === "integer" ? typeof value === "number" && Number.isInteger(value) :',
         '    expected === "number" ? typeof value === "number" && Number.isFinite(value) :',
         '    expected === "boolean" ? typeof value === "boolean" :',
         '    expected === "null" ? value === null : true;',

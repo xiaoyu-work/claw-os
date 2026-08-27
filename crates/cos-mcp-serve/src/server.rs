@@ -180,8 +180,21 @@ impl Server {
 
             let has_id = raw.get("id").is_some();
             if !has_id {
-                let _ = serde_json::from_value::<JsonRpcNotification>(raw);
-                continue;
+                match serde_json::from_value::<JsonRpcNotification>(raw) {
+                    Ok(_) => continue,
+                    Err(err) => {
+                        let resp = JsonRpcResponse::err(
+                            RequestId::Null,
+                            JsonRpcError::new(
+                                ERR_INVALID_REQUEST,
+                                format!("invalid notification: {err}"),
+                            ),
+                        );
+                        t.send(serde_json::to_string(&resp).unwrap_or_default())
+                            .await?;
+                        continue;
+                    }
+                }
             }
 
             let parsed: Result<JsonRpcRequest, _> = serde_json::from_str(&frame);

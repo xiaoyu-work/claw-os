@@ -237,6 +237,24 @@ async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
 }
 
 #[tokio::test]
+async fn malformed_idless_envelope_is_not_silently_dropped() {
+    let (client, server) = in_memory_pair();
+    let handle = tokio::spawn(Server::new("t", "0").serve(server));
+
+    client
+        .send(r#"{"jsonrpc":"2.0","params":{}}"#.into())
+        .await
+        .unwrap();
+    let frame = client.recv().await.unwrap().unwrap();
+    let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response.id, RequestId::Null);
+    assert_eq!(response.error.unwrap().code, ERR_INVALID_REQUEST);
+
+    drop(client);
+    let _ = handle.await;
+}
+
+#[tokio::test]
 async fn initialize_without_params_yields_invalid_params() {
     let (client, server) = in_memory_pair();
     let handle = tokio::spawn(Server::new("t", "0").serve(server));

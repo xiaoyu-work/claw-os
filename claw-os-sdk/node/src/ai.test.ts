@@ -90,6 +90,37 @@ test("malformed tool call rejects the entire response", () => {
   );
 });
 
+test("chat preserves unrestricted tool input and mathematical integers", () => {
+  const payload = OK_CHAT
+    .replace('"input_tokens":3', '"input_tokens":1.0')
+    .replace('"output_tokens":5', '"output_tokens":1e0')
+    .replace('"input":{"path":"/x"}', '"input":["a",1]');
+  const fake = installFakeCos(payload);
+  const response = withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi"));
+  assert.equal(response.usage.inputTokens, 1);
+  assert.equal(response.usage.outputTokens, 1);
+  assert.deepEqual(response.toolCalls[0].input, ["a", 1]);
+});
+
+test("chat rejects scalar root with stable wire error", () => {
+  const fake = installFakeCos("null");
+  assert.throws(
+    () => withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi")),
+    (error: unknown) =>
+      error instanceof ai.AiUnavailable &&
+      error.message.includes("WIRE_TYPE") &&
+      error.message.includes(" at $:"),
+  );
+});
+
+test("budget accepts the producer budget-show shape", () => {
+  const fake = installFakeCos(
+    JSON.stringify({ app: "notes", period: "2026-08", units_used: 7 }),
+  );
+  const result = withCos(fake, {}, () => ai.budget("notes"));
+  assert.deepEqual(result, { period: "2026-08", unitsUsed: 7, unitsCap: 0 });
+});
+
 test("embed is an unsupported compatibility shim", () => {
   assert.throws(
     () => ai.embed(""),

@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"strconv"
@@ -31,6 +32,7 @@ const DefaultTimeout = 60 * time.Second
 // maxOutput caps captured stdout+stderr (8 MiB) — generous for
 // embeddings / base64 artifact paths without unbounded RAM.
 const maxOutput = 8 * 1024 * 1024
+const maxExactJSONInteger = float64(9007199254740991)
 
 // UnavailableError means the `cos` binary could not be invoked, timed
 // out, or returned something that was not a JSON envelope.
@@ -65,8 +67,8 @@ func CosBinary() string {
 
 // cosOutcome is the parsed result of one `cos` invocation.
 type cosOutcome struct {
-	// Envelope is the top-level JSON object the kernel emitted.
-	Envelope map[string]any
+	// Envelope is the unconstrained top-level JSON value the kernel emitted.
+	Envelope any
 	// Status is the process exit code (so callers can treat a non-zero
 	// exit as failure even when stdout was valid JSON).
 	Status int
@@ -113,7 +115,7 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 		return nil, &UnavailableError{Msg: fmt.Sprintf("%s output exceeded %d bytes", label, maxOutput)}
 	}
 
-	var env map[string]any
+	var env any
 	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber()
 	if err := decoder.Decode(&env); err != nil {
@@ -123,7 +125,11 @@ func cosCallJSON(label string, args []string) (*cosOutcome, error) {
 }
 
 func (o *cosOutcome) hasError() bool {
-	_, ok := o.Envelope["error"]
+	envelope, ok := o.Envelope.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, ok = envelope["error"]
 	return ok
 }
 
@@ -161,8 +167,14 @@ func asInt(v any) int64 { return int64(asFloat(v)) }
 func asUint64(v any) uint64 {
 	switch n := v.(type) {
 	case json.Number:
-		value, _ := strconv.ParseUint(string(n), 10, 64)
-		return value
+		if value, err := strconv.ParseUint(string(n), 10, 64); err == nil {
+			return value
+		}
+		value, err := n.Float64()
+		if err == nil && !math.IsInf(value, 0) && !math.IsNaN(value) &&
+			value >= 0 && math.Trunc(value) == value && value <= maxExactJSONInteger {
+			return uint64(value)
+		}
 	case uint64:
 		return n
 	case uint32:
@@ -176,7 +188,8 @@ func asUint64(v any) uint64 {
 			return uint64(n)
 		}
 	case float64:
-		if n >= 0 {
+		if !math.IsInf(n, 0) && !math.IsNaN(n) && n >= 0 &&
+			math.Trunc(n) == n && n <= maxExactJSONInteger {
 			return uint64(n)
 		}
 	}

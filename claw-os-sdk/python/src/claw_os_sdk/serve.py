@@ -207,39 +207,42 @@ class App:
         if not isinstance(msg, dict):
             self._send_error(None, ERR_INVALID_REQUEST, "request not an object")
             return
+
+        has_id = "id" in msg
+        raw_id = msg.get("id")
+        valid_id = (
+            raw_id is None
+            or isinstance(raw_id, str)
+            or (
+                isinstance(raw_id, int)
+                and not isinstance(raw_id, bool)
+                and -(2**63) <= raw_id < 2**63
+            )
+        )
+        msg_id = raw_id if valid_id else None
+        if has_id and not valid_id:
+            self._send_error(
+                None,
+                ERR_INVALID_REQUEST,
+                "request id must be a string, integer, or null",
+            )
+            return
+
         if msg.get("jsonrpc") != JSONRPC_VERSION:
-            self._send_error(msg.get("id"), ERR_INVALID_REQUEST, "missing jsonrpc 2.0 envelope")
+            self._send_error(msg_id, ERR_INVALID_REQUEST, "missing jsonrpc 2.0 envelope")
             return
 
         method = msg.get("method")
         params = msg.get("params")
-        if "id" not in msg:
-            self._handle_notification(method, params)
-            return
         if not isinstance(method, str):
             self._send_error(
-                msg.get("id"),
+                msg_id,
                 ERR_INVALID_REQUEST,
                 "request method must be a string",
             )
             return
-
-        msg_id = msg["id"]
-        valid_id = (
-            msg_id is None
-            or isinstance(msg_id, str)
-            or (
-                isinstance(msg_id, int)
-                and not isinstance(msg_id, bool)
-                and -(2**63) <= msg_id < 2**63
-            )
-        )
-        if not valid_id:
-            self._send_error(
-                None,
-                ERR_INVALID_REQUEST,
-                "request id must be a string, number, or null",
-            )
+        if not has_id:
+            self._handle_notification(method, params)
             return
 
         try:

@@ -73,9 +73,9 @@ func (e *AiSafetyViolationError) Error() string {
 // NOT execute. Apps decide whether to fulfil any by calling Tool with
 // the same Name + Input; ID echoes back to the provider next turn.
 type ProposedToolCall struct {
-	ID    string         `json:"id"`
-	Name  string         `json:"name"`
-	Input map[string]any `json:"input"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Input any    `json:"input"`
 }
 
 // AiResponse is the parsed reply from the AI gate. It reuses the
@@ -199,13 +199,17 @@ func Budget(appID string) (*AiBudget, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(out.Envelope["error"])}
+		return nil, &AiUnavailableError{Msg: "cos agent budget show failed: " + asString(asMap(out.Envelope)["error"])}
 	}
-	if err := ValidateAiBudget(out.Envelope); err != nil {
+	if err := ValidateBudgetShow(out.Envelope); err != nil {
 		return nil, &AiUnavailableError{Msg: "budget response decode failed: " + err.Error()}
 	}
-	b := parseBudget(out.Envelope)
-	return &b, nil
+	env := asMap(out.Envelope)
+	return &AiBudget{
+		Period:    asString(env["period"]),
+		UnitsUsed: asUint64(env["units_used"]),
+		UnitsCap:  0,
+	}, nil
 }
 
 func resolveApp(modality, appID string) (string, error) {
@@ -296,7 +300,7 @@ func dispatch(a dispatchArgs) (*AiResponse, error) {
 		return nil, err
 	}
 	if out.Status != 0 || out.hasError() {
-		return nil, classifyError(out.Envelope)
+		return nil, classifyError(asMap(out.Envelope))
 	}
 	response, err := parseResponse(out.Envelope)
 	if err != nil {
@@ -324,10 +328,11 @@ func parseBudget(blk map[string]any) AiBudget {
 	}
 }
 
-func parseResponse(env map[string]any) (*AiResponse, error) {
-	if err := ValidateAi(env); err != nil {
+func parseResponse(value any) (*AiResponse, error) {
+	if err := ValidateAi(value); err != nil {
 		return nil, &AiUnavailableError{Msg: "ai response decode failed: " + err.Error()}
 	}
+	env := asMap(value)
 	usage := asMap(env["usage"])
 	review := asMap(env["review"])
 
@@ -340,7 +345,7 @@ func parseResponse(env map[string]any) (*AiResponse, error) {
 			calls = append(calls, ProposedToolCall{
 				ID:    asString(cm["id"]),
 				Name:  asString(cm["name"]),
-				Input: asMap(cm["input"]),
+				Input: cm["input"],
 			})
 		}
 	}

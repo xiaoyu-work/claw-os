@@ -194,7 +194,13 @@ def call(
             f"cos ai tool {name} returned non-JSON output: {_truncate(text)}"
         ) from exc
 
-    if proc.returncode != 0 or "error" in envelope:
+    if proc.returncode != 0:
+        if isinstance(envelope, Mapping):
+            raise ToolDenied(envelope)
+        raise ToolUnavailable(
+            f"cos ai tool {name} exited {proc.returncode}: {_truncate(text)}"
+        )
+    if isinstance(envelope, Mapping) and "error" in envelope:
         raise ToolDenied(envelope)
 
     try:

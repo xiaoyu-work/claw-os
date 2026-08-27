@@ -31,7 +31,7 @@ import {
 import {
   WireDecodeError,
   validateAi,
-  validateAiBudget,
+  validateBudgetShow,
   type AiBudget,
 } from "./generated";
 
@@ -85,7 +85,7 @@ export interface Review {
 export interface ProposedToolCall {
   id: string;
   name: string;
-  input: Record<string, unknown>;
+  input: unknown;
 }
 
 export interface AiResponse {
@@ -224,14 +224,18 @@ export function budget(appId?: string): Budget {
     );
   }
   try {
-    validateAiBudget(envelope);
+    validateBudgetShow(envelope);
   } catch (error) {
     if (error instanceof WireDecodeError) {
       throw new AiUnavailable(`budget response decode failed: ${error.message}`);
     }
     throw error;
   }
-  return parseBudget(envelope);
+  return {
+    period: envelope.period,
+    unitsUsed: envelope.units_used,
+    unitsCap: 0,
+  };
 }
 
 function resolveApp(modality: string, appId?: string): string {

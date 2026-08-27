@@ -37,6 +37,9 @@ Wire schemas and `wire/v1/contract.json` are the source of truth. Core, MCP,
 and every language SDK consume them.
 Serialization changes stay backwards compatible unless introduced under a new
 wire version.
+JSON Schema integers use mathematical semantics: finite values with no
+fractional component, including `1.0` and exponent notation. Type validation
+runs before schema minimum/maximum checks in every generated decoder.
 
 ## Tests
 

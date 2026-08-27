@@ -57,7 +57,7 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
-from .generated import WireDecodeError, validate_ai, validate_ai_budget
+from .generated import WireDecodeError, validate_ai, validate_budget_show
 
 
 # Subprocess timeout — covers every shell-out to the `cos` binary. The
@@ -160,7 +160,7 @@ class ProposedToolCall:
 
     id: str
     name: str
-    input: Dict[str, Any]
+    input: Any
 
 
 @dataclass
@@ -351,13 +351,13 @@ def budget(app_id: Optional[str] = None) -> Budget:
             f"cos agent budget show exited {proc.returncode}: {_truncate(text)}"
         )
     try:
-        validate_ai_budget(env)
+        validate_budget_show(env)
     except WireDecodeError as exc:
         raise AiUnavailable(f"budget response decode failed: {exc}") from exc
     return Budget(
         period=env["period"],
-        units_used=env["units_used"],
-        units_cap=env["units_cap"],
+        units_used=int(env["units_used"]),
+        units_cap=0,
     )
 
 
@@ -429,13 +429,19 @@ def _dispatch(
             f"cos ai chat returned non-JSON output: {_truncate(payload_text)}"
         ) from exc
 
-    if proc.returncode != 0 or "error" in envelope:
+    if proc.returncode != 0:
+        if isinstance(envelope, Mapping):
+            _raise_for_error(envelope)
+        raise AiUnavailable(
+            f"cos ai chat exited {proc.returncode}: {_truncate(payload_text)}"
+        )
+    if isinstance(envelope, Mapping) and "error" in envelope:
         _raise_for_error(envelope)
 
     return _parse_response(envelope)
 
 
-def _parse_response(env: Mapping[str, Any]) -> AiResponse:
+def _parse_response(env: Any) -> AiResponse:
     try:
         validate_ai(env)
     except WireDecodeError as exc:
@@ -450,7 +456,7 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
             ProposedToolCall(
                 id=tc["id"],
                 name=tc["name"],
-                input=dict(tc["input"]),
+                input=tc["input"],
             )
         )
     return AiResponse(
@@ -459,14 +465,14 @@ def _parse_response(env: Mapping[str, Any]) -> AiResponse:
         provider=env["provider"],
         verb=env["verb"],
         usage=Usage(
-            input_tokens=usage["input_tokens"],
-            output_tokens=usage["output_tokens"],
-            units=usage["units"],
+            input_tokens=int(usage["input_tokens"]),
+            output_tokens=int(usage["output_tokens"]),
+            units=int(usage["units"]),
         ),
         budget=Budget(
             period=budget_blk["period"],
-            units_used=budget_blk["units_used"],
-            units_cap=budget_blk["units_cap"],
+            units_used=int(budget_blk["units_used"]),
+            units_cap=int(budget_blk["units_cap"]),
         ),
         review=Review(
             safety=review["safety"],

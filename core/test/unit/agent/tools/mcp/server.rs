@@ -144,3 +144,22 @@ async fn valid_json_with_invalid_request_shape_is_not_a_parse_error() {
     drop(client_t);
     let _ = server_handle.await;
 }
+
+#[tokio::test]
+async fn malformed_idless_envelope_is_not_silently_dropped() {
+    let (client_t, server_t) = in_memory_pair();
+    let server = McpServer::new("cos", "0", registry_with_echo());
+    let server_handle = tokio::spawn(server.serve(server_t));
+
+    client_t
+        .send(r#"{"jsonrpc":"2.0","params":{}}"#.into())
+        .await
+        .unwrap();
+    let frame = client_t.recv().await.unwrap().unwrap();
+    let response: JsonRpcResponse = serde_json::from_str(&frame).unwrap();
+    assert_eq!(response.id, super::super::protocol::RequestId::Null);
+    assert_eq!(response.error.unwrap().code, ERR_INVALID_REQUEST);
+
+    drop(client_t);
+    let _ = server_handle.await;
+}

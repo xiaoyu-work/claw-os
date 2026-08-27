@@ -20,10 +20,10 @@ use serde_json::{json, Value};
 
 use super::protocol::{
     CallToolParams, CallToolResult, ContentItem, Implementation, InitializeParams,
-    InitializeResult, JsonRpcError, JsonRpcRequest, JsonRpcResponse, ListToolsResult,
-    RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability, ERR_INTERNAL,
-    ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND, ERR_PARSE,
-    JSONRPC_VERSION, PROTOCOL_VERSION,
+    InitializeResult, JsonRpcError, JsonRpcNotification, JsonRpcRequest, JsonRpcResponse,
+    ListToolsResult, RequestId, ServerCapabilities, ToolDescriptor, ToolsCapability,
+    ERR_INTERNAL, ERR_INVALID_PARAMS, ERR_INVALID_REQUEST, ERR_METHOD_NOT_FOUND,
+    ERR_PARSE, JSONRPC_VERSION, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
 use crate::agent::tools::registry::ToolRegistry;
@@ -109,7 +109,20 @@ impl McpServer {
                 continue;
             }
             if raw.get("id").is_none() {
-                continue;
+                match serde_json::from_value::<JsonRpcNotification>(raw) {
+                    Ok(_) => continue,
+                    Err(error) => {
+                        let response = JsonRpcResponse::err(
+                            RequestId::Null,
+                            JsonRpcError::new(
+                                ERR_INVALID_REQUEST,
+                                format!("invalid notification: {error}"),
+                            ),
+                        );
+                        t.send(encode_response(&response)).await?;
+                        continue;
+                    }
+                }
             }
             let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
                 Ok(request) => request,

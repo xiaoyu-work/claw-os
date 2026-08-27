@@ -66,7 +66,7 @@ type AiReview struct {
 type AiToolCall struct {
 	Id string `json:"id"`
 	Name string `json:"name"`
-	Input map[string]interface{} `json:"input"`
+	Input interface{} `json:"input"`
 }
 
 // App — App-verb invocation reply.
@@ -77,6 +77,14 @@ type AiToolCall struct {
 type App struct {
 	Verb string `json:"verb,omitempty"`
 	App string `json:"app,omitempty"`
+}
+
+// BudgetShow — AI budget show reply.
+// Shape returned by `cos agent budget show <app>`.
+type BudgetShow struct {
+	App string `json:"app"`
+	Period string `json:"period"`
+	UnitsUsed uint64 `json:"units_used"`
 }
 
 // Envelope — Envelope.
@@ -462,7 +470,7 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 	return nil
 }
 
-const wireSchemaAi = "{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}"
+const wireSchemaAi = "{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}"
 
 // ValidateAi validates a value against wire/v1/ai.schema.json.
 func ValidateAi(value any) error {
@@ -473,6 +481,19 @@ func ValidateAi(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "Ai", "$")
+}
+
+const wireSchemaBudgetShow = "{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}"
+
+// ValidateBudgetShow validates a value against wire/v1/budget_show.schema.json.
+func ValidateBudgetShow(value any) error {
+	var schema map[string]any
+	decoder := json.NewDecoder(strings.NewReader(wireSchemaBudgetShow))
+	decoder.UseNumber()
+	if err := decoder.Decode(&schema); err != nil {
+		panic("generated wire schema is invalid: " + err.Error())
+	}
+	return validateWireSchema(schema, schema, value, "BudgetShow", "$")
 }
 
 const wireSchemaToolCatalog = "{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}"
@@ -499,17 +520,4 @@ func ValidateTool(value any) error {
 		panic("generated wire schema is invalid: " + err.Error())
 	}
 	return validateWireSchema(schema, schema, value, "Tool", "$")
-}
-
-const wireSchemaAiBudget = "{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"}"
-
-// ValidateAiBudget validates a value against wire/v1/ai_budget.schema.json.
-func ValidateAiBudget(value any) error {
-	var schema map[string]any
-	decoder := json.NewDecoder(strings.NewReader(wireSchemaAiBudget))
-	decoder.UseNumber()
-	if err := decoder.Decode(&schema); err != nil {
-		panic("generated wire schema is invalid: " + err.Error())
-	}
-	return validateWireSchema(schema, schema, value, "AiBudget", "$")
 }

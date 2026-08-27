@@ -57,7 +57,7 @@ export interface AiReview {
 export interface AiToolCall {
   id: string;
   name: string;
-  input: Record<string, unknown>;
+  input: unknown;
 }
 
 /**
@@ -70,6 +70,16 @@ export interface AiToolCall {
 export interface App {
   verb?: string;
   app?: string;
+}
+
+/**
+ * AI budget show reply.
+ * Shape returned by `cos agent budget show <app>`.
+ */
+export interface BudgetShow {
+  app: string;
+  period: string;
+  units_used: number;
 }
 
 /**
@@ -347,7 +357,7 @@ function validateWireSchema(
     expected === "object" ? isRecord(value) :
     expected === "array" ? Array.isArray(value) :
     expected === "string" ? typeof value === "string" :
-    expected === "integer" ? typeof value === "number" && Number.isSafeInteger(value) :
+    expected === "integer" ? typeof value === "number" && Number.isInteger(value) :
     expected === "number" ? typeof value === "number" && Number.isFinite(value) :
     expected === "boolean" ? typeof value === "boolean" :
     expected === "null" ? value === null : true;
@@ -408,10 +418,16 @@ function validateWireSchema(
   }
 }
 
-const _WIRE_SCHEMA_AI: WireRule = {"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"};
+const _WIRE_SCHEMA_AI: WireRule = {"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"};
 
 export function validateAi(value: unknown): asserts value is Ai & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$");
+}
+
+const _WIRE_SCHEMA_BUDGET_SHOW: WireRule = {"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"};
+
+export function validateBudgetShow(value: unknown): asserts value is BudgetShow & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$");
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = {"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"};
@@ -424,11 +440,5 @@ const _WIRE_SCHEMA_TOOL: WireRule = {"$id":"https://claw-os.dev/wire/v1/tool.sch
 
 export function validateTool(value: unknown): asserts value is Tool & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$");
-}
-
-const _WIRE_SCHEMA_AI_BUDGET: WireRule = {"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"};
-
-export function validateAiBudget(value: unknown): asserts value is AiBudget & Record<string, unknown> {
-  validateWireSchema(_WIRE_SCHEMA_AI_BUDGET, _WIRE_SCHEMA_AI_BUDGET, value, "AiBudget", "$");
 }
 

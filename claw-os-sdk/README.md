@@ -17,6 +17,7 @@ claw-os-sdk/
 │   │   ├── envelope.schema.json    common envelope shape
 │   │   ├── perms.schema.json       capability decision envelope
 │   │   ├── ai.schema.json          AI wire schema (kernel protocol)
+│   │   ├── budget_show.schema.json cos agent budget show reply
 │   │   ├── tool.schema.json        catalog tool invocation
 │   │   ├── tool_catalog.schema.json catalog tool list
 │   │   ├── contract.json           validators + stable error codes
@@ -150,6 +151,10 @@ python3 wire/codegen.py --check    # verifies all generated outputs are current
 claw-os is pre-1.0. Breaking changes in the wire protocol are allowed
 and announced in `wire/CHANGELOG.md`. SDKs may pin to a specific wire
 version and refuse to run against incompatible kernels.
+
+Generated decoders follow JSON Schema's mathematical-integer semantics:
+finite `1`, `1.0`, and `1e0` values are equivalent integers. Bounds are
+checked after type validation, and all SDK adapters preserve accepted values.
 
 ## Releases
 

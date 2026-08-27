@@ -92,6 +92,15 @@ pub struct App {
     pub app: Option<String>,
 }
 
+/// AI budget show reply
+/// Shape returned by `cos agent budget show <app>`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BudgetShow {
+    pub app: String,
+    pub period: String,
+    pub units_used: u64,
+}
+
 /// Envelope
 /// Common wrapper around every wire v1 reply. Forward-compatible target shape —
 /// the current kernel still emits flat per-command shapes that SDKs adapt to this
@@ -448,7 +457,7 @@ fn validate_wire_schema(
             "object" => value.is_object(),
             "array" => value.is_array(),
             "string" => value.is_string(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some(),
+            "integer" => value.as_i64().is_some() || value.as_u64().is_some() || value.as_f64().is_some_and(|number| number.is_finite() && number.fract() == 0.0),
             "number" => value.is_number(),
             "boolean" => value.is_boolean(),
             "null" => value.is_null(),
@@ -525,11 +534,87 @@ fn validate_wire_schema(
     Ok(())
 }
 
-const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{"additionalProperties":true,"type":"object"},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
+fn normalize_wire_integers(
+    rule: &serde_json::Value,
+    root: &serde_json::Value,
+    value: &mut serde_json::Value,
+) {
+    if let Some(reference) = rule.get("$ref").and_then(serde_json::Value::as_str) {
+        let name = reference.rsplit('/').next().unwrap_or_default();
+        if let Some(target) = root.get("$defs").and_then(|defs| defs.get(name)) {
+            normalize_wire_integers(target, root, value);
+        }
+        return;
+    }
+    if let Some(branches) = rule.get("oneOf").and_then(serde_json::Value::as_array) {
+        if let Some(branch) = branches.iter().find(|branch| {
+            validate_wire_schema(branch, root, value, "generated", "$").is_ok()
+        }) {
+            normalize_wire_integers(branch, root, value);
+        }
+        return;
+    }
+    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer")
+        && value.as_i64().is_none()
+        && value.as_u64().is_none()
+    {
+        if let Some(number) = value.as_f64() {
+            if number >= 0.0 && number <= u64::MAX as f64 {
+                *value = serde_json::Value::Number(serde_json::Number::from(number as u64));
+            } else if number >= i64::MIN as f64 && number <= i64::MAX as f64 {
+                *value = serde_json::Value::Number(serde_json::Number::from(number as i64));
+            }
+        }
+        return;
+    }
+    if let Some(object) = value.as_object_mut() {
+        if let Some(properties) = rule.get("properties").and_then(serde_json::Value::as_object) {
+            for (name, field_rule) in properties {
+                if let Some(field_value) = object.get_mut(name) {
+                    normalize_wire_integers(field_rule, root, field_value);
+                }
+            }
+            if let Some(additional) = rule.get("additionalProperties").filter(|v| v.is_object()) {
+                for (name, field_value) in object {
+                    if !properties.contains_key(name) {
+                        normalize_wire_integers(additional, root, field_value);
+                    }
+                }
+            }
+        }
+    } else if let Some(items) = value.as_array_mut() {
+        if let Some(item_rule) = rule.get("items") {
+            for item in items {
+                normalize_wire_integers(item_rule, root, item);
+            }
+        }
+    }
+}
+
+const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
 pub fn validate_ai(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
         .expect("generated wire schema must be valid JSON");
     validate_wire_schema(&schema, &schema, value, "Ai", "$")
+}
+
+pub fn normalize_ai_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_BUDGET_SHOW: &str = r###"{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}"###;
+pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "BudgetShow", "$")
+}
+
+pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: &str = r###"{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}"###;
@@ -539,6 +624,12 @@ pub fn validate_tool_catalog(value: &serde_json::Value) -> Result<(), WireDecode
     validate_wire_schema(&schema, &schema, value, "ToolCatalog", "$")
 }
 
+pub fn normalize_tool_catalog_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL_CATALOG)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
 const _WIRE_SCHEMA_TOOL: &str = r###"{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}"###;
 pub fn validate_tool(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
@@ -546,10 +637,9 @@ pub fn validate_tool(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     validate_wire_schema(&schema, &schema, value, "Tool", "$")
 }
 
-const _WIRE_SCHEMA_AI_BUDGET: &str = r###"{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"}"###;
-pub fn validate_ai_budget(value: &serde_json::Value) -> Result<(), WireDecodeError> {
-    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI_BUDGET)
+pub fn normalize_tool_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_TOOL)
         .expect("generated wire schema must be valid JSON");
-    validate_wire_schema(&schema, &schema, value, "AiBudget", "$")
+    normalize_wire_integers(&schema, &schema, value);
 }
 
