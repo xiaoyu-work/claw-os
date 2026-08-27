@@ -262,6 +262,21 @@ pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
         .find(|session| session.session_id == session_id)
 }
 
+/// Snapshot every row in the registry resolved for the currently
+/// active owner/home override.
+///
+/// The trusted App-session authority in `clawd` uses this to locate a
+/// connecting process's launcher context inside the root-owned routed
+/// registry, instead of believing a session the caller describes.
+pub(crate) fn registry_sessions() -> Vec<SessionInfo> {
+    let Ok(Some(data)) = crate::filelock::read_locked(&registry_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str::<Registry>(&data)
+        .map(|registry| registry.sessions)
+        .unwrap_or_default()
+}
+
 /// True only after the current process has been bound to the expected
 /// session identity. Used by the launcher shim to keep third-party code
 /// from running during the pid-binding window.

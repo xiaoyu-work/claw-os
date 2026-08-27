@@ -349,3 +349,103 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Scope::path(default_output.to_string_lossy()),
     )));
 }
+
+#[test]
+fn approval_request_ids_are_read_only_from_a_typed_approval_denial() {
+    let denial = ClawdCallError {
+        message: "launcher cannot delegate sys.identity:name:accounts; awaiting approval".into(),
+        data: Some(serde_json::json!({
+            "status": "approval_required",
+            "approval_requests": ["ap-1", "ap-2"],
+        })),
+    };
+    assert_eq!(approval_requests(&denial), vec!["ap-1", "ap-2"]);
+
+    // Any other failure is terminal: the launcher must not start waiting.
+    for data in [
+        None,
+        Some(serde_json::json!({"approval_requests": ["ap-1"]})),
+        Some(serde_json::json!({"status": "approval_required"})),
+        Some(serde_json::json!({"status": "other", "approval_requests": ["ap-1"]})),
+    ] {
+        let error = ClawdCallError {
+            message: "nope".into(),
+            data,
+        };
+        assert!(approval_requests(&error).is_empty());
+    }
+}
+
+#[test]
+fn an_approval_wait_can_be_cancelled() {
+    cancel_pending_approval_wait();
+    let error = wait_for_approvals(&["ap-1".to_string()])
+        .expect_err("a cancelled wait must end with a terminal error");
+    assert!(error.contains("cancelled"), "unexpected: {error}");
+    // The flag is taken, so a later launch is not poisoned by it.
+    assert!(!APPROVAL_WAIT_CANCELLED.load(Ordering::SeqCst));
+}
+
+#[test]
+fn no_approval_secret_travels_through_the_environment() {
+    // Approval is settled in-process: the launcher waits and retries
+    // over its own connection, so nothing is exported to the App or
+    // read back from the environment.
+    let preserved = preserved_app_environment(false, |key| Some(format!("value-of-{key}")));
+    assert!(
+        !preserved
+            .iter()
+            .any(|(key, _)| key.to_ascii_uppercase().contains("APPROVAL")),
+        "no approval material may be forwarded into an App"
+    );
+}
+
+#[test]
+fn defaulted_bool_args_never_shift_the_effective_argv() {
+    let manifest = Manifest::from_json(
+        r#"{
+              "id": "flags",
+              "version": "0.1",
+              "name": "Flags",
+              "operations": {
+                "sync": {
+                  "label": "Sync",
+                  "args": [
+                    {"name": "recursive", "kind": "bool", "default": true},
+                    {"name": "target", "kind": "name", "default": "primary"}
+                  ],
+                  "needs": [
+                    {"verb": "data.kv.read",
+                     "scope": {"kind": "from-arg", "arg": "target"},
+                     "why": "Read the target store."}
+                  ]
+                }
+              }
+            }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["sync"];
+
+    let bound = bind_operation_args(operation, &[]).unwrap();
+    assert_eq!(
+        bound.argv,
+        vec!["primary".to_string()],
+        "a boolean default is not a positional token"
+    );
+    assert_eq!(bound.values["recursive"], serde_json::Value::Bool(true));
+    assert_eq!(
+        bound.values["target"],
+        serde_json::Value::String("primary".into())
+    );
+
+    // The authority re-binds this argv and must reach the same values,
+    // otherwise the scope it derives would name a different resource.
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv);
+    assert_eq!(rebound["target"], bound.values["target"]);
+    assert_eq!(rebound["recursive"], bound.values["recursive"]);
+
+    let mut parent = CapSet::new();
+    parent.insert(Cap::new(Verb::DATA_KV_READ, Scope::name("primary")));
+    let caps = constrained_operation_caps(&parent, true, operation, &rebound).unwrap();
+    assert!(caps.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("primary"))));
+}

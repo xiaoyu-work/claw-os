@@ -214,6 +214,22 @@ apps/<id>/app.json
 Manifest/schema discovery must remain side-effect free and must not execute the
 app entrypoint.
 
+App identity and capabilities are issued by the session authority, never
+asserted by the launcher. For an unprivileged launch the request names only the
+App, launch kind, operation, and arguments; `clawd` re-reads the installed
+manifest, derives capabilities from the requested operation plus the validated
+arguments, and bounds them by the launcher authority it resolves from the peer's
+process ancestry. A launcher the daemon cannot tie to a registered session gets
+an unprivileged, home-bounded policy ceiling instead: machine-mutating verbs and
+global filesystem authority require either an authenticated parent session or an
+approved permission grant bound to that exact peer process. A launch that needs
+consent is answered with the ids of the requests the daemon filed; the launcher
+process waits on `permission.status` with a bounded timeout and retries over the
+same connection, and grants are settled all-or-none and retired on first use.
+Registration returns an opaque, launcher-bound, single-use launch handle that
+authorises the pid bind, per-call capability updates, and teardown for that one
+session; the launched App never receives it.
+
 ### MCP attachment
 
 ```text

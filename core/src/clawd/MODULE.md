@@ -20,7 +20,7 @@ and agent tasks.
 | `server.rs` | Socket lifecycle, request routing, peer checks |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
-| `app_sessions.rs` | Native app and MCP session registration |
+| `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
 | `system_caps.rs` | System capability derivation |
 | Service modules | One privileged capability provider per domain |
 
@@ -29,6 +29,32 @@ and agent tasks.
 The broker consumes capability definitions and service providers. Callers use
 RPC clients rather than importing server internals. Never trust request fields
 for identity or authority; derive them from the connection/session boundary.
+
+App and MCP session rows are root-owned authority that privileged providers
+later trust. `app_sessions.rs` therefore mints them from the installed manifest
+plus schema-validated arguments, bounded by the launcher authority resolved
+from the peer's process ancestry. An unresolvable ancestry fails closed. A
+launcher with no registered session receives an unprivileged, home-bounded
+policy ceiling from `system_caps.rs`; anything above it needs an approved
+permission grant, which only the privileged approval helper can create. That
+grant is bound to an identity the daemon derives from the peer itself — the
+authenticated parent session, or the peer's exact uid/pid/start-time — never to
+a session string the request supplied and never to anything a sibling process
+shares.
+
+A launch is authorized as one plan: the complete canonical capability set is
+derived first, every capability the launcher cannot delegate is collected, a
+deduplicated pending request is filed for each, and their ids are returned as
+non-secret metadata. The launcher process stays alive, polls `permission.status`
+with a bounded timeout and cancellation, and retries over the same authenticated
+connection. Grants are settled all-or-none under an approvals-store lock, so a
+launch never burns part of a set, and every duration is retired on first use.
+Nothing carries between processes: knowing a request id authorises nothing.
+
+Mutating a registered session requires the opaque launch handle issued at
+registration, bound to the launching process and single-use for the pid bind.
+It is masked in both the broker audit log and the system journal.
+Caller-supplied capabilities may only narrow the ceiling.
 
 ## Tests
 

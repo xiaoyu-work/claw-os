@@ -25,6 +25,48 @@ pub struct Response {
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
+    /// Structured payload delivered only on this connection's response.
+    ///
+    /// Broker audit and journal records persist `code` and `message`,
+    /// never this field, so it is where a handler answers the calling
+    /// peer with machine-readable detail — currently the approval
+    /// request ids an App launch is waiting on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data: Option<Value>,
+}
+
+/// A broker failure, optionally carrying structured data for the peer.
+///
+/// Handlers that have nothing extra to say keep returning `String`;
+/// `From<String>` makes those paths unchanged.
+#[derive(Debug, Clone)]
+pub struct BrokerError {
+    pub message: String,
+    pub data: Option<Value>,
+}
+
+impl BrokerError {
+    pub fn with_data(message: impl Into<String>, data: Value) -> Self {
+        Self {
+            message: message.into(),
+            data: Some(data),
+        }
+    }
+}
+
+impl From<String> for BrokerError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            data: None,
+        }
+    }
+}
+
+impl std::fmt::Display for BrokerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
 }
 
 impl Response {
@@ -45,6 +87,24 @@ impl Response {
             error: Some(ErrorBody {
                 code: code.into(),
                 message: message.into(),
+                data: None,
+            }),
+        }
+    }
+
+    pub fn error_with_data(
+        id: Option<Value>,
+        code: impl Into<String>,
+        error: BrokerError,
+    ) -> Self {
+        Self {
+            id,
+            ok: false,
+            result: None,
+            error: Some(ErrorBody {
+                code: code.into(),
+                message: error.message,
+                data: error.data,
             }),
         }
     }

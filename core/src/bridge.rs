@@ -1,4 +1,6 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 
 use std::collections::BTreeMap;
@@ -47,23 +49,77 @@ fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
 pub(crate) struct AppIdentitySession {
     session_id: String,
     backend: AppSessionBackend,
+    parent_caps: Option<CapSet>,
 }
 
 #[derive(Clone)]
 enum AppSessionBackend {
-    Local { proc_data_dir: std::path::PathBuf },
-    Clawd { proc_data_dir: std::path::PathBuf },
+    Local {
+        proc_data_dir: std::path::PathBuf,
+    },
+    /// Session minted by the daemon. `handle` is the opaque, launcher-
+    /// bound grant clawd issued at registration; it authorises the pid
+    /// bind, transient-cap updates and teardown for this session only,
+    /// and is deliberately never exported into the App's environment.
+    Clawd {
+        proc_data_dir: std::path::PathBuf,
+        handle: String,
+    },
+}
+
+/// What a launcher is asking the authority to start. Mirrors the
+/// `kind` discriminator on the `app_session.register` request.
+enum LaunchRequest<'a> {
+    Operation {
+        operation: &'a str,
+        args: &'a [String],
+    },
+    Gui {
+        exec: &'a str,
+    },
+    Mcp,
+}
+
+impl LaunchRequest<'_> {
+    fn kind(&self) -> &'static str {
+        match self {
+            LaunchRequest::Operation { .. } => "operation",
+            LaunchRequest::Gui { .. } => "gui",
+            LaunchRequest::Mcp => "mcp",
+        }
+    }
+
+    fn command(&self, app_id: &str) -> String {
+        match self {
+            LaunchRequest::Operation { operation, .. } => format!("cos app {app_id} {operation}"),
+            LaunchRequest::Gui { exec } => format!("cos app {app_id} {exec}"),
+            LaunchRequest::Mcp => format!("cos app {app_id} session"),
+        }
+    }
+}
+
+/// One serialized App MCP call and the capabilities it needs.
+///
+/// `tool`/`args` are what the daemon re-derives the call capabilities
+/// from; `caps` is the locally resolved set used by the in-process
+/// backend, where the resolver already runs inside trusted code.
+pub(crate) struct TransientCall<'a> {
+    pub tool: &'a str,
+    pub args: &'a BTreeMap<String, serde_json::Value>,
+    pub caps: CapSet,
 }
 
 #[derive(Clone)]
 pub(crate) struct AppSessionControl {
     session_id: String,
     backend: AppSessionBackend,
+    parent_caps: Option<CapSet>,
 }
 
 pub(crate) struct McpProcSession {
     session_id: String,
     proc_data_dir: std::path::PathBuf,
+    handle: String,
 }
 
 impl McpProcSession {
@@ -72,11 +128,14 @@ impl McpProcSession {
         if crate::paths::current_owner_uid_override().is_none() && unsafe { libc::geteuid() } != 0 {
             let parent = crate::proc::current_session_info_for_caps()
                 .ok_or_else(|| "MCP launch requires a registered parent session".to_string())?;
-            let result = clawd_app_session_request(
+            if parent.caps.is_none() {
+                return Err("MCP parent session has no capabilities".to_string());
+            }
+            let result = clawd_request(
                 "mcp_session.register",
                 serde_json::json!({
-                    "parent": parent,
                     "command": command,
+                    "parent_caps": parent.caps,
                 }),
             )?;
             let session_id = result
@@ -89,9 +148,15 @@ impl McpProcSession {
                 .and_then(serde_json::Value::as_str)
                 .map(std::path::PathBuf::from)
                 .ok_or_else(|| "clawd MCP session response omitted proc_data_dir".to_string())?;
+            let handle = result
+                .get("handle")
+                .and_then(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| "clawd MCP session response omitted handle".to_string())?;
             return Ok(Some(Self {
                 session_id,
                 proc_data_dir,
+                handle,
             }));
         }
         Ok(None)
@@ -106,22 +171,27 @@ impl McpProcSession {
     }
 
     pub fn bind_process(&self, pid: u32) -> Result<(), String> {
-        clawd_app_session_request(
+        clawd_request(
             "app_session.bind",
             serde_json::json!({
                 "session_id": self.session_id,
+                "handle": self.handle,
                 "pid": pid,
             }),
         )
         .map(|_| ())
+        .map_err(String::from)
     }
 }
 
 impl Drop for McpProcSession {
     fn drop(&mut self) {
-        if let Err(error) = clawd_app_session_request(
+        if let Err(error) = clawd_request(
             "app_session.deregister",
-            serde_json::json!({"session_id": self.session_id}),
+            serde_json::json!({
+                "session_id": self.session_id,
+                "handle": self.handle,
+            }),
         ) {
             tracing::warn!(
                 session_id = %self.session_id,
@@ -133,14 +203,19 @@ impl Drop for McpProcSession {
 }
 
 impl AppSessionControl {
-    pub fn set_transient_caps(&self, caps: Option<CapSet>) -> Result<(), String> {
-        set_app_session_transient_caps(&self.session_id, &self.backend, caps)
+    pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
+        set_app_session_transient_call(
+            &self.session_id,
+            &self.backend,
+            self.parent_caps.as_ref(),
+            call,
+        )
     }
 }
 
 impl AppIdentitySession {
     pub fn for_native_host(app_id: &str) -> Result<Self, String> {
-        let result = clawd_app_session_request(
+        let result = clawd_request(
             "app_session.register_native",
             serde_json::json!({"app_id": app_id}),
         )?;
@@ -154,9 +229,18 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(std::path::PathBuf::from)
             .ok_or_else(|| "clawd native App session response omitted proc_data_dir".to_string())?;
+        let handle = result
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "clawd native App session response omitted handle".to_string())?;
         Ok(Self {
             session_id,
-            backend: AppSessionBackend::Clawd { proc_data_dir },
+            backend: AppSessionBackend::Clawd {
+                proc_data_dir,
+                handle,
+            },
+            parent_caps: None,
         })
     }
 
@@ -173,91 +257,168 @@ impl AppIdentitySession {
             );
         }
 
+        // Bind the invocation once. The App is launched with these
+        // effective arguments and the authority derives the session's
+        // capabilities from the same values, so a scope always names the
+        // resource the App was actually handed.
         let manifest = load_manifest(app_dir)?;
-        let (parent, parent_caps) = Self::parent_identity()?;
-        if parent.app_id.is_some() {
-            return Err(
-                "nested App launches are not supported by the trusted launcher".to_string(),
-            );
-        }
-        let (caps, effective_args) = match (operation, manifest.as_ref()) {
-            (_, None) => (CapSet::new(), args.to_vec()),
-            (_, Some(manifest)) => {
-                let operation = manifest.operations.get(operation).ok_or_else(|| {
-                    format!("app `{app_id}` manifest has no operation `{operation}`")
-                })?;
-                let bound = bind_operation_args(operation, args)?;
-                let caps =
-                    constrained_operation_caps(&parent_caps, false, operation, &bound.values)?;
-                (caps, bound.argv)
-            }
+        let declared = match manifest.as_ref() {
+            Some(manifest) => Some(manifest.operations.get(operation).ok_or_else(|| {
+                format!("app `{app_id}` manifest has no operation `{operation}`")
+            })?),
+            None => None,
         };
-        let session = Self::register(
-            parent,
-            parent_caps,
+        let bound = match declared {
+            Some(declared) => bind_operation_args(declared, args)?,
+            None => BoundOperationArgs {
+                values: BTreeMap::new(),
+                argv: args.to_vec(),
+            },
+        };
+        let effective_args = bound.argv.clone();
+        let session = Self::start(
             app_id,
-            &format!("cos app {app_id} {operation}"),
-            caps,
+            LaunchRequest::Operation {
+                operation,
+                args: &effective_args,
+            },
+            |parent_caps| match declared {
+                Some(declared) => {
+                    constrained_operation_caps(parent_caps, false, declared, &bound.values)
+                }
+                None => Ok(CapSet::new()),
+            },
         )?;
         Ok((session, effective_args))
     }
 
     /// Register a GUI identity with the constrained union of all operation needs.
     pub fn for_gui(app_dir: &Path, app_id: &str, exec: &str) -> Result<Self, String> {
-        let manifest = load_manifest(app_dir)?;
-        let (parent, parent_caps) = Self::parent_identity()?;
-        if parent.app_id.is_some() {
-            return Err(
-                "nested App launches are not supported by the trusted launcher".to_string(),
-            );
-        }
-        let needs = manifest
-            .iter()
-            .flat_map(|manifest| manifest.operations.values())
-            .flat_map(|operation| operation.needs.iter())
-            .collect();
-        let caps = constrained_caps(&parent_caps, needs);
-        Self::register(
-            parent,
-            parent_caps,
-            app_id,
-            &format!("cos app {app_id} {exec}"),
-            caps,
-        )
+        Self::start(app_id, LaunchRequest::Gui { exec }, |parent_caps| {
+            let manifest = load_manifest(app_dir)?;
+            let needs = manifest
+                .iter()
+                .flat_map(|manifest| manifest.operations.values())
+                .flat_map(|operation| operation.needs.iter())
+                .collect();
+            Ok(constrained_caps(parent_caps, needs))
+        })
     }
 
-    /// Register an MCP identity with the constrained union of all session-tool needs.
+    /// Register an MCP identity. Session tools receive their authority
+    /// per call through [`AppSessionControl::set_transient_call`].
     pub fn for_mcp(app_id: &str, manifest: &Manifest) -> Result<Self, String> {
+        let _ = manifest;
+        Self::start(app_id, LaunchRequest::Mcp, |_| Ok(CapSet::new()))
+    }
+
+    /// Shared launch path.
+    ///
+    /// The parent checks here are a launcher-side sanity gate, not the
+    /// authority: when the daemon mints the session it re-derives the
+    /// launcher's identity and the App's capabilities itself, and only
+    /// ever uses the reported parent capabilities to narrow the result.
+    /// `local_caps` is therefore consulted solely for the in-process
+    /// backend, which already runs as trusted code.
+    fn start<F>(app_id: &str, request: LaunchRequest<'_>, local_caps: F) -> Result<Self, String>
+    where
+        F: FnOnce(&CapSet) -> Result<CapSet, String>,
+    {
         let (parent, parent_caps) = Self::parent_identity()?;
         if parent.app_id.is_some() {
             return Err(
                 "nested App launches are not supported by the trusted launcher".to_string(),
             );
         }
-        let _ = manifest;
-        Self::register(
-            parent,
-            parent_caps,
-            app_id,
-            &format!("cos app {app_id} session"),
-            CapSet::new(),
-        )
-    }
-
-    fn register(
-        parent: SessionInfo,
-        parent_caps: CapSet,
-        app_id: &str,
-        command: &str,
-        mut caps: CapSet,
-    ) -> Result<Self, String> {
         crate::caps::enforcement::require_current_session_identity(&parent.session_id, parent.pid)
-        .map_err(|err| format!("App parent session identity check failed: {err}"))?;
+            .map_err(|err| format!("App parent session identity check failed: {err}"))?;
         let invoke = Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id));
         if !parent_caps.covers(&invoke) {
             return Err(format!("parent session cannot invoke App `{app_id}`"));
         }
+
+        if use_clawd_app_session_backend() {
+            return Self::register_with_clawd(app_id, &request, parent_caps);
+        }
+
+        let mut caps = local_caps(&parent_caps)?;
         caps.insert(invoke);
+        Self::register_local(&parent, app_id, &request.command(app_id), caps, parent_caps)
+    }
+
+    fn register_with_clawd(
+        app_id: &str,
+        request: &LaunchRequest<'_>,
+        parent_caps: CapSet,
+    ) -> Result<Self, String> {
+        // Only `parent_caps` crosses the wire, and only ever to narrow
+        // what the daemon already resolved. The launcher's identity —
+        // including the session an approval grant binds to — is derived
+        // by `clawd` from this connection, never reported here.
+        let mut params = serde_json::json!({
+            "app_id": app_id,
+            "kind": request.kind(),
+            "parent_caps": parent_caps,
+        });
+        match request {
+            LaunchRequest::Operation { operation, args } => {
+                params["operation"] = serde_json::Value::String((*operation).to_string());
+                params["args"] = serde_json::to_value(args)
+                    .map_err(|error| format!("failed to serialize App arguments: {error}"))?;
+            }
+            LaunchRequest::Gui { exec } => {
+                params["operation"] = serde_json::Value::String((*exec).to_string());
+            }
+            LaunchRequest::Mcp => {}
+        }
+
+        // A launch that needs consent is answered with the ids of the
+        // requests the daemon filed. This process stays alive and waits,
+        // then retries over the same connection identity, so the user
+        // never has to rerun anything and no secret has to travel.
+        let result = match clawd_request("app_session.register", params.clone()) {
+            Ok(result) => result,
+            Err(error) => {
+                let ids = approval_requests(&error);
+                if ids.is_empty() {
+                    return Err(error.message);
+                }
+                wait_for_approvals(&ids)?;
+                clawd_request("app_session.register", params).map_err(String::from)?
+            }
+        };
+        let session_id = result
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "clawd App session response omitted session_id".to_string())?;
+        let proc_data_dir = result
+            .get("proc_data_dir")
+            .and_then(serde_json::Value::as_str)
+            .map(std::path::PathBuf::from)
+            .ok_or_else(|| "clawd App session response omitted proc_data_dir".to_string())?;
+        let handle = result
+            .get("handle")
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned)
+            .ok_or_else(|| "clawd App session response omitted handle".to_string())?;
+        Ok(Self {
+            session_id,
+            backend: AppSessionBackend::Clawd {
+                proc_data_dir,
+                handle,
+            },
+            parent_caps: Some(parent_caps),
+        })
+    }
+
+    fn register_local(
+        parent: &SessionInfo,
+        app_id: &str,
+        command: &str,
+        caps: CapSet,
+        parent_caps: CapSet,
+    ) -> Result<Self, String> {
         let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
         let info = SessionInfo {
             session_id: session_id.clone(),
@@ -269,7 +430,7 @@ impl AppIdentitySession {
             stdout_path: String::new(),
             stderr_path: String::new(),
             group: Some("app".to_string()),
-            parent: Some(parent.session_id),
+            parent: Some(parent.session_id.clone()),
             workdir: std::env::current_dir()
                 .ok()
                 .map(|path| path.to_string_lossy().into_owned()),
@@ -278,26 +439,22 @@ impl AppIdentitySession {
             tier: parent
                 .tier
                 .map(|tier| tier.max(crate::caps::Role::Worker.credential_tier())),
-            scope: parent.scope,
-            priority: parent.priority,
+            scope: parent.scope.clone(),
+            priority: parent.priority.clone(),
             caps: Some(caps),
             transient_caps: None,
-            role: parent.role,
+            role: parent.role.clone(),
             app_id: Some(app_id.to_string()),
             pending_bind: true,
             start_time_ticks: None,
         };
-        let backend = if use_clawd_app_session_backend() {
-            register_app_session_with_clawd(&info)?
-        } else {
-            register_session(info)?;
-            AppSessionBackend::Local {
-                proc_data_dir: crate::paths::proc_data_dir(),
-            }
-        };
+        register_session(info)?;
         Ok(Self {
             session_id,
-            backend,
+            backend: AppSessionBackend::Local {
+                proc_data_dir: crate::paths::proc_data_dir(),
+            },
+            parent_caps: Some(parent_caps),
         })
     }
 
@@ -320,25 +477,32 @@ impl AppIdentitySession {
             AppSessionBackend::Local { .. } => {
                 crate::proc::bind_session_process(&self.session_id, pid)
             }
-            AppSessionBackend::Clawd { .. } => clawd_app_session_request(
-                    "app_session.bind",
-                    serde_json::json!({
-                        "session_id": self.session_id,
-                        "pid": pid,
-                    }),
-                )
-            .map(|_| ()),
+            AppSessionBackend::Clawd { handle, .. } => clawd_request(
+                "app_session.bind",
+                serde_json::json!({
+                    "session_id": self.session_id,
+                    "handle": handle,
+                    "pid": pid,
+                }),
+            )
+            .map(|_| ())
+            .map_err(String::from),
         }
     }
 
-    pub fn set_transient_caps(&self, caps: Option<CapSet>) -> Result<(), String> {
-        set_app_session_transient_caps(&self.session_id, &self.backend, caps)
+    pub fn set_transient_call(&self, call: Option<TransientCall<'_>>) -> Result<(), String> {
+        set_app_session_transient_call(
+            &self.session_id,
+            &self.backend,
+            self.parent_caps.as_ref(),
+            call,
+        )
     }
 
     pub fn proc_data_dir(&self) -> &Path {
         match &self.backend {
             AppSessionBackend::Local { proc_data_dir }
-            | AppSessionBackend::Clawd { proc_data_dir } => proc_data_dir,
+            | AppSessionBackend::Clawd { proc_data_dir, .. } => proc_data_dir,
         }
     }
 
@@ -346,6 +510,7 @@ impl AppIdentitySession {
         AppSessionControl {
             session_id: self.session_id.clone(),
             backend: self.backend.clone(),
+            parent_caps: self.parent_caps.clone(),
         }
     }
 }
@@ -451,23 +616,38 @@ fn validate_root_owned_executable(_path: &Path) -> Result<(), String> {
     Err("native App host requires Unix ownership checks".to_string())
 }
 
-fn set_app_session_transient_caps(
+fn set_app_session_transient_call(
     session_id: &str,
     backend: &AppSessionBackend,
-    caps: Option<CapSet>,
+    parent_caps: Option<&CapSet>,
+    call: Option<TransientCall<'_>>,
 ) -> Result<(), String> {
     match backend {
         AppSessionBackend::Local { .. } => {
-            crate::proc::set_app_session_transient_caps(session_id, caps)
+            crate::proc::set_app_session_transient_caps(session_id, call.map(|call| call.caps))
         }
-        AppSessionBackend::Clawd { .. } => clawd_app_session_request(
-                "app_session.set_transient",
-                serde_json::json!({
-                    "session_id": session_id,
-                    "caps": caps,
+        AppSessionBackend::Clawd { handle, .. } => {
+            let call = match call {
+                Some(call) => serde_json::json!({
+                    "tool": call.tool,
+                    "args": call.args,
                 }),
-            )
-        .map(|_| ()),
+                None => serde_json::Value::Null,
+            };
+            let mut params = serde_json::json!({
+                "session_id": session_id,
+                "handle": handle,
+                "call": call,
+            });
+            if let Some(parent_caps) = parent_caps {
+                params["parent_caps"] = serde_json::to_value(parent_caps).map_err(|error| {
+                    format!("failed to serialize parent capabilities: {error}")
+                })?;
+            }
+            clawd_request("app_session.set_transient", params)
+                .map(|_| ())
+                .map_err(String::from)
+        }
     }
 }
 
@@ -486,21 +666,29 @@ fn use_clawd_app_session_backend() -> bool {
     }
 }
 
-fn register_app_session_with_clawd(info: &SessionInfo) -> Result<AppSessionBackend, String> {
-    let result =
-        clawd_app_session_request("app_session.register", serde_json::json!({"session": info}))?;
-    let proc_data_dir = result
-        .get("proc_data_dir")
-        .and_then(serde_json::Value::as_str)
-        .map(std::path::PathBuf::from)
-        .ok_or_else(|| "clawd App session response omitted proc_data_dir".to_string())?;
-    Ok(AppSessionBackend::Clawd { proc_data_dir })
+/// A failed broker call plus whatever structured payload the daemon
+/// attached for this caller only.
+struct ClawdCallError {
+    message: String,
+    data: Option<serde_json::Value>,
 }
 
-fn clawd_app_session_request(
+impl From<ClawdCallError> for String {
+    fn from(error: ClawdCallError) -> String {
+        error.message
+    }
+}
+
+impl std::fmt::Display for ClawdCallError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+fn clawd_request(
     command: &str,
     params: serde_json::Value,
-) -> Result<serde_json::Value, String> {
+) -> Result<serde_json::Value, ClawdCallError> {
     let response = crate::clawd::client::request_blocking(
         crate::paths::clawd_socket_path(),
         crate::clawd::protocol::Request {
@@ -508,14 +696,111 @@ fn clawd_app_session_request(
             command: command.to_string(),
             params,
         },
-    )?;
+    )
+    .map_err(|message| ClawdCallError {
+        message,
+        data: None,
+    })?;
     if response.ok {
         Ok(response.result.unwrap_or(serde_json::Value::Null))
     } else {
-        Err(response
-            .error
-            .map(|error| error.message)
-            .unwrap_or_else(|| format!("clawd {command} failed")))
+        let (message, data) = match response.error {
+            Some(error) => (error.message, error.data),
+            None => (format!("clawd {command} failed"), None),
+        };
+        Err(ClawdCallError { message, data })
+    }
+}
+
+/// Longest a launcher will hold its place while the user decides.
+const APPROVAL_WAIT: Duration = Duration::from_secs(120);
+const APPROVAL_POLL: Duration = Duration::from_millis(500);
+
+/// Abandon an in-flight approval wait.
+///
+/// The launcher blocks in its own process so its authenticated identity
+/// stays valid for the retry; a host that no longer wants the launch
+/// (an interrupted agent turn, a test) flips this and the wait ends
+/// with a terminal error. Ctrl-C at a terminal ends the process itself.
+static APPROVAL_WAIT_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn cancel_pending_approval_wait() {
+    APPROVAL_WAIT_CANCELLED.store(true, Ordering::SeqCst);
+}
+
+/// Approval request ids a denied launch is waiting on, if the daemon
+/// reported any. Ids are not authority — they only say which decisions
+/// this launcher needs.
+fn approval_requests(error: &ClawdCallError) -> Vec<String> {
+    error
+        .data
+        .as_ref()
+        .filter(|data| data.get("status").and_then(serde_json::Value::as_str)
+            == Some("approval_required"))
+        .and_then(|data| data.get("approval_requests"))
+        .and_then(serde_json::Value::as_array)
+        .map(|ids| {
+            ids.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Block this process until every listed request is decided.
+///
+/// Waiting in the launcher is what keeps the retry authentic: `clawd`
+/// re-derives the same uid/pid/start identity on the follow-up call, so
+/// no token, environment variable or session string has to travel. The
+/// wait is bounded, ends immediately on a rejection, and reports a
+/// terminal error for anything that is not a clean approval.
+fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
+    let deadline = Instant::now() + APPROVAL_WAIT;
+    loop {
+        if APPROVAL_WAIT_CANCELLED.swap(false, Ordering::SeqCst) {
+            return Err("waiting for App launch approval was cancelled".to_string());
+        }
+        let result = clawd_request(
+            "permission.status",
+            serde_json::json!({"ids": ids}),
+        )
+        .map_err(String::from)?;
+        let statuses = result
+            .get("statuses")
+            .and_then(serde_json::Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let mut pending = false;
+        for entry in &statuses {
+            let id = entry
+                .get("id")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            match entry.get("status").and_then(serde_json::Value::as_str) {
+                Some("approved") => {}
+                Some("pending") => pending = true,
+                Some("denied") => {
+                    return Err(format!("App launch approval {id} was denied"));
+                }
+                other => {
+                    return Err(format!(
+                        "App launch approval {id} is no longer available ({})",
+                        other.unwrap_or("unknown")
+                    ));
+                }
+            }
+        }
+        if !pending {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!(
+                "timed out after {}s waiting for App launch approval",
+                APPROVAL_WAIT.as_secs()
+            ));
+        }
+        std::thread::sleep(APPROVAL_POLL);
     }
 }
 
@@ -663,6 +948,19 @@ fn bind_operation_args(
         let value = values
             .get(&name)
             .ok_or_else(|| format!("resolved default for `{name}` is missing"))?;
+        // Boolean declarations are never positional, so appending a
+        // resolved default as a bare token would both hand the App an
+        // argument it never asked for and shift the next positional the
+        // authority re-binds from this argv. The value stays in
+        // `values`, and the authority fills it from the same manifest
+        // default, so both sides still agree.
+        if operation
+            .args
+            .iter()
+            .any(|declaration| declaration.name == name && declaration.kind == ArgKind::Bool)
+        {
+            continue;
+        }
         argv.push(arg_value_to_string(value)?);
     }
     for declaration in &operation.args {
@@ -677,110 +975,25 @@ fn parse_supplied_operation_args(
     operation: &Operation,
     args: &[String],
 ) -> BTreeMap<String, serde_json::Value> {
-    let mut values = BTreeMap::new();
-    let mut positionals = Vec::new();
-    let mut index = 0;
-    while index < args.len() {
-        let token = &args[index];
-        if let Some(flag) = token.strip_prefix("--") {
-            let (name, inline) = flag
-                .split_once('=')
-                .map(|(name, value)| (name, Some(value)))
-                .unwrap_or((flag, None));
-            let name = match_arg_name(operation, name);
-            if let Some(decl) =
-                name.and_then(|name| operation.args.iter().find(|decl| decl.name == name))
-            {
-                let raw = inline.map(str::to_string).or_else(|| {
-                    if decl.kind != ArgKind::Bool {
-                        args.get(index + 1)
-                            .filter(|next| !next.starts_with("--"))
-                            .cloned()
-                    } else {
-                        None
-                    }
-                });
-                if inline.is_none() && raw.is_some() {
-                    index += 1;
-                }
-                if let Some(value) = parse_arg_value(decl.kind, raw.as_deref()) {
-                    values.insert(decl.name.clone(), value);
-                }
-            } else if inline.is_none()
-                && args
-                    .get(index + 1)
-                    .is_some_and(|next| !next.starts_with("--"))
-            {
-                // Unknown flags must not turn their value into a positional
-                // capability binding on the next loop iteration.
-                index += 1;
-            }
-        } else {
-            positionals.push(token.clone());
-        }
-        index += 1;
-    }
-
-    let mut positional = positionals.into_iter();
-    for decl in &operation.args {
-        if values.contains_key(&decl.name) {
-            continue;
-        }
-        if decl.kind == ArgKind::Bool {
-            continue;
-        }
-        if let Some(raw) = positional.next() {
-            if let Some(value) = parse_arg_value(decl.kind, Some(&raw)) {
-                values.insert(decl.name.clone(), value);
-            }
-        }
-    }
-    values
+    crate::caps::args::bind_supplied_cli_args(&operation.args, args)
 }
 
 fn normalize_path_args(
     operation: &Operation,
     values: &mut BTreeMap<String, serde_json::Value>,
 ) -> Result<(), String> {
-    for declaration in &operation.args {
-        if declaration.kind != ArgKind::Path {
-            continue;
-        }
-        let Some(value) = values
-            .get(&declaration.name)
-            .and_then(serde_json::Value::as_str)
-        else {
-            continue;
-        };
-        let absolute = absolute_app_path(value)?;
-        values.insert(
-            declaration.name.clone(),
-            serde_json::Value::String(absolute),
-        );
-    }
-    Ok(())
+    crate::caps::args::resolve_path_args(&operation.args, values, &launcher_path_context()?)
 }
 
-fn absolute_app_path(value: &str) -> Result<String, String> {
-    let path = if value == "~" {
-        effective_app_home()
-    } else if let Some(rest) = value.strip_prefix("~/") {
-        effective_app_home().join(rest)
-    } else {
-        std::path::PathBuf::from(value)
-    };
-    let absolute = if path.is_absolute() {
-        path
-    } else {
-        std::env::current_dir()
-            .map_err(|error| format!("resolve current directory for path arg: {error}"))?
-            .join(path)
-    };
-    let resolved = absolute.canonicalize().unwrap_or(absolute);
-    resolved
-        .to_str()
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "resolved path arg is not valid UTF-8".to_string())
+/// Where this launcher resolves relative and `~` path arguments.
+fn launcher_path_context() -> Result<crate::caps::args::PathContext, String> {
+    Ok(crate::caps::args::PathContext {
+        home: effective_app_home(),
+        cwd: Some(
+            std::env::current_dir()
+                .map_err(|error| format!("resolve current directory for path arg: {error}"))?,
+        ),
+    })
 }
 
 fn effective_app_home() -> std::path::PathBuf {
@@ -795,35 +1008,6 @@ fn arg_value_to_string(value: &serde_json::Value) -> Result<String, String> {
         serde_json::Value::Number(value) => Ok(value.to_string()),
         serde_json::Value::Bool(value) => Ok(value.to_string()),
         _ => Err("manifest defaults must be strings, numbers, or booleans".to_string()),
-    }
-}
-
-fn match_arg_name<'a>(operation: &'a Operation, raw: &str) -> Option<&'a str> {
-    operation
-        .args
-        .iter()
-        .find(|decl| decl.name == raw || decl.name.replace('_', "-") == raw)
-        .map(|decl| decl.name.as_str())
-}
-
-fn parse_arg_value(kind: ArgKind, raw: Option<&str>) -> Option<serde_json::Value> {
-    match kind {
-        ArgKind::Bool => Some(serde_json::Value::Bool(
-            raw.map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(true),
-        )),
-        ArgKind::Number => raw
-            .and_then(|value| value.parse::<f64>().ok())
-            .and_then(serde_json::Number::from_f64)
-            .map(serde_json::Value::Number),
-        ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => {
-            raw.map(|value| serde_json::Value::String(value.to_string()))
-        }
     }
 }
 
@@ -853,10 +1037,13 @@ impl Drop for AppIdentitySession {
     fn drop(&mut self) {
         match &self.backend {
             AppSessionBackend::Local { .. } => deregister_session(&self.session_id),
-            AppSessionBackend::Clawd { .. } => {
-                if let Err(error) = clawd_app_session_request(
+            AppSessionBackend::Clawd { handle, .. } => {
+                if let Err(error) = clawd_request(
                     "app_session.deregister",
-                    serde_json::json!({"session_id": self.session_id}),
+                    serde_json::json!({
+                        "session_id": self.session_id,
+                        "handle": handle,
+                    }),
                 ) {
                     tracing::warn!(
                         session_id = %self.session_id,
