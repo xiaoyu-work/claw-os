@@ -570,18 +570,26 @@ fn python_and_rust_share_url_host_scope_vectors() {
         }"#,
     )
     .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
     for vector in vectors {
         let url = vector["url"].as_str().unwrap();
-        let resolved = manifest.resolve_needs(
+        let resolved = manifest.resolve_operation_call(
             "fetch",
             &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+            &paths,
         );
         if vector["error"].as_bool().unwrap_or(false) {
             assert!(resolved.is_err(), "accepted {url}");
         } else {
+            let canonical_url = vector["canonical_url"].as_str().unwrap();
             let expected = vector["scope"].as_str().unwrap();
+            let resolved = resolved.unwrap();
+            assert_eq!(resolved.values["url"], canonical_url, "{url}");
             assert_eq!(
-                resolved.unwrap()[0][0].scope,
+                resolved.needs[0][0].scope,
                 Scope::host(expected),
                 "{url}"
             );

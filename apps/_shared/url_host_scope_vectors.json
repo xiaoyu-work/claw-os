@@ -1,30 +1,37 @@
 [
   {
     "url": "https://EXAMPLE.COM/path",
+    "canonical_url": "https://example.com/path",
     "scope": "example.com:443"
   },
   {
     "url": "https://bücher.example/path",
+    "canonical_url": "https://xn--bcher-kva.example/path",
     "scope": "xn--bcher-kva.example:443"
   },
   {
     "url": "https://exam­ple.com/path",
+    "canonical_url": "https://example.com/path",
     "scope": "example.com:443"
   },
   {
     "url": "https://faß.de/path",
+    "canonical_url": "https://xn--fa-hia.de/path",
     "scope": "xn--fa-hia.de:443"
   },
   {
     "url": "https://例え。テスト/path",
+    "canonical_url": "https://xn--r8jz45g.xn--zckzah/path",
     "scope": "xn--r8jz45g.xn--zckzah:443"
   },
   {
     "url": "https://l·l.cat/path",
+    "canonical_url": "https://xn--ll-0ea.cat/path",
     "scope": "xn--ll-0ea.cat:443"
   },
   {
     "url": "https://שלום.example/path",
+    "canonical_url": "https://xn--9dbne9b.example/path",
     "scope": "xn--9dbne9b.example:443"
   },
   {
@@ -37,38 +44,63 @@
   },
   {
     "url": "https://☃.example/path",
-    "error": true
+    "canonical_url": "https://xn--n3h.example/path",
+    "scope": "xn--n3h.example:443",
+    "python_raw_error": true
+  },
+  {
+    "url": "https://𞊐.example/path",
+    "canonical_url": "https://xn--7z4h.example/path",
+    "scope": "xn--7z4h.example:443"
+  },
+  {
+    "url": "https://ab--cd.example/path",
+    "canonical_url": "https://ab--cd.example/path",
+    "scope": "ab--cd.example:443"
+  },
+  {
+    "url": "https://example.com:/path",
+    "canonical_url": "https://example.com/path",
+    "scope": "example.com:443"
   },
   {
     "url": "https://XN--BCHER-KVA.EXAMPLE:8443/path",
+    "canonical_url": "https://xn--bcher-kva.example:8443/path",
     "scope": "xn--bcher-kva.example:8443"
   },
   {
     "url": "http://127.1/path",
+    "canonical_url": "http://127.0.0.1/path",
     "scope": "127.0.0.1:80"
   },
   {
     "url": "http://0x7f.1/path",
+    "canonical_url": "http://127.0.0.1/path",
     "scope": "127.0.0.1:80"
   },
   {
     "url": "http://0177.0.0.1/path",
+    "canonical_url": "http://127.0.0.1/path",
     "scope": "127.0.0.1:80"
   },
   {
     "url": "http://2130706433/path",
+    "canonical_url": "http://127.0.0.1/path",
     "scope": "127.0.0.1:80"
   },
   {
     "url": "http://0xffffffff/path",
+    "canonical_url": "http://255.255.255.255/path",
     "scope": "255.255.255.255:80"
   },
   {
     "url": "http://[2001:0db8:0:0:0:0:0:1]/path",
+    "canonical_url": "http://[2001:db8::1]/path",
     "scope": "[2001:db8::1]:80"
   },
   {
     "url": "https://[2001:db8::1]:9443/path",
+    "canonical_url": "https://[2001:db8::1]:9443/path",
     "scope": "[2001:db8::1]:9443"
   }
 ]

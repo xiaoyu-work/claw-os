@@ -35,8 +35,18 @@ def test_host_scope_includes_effective_ports_and_ipv6_brackets():
             with pytest.raises(ValueError):
                 safe_http.host_scope(safe_http.parse_url(vector["url"]))
         else:
+            if vector.get("python_raw_error"):
+                with pytest.raises(ValueError):
+                    safe_http.canonical_url(safe_http.parse_url(vector["url"]))
+            else:
+                assert (
+                    safe_http.canonical_url(safe_http.parse_url(vector["url"]))
+                    == vector["canonical_url"]
+                )
             assert (
-                safe_http.host_scope(safe_http.parse_url(vector["url"]))
+                safe_http.host_scope(
+                    safe_http.parse_url(vector["canonical_url"])
+                )
                 == vector["scope"]
             )
 

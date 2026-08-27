@@ -852,6 +852,55 @@ fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
 }
 
 #[test]
+fn canonical_url_is_materialized_in_child_argv_before_authority() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/net/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["fetch"];
+    let bound =
+        bind_operation_args(operation, &["https://exam\u{ad}ple.com:/path".into()]).unwrap();
+    assert_eq!(
+        bound.values["url"],
+        serde_json::json!("https://example.com/path")
+    );
+    assert_eq!(bound.argv[0], "https://example.com/path");
+    let needs = manifest.resolve_needs("fetch", &bound.values).unwrap();
+    assert_eq!(needs[0][0].scope, Scope::host("example.com:443"));
+
+    let web = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/web/app.json")).unwrap(),
+    )
+    .unwrap();
+    let scrape = &web.operations["scrape"];
+    let bound = bind_operation_args(
+        scrape,
+        &[
+            "https://bücher.example/a".into(),
+            "https://example.com:/b".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        bound.values["urls"],
+        serde_json::json!([
+            "https://xn--bcher-kva.example/a",
+            "https://example.com/b"
+        ])
+    );
+    assert_eq!(
+        &bound.argv[..2],
+        [
+            "https://xn--bcher-kva.example/a",
+            "https://example.com/b"
+        ]
+    );
+}
+
+#[test]
 fn stdin_forwarding_requires_an_explicit_operation_contract() {
     let app = tempfile::tempdir().unwrap();
     std::fs::write(

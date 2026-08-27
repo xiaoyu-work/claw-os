@@ -81,11 +81,17 @@ def _canonical_domain(host):
             "standards-conformant URL host validation requires idna >= 3.3, < 4"
         ) from _IDNA_ERROR
     try:
+        if host.isascii():
+            canonical = idna.uts46_remap(
+                host,
+                std3_rules=True,
+                transitional=False,
+            )
+            if not canonical.isascii():
+                raise ValueError("ASCII URL host remapped to non-ASCII")
+            return canonical
         return idna.encode(
-            host,
-            uts46=True,
-            std3_rules=True,
-            transitional=False,
+            host, uts46=True, std3_rules=True, transitional=False
         ).decode("ascii")
     except idna.IDNAError as error:
         raise ValueError(f"URL host is not valid UTS-46: {error}") from None

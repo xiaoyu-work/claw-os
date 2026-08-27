@@ -921,12 +921,18 @@ fn bind_operation_args(
 ) -> Result<BoundOperationArgs, String> {
     let supplied_values = parse_supplied_operation_args(operation, args)?;
     let supplied = supplied_values.keys().cloned().collect::<BTreeSet<_>>();
-    let (values, defaulted) = crate::caps::manifest::resolve_effective_args(
+    let (mut values, defaulted) = crate::caps::manifest::resolve_effective_args(
         &operation.args,
         &supplied_values,
         Some(&launcher_path_context()?),
     )
     .map_err(|error| format!("resolve operation arguments: {error}"))?;
+    crate::caps::manifest::canonicalize_url_scope_args(
+        &operation.args,
+        &operation.needs,
+        &mut values,
+    )
+    .map_err(|error| format!("canonicalize operation URL arguments: {error}"))?;
     let argv = canonical_operation_argv(operation, args, &values, &defaulted, &supplied)?;
     Ok(BoundOperationArgs { values, argv })
 }

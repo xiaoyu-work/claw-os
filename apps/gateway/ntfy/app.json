@@ -131,7 +131,7 @@
           "when": {
             "kind": "arg-not-equals",
             "arg": "server",
-            "value": "https://ntfy.sh"
+            "value": "https://ntfy.sh/"
           }
         },
         {

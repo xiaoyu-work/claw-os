@@ -1919,7 +1919,7 @@ impl Manifest {
                     idx: 0,
                     detail: "unknown operation".to_string(),
                 })?;
-        let (values, defaulted) =
+        let (mut values, defaulted) =
             resolve_effective_args(&operation.args, supplied, Some(paths)).map_err(|detail| {
                 ManifestError::NeedInvalid {
                     op: op_name.to_string(),
@@ -1927,6 +1927,13 @@ impl Manifest {
                     detail,
                 }
             })?;
+        canonicalize_url_scope_args(&operation.args, &operation.needs, &mut values).map_err(
+            |detail| ManifestError::NeedInvalid {
+                op: op_name.to_string(),
+                idx: 0,
+                detail,
+            },
+        )?;
         let needs = self.resolve_needs(op_name, &values)?;
         Ok(EffectiveCall {
             values,
@@ -1952,7 +1959,14 @@ impl Manifest {
                 idx: 0,
                 detail: "unknown operation".into(),
             })?;
-        let (args, _) = resolve_effective_args(&op.args, args, None).map_err(|detail| {
+        let (mut args, _) = resolve_effective_args(&op.args, args, None).map_err(|detail| {
+            ManifestError::NeedInvalid {
+                op: op_name.to_string(),
+                idx: 0,
+                detail,
+            }
+        })?;
+        canonicalize_url_scope_args(&op.args, &op.needs, &mut args).map_err(|detail| {
             ManifestError::NeedInvalid {
                 op: op_name.to_string(),
                 idx: 0,
@@ -2186,7 +2200,7 @@ impl Manifest {
                 idx: 0,
                 detail: "unknown session tool".to_string(),
             })?;
-        let (values, defaulted) =
+        let (mut values, defaulted) =
             resolve_effective_args(&tool.args, supplied, Some(paths)).map_err(|detail| {
                 ManifestError::SessionNeedInvalid {
                     tool: tool_name.to_string(),
@@ -2194,6 +2208,13 @@ impl Manifest {
                     detail,
                 }
             })?;
+        canonicalize_url_scope_args(&tool.args, &tool.needs, &mut values).map_err(|detail| {
+            ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail,
+            }
+        })?;
         let needs = self.resolve_session_tool_needs(tool_name, &values)?;
         Ok(EffectiveCall {
             values,
@@ -2227,7 +2248,14 @@ impl Manifest {
                 idx: 0,
                 detail: "unknown session tool".to_string(),
             })?;
-        let (resolved, _) = resolve_effective_args(&tool.args, args, None).map_err(|detail| {
+        let (mut resolved, _) = resolve_effective_args(&tool.args, args, None).map_err(|detail| {
+            ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail,
+            }
+        })?;
+        canonicalize_url_scope_args(&tool.args, &tool.needs, &mut resolved).map_err(|detail| {
             ManifestError::SessionNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
@@ -2413,50 +2441,7 @@ fn scopes_from_arg_value(
     let scope = |value: &serde_json::Value| {
         if transform == ScopeTransform::UrlHost {
             let raw = value.as_str()?;
-            let normalized;
-            let raw = if raw.contains("://") {
-                raw
-            } else {
-                normalized = format!("https://{raw}");
-                &normalized
-            };
-            let explicit_port = explicit_url_port(raw);
-            let raw_host = raw_url_hostname(raw)?;
-            let strict_domain = if raw_host.contains(':') {
-                None
-            } else {
-                Some(
-                    idna_2008::Config::default()
-                        .use_std3_ascii_rules(true)
-                        .transitional_processing(false)
-                        .use_idna_2008_rules(true)
-                        .verify_dns_length(true)
-                        .to_ascii(raw_host)
-                        .ok()?,
-                )
-            };
-            let parsed = url::Url::parse(raw).ok()?;
-            let host = parsed.host()?;
-            let rendered = match host {
-                url::Host::Domain(host) => {
-                    let strict = strict_domain?;
-                    if strict != host {
-                        return None;
-                    }
-                    strict
-                }
-                url::Host::Ipv4(host) => host.to_string(),
-                url::Host::Ipv6(host) => format!("[{host}]"),
-            };
-            let port = match explicit_port.or_else(|| parsed.port()) {
-                Some(port) => port,
-                None => match parsed.scheme() {
-                    "http" => 80,
-                    "https" => 443,
-                    _ => return None,
-                },
-            };
-            return Some(Scope::host(format!("{rendered}:{port}")));
+            return canonical_url_and_scope(raw).map(|(_, scope)| scope);
         }
         let scope = scope_from_arg_value(arg.kind, value)?;
         match (transform, scope) {
@@ -2477,6 +2462,92 @@ fn scopes_from_arg_value(
     }
 }
 
+pub(crate) fn canonicalize_url_scope_args(
+    declarations: &[Arg],
+    needs: &[Need],
+    values: &mut BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    for arg_name in needs.iter().filter_map(|need| match &need.scope {
+        ScopeBinding::FromArg {
+            arg,
+            transform: ScopeTransform::UrlHost,
+        } => Some(arg),
+        _ => None,
+    }) {
+        let declaration = declarations
+            .iter()
+            .find(|declaration| declaration.name == *arg_name)
+            .ok_or_else(|| format!("url-host references undeclared arg `{arg_name}`"))?;
+        let Some(value) = values.get_mut(arg_name) else {
+            continue;
+        };
+        if declaration.repeatable {
+            let items = value
+                .as_array_mut()
+                .ok_or_else(|| format!("repeatable URL arg `{arg_name}` is not an array"))?;
+            for item in items {
+                let raw = item
+                    .as_str()
+                    .ok_or_else(|| format!("URL arg `{arg_name}` is not text"))?;
+                *item = serde_json::Value::String(
+                    canonical_url_and_scope(raw)
+                        .ok_or_else(|| format!("URL arg `{arg_name}` is invalid"))?
+                        .0,
+                );
+            }
+        } else {
+            let raw = value
+                .as_str()
+                .ok_or_else(|| format!("URL arg `{arg_name}` is not text"))?;
+            *value = serde_json::Value::String(
+                canonical_url_and_scope(raw)
+                    .ok_or_else(|| format!("URL arg `{arg_name}` is invalid"))?
+                    .0,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn canonical_url_and_scope(raw: &str) -> Option<(String, Scope)> {
+    let normalized;
+    let raw = if raw.contains("://") {
+        raw
+    } else {
+        normalized = format!("https://{raw}");
+        &normalized
+    };
+    let explicit_port = explicit_url_port(raw);
+    let parsed = url::Url::parse(raw).ok()?;
+    let host = parsed.host()?;
+    let rendered = match host {
+        url::Host::Domain(host) => host.to_string(),
+        url::Host::Ipv4(host) => host.to_string(),
+        url::Host::Ipv6(host) => format!("[{host}]"),
+    };
+    let port = match explicit_port.or_else(|| parsed.port()) {
+        Some(port) => port,
+        None => match parsed.scheme() {
+            "http" => 80,
+            "https" => 443,
+            _ => return None,
+        },
+    };
+    let mut canonical = parsed.to_string();
+    if !matches!(parsed.scheme(), "http" | "https")
+        && explicit_port.is_some()
+        && parsed.port().is_none()
+    {
+        let authority_start = canonical.find("://")? + 3;
+        let authority_end = canonical[authority_start..]
+            .find(['/', '?', '#'])
+            .map(|offset| authority_start + offset)
+            .unwrap_or(canonical.len());
+        canonical.insert_str(authority_end, &format!(":{port}"));
+    }
+    Some((canonical, Scope::host(format!("{rendered}:{port}"))))
+}
+
 fn explicit_url_port(raw: &str) -> Option<u16> {
     let authority = raw
         .split_once("://")?
@@ -2491,24 +2562,6 @@ fn explicit_url_port(raw: &str) -> Option<u16> {
         authority.rsplit_once(':')?.1
     };
     port.parse().ok()
-}
-
-fn raw_url_hostname(raw: &str) -> Option<&str> {
-    let authority = raw
-        .split_once("://")?
-        .1
-        .split(['/', '?', '#'])
-        .next()?
-        .rsplit('@')
-        .next()?;
-    if let Some(bracketed) = authority.strip_prefix('[') {
-        return bracketed.split_once(']').map(|(host, _)| host);
-    }
-    if explicit_url_port(raw).is_some() {
-        authority.rsplit_once(':').map(|(host, _)| host)
-    } else {
-        Some(authority)
-    }
 }
 
 fn mapped_scopes(

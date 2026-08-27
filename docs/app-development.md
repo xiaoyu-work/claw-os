@@ -295,9 +295,12 @@ Declare it in `operations.<op>.needs[]`:
   `_shared/url_host_scope_vectors.json` corpus locks Rust and Python behavior
   for UTS-46 ignored/mapped/contextual/rejected input, IDNA/punycode domains,
   legacy IPv4 forms, IPv6 compression, and ports. Production images provide
-  `idna >= 3.3, < 4`; missing or unsupported versions fail closed. Core pairs
-  its WHATWG parser with a pinned strict IDNA2008 validator for the same
-  rejection behavior.
+  `idna >= 3.3, < 4`; missing or unsupported versions fail closed. Core's
+  `url 2.5.8` parser materializes caller URLs as canonical ASCII effective
+  arguments before capability derivation and child dispatch. Python therefore
+  never reinterprets caller Unicode on the initial request; it applies UTS-46
+  itself only when canonicalizing redirect locations before requesting their
+  authority.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a
