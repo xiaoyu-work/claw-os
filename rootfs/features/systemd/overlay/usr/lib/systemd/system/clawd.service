@@ -16,6 +16,17 @@ Environment=COS_RUNTIME_DIR=/run/cos
 Environment=COS_LOG_DIR=/var/log/cos
 Environment=CLAWD_SOCKET=/run/cos/clawd.sock
 Environment=CLAWD_SOCKET_MODE=0660
+# Agent runtime isolation: the model/tool loop never runs in this
+# process. clawd spawns /usr/local/bin/claw-agentd per task, dropped to
+# the task owner with supplementary groups cleared, NoNewPrivs set, its
+# own session/process group, and only a private job channel on fd 3.
+# Tasks owned by root are refused: the runtime has no account to drop
+# to. Set CLAWD_AGENTD=off to stop running agent tasks; every other
+# clawd primitive keeps working.
+Environment=CLAWD_AGENTD=on
+Environment=COS_AGENTD_BIN=/usr/local/bin/claw-agentd
+Environment=CLAWD_AGENTD_MAX_WORKERS=4
+Environment=CLAWD_AGENTD_LEASE_SECS=900
 # System-vitals heartbeat: cheap reflex loop that samples kernel vitals,
 # emits context.events on threshold crossings (the trigger engine turns
 # matching ones into agent jobs), and drives cron/triggers ticks so no
@@ -25,7 +36,11 @@ Environment=CLAWD_HEARTBEAT_INTERVAL_SECS=60
 RuntimeDirectory=cos
 RuntimeDirectoryMode=0751
 StateDirectory=cos
-StateDirectoryMode=0700
+# 0711: traversable, never listable. An unprivileged claw-agentd worker
+# walks through /var/lib/cos to its own /var/lib/cos/users/<uid> agent
+# state, which clawd creates owned by that account with mode 0700. Every
+# other subtree below stays 0700 root.
+StateDirectoryMode=0711
 LogsDirectory=cos
 LogsDirectoryMode=0700
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

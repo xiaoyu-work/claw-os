@@ -357,6 +357,26 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
     }
 
     let owner_uid = crate::paths::current_owner_uid_override().or_else(current_euid);
+    // An `agentd` worker cannot open the root-owned consent store and
+    // has no broker route, so it files through its job channel instead.
+    // The broker supplies session and owner from the verified grant;
+    // nothing about the request travels except the exact verb and scope.
+    if let Some(gateway) = super::approval_gateway::installed() {
+        denial.hint = Some(
+            match gateway.request(denial.verb, &denial.requested_scope) {
+                Ok(pending) => match pending.request_id {
+                    Some(id) => format!(
+                        "approval request {id} is pending; approve it in Claw OS, then retry"
+                    ),
+                    None => "an approval request is pending; approve it in Claw OS, then retry"
+                        .to_string(),
+                },
+                Err(error) => format!("could not create approval request: {error}"),
+            },
+        );
+        return;
+    }
+
     let existing = crate::approvals::list_pending_for_owner(owner_uid)
         .into_iter()
         .find(|request| {
@@ -515,6 +535,25 @@ fn authorize_session_caps(
 }
 
 fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
+    // Same one-shot semantics either way: the grant is spent at the
+    // gate, never written back into a session's capability set. A
+    // worker asks the broker to spend it because the store is
+    // root-owned; the broker still matches on its own view of the
+    // session and owner, taken from the job grant.
+    if let Some(gateway) = super::approval_gateway::installed() {
+        return match gateway.consume(verb, scope) {
+            Ok(granted) => granted,
+            Err(error) => {
+                tracing::warn!(
+                    session_id,
+                    verb = %verb.as_str(),
+                    error = %error,
+                    "approval mediation unavailable; keeping the gate closed"
+                );
+                false
+            }
+        };
+    }
     match crate::approvals::consume_matching_grant_for_owner(
         session_id,
         verb,

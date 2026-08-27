@@ -708,6 +708,90 @@ impl Store {
 
         Ok((requeued, failed))
     }
+    /// Rebind a claimed job from the broker that claimed it to the
+    /// worker process that actually executes it. Recovery and audit
+    /// then track the worker's kernel identity rather than `clawd`'s,
+    /// which is what makes an abandoned lease detectable.
+    pub fn bind_worker(
+        &self,
+        id: &str,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+    ) -> io::Result<Job> {
+        validate_job_id(id)?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        validate_job_id(&job.id)?;
+        if job.id != id {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("job id `{}` does not match queue filename `{id}`", job.id),
+            ));
+        }
+        job.worker_pid = Some(worker_pid);
+        job.worker_start_time_ticks = worker_start_time_ticks;
+        write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.worker_bound", &job);
+        Ok(job)
+    }
+
+    /// Hand a running job back to the queue after its worker failed
+    /// without reporting an outcome. Shares the recovery budget with
+    /// [`Store::recover_orphaned_jobs`], so a task that keeps killing
+    /// workers is failed instead of retried forever.
+    ///
+    /// Returns the job in its new state, or `Ok(None)` when it is no
+    /// longer running (already cancelled or finished).
+    pub fn release_for_retry(&self, id: &str, reason: &str) -> io::Result<Option<Job>> {
+        validate_job_id(id)?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = match fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        validate_job_id(&job.id)?;
+
+        if job.cancel_requested_at.is_some() {
+            job.status = JobStatus::Cancelled;
+            job.error = Some("cancelled by user".to_string());
+            job.finished_at = Some(now_iso());
+            write_json_atomic(&path, &job)?;
+            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            let _ = finish_durable_session(&job);
+            crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+            return Ok(Some(job));
+        }
+
+        job.recovery_count = job.recovery_count.saturating_add(1);
+        if job.recovery_count > MAX_RECOVERIES {
+            job.status = JobStatus::Error;
+            job.error = Some(format!(
+                "job abandoned after {} interrupted run(s): {reason}",
+                job.recovery_count - 1
+            ));
+            job.finished_at = Some(now_iso());
+            write_json_atomic(&path, &job)?;
+            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            let _ = finish_durable_session(&job);
+            crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+            return Ok(Some(job));
+        }
+
+        job.status = JobStatus::Pending;
+        job.worker_pid = None;
+        job.worker_start_time_ticks = None;
+        job.started_at = None;
+        write_json_atomic(&path, &job)?;
+        fs::rename(&path, self.path_for(JobStatus::Pending, id))?;
+        crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
+        Ok(Some(job))
+    }
+
     pub fn finish(&self, job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         validate_job_id(&job.id)?;
         let _lock = self.lock_for_id(&job.id)?;
@@ -1648,6 +1732,11 @@ fn run_worker_loop_inner(
     shutdown: Arc<AtomicBool>,
     install_signals: bool,
 ) -> Result<Value, String> {
+    // The in-process loop is the model/tool runtime. It exists for
+    // stand-alone `cos agent service work` operators; inside `clawd`
+    // agent work is spawned into an unprivileged `claw-agentd` process
+    // by `agentd::supervisor` instead.
+    crate::agentd::guard::ensure_agent_runtime_allowed("in-process agent worker loop")?;
     crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
     // Reclaim jobs stranded in running/ by a previously-crashed worker
@@ -1864,12 +1953,62 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
+        job_id: job.id.clone(),
+    });
+    let progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
+        Arc::new(JobProgressSink {
+            job_id: job.id.clone(),
+        });
+    execute_job(
+        JobExecution {
+            id: job.id.clone(),
+            prompt: job.prompt.clone(),
+            context: job.context.clone(),
+            branch_context: job.branch_context.clone(),
+            session_id: job.session_id.clone(),
+            max_turns: job.max_turns,
+        },
+        stream_sink,
+        progress_sink,
+    )
+    .await
+}
+
+/// One unit of agent work, decoupled from where the job record lives.
+/// The `agentd` worker builds this from a supervisor assignment and
+/// never touches the queue; the in-process loop builds it from a
+/// claimed [`Job`].
+#[derive(Debug, Clone)]
+pub struct JobExecution {
+    pub id: String,
+    pub prompt: String,
+    pub context: Option<String>,
+    pub branch_context: Option<String>,
+    pub session_id: Option<String>,
+    pub max_turns: Option<u32>,
+}
+
+/// Run the agent loop for one task.
+///
+/// This is the model/tool runtime proper — provider construction, MCP
+/// attachment, the guarded tool registry and prompt assembly all happen
+/// here — so it refuses to execute inside the privileged broker.
+pub async fn execute_job(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+) -> FinishOutcome {
     use crate::agent::runtime::loop_;
+
+    if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("agent job execution") {
+        return FinishOutcome::Error(error);
+    }
 
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
     // `config::get()` here is intentionally the *task-local* one
-    // installed by `run_one_job` for clawd-routed jobs; for in-process
+    // installed by the caller for clawd-routed jobs; for in-process
     // submits it falls through to the process-wide config as before.
     let base = crate::config::get().agent.clone();
     let mut cfg = base;
@@ -1885,13 +2024,6 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
     let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
-    let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
-        job_id: job.id.clone(),
-    });
-    let progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink> =
-        Arc::new(JobProgressSink {
-            job_id: job.id.clone(),
-        });
 
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {

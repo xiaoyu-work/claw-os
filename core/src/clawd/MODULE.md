@@ -10,14 +10,17 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
-- Run agent task workers and expose task lifecycle RPC.
-- Install audit hooks around broker-visible work.
+- Own task ownership/lease and expose task lifecycle RPC.
+- Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
+  in this process (see `core/src/agentd/MODULE.md`).
+- Install audit hooks around broker-visible work, including runtime audit
+  forwarded by a worker.
 
 ## Key Files
 
 | Path | Role |
 | --- | --- |
-| `server.rs` | Socket lifecycle, request routing, peer checks |
+| `server.rs` | Socket lifecycle, request routing, peer checks, agentd supervision start |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |

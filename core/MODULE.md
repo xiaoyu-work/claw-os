@@ -2,9 +2,10 @@
 
 ## Purpose
 
-`core/` builds the `cos` CLI/library, the `clawd` system broker, and small
-privileged helper binaries. It owns system authority, capability enforcement,
-agent orchestration, persistence, and structured primitive dispatch.
+`core/` builds the `cos` CLI/library, the `clawd` system broker, the
+unprivileged `claw-agentd` agent worker, and small privileged helper binaries.
+It owns system authority, capability enforcement, agent orchestration,
+persistence, and structured primitive dispatch.
 
 ## Responsibilities
 
@@ -21,7 +22,9 @@ agent orchestration, persistence, and structured primitive dispatch.
 | `src/main.rs` | `cos` process entry and output format selection |
 | `src/router.rs` | Top-level command and hidden bridge dispatch |
 | `src/bin/clawd.rs` | System daemon entry |
+| `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
+| `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
@@ -33,8 +36,9 @@ agent orchestration, persistence, and structured primitive dispatch.
 
 Entry points and orchestration depend on stable service/capability definitions.
 Providers implement those definitions; consumers must not import around them.
-`clawd` is the privileged boundary. App code and model output are untrusted
-inputs at this layer.
+`clawd` is the privileged boundary, and it does not run the model/tool loop:
+that executes in `claw-agentd` — see [`src/agentd/MODULE.md`](src/agentd/MODULE.md).
+App code and model output are untrusted inputs at this layer.
 
 Read [`src/agent/MODULE.md`](src/agent/MODULE.md) before changing agent code.
 Project-wide rules are in [`../ARCHITECTURE.md`](../ARCHITECTURE.md).

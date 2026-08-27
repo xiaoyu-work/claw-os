@@ -56,3 +56,20 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let error = prepare_task_session(&session_id, 0, &home).unwrap_err();
     assert!(error.contains("not owned"));
 }
+
+#[tokio::test]
+async fn a_root_peer_cannot_submit_an_agent_task() {
+    // The agent runtime runs unprivileged in `claw-agentd`, and root has
+    // no account to drop to, so a root-owned task is refused where it is
+    // submitted rather than becoming a queued task that can only fail.
+    let root = ClientIdentity {
+        pid: Some(std::process::id()),
+        uid: Some(0),
+        gid: Some(0),
+    };
+    let error = submit(json!({ "prompt": "hello" }), &root)
+        .await
+        .expect_err("a root-owned task must be refused");
+    assert_eq!(error, crate::agentd::spawn::ROOT_OWNER_REFUSAL);
+    assert!(error.contains("non-root"), "{error}");
+}

@@ -11,6 +11,13 @@ use super::client_identity::ClientIdentity;
 
 pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
+    if owner_uid == 0 {
+        // The agent runtime executes in an unprivileged `claw-agentd`
+        // worker owned by the submitter. Root has no account to drop to,
+        // so a root-owned task is refused at submission rather than
+        // silently running the model as root.
+        return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
+    }
     // The same canonical, ownership-checked home every other
     // system-agent policy derivation uses, so the capabilities stamped
     // here and the ceiling applied at execution cannot disagree.

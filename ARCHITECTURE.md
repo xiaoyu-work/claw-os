@@ -40,7 +40,8 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
-| `clawd` broker | Unix-socket RPC, peer/session identity, privileged dispatch, task worker, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` |
+| `clawd` broker | Unix-socket RPC, peer/session identity, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` |
+| `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -138,6 +139,8 @@ Hidden router bridges such as `__policy`, `__memory`, `__package`, and
 ```text
 CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
+  -> clawd claims the task, derives session capabilities, spawns claw-agentd
+  -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
   -> runtime::loop_
   -> traced system prompt + metadata-only Skill catalogue + persisted conversation
   -> Provider::chat or Provider::chat_stream
@@ -148,7 +151,8 @@ CLI / web UI / bridge
   -> tool results appended to conversation
   -> repeat until final response or max_turns
   -> final no-tools synthesis when the work limit is reached
-  -> usage/session/audit records
+  -> stream/progress/audit/result frames back to clawd over the job channel
+  -> clawd persists usage/session/audit records and finishes the task
 ```
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
@@ -157,9 +161,37 @@ The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier.
 
-A daemon-backed task runs inside root `clawd` on behalf of an account that is
-usually not root, so its baseline authority is daemon policy rather than a
-consequence of that process context. `core/src/clawd/system_caps.rs` records one
+A daemon-backed task no longer runs inside root `clawd`. The broker claims the
+task, derives its capabilities, and hands the work to a `claw-agentd` process
+that starts as root only long enough to `exec`: `core/src/agentd/spawn.rs`
+clears supplementary groups (including `sudo`) before dropping gid and uid to
+the task owner, re-reads every id from the kernel, sets `PR_SET_NO_NEW_PRIVS`,
+gives the runtime its own session and process group, applies a `0077` umask,
+rebuilds the environment from an allowlist and closes every inherited
+descriptor except a private `socketpair(2)` on fd 3. A task owned by root is
+refused at `task.submit` and again before a worker could be forked: there is no
+lesser account to drop to, so running one would put the model back in a root
+process.
+
+Because the worker leaves the `sudo` group, `/run/cos/clawd.sock` (`0660
+root:sudo`) is unreachable from it, and the only authority it holds is the
+grant in `core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key
+and bound to owner uid, worker pid plus kernel start time, task and session id,
+a lease deadline, and the route allowlist in `core/src/agentd/protocol.rs`. No
+admin, App-session, scheduler or permission-decision route exists on that
+channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
+the fork, so the kernel stamps it with the broker's own identity.
+
+Consent still works. `core/src/caps/approval_gateway.rs` is the seam
+`caps::require` consults instead of the root-owned approvals store: the worker
+names the exact verb and canonical scope it was denied and nothing else, and
+`clawd` supplies owner, session and task from the verified grant, spends an
+exactly-matching approved grant one-shot or files a deduped pending request
+under that identity. There is no route to decide a request or to obtain a
+reusable capability.
+
+The owner's baseline authority is still daemon policy rather than a consequence
+of process context. `core/src/clawd/system_caps.rs` records one
 explicit decision per catalog verb — risk is an input, not the rule — and the
 default set is only what an owner-scoped conversation needs: the owner's own
 path roots, its own memory and process-registry rows, read-only status of the
@@ -172,6 +204,16 @@ account's units, or the machine's security posture are denied and require an
 authenticated task/session delegation or an exact, one-shot approval settled at
 the gate. Resource-addressing verbs never receive an untyped wildcard, and a
 verb absent from the table is denied.
+
+Because the runtime now executes as the owner, the per-owner agent state it
+writes — conversation memory, notes, todos, AI budget counters and run records
+under `<data>/users/<uid>/` — is owned by that account with mode `0700`, and
+`<data>` plus `<data>/users` are `0711`: traversable, never listable. Every
+other subtree stays `0700 root`. The residual boundary is honest and documented
+in `core/src/agentd/MODULE.md`: a compromised worker holds the authority of the
+account that submitted the task, and nothing beyond it. A task owned by root is
+refused rather than run, so single-account container and WSL images must give
+the agent its own unprivileged account.
 
 Provenance decides which policy a trusted-session override is clamped by.
 `SessionMeta::origin` is a typed marker written only by the daemon-side issuer
@@ -328,6 +370,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | --- | --- | --- |
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
+| `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |

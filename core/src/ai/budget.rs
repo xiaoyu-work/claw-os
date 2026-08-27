@@ -51,7 +51,7 @@ pub struct Store {
 }
 
 fn db_path() -> PathBuf {
-    crate::paths::data_dir().join("ai_budget.db")
+    crate::paths::ai_budget_db_path()
 }
 
 fn current_period_utc() -> String {

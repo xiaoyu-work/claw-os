@@ -41,6 +41,9 @@ jobs:
       - name: Test managed-home package removal
         run: bash packaging/deb/tests/test-remove-home-overlay.sh
 
+      - name: Test agent worker packaging contract
+        run: bash packaging/deb/tests/test-agentd-packaging.sh
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:

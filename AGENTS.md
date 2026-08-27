@@ -35,6 +35,7 @@ editing additional surfaces.
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
+| Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |

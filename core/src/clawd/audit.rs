@@ -161,6 +161,186 @@ pub fn install_runtime_hook() {
     hooks::global_registry().register(Arc::new(ClawdRuntimeAuditHook));
 }
 
+/// Persist runtime audit forwarded by an `agentd` worker.
+///
+/// The worker holds no descriptor on this log, so the record arrives as
+/// a typed [`crate::agentd::protocol::RuntimeAuditRecord`] on its job
+/// channel. Tool facts are re-projected through [`audit_policy`] here —
+/// the worker's own projection is not trusted — and the task/owner
+/// stamps come from the lease rather than from the frame, so a
+/// compromised worker cannot forge either the provenance or the payload
+/// of a record.
+pub fn record_worker_runtime(
+    task_id: &str,
+    owner_uid: u32,
+    record: &crate::agentd::protocol::RuntimeAuditRecord,
+) {
+    use crate::agentd::protocol::RuntimeAuditRecord as Record;
+
+    let job_id = audit_policy::safe_identity(task_id);
+    let result = match record {
+        Record::ToolStarted {
+            session_id,
+            turn_index,
+            tool,
+            tool_use_id,
+        } => append_jsonl(&WorkerToolAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.tool.started",
+            job_id: &job_id,
+            owner_uid,
+            session_id: audit_policy::safe_identity(session_id),
+            turn_index: *turn_index,
+            tool: audit_policy::reproject_tool_facts(tool),
+            tool_use_id: audit_policy::safe_identity(tool_use_id),
+            success: true,
+            latency_ms: 0,
+            bytes_returned: 0,
+            error: None,
+        }),
+        Record::ToolFinished {
+            session_id,
+            turn_index,
+            tool,
+            tool_use_id,
+            success,
+            latency_ms,
+            bytes_returned,
+            error,
+        } => append_jsonl(&WorkerToolAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.tool.finished",
+            job_id: &job_id,
+            owner_uid,
+            session_id: audit_policy::safe_identity(session_id),
+            turn_index: *turn_index,
+            tool: audit_policy::reproject_tool_facts(tool),
+            tool_use_id: audit_policy::safe_identity(tool_use_id),
+            success: *success,
+            latency_ms: *latency_ms,
+            bytes_returned: *bytes_returned,
+            error: error.clone(),
+        }),
+        Record::TurnFinished {
+            session_id,
+            turn_index,
+            provider,
+            model,
+            success,
+            latency_ms,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            tool_calls_made,
+            stop_reason,
+            error,
+        } => append_jsonl(&WorkerTurnAudit {
+            ts: Utc::now(),
+            event: "clawd.agent.turn.finished",
+            job_id: &job_id,
+            owner_uid,
+            session_id: audit_policy::safe_identity(session_id),
+            turn_index: *turn_index,
+            provider: audit_policy::safe_identity(provider),
+            model: audit_policy::safe_identity(model),
+            success: *success,
+            latency_ms: *latency_ms,
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+            cache_read_tokens: *cache_read_tokens,
+            cache_write_tokens: *cache_write_tokens,
+            tool_calls_made: *tool_calls_made,
+            stop_reason: audit_policy::safe_identity(stop_reason),
+            error: error.clone(),
+        }),
+    };
+    if let Err(err) = result {
+        tracing::error!(error = %err, "failed to write agentd worker audit record");
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerApprovalAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: &'a str,
+    owner_uid: u32,
+    session_id: String,
+    verb: String,
+    scope: String,
+    action: &'static str,
+}
+
+/// Record one permission mediation the broker performed for a worker.
+///
+/// Identity comes from the caller's verified lease, and the verb/scope
+/// are re-bounded here, so the trail says exactly which consent decision
+/// was spent or filed on whose behalf without trusting worker text.
+pub fn record_worker_approval(
+    task_id: &str,
+    owner_uid: u32,
+    session_id: &str,
+    verb: &str,
+    scope: &crate::caps::Scope,
+    action: &'static str,
+) {
+    let job_id = audit_policy::safe_identity(task_id);
+    let record = WorkerApprovalAudit {
+        ts: Utc::now(),
+        event: "clawd.agent.approval.mediated",
+        job_id: &job_id,
+        owner_uid,
+        session_id: audit_policy::safe_identity(session_id),
+        verb: audit_policy::safe_identity(verb),
+        scope: audit_policy::safe_reference(&scope.to_string()),
+        action,
+    };
+    if let Err(err) = append_jsonl(&record) {
+        tracing::error!(error = %err, "failed to write agentd approval audit record");
+    }
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerToolAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: &'a str,
+    owner_uid: u32,
+    session_id: String,
+    turn_index: u32,
+    #[serde(flatten)]
+    tool: ToolFacts,
+    tool_use_id: String,
+    success: bool,
+    latency_ms: u64,
+    bytes_returned: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<TextDigest>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerTurnAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: &'a str,
+    owner_uid: u32,
+    session_id: String,
+    turn_index: u32,
+    provider: String,
+    model: String,
+    success: bool,
+    latency_ms: u64,
+    input_tokens: u32,
+    output_tokens: u32,
+    cache_read_tokens: u32,
+    cache_write_tokens: u32,
+    tool_calls_made: u32,
+    stop_reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<TextDigest>,
+}
+
 #[derive(Debug)]
 struct ClawdRuntimeAuditHook;
 

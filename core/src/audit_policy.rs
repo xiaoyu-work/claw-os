@@ -30,7 +30,7 @@
 
 use std::sync::OnceLock;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
 /// Recorded in place of a command the policy does not recognise.
@@ -63,7 +63,7 @@ const DIGEST_HEX_LEN: usize = 16;
 /// daemon can be recognised as the same text while nothing outside that
 /// process — including anyone holding the log — can test a guess
 /// against it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TextDigest {
     pub bytes: usize,
     pub digest: String,
@@ -869,7 +869,7 @@ pub fn tool_policy(tool: &str) -> Option<&'static ToolPolicy> {
 }
 
 /// Everything a durable record may say about a tool invocation.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolFacts {
     /// Bounded tool name: the policy's static name when known, the
     /// registry name when it is a well-formed token, otherwise
@@ -904,6 +904,20 @@ pub fn tool_facts(tool: &str, input: &Value) -> ToolFacts {
             }
         }
     }
+}
+
+/// Re-apply the projection to facts that arrived from another process.
+///
+/// An `agentd` worker computes its own [`ToolFacts`], so nothing it
+/// sends may be written verbatim: the tool name is re-bounded and the
+/// recorded input is re-projected through the same policy, which drops
+/// any field the policy does not allow no matter what the sender
+/// claimed. The reported omission count is kept when it is larger, so a
+/// worker cannot understate what it withheld either.
+pub fn reproject_tool_facts(facts: &ToolFacts) -> ToolFacts {
+    let mut reprojected = tool_facts(&facts.tool, &facts.input);
+    reprojected.input_omitted = reprojected.input_omitted.max(facts.input_omitted);
+    reprojected
 }
 
 /// Bound an identifier the broker or a provider produced (a tool-use

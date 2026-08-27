@@ -25,7 +25,7 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos`, `clawd`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
+| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
 | `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 

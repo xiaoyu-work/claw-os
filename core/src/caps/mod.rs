@@ -38,6 +38,7 @@
 //! the system can begin moving over without a big-bang switch.
 
 pub mod args;
+pub mod approval_gateway;
 pub mod cap;
 pub mod catalog;
 pub mod denial;
@@ -58,6 +59,7 @@ pub(crate) mod test_env_lock {
 }
 
 pub use cap::{Cap, CapSet};
+pub use approval_gateway::{ApprovalGateway, PendingApproval};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
 pub use denial::{Denial, DenialReason};
 pub use enforcement::{require, require_or_json, Mode};

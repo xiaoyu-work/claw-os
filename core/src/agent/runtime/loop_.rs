@@ -1319,6 +1319,13 @@ pub async fn attach_mcp_servers_for_cli(
     tools: &mut ToolRegistry,
     cfg: &AgentConfig,
 ) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
+    // MCP clients are model-visible transport the broker must never
+    // hold. Fail closed (no servers attached) rather than dialling out
+    // from a root process.
+    if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("MCP attachment") {
+        tracing::error!(error = %error, "refusing to attach MCP servers");
+        return Vec::new();
+    }
     attach_mcp_servers(tools, cfg).await
 }
 

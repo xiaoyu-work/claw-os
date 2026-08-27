@@ -3,7 +3,6 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 
-use crate::agent::service::{self, WorkerOptions};
 use crate::audit_policy;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -44,7 +43,13 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
 
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
-    let worker = spawn_agent_worker();
+    let agentd_shutdown = Arc::new(AtomicBool::new(false));
+    // Agent work runs in unprivileged `claw-agentd` processes. The
+    // supervisor handle is deliberately *not* part of the daemon's
+    // fatal path: a worker exiting — normally or not — must never take
+    // the broker down, and supervision stopping still leaves every
+    // non-agent primitive served.
+    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown);
     spawn_heartbeat();
     let serve = async move {
         loop {
@@ -69,28 +74,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
         #[allow(unreachable_code)]
         Ok::<(), String>(())
     };
-    tokio::select! {
-        result = worker => {
-            match result {
-                Ok(Ok(_)) => Err("clawd agent worker exited unexpectedly".to_string()),
-                Ok(Err(error)) => Err(format!("clawd agent worker failed: {error}")),
-                Err(error) => Err(format!("clawd agent worker panicked: {error}")),
-            }
-        }
-        result = serve => result,
-    }
-}
-
-fn spawn_agent_worker() -> tokio::task::JoinHandle<Result<Value, String>> {
-    let shutdown = Arc::new(AtomicBool::new(false));
-    tokio::task::spawn_blocking(move || {
-        let options = WorkerOptions {
-            once: false,
-            poll_ms: 500,
-            max_jobs: None,
-        };
-        service::run_worker_loop(options, shutdown)
-    })
+    serve.await
 }
 
 /// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop

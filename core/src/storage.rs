@@ -35,12 +35,20 @@ pub fn harden_clawd_state() -> io::Result<()> {
 
     validate_clawd_root(&data)?;
     validate_clawd_root(&logs)?;
-    ensure_private_dir(&data)?;
+    // Traversable, never listable. The per-owner agent state each
+    // `claw-agentd` worker runs against lives at `<data>/users/<uid>`
+    // and is owned by that account, so both the daemon root and the
+    // `users/` level must let a non-root worker walk *through* them.
+    // Every other subtree below stays `0700 root`.
+    ensure_traversable_dir(&data)?;
     ensure_private_dir(&logs)?;
 
+    let users = data.join("users");
+    if users.exists() {
+        harden_owner_partitioned_tree(&users)?;
+    }
     for root in [
         data.join("agent"),
-        data.join("users"),
         data.join("approvals"),
         data.join("sessions"),
         data.join("proc"),
@@ -51,6 +59,103 @@ pub fn harden_clawd_state() -> io::Result<()> {
         }
     }
     harden_private_tree(&logs)
+}
+
+/// Prepare the per-owner agent state root an unprivileged worker writes
+/// through: conversation memory, notes, todos and AI budget counters.
+///
+/// The leaf is owned by the account the task belongs to and stays
+/// `0700`, so no other user can read it and `clawd` (root) can still
+/// audit it. `<data>` and `<data>/users` are `0711`: a worker can walk
+/// to its own directory but cannot enumerate the daemon's state or
+/// discover other accounts' partitions by listing.
+pub fn ensure_owner_agent_state_dir(uid: u32, gid: u32) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        if uid == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "refusing to prepare owner agent state for uid 0",
+            ));
+        }
+        let euid = unsafe { libc::geteuid() as u32 };
+        if euid != 0 && euid != uid {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                format!("cannot prepare owner agent state for uid {uid} as uid {euid}"),
+            ));
+        }
+        let data = crate::paths::data_dir();
+        validate_clawd_root(&data)?;
+        ensure_traversable_dir(&data)?;
+        let users = data.join("users");
+        reject_symlink(&users)?;
+        fs::create_dir_all(&users)?;
+        if euid == 0 {
+            chown(&users, 0, 0)?;
+        }
+        fs::set_permissions(&users, fs::Permissions::from_mode(0o711))?;
+
+        let owner_root = crate::paths::clawd_user_state_dir(uid);
+        reject_symlink(&owner_root)?;
+        fs::create_dir_all(&owner_root)?;
+        if euid == 0 {
+            chown(&owner_root, uid, gid)?;
+        }
+        fs::set_permissions(&owner_root, fs::Permissions::from_mode(0o700))?;
+
+        for child in ["agent", "logs"] {
+            let path = owner_root.join(child);
+            reject_symlink(&path)?;
+            fs::create_dir_all(&path)?;
+            if euid == 0 {
+                chown(&path, uid, gid)?;
+            }
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = gid;
+        ensure_private_dir(&crate::paths::clawd_user_state_dir(uid))
+    }
+}
+
+/// `users/` itself is daemon-owned and traversable; each `users/<uid>`
+/// below it belongs to that account and is left alone, so hardening on
+/// start-up cannot take a running worker's state away from it.
+fn harden_owner_partitioned_tree(root: &Path) -> io::Result<()> {
+    reject_symlink(root)?;
+    let metadata = fs::symlink_metadata(root)?;
+    if !metadata.is_dir() {
+        return set_private_file(root);
+    }
+    #[cfg(unix)]
+    fs::set_permissions(root, fs::Permissions::from_mode(0o711))?;
+    for entry in fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        let child = fs::symlink_metadata(&path)?;
+        if child.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("refusing symlink inside private state: {}", path.display()),
+            ));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            // A partition still owned by root predates the split (or
+            // belongs to no account); keep it locked down.
+            if child.is_dir() && child.uid() == 0 {
+                harden_private_tree(&path)?;
+            }
+        }
+        #[cfg(not(unix))]
+        harden_private_tree(&path)?;
+    }
+    Ok(())
 }
 
 pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
@@ -154,6 +259,20 @@ fn set_dir_mode(path: &Path) -> io::Result<()> {
         let _ = path;
         Ok(())
     }
+}
+
+/// `0711`: walkable by any account, listable by none. Used for the
+/// daemon state root and the `users/` level so an unprivileged
+/// `claw-agentd` worker can reach its own owner partition without being
+/// able to enumerate the daemon's state.
+fn ensure_traversable_dir(path: &Path) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o711))
+    }
+    #[cfg(not(unix))]
+    Ok(())
 }
 
 fn validate_clawd_root(path: &Path) -> io::Result<()> {

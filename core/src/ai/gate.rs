@@ -1187,6 +1187,12 @@ pub fn build_system_provider(
     use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
     use std::collections::BTreeSet;
 
+    // Provider construction is where the model transport (HTTP client,
+    // streaming parser, credential resolution) enters a process. It is
+    // reachable only from the unprivileged agent worker.
+    crate::agentd::guard::ensure_agent_runtime_allowed("model provider construction")
+        .map_err(llm::LlmError::NotConfigured)?;
+
     if cfg.provider_fallbacks.len() > 8 {
         return Err(llm::LlmError::NotConfigured(format!(
             "provider fallback chain has {} fallbacks; maximum is 8",

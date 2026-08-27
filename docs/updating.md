@@ -29,7 +29,7 @@ release schedules:
 
 | Package | Contents |
 | --- | --- |
-| `claw-os-agent` | Reusable Agent, `clawd`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
+| `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
 | `claw-os-base` | Claw OS recovery, managed agent home, and distribution boot/service policy |
 | `claw-os-desktop` | Desktop shell, graphical Agent UI, and graphical applications, when installed |
 
@@ -43,6 +43,33 @@ upgrade. Newly launched `cos` commands use the replaced binary immediately;
 the running daemon is restarted automatically. `claw-os-base` separately
 restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed.
+
+`clawd` and `claw-agentd` ship in the same package and are replaced together.
+Agent tasks run in `claw-agentd` processes that `clawd` supervises, so an
+upgrade behaves as follows:
+
+- In-flight workers are killed when the daemon restarts (`PR_SET_PDEATHSIG`),
+  and their tasks are reconciled — retried, or failed once they have used up
+  their recovery budget — the next time `clawd` starts.
+- A mismatched pair (an old `clawd` with a new `claw-agentd`, or the reverse)
+  fails closed: both sides check the worker protocol version and report
+  `agentd protocol mismatch`, naming reinstallation as the fix. No task runs
+  against a half-upgraded pair.
+- If the worker binary is missing or the daemon is started with
+  `CLAWD_AGENTD=off`, agent tasks stop being executed and say so, while every
+  other `clawd` primitive keeps serving.
+- Agent tasks must be submitted by a non-root account. A root-owned task is
+  refused with a message naming that requirement, because the runtime has no
+  lesser account to drop to. On a single-account image, create an ordinary user
+  and submit as that user.
+
+Confirm both binaries and the running daemon after an upgrade:
+
+```bash
+dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd)$'
+sudo systemctl status clawd
+cos agent service list --status pending
+```
 
 Check the installed and available versions with:
 

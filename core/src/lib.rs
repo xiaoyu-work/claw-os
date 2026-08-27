@@ -10,6 +10,7 @@
 )]
 
 pub mod agent;
+pub mod agentd;
 pub mod ai;
 pub mod approvals;
 pub mod apps;

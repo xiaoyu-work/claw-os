@@ -3,6 +3,11 @@ use std::path::PathBuf;
 use cos::clawd::{config, server};
 
 fn main() {
+    // Declare this the privileged broker before anything else can pull
+    // a provider client, MCP session, App launch or model-visible tool
+    // registry into the root address space. `agentd::guard` turns each
+    // of those surfaces into a hard error from here on.
+    cos::agentd::guard::mark_broker_process();
     cos::storage::set_private_umask();
     let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
     if raw_args

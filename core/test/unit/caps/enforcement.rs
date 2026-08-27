@@ -581,3 +581,122 @@ fn require_writes_to_caps_jsonl() {
     assert_eq!(deny["verb"], "fs.delete");
     assert_eq!(deny["reason"], "verb-not-granted");
 }
+
+// ---------------------------------------------------------------------------
+// Worker approval mediation
+// ---------------------------------------------------------------------------
+
+/// Stand-in for the `agentd` worker gateway: records what the gate
+/// asked and answers with whatever the test configured.
+#[derive(Debug)]
+struct FakeGateway {
+    consume: std::sync::Mutex<Result<bool, String>>,
+    request: std::sync::Mutex<Result<crate::caps::PendingApproval, String>>,
+    asked: std::sync::Mutex<Vec<(String, String)>>,
+}
+
+impl FakeGateway {
+    fn new(
+        consume: Result<bool, String>,
+        request: Result<crate::caps::PendingApproval, String>,
+    ) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            consume: std::sync::Mutex::new(consume),
+            request: std::sync::Mutex::new(request),
+            asked: std::sync::Mutex::new(Vec::new()),
+        })
+    }
+
+    fn record(&self, verb: Verb, scope: &Scope) {
+        if let Ok(mut asked) = self.asked.lock() {
+            asked.push((verb.as_str().to_string(), scope.to_string()));
+        }
+    }
+}
+
+impl crate::caps::ApprovalGateway for FakeGateway {
+    fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
+        self.record(verb, scope);
+        self.consume.lock().unwrap().clone()
+    }
+
+    fn request(&self, verb: Verb, scope: &Scope) -> Result<crate::caps::PendingApproval, String> {
+        self.record(verb, scope);
+        self.request.lock().unwrap().clone()
+    }
+}
+
+struct GatewayGuard;
+
+impl Drop for GatewayGuard {
+    fn drop(&mut self) {
+        crate::caps::approval_gateway::clear_for_test();
+    }
+}
+
+#[test]
+fn a_worker_gate_reaches_consent_through_its_gateway_not_the_store() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-gw", caps);
+    let _g = EnvGuard::new(&reg, Some("s-gw"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Ok(false),
+        Ok(crate::caps::PendingApproval {
+            request_id: Some("ap-test".to_string()),
+        }),
+    );
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+
+    let denial =
+        require(Verb::FS_DELETE, Scope::path("/home/jay/x")).expect_err("the verb is not granted");
+    let hint = denial.hint.unwrap_or_default();
+    assert!(hint.contains("ap-test"), "{hint}");
+
+    // The gate consulted the gateway with the exact verb and scope it
+    // refused, and nothing reached the local consent store.
+    let asked = gateway.asked.lock().unwrap().clone();
+    assert!(asked.contains(&(
+        "fs.delete".to_string(),
+        Scope::path("/home/jay/x").to_string()
+    )));
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[test]
+fn an_approved_grant_lets_the_retry_through_the_worker_gateway() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-gw2", caps);
+    let _g = EnvGuard::new(&reg, Some("s-gw2"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Ok(true),
+        Ok(crate::caps::PendingApproval { request_id: None }),
+    );
+    crate::caps::approval_gateway::install(gateway);
+    let _restore = GatewayGuard;
+
+    // The normal post-approval retry: the broker spends the grant
+    // one-shot and the gate proceeds.
+    assert!(require(Verb::FS_DELETE, Scope::path("/home/jay/x")).is_ok());
+}
+
+#[test]
+fn an_unavailable_broker_keeps_the_gate_closed() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-gw3", caps);
+    let _g = EnvGuard::new(&reg, Some("s-gw3"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Err("consent store is unavailable".to_string()),
+        Err("consent store is unavailable".to_string()),
+    );
+    crate::caps::approval_gateway::install(gateway);
+    let _restore = GatewayGuard;
+
+    let denial = require(Verb::FS_DELETE, Scope::path("/home/jay/x"))
+        .expect_err("mediation failure must not open the gate");
+    let hint = denial.hint.unwrap_or_default();
+    assert!(hint.contains("could not create approval request"), "{hint}");
+}

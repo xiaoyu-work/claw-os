@@ -1319,6 +1319,9 @@ pub fn run_python_app(
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
+    // Dynamic App execution is model-reachable, so it belongs in the
+    // unprivileged worker, never in the root broker's address space.
+    crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
         return Err(format!("app has no main.py at {}", main_py.display()));

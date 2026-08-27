@@ -450,10 +450,33 @@ pub fn clawd_user_memory_db_path(uid: u32) -> PathBuf {
 }
 
 pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
-    data_dir()
-        .join("users")
-        .join(uid.to_string())
-        .join("agent")
+    clawd_user_state_dir(uid).join("agent")
+}
+
+/// Per-owner state root for clawd-routed agent work.
+///
+/// Owned by that account and `0700`, because the agent runtime now
+/// executes as the task owner in `claw-agentd` and has to be able to
+/// write its own conversation memory, notes and budget counters. The
+/// daemon (root) still reads it; no other account can.
+pub fn clawd_user_state_dir(uid: u32) -> PathBuf {
+    data_dir().join("users").join(uid.to_string())
+}
+
+/// State root for the *current* scope: the owner partition inside a
+/// routed job, the process data dir everywhere else.
+pub fn routed_data_dir() -> PathBuf {
+    match current_owner_uid_override() {
+        Some(uid) => clawd_user_state_dir(uid),
+        None => data_dir(),
+    }
+}
+
+/// AI usage/budget ledger. Partitioned per owner inside a routed job so
+/// the unprivileged worker can settle its own reservations; the
+/// machine-wide ledger stays root-owned for everything else.
+pub fn ai_budget_db_path() -> PathBuf {
+    routed_data_dir().join("ai_budget.db")
 }
 
 /// Path to the agent's semantic-memory (vector) SQLite store.
@@ -602,6 +625,12 @@ pub fn agent_runtime_socket() -> PathBuf {
 /// from `audit.rs` which logs the parent `cos <app> <cmd>`
 /// invocation; one CLI call may produce many run-record lines.
 pub fn ai_run_log_path() -> PathBuf {
+    if let Some(uid) = current_owner_uid_override() {
+        // A routed job runs unprivileged in `claw-agentd`, which cannot
+        // write the daemon's `0700` log dir. Its run records land in the
+        // same owner partition as the rest of that task's state.
+        return clawd_user_state_dir(uid).join("logs").join("ai.jsonl");
+    }
     log_dir().join("ai.jsonl")
 }
 

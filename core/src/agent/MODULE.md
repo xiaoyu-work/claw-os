@@ -13,7 +13,9 @@ surfaces.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Attach built-in, app, and MCP tools to one guarded registry.
-- Expose CLI, daemon worker, and authenticated local web surfaces.
+- Expose CLI, task-queue, and authenticated local web surfaces. The queue's
+  execution side runs in `claw-agentd`, never in the `clawd` broker — see
+  [`../agentd/MODULE.md`](../agentd/MODULE.md).
 
 ## Key Files
 
@@ -26,7 +28,7 @@ surfaces.
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
-| `service.rs`, `../../test/unit/agent/service.rs` | Agent daemon/task service lifecycle and tests |
+| `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
@@ -44,7 +46,7 @@ surfaces.
 The normal call direction is:
 
 ```text
-CLI/web/clawd worker
+CLI/web -> clawd task queue -> claw-agentd worker
   -> runtime loop
   -> prompt + memory
   -> Provider
