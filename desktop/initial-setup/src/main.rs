@@ -15,9 +15,11 @@ use futures::{SinkExt, Stream, StreamExt};
 use indexmap::IndexMap;
 use tracing_subscriber::prelude::*;
 
+mod finish;
 mod greeter;
 mod localize;
 
+use self::finish::{Coordinator as FinishCoordinator, PageResult, Start};
 use self::page::Page;
 mod page;
 
@@ -145,8 +147,19 @@ pub enum Message {
     None,
     Exit,
     Finish,
-    SetupMarked(Result<(), String>),
-    SessionEnded(Result<(), String>),
+    PageApplied {
+        attempt: u64,
+        page: TypeId,
+        result: page::ApplyResult,
+    },
+    SetupMarked {
+        attempt: u64,
+        result: Result<(), String>,
+    },
+    SessionEnded {
+        attempt: u64,
+        result: Result<(), String>,
+    },
     PageMessage(page::Message),
     PageOpen(usize),
 }
@@ -158,8 +171,7 @@ pub struct App {
     page_i: usize,
     oem_mode: bool,
     user_creation_complete: bool,
-    settings_applied: bool,
-    finishing: bool,
+    finish: FinishCoordinator,
     finish_error: Option<String>,
     wifi_exists: bool,
     /// Wallpaper for the wizard background, when one is available on disk.
@@ -208,28 +220,75 @@ fn configured_first_user_exists() -> bool {
 }
 
 impl App {
-    fn apply_remaining_settings(&mut self) -> Task<Message> {
-        if self.settings_applied {
-            return cosmic::Task::future(async {
-                Message::SetupMarked(write_setup_marker().await).into()
-            });
-        }
-        let user_page = TypeId::of::<page::user::Page>();
-        let tasks = self
-            .pages
+    fn apply_pending_settings(
+        &mut self,
+        attempt: u64,
+        only_page: Option<TypeId>,
+    ) -> Task<Message> {
+        let finish = &self.finish;
+        self.pages
             .iter_mut()
-            .filter_map(|(type_id, page)| {
-                (*type_id != user_page && page.completed()).then(|| {
+            .filter_map(|(page_id, page)| {
+                (finish.is_pending(attempt, *page_id)
+                    && only_page.is_none_or(|only| only == *page_id))
+                .then(|| {
+                    let page_id = *page_id;
                     page.apply_settings()
-                        .map(Message::PageMessage)
+                        .map(move |result| Message::PageApplied {
+                            attempt,
+                            page: page_id,
+                            result,
+                        })
                         .map(cosmic::Action::App)
                 })
             })
             .collect::<Vec<_>>()
-            .apply(Task::batch);
-        tasks.chain(cosmic::Task::future(async {
-            Message::SetupMarked(write_setup_marker().await).into()
-        }))
+            .apply(Task::batch)
+    }
+
+    fn applicable_pages(&self, include_user: bool) -> Vec<TypeId> {
+        let user_page = TypeId::of::<page::user::Page>();
+        self
+            .pages
+            .iter()
+            .filter_map(|(type_id, page)| {
+                ((*type_id == user_page && include_user)
+                    || (*type_id != user_page && page.completed()))
+                .then_some(*type_id)
+            })
+            .collect()
+    }
+
+    fn write_setup_marker_task(attempt: u64) -> Task<Message> {
+        cosmic::Task::future(async move {
+            Message::SetupMarked {
+                attempt,
+                result: write_setup_marker().await,
+            }
+            .into()
+        })
+    }
+
+    fn show_apply_failure(&mut self, page_id: TypeId, why: String) -> Task<Message> {
+        let title = self
+            .pages
+            .get(&page_id)
+            .map(|page| page.title())
+            .unwrap_or_else(|| "Setup".to_string());
+        self.finish_error = Some(format!(
+            "{title}: {why}. Review this page and try again."
+        ));
+
+        let Some(page_i) = self.pages.get_index_of(&page_id) else {
+            return Task::none();
+        };
+        self.page_i = page_i;
+        self.pages
+            .get_mut(&page_id)
+            .expect("page index came from the same map")
+            .open()
+            .map(Message::PageMessage)
+            .map(cosmic::Action::App)
     }
 }
 
@@ -342,8 +401,7 @@ impl Application for App {
             core,
             oem_mode,
             user_creation_complete,
-            settings_applied: resume_exit,
-            finishing: false,
+            finish: FinishCoordinator::new(resume_exit),
             finish_error: None,
             pages,
             page_i: 0,
@@ -450,32 +508,17 @@ impl Application for App {
                     }
                 }
 
-                page::Message::User(message) => match message {
-                    page::user::Message::Applied(result) => match result {
-                        Ok(()) => {
-                            self.user_creation_complete = true;
-                            return self.apply_remaining_settings();
-                        }
-                        Err(why) => {
-                            tracing::error!(error = %why, "first-user transaction failed");
-                            self.finishing = false;
-                            self.finish_error = Some(why);
-                        }
-                    },
-                    other => {
-                        if let Some(page) =
-                            self.pages.get_mut(&TypeId::of::<page::user::Page>())
-                        {
-                            return page
-                                .as_any()
-                                .downcast_mut::<page::user::Page>()
-                                .unwrap()
-                                .update(other)
-                                .map(Message::PageMessage)
-                                .map(cosmic::Action::App);
-                        }
+                page::Message::User(message) => {
+                    if let Some(page) = self.pages.get_mut(&TypeId::of::<page::user::Page>()) {
+                        return page
+                            .as_any()
+                            .downcast_mut::<page::user::Page>()
+                            .unwrap()
+                            .update(message)
+                            .map(Message::PageMessage)
+                            .map(cosmic::Action::App);
                     }
-                },
+                }
 
                 page::Message::A11y(message) => {
                     if let Some(page) = self.pages.get_mut(&TypeId::of::<page::a11y::Page>()) {
@@ -527,7 +570,7 @@ impl Application for App {
             },
 
             Message::PageOpen(page_i) => {
-                if self.finishing {
+                if self.finish.finishing() {
                     return Task::none();
                 }
                 if let Some((_, page)) = self.pages.get_index_mut(page_i) {
@@ -540,53 +583,124 @@ impl Application for App {
             }
 
             Message::Finish => {
-                if self.finishing {
+                if self.finish.finishing() {
                     return Task::none();
                 }
-                self.finishing = true;
                 self.finish_error = None;
-                if self.oem_mode
-                    && !self.user_creation_complete
-                    && let Some(page) =
-                        self.pages.get_mut(&TypeId::of::<page::user::Page>())
-                {
+
+                let user_page = TypeId::of::<page::user::Page>();
+                let needs_user = self.oem_mode && !self.user_creation_complete;
+                if needs_user {
+                    let Some(page) = self.pages.get(&user_page) else {
+                        self.finish_error =
+                            Some("The first-user page is unavailable. Try setup again.".to_string());
+                        return Task::none();
+                    };
                     if !page.completed() {
-                        self.finishing = false;
                         self.finish_error =
                             Some("Create the first user before finishing setup.".to_string());
+                        if let Some(page_i) = self.pages.get_index_of(&user_page) {
+                            self.page_i = page_i;
+                        }
                         return Task::none();
                     }
-                    return page
-                        .apply_settings()
-                        .map(Message::PageMessage)
-                        .map(cosmic::Action::App);
                 }
-                return self.apply_remaining_settings();
+
+                let pages = self.applicable_pages(needs_user);
+                match self.finish.begin(pages) {
+                    Some(Start::Apply { attempt }) => {
+                        let user_only = (needs_user
+                            && self.finish.is_pending(attempt, user_page))
+                        .then_some(user_page);
+                        return self.apply_pending_settings(attempt, user_only);
+                    }
+                    Some(Start::WriteMarker { attempt }) => {
+                        return Self::write_setup_marker_task(attempt);
+                    }
+                    None => {}
+                }
             }
 
-            Message::SetupMarked(result) => {
-                self.settings_applied = true;
+            Message::PageApplied {
+                attempt,
+                page: page_id,
+                result,
+            } => {
+                let progress =
+                    self.finish
+                        .page_finished(attempt, page_id, result.is_ok());
+                if progress == PageResult::Ignored {
+                    return Task::none();
+                }
+                if let Some(page) = self.pages.get_mut(&page_id) {
+                    page.apply_result(&result);
+                }
+
+                match result {
+                    Err(why) => {
+                        debug_assert_eq!(progress, PageResult::Failed);
+                        tracing::error!(
+                            page = %self.pages.get(&page_id).map(|page| page.title()).unwrap_or_default(),
+                            error = %why,
+                            "initial-setup page apply failed"
+                        );
+                        return self.show_apply_failure(page_id, why);
+                    }
+                    Ok(()) if page_id == TypeId::of::<page::user::Page>() => {
+                        self.user_creation_complete = true;
+                        if progress == PageResult::Waiting {
+                            return self.apply_pending_settings(attempt, None);
+                        }
+                    }
+                    Ok(()) => {}
+                }
+
+                if progress == PageResult::WriteMarker {
+                    for page in self.pages.values_mut() {
+                        page.all_settings_applied();
+                    }
+                    return Self::write_setup_marker_task(attempt);
+                }
+            }
+
+            Message::SetupMarked { attempt, result } => {
+                if !self.finish.is_active(attempt) {
+                    return Task::none();
+                }
                 match result {
                     Ok(()) if self.oem_mode => {
-                        return cosmic::Task::future(async {
-                            Message::SessionEnded(terminate_oem_session().await).into()
+                        return cosmic::Task::future(async move {
+                            Message::SessionEnded {
+                                attempt,
+                                result: terminate_oem_session().await,
+                            }
+                            .into()
                         });
                     }
                     Ok(()) => return cosmic::Task::done(Message::Exit.into()),
                     Err(why) => {
                         tracing::error!(error = %why, "failed to mark initial setup complete");
-                        self.finishing = false;
-                        self.finish_error = Some(why);
+                        self.finish.operation_failed(attempt);
+                        self.finish_error = Some(format!(
+                            "Could not finish setup: {why}. Try again."
+                        ));
                     }
                 }
             }
 
-            Message::SessionEnded(result) => match result {
-                Ok(()) => return cosmic::Task::done(Message::Exit.into()),
-                Err(why) => {
-                    tracing::error!(error = %why, "failed to end first-boot session");
-                    self.finishing = false;
-                    self.finish_error = Some(why);
+            Message::SessionEnded { attempt, result } => {
+                if !self.finish.is_active(attempt) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => return cosmic::Task::done(Message::Exit.into()),
+                    Err(why) => {
+                        tracing::error!(error = %why, "failed to end first-boot session");
+                        self.finish.operation_failed(attempt);
+                        self.finish_error = Some(format!(
+                            "Could not end the first-boot session: {why}. Try again."
+                        ));
+                    }
                 }
             }
 
@@ -639,13 +753,13 @@ impl Application for App {
         if let Some(page_i) = self.page_i.checked_add(1) {
             if self.pages.get_index(page_i).is_some() {
                 let mut next = widget::button::suggested(fl!("next"));
-                if page.completed() && !self.finishing {
+                if page.completed() && !self.finish.finishing() {
                     next = next.on_press(Message::PageOpen(page_i));
                 }
                 button_row = button_row.push(next);
             } else {
                 let mut finish = widget::button::suggested(fl!("finish"));
-                if page.completed() && !self.finishing {
+                if page.completed() && !self.finish.finishing() {
                     finish = finish.on_press(Message::Finish);
                 }
                 button_row = button_row.push(finish);

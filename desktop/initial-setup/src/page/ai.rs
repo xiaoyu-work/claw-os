@@ -147,7 +147,6 @@ pub enum Message {
     EditApiKey(String),
     ToggleApiKeyVisibility,
     EditExtra(&'static str, String),
-    AppliedResult(ApplyOutcome),
     /// User clicked "Sign in with GitHub" on the OAuth panel.
     StartOauth,
     /// `cos agent setup text oauth-start --provider copilot` returned
@@ -161,14 +160,6 @@ pub enum Message {
     },
     /// Polling finished — either authorized or terminal error.
     OauthCompleted(Result<(), String>),
-}
-
-#[derive(Clone, Debug)]
-pub enum ApplyOutcome {
-    Ok,
-    /// Bridge denied or CLI exited non-zero. The string is a
-    /// short, user-readable summary suitable for inline display.
-    Failed(String),
 }
 
 /// OAuth flow state for providers like GitHub Copilot. Replaces the
@@ -220,7 +211,7 @@ pub struct Page {
     extras: HashMap<&'static str, String>,
     /// Last outcome of `apply_settings`, surfaced inline in the view.
     /// `None` until the user hits Finish.
-    last_outcome: Option<ApplyOutcome>,
+    last_outcome: Option<page::ApplyResult>,
     /// Device-flow state for OAuth providers (Copilot today). Reset
     /// to `Idle` whenever the user picks a non-OAuth provider so the
     /// stale "Authorized" badge can't leak.
@@ -278,9 +269,6 @@ impl Page {
                 } else {
                     self.extras.insert(key, value);
                 }
-            }
-            Message::AppliedResult(outcome) => {
-                self.last_outcome = Some(outcome);
             }
             Message::StartOauth => {
                 let provider = self
@@ -475,8 +463,8 @@ impl page::Page for Page {
 
         if let Some(outcome) = &self.last_outcome {
             let line = match outcome {
-                ApplyOutcome::Ok => widget::text::body(fl!("ai-page", "apply-ok")),
-                ApplyOutcome::Failed(reason) => widget::text::body(format!(
+                Ok(()) => widget::text::body(fl!("ai-page", "apply-ok")),
+                Err(reason) => widget::text::body(format!(
                     "{}: {}",
                     fl!("ai-page", "apply-failed"),
                     reason
@@ -505,29 +493,22 @@ impl page::Page for Page {
     /// always blank: the GitHub token lives in clawd's credential
     /// store, persisted during `oauth-poll`. We still pass `--model`
     /// so the apply verifies against the actual deployment id.
-    fn apply_settings(&mut self) -> Task<page::Message> {
-        // Honour `completed()` — skipped pages have nothing to write.
+    fn apply_settings(&mut self) -> Task<page::ApplyResult> {
         let Some(idx) = self.selected else {
-            return Task::none();
+            return Task::done(Err("Choose an AI provider before applying.".to_string()));
         };
         let provider = match PROVIDER_KEYS.get(idx) {
             Some(p) => (*p).to_string(),
-            None => return Task::none(),
+            None => return Task::done(Err("Choose a valid AI provider.".to_string())),
         };
         let model = self.model.trim().to_string();
         if model.is_empty() {
-            return Task::none();
+            return Task::done(Err("Enter an AI model before applying.".to_string()));
         }
-        // Move the credential out of the page state so we don't leave
-        // a copy hanging around in the UI struct after apply.
         let api_key = if is_oauth_provider(&provider) {
-            // Clear any stale value but don't forward it — Copilot's
-            // credential lives in the kernel credential store, not in
-            // the wizard.
-            self.api_key.clear();
             String::new()
         } else {
-            std::mem::take(&mut self.api_key)
+            self.api_key.clone()
         };
 
         // Snapshot only the extras the picked provider declares —
@@ -542,17 +523,21 @@ impl page::Page for Page {
             })
             .collect();
 
-        let fut = async move {
-            let outcome = tokio::task::spawn_blocking(move || {
+        cosmic::task::future(async move {
+            tokio::task::spawn_blocking(move || {
                 apply_blocking(&provider, &model, &api_key, &extras)
             })
             .await
-            .unwrap_or_else(|join_err| {
-                ApplyOutcome::Failed(format!("internal join error: {join_err}"))
-            });
-            page::Message::Ai(Message::AppliedResult(outcome))
-        };
-        cosmic::task::future(fut)
+            .unwrap_or_else(|join_err| Err(format!("internal join error: {join_err}")))
+        })
+    }
+
+    fn apply_result(&mut self, result: &page::ApplyResult) {
+        self.last_outcome = Some(result.clone());
+    }
+
+    fn all_settings_applied(&mut self) {
+        self.api_key.clear();
     }
 }
 
@@ -565,7 +550,7 @@ fn apply_blocking(
     model: &str,
     api_key: &str,
     extras: &[(&'static str, String)],
-) -> ApplyOutcome {
+) -> page::ApplyResult {
     let mut argv: Vec<&str> = vec![
         "cos",
         "agent",
@@ -592,7 +577,7 @@ fn apply_blocking(
                 model,
                 "cos agent setup text apply succeeded via claw-os-sdk"
             );
-            ApplyOutcome::Ok
+            Ok(())
         }
         Ok(r) => {
             // Redact: stderr can contain hints, but never the api-key
@@ -612,7 +597,7 @@ fn apply_blocking(
                 stderr = %r.stderr,
                 "cos agent setup text apply failed (non-zero exit)"
             );
-            ApplyOutcome::Failed(summary)
+            Err(summary)
         }
         Err(why) => {
             if why.is_denied() {
@@ -620,7 +605,7 @@ fn apply_blocking(
             } else {
                 tracing::error!(?why, "exec.run cos agent setup text apply failed");
             }
-            ApplyOutcome::Failed(format!("{why}"))
+            Err(format!("{why}"))
         }
     }
 }
@@ -845,4 +830,12 @@ fn oauth_panel<'a>(state: &OauthState) -> Element<'a, page::Message> {
         widget::container(col).padding(space_s).into(),
     ])
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/page/ai.rs"
+    ));
 }

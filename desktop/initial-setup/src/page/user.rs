@@ -257,7 +257,6 @@ impl Default for Page {
 #[derive(Clone, Debug)]
 pub enum Message {
     Edit(EditorField, String),
-    Applied(Result<(), String>),
     SelectedProfileImage(Arc<Result<Url, file_chooser::Error>>),
     SelectProfileImage,
     TogglePasswordConfirmVisibility,
@@ -355,7 +354,7 @@ impl super::Page for Page {
             .into()
     }
 
-    fn apply_settings(&mut self) -> cosmic::Task<super::Message> {
+    fn apply_settings(&mut self) -> cosmic::Task<super::ApplyResult> {
         let username = self.username.clone();
         let full_name = self.full_name.clone();
         let password = self.password.clone();
@@ -367,10 +366,7 @@ impl super::Page for Page {
         let is_admin = true;
 
         cosmic::task::future(async move {
-            super::Message::User(Message::Applied(
-                create_user_transaction(username, full_name, password, icon_file, is_admin)
-                    .await,
-            ))
+            create_user_transaction(username, full_name, password, icon_file, is_admin).await
         })
     }
 }
@@ -447,8 +443,6 @@ impl Page {
             Message::TogglePasswordConfirmVisibility => {
                 self.password_confirm_hidden = !self.password_confirm_hidden;
             }
-
-            Message::Applied(_) => {}
         };
 
         cosmic::Task::none()

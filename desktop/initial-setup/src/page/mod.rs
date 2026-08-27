@@ -127,6 +127,8 @@ pub enum Message {
     WiFi(wifi::Message),
 }
 
+pub type ApplyResult = Result<(), String>;
+
 impl From<Message> for super::Message {
     fn from(message: Message) -> Self {
         super::Message::PageMessage(message)
@@ -142,9 +144,13 @@ pub trait Page {
         cosmic::Task::none()
     }
 
-    fn apply_settings(&mut self) -> cosmic::Task<Message> {
-        cosmic::Task::none()
+    fn apply_settings(&mut self) -> cosmic::Task<ApplyResult> {
+        cosmic::Task::done(Ok(()))
     }
+
+    fn apply_result(&mut self, _result: &ApplyResult) {}
+
+    fn all_settings_applied(&mut self) {}
 
     fn open(&mut self) -> cosmic::Task<Message> {
         cosmic::Task::none()
