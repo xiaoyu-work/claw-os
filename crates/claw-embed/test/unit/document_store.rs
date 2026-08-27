@@ -2,6 +2,34 @@ use super::*;
 use crate::Chunk;
 use tempfile::tempdir;
 
+struct LegacyStore;
+
+impl VectorStore for LegacyStore {
+    fn upsert(&self, _path: &str, _chunks: &[Chunk], _vectors: &[Vec<f32>]) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn delete_path(&self, _path: &str) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn search(&self, _query: &[f32], _limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+        Ok(Vec::new())
+    }
+
+    fn stats(&self) -> anyhow::Result<StoreStats> {
+        Ok(StoreStats::default())
+    }
+}
+
+#[test]
+fn legacy_result_signatures_remain_source_compatible() {
+    let directory = tempdir().unwrap();
+    let open: fn(std::path::PathBuf) -> anyhow::Result<MemoryStore> = MemoryStore::open;
+    let _: anyhow::Result<MemoryStore> = open(directory.path().join("store.json"));
+    let _: Box<dyn VectorStore> = Box::new(LegacyStore);
+}
+
 #[test]
 fn existing_json_format_opens_without_migration() {
     let directory = tempdir().unwrap();
@@ -99,11 +127,11 @@ fn mismatched_chunks_and_vectors_are_rejected() {
         )
         .unwrap_err();
     assert!(matches!(
-        error,
-        DocumentStoreError::LengthMismatch {
+        error.downcast_ref(),
+        Some(DocumentStoreError::LengthMismatch {
             chunks: 1,
             vectors: 0
-        }
+        })
     ));
 }
 
@@ -121,6 +149,9 @@ fn failed_persistence_does_not_publish_in_memory_changes() {
     let error = store
         .upsert("/document", &[chunk], &[vec![1.0, 0.0]])
         .unwrap_err();
-    assert!(matches!(error, DocumentStoreError::Io { .. }));
+    assert!(matches!(
+        error.downcast_ref(),
+        Some(DocumentStoreError::Io { .. })
+    ));
     assert_eq!(store.stats().unwrap().n_chunks, 0);
 }

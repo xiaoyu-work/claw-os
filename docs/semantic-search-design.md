@@ -94,6 +94,12 @@ imports through `claw_semantic::{chunk, embed, extract, store, watch}` remain
 available as compatibility re-exports; callers can migrate to `claw_embed`
 without a coordinated data or service cutover.
 
+The re-exported `VectorStore` methods and `MemoryStore::open` retain their
+former `anyhow::Result` signatures, so existing store implementations and
+callers remain source-compatible. The shared implementation constructs typed
+`DocumentStoreError` causes internally; callers that need structured handling
+can downcast the returned `anyhow::Error`.
+
 The former `claw_semantic::Embedder::embed(&[String])` contract is the one
 source-level change: implementers and direct trait callers migrate to the
 shared async `claw_embed::Embedder` request/response API by constructing

@@ -51,18 +51,13 @@ pub struct SearchHit {
 }
 
 pub trait VectorStore: Send + Sync {
-    fn upsert(
-        &self,
-        path: &str,
-        chunks: &[Chunk],
-        vectors: &[Vec<f32>],
-    ) -> Result<(), DocumentStoreError>;
+    fn upsert(&self, path: &str, chunks: &[Chunk], vectors: &[Vec<f32>]) -> anyhow::Result<()>;
 
-    fn delete_path(&self, path: &str) -> Result<(), DocumentStoreError>;
+    fn delete_path(&self, path: &str) -> anyhow::Result<()>;
 
-    fn search(&self, query: &[f32], limit: usize) -> Result<Vec<SearchHit>, DocumentStoreError>;
+    fn search(&self, query: &[f32], limit: usize) -> anyhow::Result<Vec<SearchHit>>;
 
-    fn stats(&self) -> Result<StoreStats, DocumentStoreError>;
+    fn stats(&self) -> anyhow::Result<StoreStats>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -107,7 +102,11 @@ impl MemoryStore {
             .join("store.json")
     }
 
-    pub fn open(path: PathBuf) -> Result<Self, DocumentStoreError> {
+    pub fn open(path: PathBuf) -> anyhow::Result<Self> {
+        Self::open_typed(path).map_err(Into::into)
+    }
+
+    fn open_typed(path: PathBuf) -> Result<Self, DocumentStoreError> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|source| DocumentStoreError::Io {
                 action: "creating",
@@ -169,10 +168,8 @@ impl MemoryStore {
             source,
         })
     }
-}
 
-impl VectorStore for MemoryStore {
-    fn upsert(
+    fn upsert_typed(
         &self,
         path: &str,
         chunks: &[Chunk],
@@ -208,7 +205,7 @@ impl VectorStore for MemoryStore {
         Ok(())
     }
 
-    fn delete_path(&self, path: &str) -> Result<(), DocumentStoreError> {
+    fn delete_path_typed(&self, path: &str) -> Result<(), DocumentStoreError> {
         let mut inner = self.write()?;
         let mut next = inner.clone();
         if let Some(indices) = next.by_path.remove(path) {
@@ -220,7 +217,11 @@ impl VectorStore for MemoryStore {
         Ok(())
     }
 
-    fn search(&self, query: &[f32], limit: usize) -> Result<Vec<SearchHit>, DocumentStoreError> {
+    fn search_typed(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Vec<SearchHit>, DocumentStoreError> {
         let inner = self.read()?;
         let mut scored: Vec<(f32, &Row)> = inner
             .rows
@@ -241,13 +242,31 @@ impl VectorStore for MemoryStore {
             .collect())
     }
 
-    fn stats(&self) -> Result<StoreStats, DocumentStoreError> {
+    fn stats_typed(&self) -> Result<StoreStats, DocumentStoreError> {
         let inner = self.read()?;
         Ok(StoreStats {
             n_paths: inner.by_path.len(),
             n_chunks: inner.rows.len(),
             dim: inner.rows.first().map(|row| row.vec.len()).unwrap_or(0),
         })
+    }
+}
+
+impl VectorStore for MemoryStore {
+    fn upsert(&self, path: &str, chunks: &[Chunk], vectors: &[Vec<f32>]) -> anyhow::Result<()> {
+        self.upsert_typed(path, chunks, vectors).map_err(Into::into)
+    }
+
+    fn delete_path(&self, path: &str) -> anyhow::Result<()> {
+        self.delete_path_typed(path).map_err(Into::into)
+    }
+
+    fn search(&self, query: &[f32], limit: usize) -> anyhow::Result<Vec<SearchHit>> {
+        self.search_typed(query, limit).map_err(Into::into)
+    }
+
+    fn stats(&self) -> anyhow::Result<StoreStats> {
+        self.stats_typed().map_err(Into::into)
     }
 }
 
