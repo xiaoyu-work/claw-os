@@ -3,7 +3,7 @@ name = "claw-embed"
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-description = "Pure embedding abstractions for claw-os: Embedder trait, SemanticStore, chunk/extract/walk utilities. No engine or global-config dependencies."
+description = "Reusable embedding, extraction, chunking, walking, and semantic storage primitives for claw-os."
 repository = "https://github.com/xiaoyu-work/claw-os"
 
 [lib]
@@ -19,6 +19,7 @@ thiserror = "1"
 tracing = { workspace = true }
 notify = "6"
 sha2 = "0.10"
+dirs = "5"
 
 [dev-dependencies]
 tempfile = "3.27"

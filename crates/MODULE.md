@@ -15,14 +15,17 @@ CLI, semantic, and embedding surfaces.
 
 | Path | Role |
 | --- | --- |
-| `claw-embed/`, `claw-semantic/` | First-party embedding/search services |
+| `claw-embed/` | Reusable embedding, extraction, chunking, walking, and storage contracts |
+| `claw-semantic/` | Filesystem semantic daemon, config, service orchestration, and CLI |
 | `cos-browser/`, `cos-mcp-serve/`, `cos-cli/` | First-party binaries/tools |
 | `obscura-*/` | Vendored browser-engine internals |
 | `../Cargo.toml` | Workspace membership and shared dependencies |
 
 ## Dependencies
 
-Core depends on crate APIs; focused crates do not import core orchestration.
+Core and `claw-semantic` depend on `claw-embed`; the primitives crate does not
+import daemon or core orchestration. Core depends on crate APIs; focused crates
+do not import core orchestration.
 Keep Obscura changes scoped and preserve upstream licensing/provenance. Add a
 new crate only for a coherent reusable responsibility.
 

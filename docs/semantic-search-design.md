@@ -6,7 +6,7 @@ do not yet form one unified document-search pipeline.
 | Surface | Implementation | Storage | Current consumer | Status |
 | --- | --- | --- | --- | --- |
 | Document keyword search | Recoll / Xapian | `~/.recoll/` | `apps/docs` | Shipped |
-| Filesystem semantic prototype | `crates/claw-semantic` | JSON-backed `MemoryStore` | `claw-semantic` CLI only | Experimental |
+| Filesystem semantic prototype | `claw-semantic` orchestration + `claw-embed` primitives | JSON-backed `MemoryStore` | `claw-semantic` CLI only | Experimental |
 | Agent semantic memory | `crates/claw-embed` + core memory adapter | SQLite `SemanticStore` | Agent indexing and `cos_recall_semantic` | Shipped when embedding is configured |
 
 The Recoll and `claw-semantic` user units are enabled under
@@ -30,14 +30,14 @@ store and does not perform result fusion.
 
 ## Filesystem Semantic Prototype: `claw-semantic`
 
-`crates/claw-semantic` remains a Phase-1 prototype:
+`crates/claw-semantic` remains a Phase-1 daemon and CLI:
 
 ```text
-watched files
-  -> TextExtractor
-  -> grapheme-safe overlapping chunks
-  -> StubEmbedder (384 dimensions)
-  -> MemoryStore persisted as JSON
+watched files (`claw-semantic` orchestration)
+  -> claw_embed::TextExtractor
+  -> claw_embed::chunks_for
+  -> claw_embed::StubEmbedder (384 dimensions)
+  -> claw_embed::MemoryStore persisted as JSON
   -> claw-semantic CLI queries
 ```
 
@@ -47,6 +47,11 @@ exercised end to end, but the resulting similarity scores are not meaningful
 semantic embeddings.
 
 This prototype is not connected to `apps/docs`.
+
+`claw-embed` is the sole owner of the chunk, embedder, extractor, filesystem
+walker, and store contracts. `claw-semantic` retains compatibility re-exports
+for its former library module paths, but new callers should import
+`claw_embed` directly.
 
 ## Agent Semantic Memory: `claw-embed`
 
@@ -74,7 +79,28 @@ directory.
 This path provides real semantic recall for Agent memory, but it does not
 index the user's document directories for `apps/docs`.
 
-## Why the Paths Are Separate
+## Persistence and Caller Compatibility
+
+The consolidation does not migrate or rewrite filesystem semantic data.
+`MemoryStore` still reads and writes the same JSON array at
+`$XDG_STATE_HOME/claw-semantic/store.json` (falling back to
+`~/.local/state/claw-semantic/store.json`), with the same row fields and
+384-dimensional `stub-sha256` vectors. Existing indexes therefore open in
+place.
+
+The `claw-semantic` and `claw-semantic-daemon` executable names, command JSON,
+configuration path, and systemd user unit remain unchanged. Existing Rust
+imports through `claw_semantic::{chunk, embed, extract, store, watch}` remain
+available as compatibility re-exports; callers can migrate to `claw_embed`
+without a coordinated data or service cutover.
+
+The former `claw_semantic::Embedder::embed(&[String])` contract is the one
+source-level change: implementers and direct trait callers migrate to the
+shared async `claw_embed::Embedder` request/response API by constructing
+`EmbedRequest` and awaiting `embed`. The shipped daemon and CLI already use
+that path; persisted vectors and service protocols are unchanged.
+
+## Why the Search Paths Are Separate
 
 - Recoll is an external document-indexing system with broad format support.
 - `claw-semantic` is a standalone filesystem-watching prototype.
@@ -97,12 +123,10 @@ score(doc) = sum over each source S of:
                 1 / (k + rank_S(doc))
 ```
 
-Before implementing fusion, the project must choose one filesystem semantic
-path:
-
-- upgrade `claw-semantic` to use the production embedding task and a durable
-  store, or
-- reuse `claw-embed` and retire the duplicate prototype storage pipeline.
+Before implementing fusion, the filesystem daemon must be upgraded from the
+compatibility stub embedder and JSON store to a real embedding provider and a
+production-scale document store. Those implementations belong behind the
+contracts in `claw-embed`; daemon lifecycle remains in `claw-semantic`.
 
 Only after that decision should `apps/docs` gain semantic queries and RRF
 fusion.
@@ -110,6 +134,7 @@ fusion.
 ## Current Status
 
 - `apps/docs`: Recoll keyword search only.
-- `claw-semantic`: optional filesystem prototype with stub embeddings.
+- `claw-semantic`: optional filesystem daemon/CLI using `claw-embed`
+  primitives with compatibility JSON persistence and stub embeddings.
 - Agent semantic recall: real embeddings and SQLite storage when configured.
 - Document semantic fusion: not implemented.
