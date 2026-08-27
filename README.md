@@ -18,13 +18,6 @@
 
 > **Claw OS is under active development; its architecture, APIs, and behavior may change significantly.**
 
-Claw OS is a complete Linux-based environment where the AI agent is a
-**system-level layer**, not an application running on top of one. The agent
-runs as a privileged system daemon (`clawd`) with direct, scoped access to the
-kernel, processes, logs, network, and every installed app — so it can reason
-about and act on the whole machine, the way an operator would, instead of being
-trapped inside a single app's sandbox.
-
 ## Why Claw OS is agent-native
 
 Agent-native is the whole bet: the next operating system is one where the
