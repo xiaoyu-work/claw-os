@@ -241,6 +241,8 @@ COMMANDS = {
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     """Entry point called by cos."""
     handler = COMMANDS.get(command)
     if handler is None:

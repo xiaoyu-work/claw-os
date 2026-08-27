@@ -50,6 +50,8 @@ def _broker(action, accuracy):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command not in {"locate", "timezone"}:
         return {"error": f"unknown command: {command}"}
     if len(args) > 1:

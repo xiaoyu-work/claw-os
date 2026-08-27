@@ -193,6 +193,8 @@ def _cmd_overlay(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"voice"})
     handlers = {
         "open": _cmd_open,
         "overlay": _cmd_overlay,

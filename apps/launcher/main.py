@@ -637,6 +637,10 @@ def cmd_is_running(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(
+        args, bool_flags={"include-no-display", "include-hidden"}
+    )
     handlers = {
         "list": cmd_list,
         "find": cmd_find,

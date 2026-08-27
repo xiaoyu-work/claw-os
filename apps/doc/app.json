@@ -110,7 +110,14 @@
       "label": {
         "en": "Summarize a document into 5 short bullet lines via the AI gate"
       },
+      "stdin": true,
       "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
         {
           "name": "file",
           "kind": "path",
@@ -161,7 +168,14 @@
       "label": {
         "en": "Explain the supplied content in plain prose via the AI gate"
       },
+      "stdin": true,
       "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
         {
           "name": "file",
           "kind": "path",
@@ -199,7 +213,14 @@
       "label": {
         "en": "Rewrite the supplied content following an instruction"
       },
+      "stdin": true,
       "args": [
+        {
+          "name": "text",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
         {
           "name": "file",
           "kind": "path",

@@ -797,7 +797,22 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
             ArgKind::Bool => "boolean",
         };
         let mut prop = serde_json::Map::new();
-        prop.insert("type".to_string(), Value::String(json_type.to_string()));
+        if a.repeatable {
+            prop.insert("type".to_string(), Value::String("array".to_string()));
+            let mut items = serde_json::Map::from_iter([(
+                "type".to_string(),
+                Value::String(json_type.to_string()),
+            )]);
+            if !a.choices.is_empty() {
+                items.insert("enum".to_string(), Value::Array(a.choices.clone()));
+            }
+            prop.insert("items".to_string(), Value::Object(items));
+        } else {
+            prop.insert("type".to_string(), Value::String(json_type.to_string()));
+            if !a.choices.is_empty() {
+                prop.insert("enum".to_string(), Value::Array(a.choices.clone()));
+            }
+        }
         if a.label.has_english() {
             prop.insert(
                 "description".to_string(),

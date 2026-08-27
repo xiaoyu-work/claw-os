@@ -96,6 +96,20 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Name,
             binding: Some(ArgBinding::Positional),
             required: true,
+            repeatable: false,
+            choices: Vec::new(),
+            default: None,
+            default_from: None,
+            trusted_resolver: None,
+            label: LocalizedText::default(),
+        },
+        Arg {
+            name: "provider".into(),
+            kind: ArgKind::Name,
+            binding: Some(ArgBinding::Positional),
+            required: false,
+            repeatable: true,
+            choices: vec![serde_json::json!("a"), serde_json::json!("b")],
             default: None,
             default_from: None,
             trusted_resolver: None,
@@ -106,6 +120,8 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Number,
             binding: Some(ArgBinding::Positional),
             required: false,
+            repeatable: false,
+            choices: Vec::new(),
             default: Some(serde_json::json!(60)),
             default_from: None,
             trusted_resolver: None,
@@ -119,6 +135,11 @@ fn build_schema_marks_required_args() {
     assert_eq!(
         schema["properties"]["ttl"]["default"],
         serde_json::json!(60)
+    );
+    assert_eq!(schema["properties"]["provider"]["type"], "array");
+    assert_eq!(
+        schema["properties"]["provider"]["items"]["enum"],
+        serde_json::json!(["a", "b"])
     );
     assert_eq!(schema["properties"]["key"]["type"], "string");
     assert_eq!(schema["properties"]["ttl"]["type"], "number");

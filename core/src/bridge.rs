@@ -3,7 +3,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::io::IsTerminal;
 
 use crate::caps::manifest::{ArgKind, Manifest, Need, Operation, Runtime, ScopeBinding};
 use crate::caps::{Cap, CapSet, Scope, Verb};
@@ -279,6 +280,11 @@ impl AppIdentitySession {
             },
         };
         let effective_args = bound.argv.clone();
+        let resolved = manifest
+            .as_ref()
+            .map(|manifest| manifest.resolve_needs(operation, &bound.values))
+            .transpose()
+            .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
@@ -287,7 +293,12 @@ impl AppIdentitySession {
             },
             |parent_caps| match declared {
                 Some(declared) => {
-                    constrained_operation_caps(parent_caps, false, declared, &bound.values)
+                    constrained_operation_caps(
+                        parent_caps,
+                        false,
+                        &declared.needs,
+                        resolved.as_deref().unwrap_or_default(),
+                    )
                 }
                 None => Ok(CapSet::new()),
             },
@@ -843,14 +854,18 @@ fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
 fn constrained_operation_caps(
     parent: &CapSet,
     parent_is_app: bool,
-    operation: &Operation,
-    values: &BTreeMap<String, serde_json::Value>,
+    needs: &[Need],
+    resolved: &[Vec<Cap>],
 ) -> Result<CapSet, String> {
+    if needs.len() != resolved.len() {
+        return Err("manifest capability resolution is inconsistent".to_string());
+    }
     let mut caps = CapSet::new();
-    for need in &operation.needs {
-        let requested = match &need.scope {
-            ScopeBinding::Fixed { scope } => Some(Cap::new(need.verb, scope.clone())),
-            ScopeBinding::Wild => {
+    for (need, requested_caps) in needs.iter().zip(resolved) {
+        if requested_caps.is_empty() {
+            continue;
+        }
+        if matches!(need.scope, ScopeBinding::Wild) {
                 let inherited = parent
                     .iter()
                     .filter(|cap| cap.verb == need.verb)
@@ -864,58 +879,15 @@ fn constrained_operation_caps(
                 } else {
                     caps.extend(inherited);
                 }
-                None
-            }
-            ScopeBinding::FromArg { arg } => operation
-                .args
-                .iter()
-                .find(|decl| decl.name == *arg)
-                .and_then(|decl| {
-                    values
-                        .get(arg)
-                        .and_then(|value| scope_for_arg(decl.kind, value))
-                })
-                .map(|scope| Cap::new(need.verb, scope)),
-            ScopeBinding::FromArgMap {
-                arg,
-                values: mappings,
-            } => mappings
-                .get(
-                    values
-                        .get(arg)
-                        .and_then(serde_json::Value::as_str)
-                        .unwrap_or_default(),
-                )
-                .cloned()
-                .map(|scope| Cap::new(need.verb, scope)),
-            ScopeBinding::FromArgOrWild { arg, wild_when } => {
-                if values
-                    .get(wild_when)
-                    .and_then(serde_json::Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    Some(Cap::new(need.verb, Scope::Wild))
-                } else {
-                    operation
-                        .args
-                        .iter()
-                        .find(|decl| decl.name == *arg)
-                        .and_then(|decl| {
-                            values
-                                .get(arg)
-                                .and_then(|value| scope_for_arg(decl.kind, value))
-                        })
-                        .map(|scope| Cap::new(need.verb, scope))
-                }
-            }
-        };
-        if let Some(requested) = requested {
-            if parent.covers(&requested) {
-                caps.insert(requested);
+                continue;
+        }
+        for requested in requested_caps {
+            if parent.covers(requested) {
+                caps.insert(requested.clone());
             } else if !parent_is_app {
                 crate::caps::require(requested.verb, requested.scope.clone())
                     .map_err(|denial| denial.to_string())?;
-                caps.insert(requested);
+                caps.insert(requested.clone());
             }
         }
     }
@@ -933,6 +905,7 @@ fn bind_operation_args(
     args: &[String],
 ) -> Result<BoundOperationArgs, String> {
     let mut values = parse_supplied_operation_args(operation, args)?;
+    let supplied = values.keys().cloned().collect::<BTreeSet<_>>();
     for declaration in &operation.args {
         if declaration.required && !values.contains_key(&declaration.name) {
             return Err(format!(
@@ -950,7 +923,7 @@ fn bind_operation_args(
             values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
         }
     }
-    let argv = canonical_operation_argv(operation, args, &values, &defaulted)?;
+    let argv = canonical_operation_argv(operation, args, &values, &defaulted, &supplied)?;
     Ok(BoundOperationArgs { values, argv })
 }
 
@@ -966,11 +939,9 @@ fn trusted_pre_dispatch_args(
     else {
         return Ok(args.to_vec());
     };
-    if app_id != "email" {
-        return Err(format!(
-            "App `{app_id}` is not allowed to use a trusted argument resolver"
-        ));
-    }
+    let resolver = selector
+        .trusted_resolver
+        .ok_or_else(|| "trusted resolver disappeared during dispatch".to_string())?;
     let flag = crate::caps::args::flag_name(selector);
     if args
         .iter()
@@ -980,6 +951,36 @@ fn trusted_pre_dispatch_args(
         return Ok(args.to_vec());
     }
 
+    let provider = match resolver {
+        crate::caps::manifest::TrustedArgResolver::EmailProvider => {
+            resolve_email_provider(operation, selector)?
+        }
+        crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
+            if app_id != "calendar" {
+                return Err(format!(
+                    "App `{app_id}` is not allowed to use the calendar provider resolver"
+                ));
+            }
+            resolve_calendar_provider()?
+        }
+    };
+
+    let mut resolved = args.to_vec();
+    let delimiter = resolved
+        .iter()
+        .position(|arg| arg == "--")
+        .unwrap_or(resolved.len());
+    resolved.splice(
+        delimiter..delimiter,
+        [format!("--{flag}"), provider.to_string()],
+    );
+    Ok(resolved)
+}
+
+fn resolve_email_provider<'a>(
+    operation: &'a Operation,
+    selector: &crate::caps::manifest::Arg,
+) -> Result<&'a str, String> {
     let mappings = operation
         .needs
         .iter()
@@ -1018,20 +1019,23 @@ fn trusted_pre_dispatch_args(
             break;
         }
     }
-    let provider = provider.ok_or_else(|| {
+    provider.ok_or_else(|| {
         "no email provider configured; pass --provider or configure credentials".to_string()
-    })?;
+    })
+}
 
-    let mut resolved = args.to_vec();
-    let delimiter = resolved
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(resolved.len());
-    resolved.splice(
-        delimiter..delimiter,
-        [format!("--{flag}"), provider.to_string()],
-    );
-    Ok(resolved)
+fn resolve_calendar_provider() -> Result<&'static str, String> {
+    for (provider, credential) in [
+        ("google", "GOOGLE_ACCESS_TOKEN"),
+        ("outlook", "MICROSOFT_ACCESS_TOKEN"),
+    ] {
+        if crate::credential::is_configured(credential, "default")
+            .map_err(|error| format!("resolve calendar provider: {error}"))?
+        {
+            return Ok(provider);
+        }
+    }
+    Ok("local")
 }
 
 fn canonical_operation_argv(
@@ -1039,6 +1043,7 @@ fn canonical_operation_argv(
     raw: &[String],
     values: &BTreeMap<String, serde_json::Value>,
     defaulted: &[String],
+    supplied: &BTreeSet<String>,
 ) -> Result<Vec<String>, String> {
     use crate::caps::manifest::ArgBinding;
 
@@ -1048,17 +1053,26 @@ fn canonical_operation_argv(
         .iter()
         .filter(|declaration| declaration.effective_binding() == ArgBinding::Positional)
         .collect::<Vec<_>>();
-    let supplied_count = supplied_positionals.len().min(positional_declarations.len());
-
     let mut positionals = Vec::new();
-    for (index, declaration) in positional_declarations.iter().enumerate() {
-        if index >= supplied_count && !defaulted.contains(&declaration.name) {
+    let mut supplied_count = 0;
+    for declaration in positional_declarations {
+        let was_supplied = if declaration.repeatable {
+            let supplied = supplied_positionals.len().saturating_sub(supplied_count);
+            supplied_count = supplied_positionals.len();
+            supplied > 0
+        } else if supplied_count < supplied_positionals.len() {
+            supplied_count += 1;
+            true
+        } else {
+            false
+        };
+        if !was_supplied && !defaulted.contains(&declaration.name) {
             continue;
         }
         let value = values
             .get(&declaration.name)
             .ok_or_else(|| format!("bound positional `{}` is missing", declaration.name))?;
-        positionals.push(arg_value_to_string(value)?);
+        positionals.extend(arg_values_to_strings(declaration, value)?);
     }
     positionals.extend(supplied_positionals.into_iter().skip(supplied_count));
 
@@ -1075,14 +1089,17 @@ fn canonical_operation_argv(
         if declaration.kind == ArgKind::Bool {
             if value.as_bool() == Some(true) {
                 flags.push(name);
+            } else if supplied.contains(&declaration.name) {
+                flags.push(format!("{name}=false"));
             }
         } else {
-            let value = arg_value_to_string(value)?;
-            if value.starts_with("--") {
-                flags.push(format!("{name}={value}"));
-            } else {
-                flags.push(name);
-                flags.push(value);
+            for value in arg_values_to_strings(declaration, value)? {
+                if value.starts_with("--") {
+                    flags.push(format!("{name}={value}"));
+                } else {
+                    flags.push(name.clone());
+                    flags.push(value);
+                }
             }
         }
     }
@@ -1165,14 +1182,19 @@ fn arg_value_to_string(value: &serde_json::Value) -> Result<String, String> {
     }
 }
 
-fn scope_for_arg(kind: ArgKind, value: &serde_json::Value) -> Option<Scope> {
-    let value = value.as_str()?;
-    match kind {
-        ArgKind::Path => Some(Scope::path(value)),
-        ArgKind::Host => Some(Scope::host(value)),
-        ArgKind::Name => Some(Scope::name(value)),
-        ArgKind::Text | ArgKind::Number | ArgKind::Integer | ArgKind::Bool => None,
+fn arg_values_to_strings(
+    declaration: &crate::caps::manifest::Arg,
+    value: &serde_json::Value,
+) -> Result<Vec<String>, String> {
+    if declaration.repeatable {
+        return value
+            .as_array()
+            .ok_or_else(|| format!("repeatable arg `{}` is not an array", declaration.name))?
+            .iter()
+            .map(arg_value_to_string)
+            .collect();
     }
+    arg_value_to_string(value).map(|value| vec![value])
 }
 
 fn bind_child_session(
@@ -1488,13 +1510,18 @@ pub fn run_python_app(
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
+    let forward_stdin = operation_forwards_stdin(app_dir, command)? && !std::io::stdin().is_terminal();
 
     let mut command = app_command(python);
     reset_app_environment(&mut command, false);
     command
         .arg("-c")
         .arg(&wrapper)
-        .stdin(Stdio::null())
+        .stdin(if forward_stdin {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         // Agent-native: suppress all interactive prompts
@@ -1515,6 +1542,7 @@ pub fn run_python_app(
     if let Some(home) = crate::paths::current_home_override() {
         command.env("HOME", &home).env("COS_HOME", home);
     }
+
     apply_routed_identity(&mut command)?;
     let mut child = command
         .spawn()
@@ -1556,6 +1584,17 @@ pub fn run_python_app(
     } else {
         Ok(Some(trimmed.to_string()))
     }
+}
+
+fn operation_forwards_stdin(app_dir: &Path, operation: &str) -> Result<bool, String> {
+    Ok(load_manifest(app_dir)?
+        .and_then(|manifest| {
+            manifest
+                .operations
+                .get(operation)
+                .map(|operation| operation.stdin)
+        })
+        .unwrap_or(false))
 }
 
 /// Generic polyglot bridge: read `app_dir/app.json`, pick the runtime

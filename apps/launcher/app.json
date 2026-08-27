@@ -87,8 +87,9 @@
       "args": [
         {
           "name": "query",
-          "kind": "name",
-          "required": true
+          "kind": "text",
+          "required": true,
+          "repeatable": true
         },
         {
           "name": "limit",
@@ -156,7 +157,8 @@
         {
           "name": "uri_or_path",
           "kind": "text",
-          "required": false
+          "required": false,
+          "repeatable": true
         }
       ],
       "needs": [

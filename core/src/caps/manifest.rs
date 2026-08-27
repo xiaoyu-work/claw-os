@@ -320,6 +320,10 @@ pub struct Operation {
     pub label: LocalizedText,
     #[serde(default)]
     pub summary: LocalizedText,
+    /// Forward piped caller input to this operation. Interactive stdin is
+    /// still closed so agent and desktop launches cannot block on a prompt.
+    #[serde(default)]
+    pub stdin: bool,
     /// Declared input parameters. Order is significant for the UI.
     #[serde(default)]
     pub args: Vec<Arg>,
@@ -344,6 +348,12 @@ pub struct Arg {
     pub binding: Option<ArgBinding>,
     #[serde(default)]
     pub required: bool,
+    /// Bind every occurrence in order and expose the value as a JSON array.
+    #[serde(default)]
+    pub repeatable: bool,
+    /// Optional closed set of accepted scalar values.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub choices: Vec<serde_json::Value>,
     #[serde(
         default,
         deserialize_with = "deserialize_non_null_default",
@@ -360,7 +370,7 @@ pub struct Arg {
     )]
     pub default_from: Option<ArgDefaultBinding>,
     /// Trusted kernel resolver applied before binding and capability
-    /// derivation. Only the bundled email provider selector supports this.
+    /// derivation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trusted_resolver: Option<TrustedArgResolver>,
     /// Human-readable help. Optional.
@@ -396,6 +406,7 @@ pub enum ArgDefaultTransform {
 #[serde(rename_all = "kebab-case")]
 pub enum TrustedArgResolver {
     EmailProvider,
+    CalendarProvider,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -443,6 +454,21 @@ impl Arg {
                 ArgBinding::Positional
             }
         })
+    }
+
+    fn accepts_value(&self, value: &serde_json::Value) -> bool {
+        if self.repeatable {
+            value.as_array().is_some_and(|values| {
+                values.iter().all(|value| self.accepts_scalar(value))
+            })
+        } else {
+            self.accepts_scalar(value)
+        }
+    }
+
+    fn accepts_scalar(&self, value: &serde_json::Value) -> bool {
+        self.kind.accepts_default(value)
+            && (self.choices.is_empty() || self.choices.contains(value))
     }
 }
 
@@ -1011,6 +1037,50 @@ pub enum ManifestError {
 
 fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
     for (index, arg) in args.iter().enumerate() {
+        if arg.repeatable && arg.kind == ArgKind::Bool {
+            return Err((
+                arg.name.clone(),
+                "repeatable boolean arguments are ambiguous".to_string(),
+            ));
+        }
+        if arg.repeatable
+            && (arg.default_from.is_some() || arg.trusted_resolver.is_some())
+        {
+            return Err((
+                arg.name.clone(),
+                "repeatable arguments cannot use default_from or trusted_resolver".to_string(),
+            ));
+        }
+        if arg.repeatable
+            && arg.effective_binding() == ArgBinding::Positional
+            && args[index + 1..]
+                .iter()
+                .any(|later| later.effective_binding() == ArgBinding::Positional)
+        {
+            return Err((
+                arg.name.clone(),
+                "a repeatable positional argument must be the final positional argument"
+                    .to_string(),
+            ));
+        }
+        if !arg.choices.is_empty() {
+            for choice in &arg.choices {
+                if !arg.kind.accepts_default(choice) {
+                    return Err((
+                        arg.name.clone(),
+                        format!("choice does not match arg kind `{:?}`", arg.kind),
+                    ));
+                }
+            }
+            if arg
+                .choices
+                .iter()
+                .enumerate()
+                .any(|(index, choice)| arg.choices[index + 1..].contains(choice))
+            {
+                return Err((arg.name.clone(), "choices must be unique".to_string()));
+            }
+        }
         if arg.effective_binding() == ArgBinding::Positional
             && !arg.required
             && args[index + 1..].iter().any(|later| {
@@ -1049,10 +1119,13 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
             ));
         }
         if let Some(default) = &arg.default {
-            if !arg.kind.accepts_default(default) {
+            if !arg.accepts_value(default) {
                 return Err((
                     arg.name.clone(),
-                    format!("value does not match arg kind `{:?}`", arg.kind),
+                    format!(
+                        "value does not match arg kind `{:?}`, repeatability, or choices",
+                        arg.kind
+                    ),
                 ));
             }
         }
@@ -1081,10 +1154,14 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
         if !matches!(
             source.kind,
             ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text
-        ) {
+        ) || source.repeatable
+        {
             return Err((
                 arg.name.clone(),
-                format!("source `{}` must be a string arg", binding.arg),
+                format!(
+                    "source `{}` must be a non-repeatable string arg",
+                    binding.arg
+                ),
             ));
         }
         if !matches!(
@@ -1229,8 +1306,13 @@ impl Manifest {
                         arg: arg.name.clone(),
                     });
                 }
+                let trusted_app_matches = match arg.trusted_resolver {
+                    Some(TrustedArgResolver::EmailProvider) => self.id == "email",
+                    Some(TrustedArgResolver::CalendarProvider) => self.id == "calendar",
+                    None => true,
+                };
                 if arg.trusted_resolver.is_some()
-                    && (self.id != "email"
+                    && (!trusted_app_matches
                         || arg.name != "provider"
                         || arg.kind != ArgKind::Name
                         || arg.effective_binding() != ArgBinding::Flag
@@ -1241,7 +1323,7 @@ impl Manifest {
                     return Err(ManifestError::ArgDefaultInvalid {
                         op: op_name.clone(),
                         arg: arg.name.clone(),
-                        detail: "trusted resolver is restricted to the optional email provider flag"
+                        detail: "trusted resolver is restricted to its bundled app's optional provider flag"
                             .to_string(),
                     });
                 }
@@ -1598,7 +1680,7 @@ impl Manifest {
         &self,
         op_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<Option<super::cap::Cap>>, ManifestError> {
+    ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
         let op = self
             .operations
             .get(op_name)
@@ -1617,10 +1699,10 @@ impl Manifest {
         let mut out = Vec::with_capacity(op.needs.len());
         for (idx, need) in op.needs.iter().enumerate() {
             if !need_applies(need.when.as_ref(), &args) {
-                out.push(None);
+                out.push(Vec::new());
                 continue;
             }
-            let scope = match &need.scope {
+            let scopes = match &need.scope {
                 ScopeBinding::FromArg { arg } => {
                     let val = args.get(arg).ok_or_else(|| ManifestError::NeedInvalid {
                         op: op_name.to_string(),
@@ -1634,7 +1716,7 @@ impl Manifest {
                             arg: arg.clone(),
                         }
                     })?;
-                    scope_from_arg_value(arg_decl.kind, val).ok_or_else(|| {
+                    scopes_from_arg_value(arg_decl, val).ok_or_else(|| {
                         ManifestError::NeedInvalid {
                             op: op_name.to_string(),
                             idx,
@@ -1646,22 +1728,18 @@ impl Manifest {
                     })?
                 }
                 ScopeBinding::FromArgMap { arg, values } => {
-                    let value = args
-                        .get(arg)
-                        .and_then(serde_json::Value::as_str)
-                        .ok_or_else(|| ManifestError::NeedInvalid {
+                    let value = args.get(arg).ok_or_else(|| ManifestError::NeedInvalid {
+                        op: op_name.to_string(),
+                        idx,
+                        detail: format!("arg `{arg}` was not supplied"),
+                    })?;
+                    mapped_scopes(value, values).map_err(|detail| {
+                        ManifestError::NeedInvalid {
                             op: op_name.to_string(),
                             idx,
-                            detail: format!("arg `{arg}` must be a string"),
-                        })?;
-                    values
-                        .get(value)
-                        .cloned()
-                        .ok_or_else(|| ManifestError::NeedInvalid {
-                            op: op_name.to_string(),
-                            idx,
-                            detail: format!("arg `{arg}` has unmapped value `{value}`"),
-                        })?
+                            detail: format!("arg `{arg}` {detail}"),
+                        }
+                    })?
                 }
                 ScopeBinding::FromArgOrWild { arg, wild_when } => {
                     if args
@@ -1669,7 +1747,7 @@ impl Manifest {
                         .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false)
                     {
-                        Scope::Wild
+                        vec![Scope::Wild]
                     } else {
                         let value = args.get(arg).ok_or_else(|| ManifestError::NeedInvalid {
                             op: op_name.to_string(),
@@ -1685,7 +1763,7 @@ impl Manifest {
                                     idx,
                                     arg: arg.clone(),
                                 })?;
-                        scope_from_arg_value(decl.kind, value).ok_or_else(|| {
+                        scopes_from_arg_value(decl, value).ok_or_else(|| {
                             ManifestError::NeedInvalid {
                                 op: op_name.to_string(),
                                 idx,
@@ -1694,10 +1772,15 @@ impl Manifest {
                         })?
                     }
                 }
-                ScopeBinding::Fixed { scope } => scope.clone(),
-                ScopeBinding::Wild => Scope::Wild,
+                ScopeBinding::Fixed { scope } => vec![scope.clone()],
+                ScopeBinding::Wild => vec![Scope::Wild],
             };
-            out.push(Some(super::cap::Cap::new(need.verb, scope)));
+            out.push(
+                scopes
+                    .into_iter()
+                    .map(|scope| super::cap::Cap::new(need.verb, scope))
+                    .collect(),
+            );
         }
         Ok(out)
     }
@@ -1711,7 +1794,7 @@ impl Manifest {
         &self,
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<Option<super::cap::Cap>>, ManifestError> {
+    ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
         let args = self.resolve_session_tool_args(tool_name, args)?;
         let session = self
             .session
@@ -1733,10 +1816,10 @@ impl Manifest {
         let mut out = Vec::with_capacity(tool.needs.len());
         for (idx, need) in tool.needs.iter().enumerate() {
             if !need_applies(need.when.as_ref(), &args) {
-                out.push(None);
+                out.push(Vec::new());
                 continue;
             }
-            let scope =
+            let scopes =
                 match &need.scope {
                     ScopeBinding::FromArg { arg } => {
                         let val =
@@ -1754,7 +1837,7 @@ impl Manifest {
                                     arg: arg.clone(),
                                 }
                             })?;
-                        scope_from_arg_value(arg_decl.kind, val).ok_or_else(|| {
+                        scopes_from_arg_value(arg_decl, val).ok_or_else(|| {
                             ManifestError::SessionNeedInvalid {
                                 tool: tool_name.to_string(),
                                 idx,
@@ -1766,19 +1849,18 @@ impl Manifest {
                         })?
                     }
                     ScopeBinding::FromArgMap { arg, values } => {
-                        let value = args
-                            .get(arg)
-                            .and_then(serde_json::Value::as_str)
-                            .ok_or_else(|| ManifestError::SessionNeedInvalid {
-                                tool: tool_name.to_string(),
-                                idx,
-                                detail: format!("arg `{arg}` must be a string"),
-                            })?;
-                        values.get(value).cloned().ok_or_else(|| {
+                        let value =
+                            args.get(arg)
+                                .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                                    tool: tool_name.to_string(),
+                                    idx,
+                                    detail: format!("arg `{arg}` was not supplied"),
+                                })?;
+                        mapped_scopes(value, values).map_err(|detail| {
                             ManifestError::SessionNeedInvalid {
                                 tool: tool_name.to_string(),
                                 idx,
-                                detail: format!("arg `{arg}` has unmapped value `{value}`"),
+                                detail: format!("arg `{arg}` {detail}"),
                             }
                         })?
                     }
@@ -1788,7 +1870,7 @@ impl Manifest {
                             .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false)
                         {
-                            Scope::Wild
+                            vec![Scope::Wild]
                         } else {
                             let value =
                                 args.get(arg)
@@ -1804,7 +1886,7 @@ impl Manifest {
                                     arg: arg.clone(),
                                 },
                             )?;
-                            scope_from_arg_value(decl.kind, value).ok_or_else(|| {
+                            scopes_from_arg_value(decl, value).ok_or_else(|| {
                                 ManifestError::SessionNeedInvalid {
                                     tool: tool_name.to_string(),
                                     idx,
@@ -1813,10 +1895,15 @@ impl Manifest {
                             })?
                         }
                     }
-                    ScopeBinding::Fixed { scope } => scope.clone(),
-                    ScopeBinding::Wild => Scope::Wild,
+                    ScopeBinding::Fixed { scope } => vec![scope.clone()],
+                    ScopeBinding::Wild => vec![Scope::Wild],
                 };
-            out.push(Some(super::cap::Cap::new(need.verb, scope)));
+            out.push(
+                scopes
+                    .into_iter()
+                    .map(|scope| super::cap::Cap::new(need.verb, scope))
+                    .collect(),
+            );
         }
         Ok(out)
     }
@@ -1879,7 +1966,12 @@ fn validate_need_condition(
         .get(arg_name.as_str())
         .ok_or_else(|| format!("condition references undeclared arg `{arg_name}`"))?;
     if let Some(value) = expected {
-        if value.is_null() || !declaration.kind.accepts_default(value) {
+        if declaration.repeatable {
+            return Err(format!(
+                "arg-equals cannot target repeatable arg `{arg_name}`"
+            ));
+        }
+        if value.is_null() || !declaration.accepts_scalar(value) {
             return Err(format!(
                 "condition value for `{arg_name}` does not match arg kind `{:?}`",
                 declaration.kind
@@ -1927,7 +2019,9 @@ fn need_applies(
 ) -> bool {
     match condition {
         None => true,
-        Some(NeedCondition::ArgPresent { arg }) => args.contains_key(arg),
+        Some(NeedCondition::ArgPresent { arg }) => args
+            .get(arg)
+            .is_some_and(|value| value.as_array().is_none_or(|values| !values.is_empty())),
         Some(NeedCondition::ArgEquals { arg, value }) => args.get(arg) == Some(value),
     }
 }
@@ -1970,6 +2064,40 @@ fn scope_from_arg_value(kind: ArgKind, value: &serde_json::Value) -> Option<Scop
         ArgKind::Name => Scope::name(s),
         _ => return None,
     })
+}
+
+fn scopes_from_arg_value(arg: &Arg, value: &serde_json::Value) -> Option<Vec<Scope>> {
+    if arg.repeatable {
+        value
+            .as_array()?
+            .iter()
+            .map(|value| scope_from_arg_value(arg.kind, value))
+            .collect()
+    } else {
+        scope_from_arg_value(arg.kind, value).map(|scope| vec![scope])
+    }
+}
+
+fn mapped_scopes(
+    value: &serde_json::Value,
+    mappings: &BTreeMap<String, Scope>,
+) -> Result<Vec<Scope>, String> {
+    let values = value
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_else(|| std::slice::from_ref(value));
+    values
+        .iter()
+        .map(|value| {
+            let value = value
+                .as_str()
+                .ok_or_else(|| "must be a string or string array".to_string())?;
+            mappings
+                .get(value)
+                .cloned()
+                .ok_or_else(|| format!("has unmapped value `{value}`"))
+        })
+        .collect()
 }
 
 fn is_valid_id(s: &str) -> bool {

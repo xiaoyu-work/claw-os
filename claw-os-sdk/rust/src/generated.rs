@@ -169,6 +169,8 @@ pub struct Operation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Localizedtext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stdin: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub args: Option<Vec<Arg>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Vec<Need>>,
@@ -183,6 +185,10 @@ pub struct Arg {
     pub binding: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeatable: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<serde_json::Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

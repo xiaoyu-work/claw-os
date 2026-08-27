@@ -528,6 +528,8 @@ def cmd_ps(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"shell"})
     handlers = {
         "run": cmd_run,
         "script": cmd_script,

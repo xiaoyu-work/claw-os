@@ -358,6 +358,17 @@ class TestWriteBytes(unittest.TestCase):
         with self.assertRaises(Exception):
             cmd_write_bytes([])
 
+    def test_run_consumes_canonical_option_shaped_content(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = os.path.join(directory, "note.txt")
+            result = fs_main.run(
+                "write",
+                [destination, "--content=--urgent"],
+            )
+            self.assertEqual(result["path"], destination)
+            with open(destination, encoding="utf-8") as file:
+                self.assertEqual(file.read(), "--urgent")
+
 
 class TestSymlinkEscape(unittest.TestCase):
     """Regression coverage for CR-1 (symlink TOCTOU sandbox escape).

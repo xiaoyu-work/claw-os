@@ -78,6 +78,8 @@ def _save(data):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     try:
         if command == "set":
             if len(args) < 2:

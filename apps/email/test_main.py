@@ -175,6 +175,23 @@ class TestUnknownCommand(unittest.TestCase):
         self.assertIn("unknown command", result["error"])
 
 
+class TestCanonicalArguments(unittest.TestCase):
+    def test_explicit_false_reaches_argparse_handler(self):
+        with patch.object(email_main.policy, "require"), patch.object(
+            email_main,
+            "_list_gmail",
+            side_effect=lambda max_results, unread: {
+                "max_results": max_results,
+                "unread": unread,
+            },
+        ):
+            result = run(
+                "list",
+                ["--provider=gmail", "--max-results=3", "--unread=false"],
+            )
+        self.assertEqual(result, {"max_results": 3, "unread": False})
+
+
 # ---------------------------------------------------------------------------
 # Send command
 # ---------------------------------------------------------------------------

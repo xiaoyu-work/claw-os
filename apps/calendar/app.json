@@ -20,7 +20,8 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
-          "default": "local"
+          "choices": ["local", "google", "outlook"],
+          "trusted_resolver": "calendar-provider"
         },
         {
           "name": "from",
@@ -57,7 +58,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "www.googleapis.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -89,7 +94,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.microsoft.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -130,7 +139,8 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
-          "default": "local"
+          "choices": ["local", "google", "outlook"],
+          "trusted_resolver": "calendar-provider"
         },
         {
           "name": "title",
@@ -200,7 +210,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "www.googleapis.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -232,7 +246,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.microsoft.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -273,7 +291,8 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
-          "default": "local"
+          "choices": ["local", "google", "outlook"],
+          "trusted_resolver": "calendar-provider"
         },
         {
           "name": "id",
@@ -347,7 +366,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "www.googleapis.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -379,7 +402,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.microsoft.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -420,7 +447,8 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
-          "default": "local"
+          "choices": ["local", "google", "outlook"],
+          "trusted_resolver": "calendar-provider"
         },
         {
           "name": "id",
@@ -464,7 +492,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "www.googleapis.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -496,7 +528,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.microsoft.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -537,7 +573,8 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
-          "default": "local"
+          "choices": ["local", "google", "outlook"],
+          "trusted_resolver": "calendar-provider"
         }
       ],
       "needs": [
@@ -562,7 +599,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "www.googleapis.com"
+            }
           },
           "when": {
             "kind": "arg-equals",
@@ -594,7 +635,11 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "fixed",
+            "scope": {
+              "kind": "host",
+              "value": "graph.microsoft.com"
+            }
           },
           "when": {
             "kind": "arg-equals",

@@ -270,9 +270,14 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_READ,
         Scope::path(current_dir.to_string_lossy()),
     ));
-    let ls_caps =
-        constrained_operation_caps(&ls_parent, true, &manifest.operations["ls"], &ls.values)
-            .unwrap();
+    let ls_resolved = manifest.resolve_needs("ls", &ls.values).unwrap();
+    let ls_caps = constrained_operation_caps(
+        &ls_parent,
+        true,
+        &manifest.operations["ls"].needs,
+        &ls_resolved,
+    )
+    .unwrap();
     assert!(ls_caps.covers(&Cap::new(
         Verb::FS_READ,
         Scope::path(current_dir.to_string_lossy()),
@@ -286,11 +291,12 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         .contains("required operation arg `query`"));
     let mut search_parent = CapSet::new();
     search_parent.insert(Cap::new(Verb::FS_READ, Scope::path("/workspace")));
+    let search_resolved = manifest.resolve_needs("search", &search.values).unwrap();
     let search_caps = constrained_operation_caps(
         &search_parent,
         true,
-        &manifest.operations["search"],
-        &search.values,
+        &manifest.operations["search"].needs,
+        &search_resolved,
     )
     .unwrap();
     assert!(search_caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/workspace"))));
@@ -312,11 +318,12 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_WRITE,
         Scope::path(default_output.to_string_lossy()),
     ));
+    let download_resolved = manifest.resolve_needs("download", &download.values).unwrap();
     let download_caps = constrained_operation_caps(
         &download_parent,
         true,
-        &manifest.operations["download"],
-        &download.values,
+        &manifest.operations["download"].needs,
+        &download_resolved,
     )
     .unwrap();
     assert!(download_caps.covers(&Cap::new(
@@ -337,11 +344,12 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
         Verb::FS_WRITE,
         Scope::path(explicit_output.to_string_lossy()),
     ));
+    let explicit_resolved = manifest.resolve_needs("download", &explicit.values).unwrap();
     let explicit_caps = constrained_operation_caps(
         &explicit_parent,
         true,
-        &manifest.operations["download"],
-        &explicit.values,
+        &manifest.operations["download"].needs,
+        &explicit_resolved,
     )
     .unwrap();
     assert!(explicit_caps.covers(&Cap::new(
@@ -460,7 +468,8 @@ fn defaulted_bool_args_never_shift_the_effective_argv() {
 
     let mut parent = CapSet::new();
     parent.insert(Cap::new(Verb::DATA_KV_READ, Scope::name("primary")));
-    let caps = constrained_operation_caps(&parent, true, operation, &rebound).unwrap();
+    let resolved = manifest.resolve_needs("sync", &rebound).unwrap();
+    let caps = constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
     assert!(caps.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("primary"))));
 }
 
@@ -497,8 +506,14 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
         &["hello".into(), "--confirm=false".into()],
     )
     .unwrap();
-    assert_eq!(inline_false.argv, ["hello", "true", "--limit", "10"]);
+    assert_eq!(
+        inline_false.argv,
+        ["hello", "true", "--confirm=false", "--limit", "10"]
+    );
     assert_eq!(inline_false.values["confirm"], serde_json::json!(false));
+    let rebound =
+        crate::caps::args::bind_cli_args(&operation.args, &inline_false.argv).unwrap();
+    assert_eq!(rebound, inline_false.values);
 
     let delimited = bind_operation_args(operation, &["--".into(), "--literal".into()]).unwrap();
     assert_eq!(
@@ -520,6 +535,86 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
     let rebound =
         crate::caps::args::bind_cli_args(&operation.args, &option_shaped_value.argv).unwrap();
     assert_eq!(rebound, option_shaped_value.values);
+}
+
+#[test]
+fn repeatable_flags_round_trip_through_canonical_argv() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"repeat","version":"0.1","name":"Repeat",
+            "operations":{"fetch":{"label":"Fetch","args":[
+                {"name":"url","kind":"text","required":true},
+                {"name":"header","kind":"text","binding":"flag","repeatable":true}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["fetch"];
+    let bound = bind_operation_args(
+        operation,
+        &[
+            "https://example.test".into(),
+            "--header=A: 1".into(),
+            "--header".into(),
+            "--urgent".into(),
+        ],
+    )
+    .unwrap_err();
+    assert!(bound.contains("valid text value"));
+
+    let bound = bind_operation_args(
+        operation,
+        &[
+            "https://example.test".into(),
+            "--header=A: 1".into(),
+            "--header=--urgent".into(),
+        ],
+    )
+    .unwrap();
+    assert_eq!(
+        bound.argv,
+        [
+            "https://example.test",
+            "--header",
+            "A: 1",
+            "--header=--urgent"
+        ]
+    );
+    assert_eq!(
+        bound.values["header"],
+        serde_json::json!(["A: 1", "--urgent"])
+    );
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
+    assert_eq!(rebound, bound.values);
+}
+
+#[test]
+fn explicit_false_overrides_true_default_for_authority_and_child() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"boolean","version":"0.1","name":"Boolean",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"enabled","kind":"bool","binding":"flag","default":true}
+            ],"needs":[
+                {"verb":"data.kv.read","scope":{"kind":"fixed",
+                 "scope":{"kind":"name","value":"enabled"}},
+                 "when":{"kind":"arg-equals","arg":"enabled","value":true},
+                 "why":"Read enabled data"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["run"];
+    let bound =
+        bind_operation_args(operation, &["--enabled=false".to_string()]).unwrap();
+    assert_eq!(bound.argv, ["--enabled=false"]);
+    assert_eq!(bound.values["enabled"], serde_json::json!(false));
+    let rebound = crate::caps::args::bind_cli_args(&operation.args, &bound.argv).unwrap();
+    assert_eq!(rebound, bound.values);
+    assert_eq!(
+        manifest.resolve_needs("run", &rebound).unwrap(),
+        [Vec::new()]
+    );
 }
 
 #[test]
@@ -552,9 +647,72 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
 
     let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
     assert_eq!(
-        resolved[0].as_ref().unwrap().scope,
+        resolved[0][0].scope,
         Scope::name("default/SMTP_PASSWORD")
     );
+}
+
+#[test]
+fn local_calendar_resolution_is_identical_for_in_process_caps() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let app_dir = repository.join("apps/calendar");
+    let manifest = load_manifest(&app_dir).unwrap().unwrap();
+    let operation = &manifest.operations["today"];
+    let credentials = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
+    assert_eq!(trusted, ["--provider", "local"]);
+    let bound = bind_operation_args(operation, &trusted).unwrap();
+    let resolved = manifest.resolve_needs("today", &bound.values).unwrap();
+
+    let mut parent = CapSet::new();
+    parent.insert(Cap::new(Verb::DATA_DB_READ, Scope::name("calendar")));
+    parent.insert(Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN"),
+    ));
+    parent.insert(Cap::new(Verb::NET_DIAL, Scope::host("www.googleapis.com")));
+    let caps =
+        constrained_operation_caps(&parent, true, &operation.needs, &resolved).unwrap();
+    assert!(caps.covers(&Cap::new(
+        Verb::DATA_DB_READ,
+        Scope::name("calendar")
+    )));
+    assert!(!caps.covers(&Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN")
+    )));
+    assert!(!caps.covers(&Cap::new(
+        Verb::NET_DIAL,
+        Scope::host("www.googleapis.com")
+    )));
+
+    let namespace = credentials.path().join("default");
+    std::fs::create_dir_all(&namespace).unwrap();
+    std::fs::write(namespace.join("GOOGLE_ACCESS_TOKEN.json"), "{}").unwrap();
+    let trusted = trusted_pre_dispatch_args("calendar", operation, &[]).unwrap();
+    assert_eq!(trusted, ["--provider", "google"]);
+}
+
+#[test]
+fn stdin_forwarding_requires_an_explicit_operation_contract() {
+    let app = tempfile::tempdir().unwrap();
+    std::fs::write(
+        app.path().join("app.json"),
+        r#"{
+            "id":"stdin","version":"0.1","name":"Stdin",
+            "operations":{
+                "pipe":{"label":"Pipe","stdin":true},
+                "closed":{"label":"Closed"}
+            }
+        }"#,
+    )
+    .unwrap();
+    assert!(operation_forwards_stdin(app.path(), "pipe").unwrap());
+    assert!(!operation_forwards_stdin(app.path(), "closed").unwrap());
 }
 
 #[test]

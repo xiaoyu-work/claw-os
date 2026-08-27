@@ -113,6 +113,8 @@ def _cmd_list(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"urgent"})
     commands = {
         "send": _cmd_send,
         "list": _cmd_list,

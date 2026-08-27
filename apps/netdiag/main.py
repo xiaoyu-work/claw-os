@@ -418,6 +418,8 @@ def _safe_int(value):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     handler = {
         "interfaces": cmd_interfaces,
         "routes": cmd_routes,

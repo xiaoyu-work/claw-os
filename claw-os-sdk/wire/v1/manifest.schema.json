@@ -40,6 +40,7 @@
       "properties": {
         "label": { "$ref": "#/$defs/localizedText" },
         "summary": { "$ref": "#/$defs/localizedText" },
+        "stdin": { "type": "boolean", "description": "Forward piped caller input. Interactive stdin is always closed." },
         "args": { "type": "array", "items": { "$ref": "#/$defs/arg" }, "description": "Declared input parameters; order is significant for the UI." },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" }, "description": "Capability requirements checked before dispatch." }
       }
@@ -65,19 +66,42 @@
         },
         {
           "if": { "properties": { "kind": { "enum": ["path", "host", "name", "text"] } }, "required": ["kind"] },
-          "then": { "properties": { "default": { "type": "string" } } }
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
+            "choices": { "items": { "type": "string" } }
+          } }
         },
         {
           "if": { "properties": { "kind": { "const": "number" } }, "required": ["kind"] },
-          "then": { "properties": { "default": { "type": "number" } } }
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "number" }, { "type": "array", "items": { "type": "number" } }] },
+            "choices": { "items": { "type": "number" } }
+          } }
         },
         {
           "if": { "properties": { "kind": { "const": "integer" } }, "required": ["kind"] },
-          "then": { "properties": { "default": { "type": "integer" } } }
+          "then": { "properties": {
+            "default": { "oneOf": [{ "type": "integer" }, { "type": "array", "items": { "type": "integer" } }] },
+            "choices": { "items": { "type": "integer" } }
+          } }
         },
         {
           "if": { "properties": { "kind": { "const": "bool" } }, "required": ["kind"] },
-          "then": { "properties": { "default": { "type": "boolean" } } }
+          "then": { "properties": {
+            "default": { "type": "boolean" },
+            "choices": { "items": { "type": "boolean" } }
+          } }
+        },
+        {
+          "if": { "properties": { "repeatable": { "const": true } }, "required": ["repeatable"] },
+          "then": {
+            "properties": {
+              "default": { "type": "array" },
+              "kind": { "not": { "const": "bool" } }
+            },
+            "not": { "anyOf": [{ "required": ["default_from"] }, { "required": ["trusted_resolver"] }] }
+          },
+          "else": { "properties": { "default": { "not": { "type": "array" } } } }
         },
         {
           "if": { "required": ["trusted_resolver"] },
@@ -103,9 +127,11 @@
         "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
         "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
         "required": { "type": "boolean" },
+        "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
+        "choices": { "type": "array", "uniqueItems": true, "description": "Optional closed set of accepted scalar values." },
         "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
         "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
-        "trusted_resolver": { "type": "string", "enum": ["email-provider"], "description": "Trusted pre-dispatch resolver. Restricted by the kernel to the bundled email provider flag." },
+        "trusted_resolver": { "type": "string", "enum": ["email-provider", "calendar-provider"], "description": "Trusted pre-dispatch provider resolver, restricted by the kernel to its matching bundled app." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
     },

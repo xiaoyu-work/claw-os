@@ -630,6 +630,8 @@ HANDLERS = {
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_argparse_booleans
+    args = normalize_argparse_booleans(args, bool_flags={"has-attachments"})
     handler = HANDLERS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

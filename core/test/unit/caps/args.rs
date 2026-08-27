@@ -39,6 +39,16 @@ fn unknown_flags_are_rejected() {
 }
 
 #[test]
+fn excess_positionals_require_an_explicit_repeatable_contract() {
+    let error = bind_cli_args(
+        &decls(),
+        &raw(&["/home/u/notes.txt", "undeclared"]),
+    )
+    .expect_err("extra positional values must fail closed");
+    assert!(error.contains("undeclared"), "unexpected error: {error}");
+}
+
+#[test]
 fn legacy_boolean_binding_is_a_flag() {
     let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "urgent", "kind": "bool"}
@@ -60,12 +70,51 @@ fn invalid_supplied_scalars_are_rejected() {
             .expect_err("invalid supplied values must not reach an App");
         assert!(error.contains("value"), "unexpected error: {error}");
     }
-
     let bool_flag: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "urgent", "kind": "bool"}
     ]))
     .unwrap();
     assert!(bind_cli_args(&bool_flag, &raw(&["--urgent=maybe"])).is_err());
+}
+
+#[test]
+fn choices_and_duplicate_non_repeatable_flags_fail_closed() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name":"provider","kind":"name","binding":"flag",
+         "choices":["local","google","outlook"]}
+    ]))
+    .unwrap();
+    assert!(bind_cli_args(&decls, &raw(&["--provider", "unknown"])).is_err());
+    assert!(
+        bind_cli_args(
+            &decls,
+            &raw(&["--provider", "local", "--provider", "google"])
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn repeatable_flags_and_positionals_preserve_every_value_in_order() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name":"header","kind":"text","binding":"flag","repeatable":true},
+        {"name":"word","kind":"text","repeatable":true}
+    ]))
+    .unwrap();
+    let values = bind_cli_args(
+        &decls,
+        &raw(&[
+            "--header=A: 1",
+            "--header",
+            "B: 2",
+            "hello",
+            "--",
+            "--literal",
+        ]),
+    )
+    .unwrap();
+    assert_eq!(values["header"], serde_json::json!(["A: 1", "B: 2"]));
+    assert_eq!(values["word"], serde_json::json!(["hello", "--literal"]));
 }
 
 #[test]

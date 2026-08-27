@@ -159,6 +159,8 @@ def _cmd_search(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     commands = {
         "write": _cmd_write,
         "read": _cmd_read,

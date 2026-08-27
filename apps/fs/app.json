@@ -243,7 +243,8 @@
         {
           "name": "tags",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         }
       ],
       "needs": [

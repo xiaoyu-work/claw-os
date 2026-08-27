@@ -64,6 +64,8 @@ def _broker(action, identifier=None, app_id=None):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command == "list":
         if args:
             return {"error": "list takes no arguments"}

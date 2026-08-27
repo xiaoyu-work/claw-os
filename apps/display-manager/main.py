@@ -70,6 +70,10 @@ def _manage():
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(
+        args, bool_flags={"adaptive-sync", "confirm"}
+    )
     if command == "status":
         if args:
             return {"error": "status takes no arguments"}

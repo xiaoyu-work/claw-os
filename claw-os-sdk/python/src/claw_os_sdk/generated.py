@@ -166,6 +166,7 @@ class Operation(_OperationRequired, total=False):
     A one-shot operation: its inputs and the capabilities it needs.
     """
     summary: "Localizedtext"
+    stdin: bool
     args: List["Arg"]
     needs: List["Need"]
 
@@ -178,6 +179,8 @@ class Arg(_ArgRequired, total=False):
     """
     binding: str
     required: bool
+    repeatable: bool
+    choices: List[Any]
     default: Any
     default_from: "Argdefaultbinding"
     trusted_resolver: str

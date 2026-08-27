@@ -76,6 +76,8 @@ def _query_bounds(args):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command in {"recent", "diagnose"}:
         try:
             since_minutes, limit = _query_bounds(args)

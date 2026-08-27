@@ -50,6 +50,11 @@ def _brave_credential():
 
 def _pick_provider(preferred=None):
     """Choose a search provider.  Returns (provider, config) or (None, error_dict)."""
+    if preferred not in {None, "google", "brave"}:
+        return None, {
+            "error": "invalid search provider; expected google or brave",
+            "retryable": False,
+        }
     if preferred == "google":
         google_key, google_cx = _google_credentials()
         if google_key and google_cx:
@@ -103,33 +108,26 @@ def _parse_args(args):
 
     Returns (query, max_results, provider) or (None, None, error_dict).
     """
-    query_parts = []
-    max_results = MAX_RESULTS_DEFAULT
-    provider = None
-    i = 0
-    while i < len(args):
-        if args[i] == "--max-results":
-            if i + 1 >= len(args):
-                return None, None, None, {"error": "--max-results requires a value"}
-            try:
-                max_results = int(args[i + 1])
-            except ValueError:
-                return None, None, None, {"error": f"invalid --max-results value: {args[i + 1]}"}
-            if max_results < 1:
-                max_results = 1
-            elif max_results > MAX_RESULTS_LIMIT:
-                max_results = MAX_RESULTS_LIMIT
-            i += 2
-        elif args[i] == "--provider":
-            if i + 1 >= len(args):
-                return None, None, None, {"error": "--provider requires a value (google|brave)"}
-            provider = args[i + 1]
-            if provider not in ("google", "brave"):
-                return None, None, None, {"error": f"unknown provider: {provider} (choose google or brave)"}
-            i += 2
-        else:
-            query_parts.append(args[i])
-            i += 1
+    from canonical_argv import parse_canonical_argv
+    try:
+        query_parts, options = parse_canonical_argv(
+            args, value_flags={"max-results", "provider"}
+        )
+    except ValueError as error:
+        return None, None, None, {"error": str(error)}
+
+    provider = options.get("provider")
+    if provider is not None and provider not in ("google", "brave"):
+        return None, None, None, {
+            "error": f"unknown provider: {provider} (choose google or brave)"
+        }
+    try:
+        max_results = int(options.get("max_results", MAX_RESULTS_DEFAULT))
+    except ValueError:
+        return None, None, None, {
+            "error": f"invalid --max-results value: {options['max_results']}"
+        }
+    max_results = min(MAX_RESULTS_LIMIT, max(1, max_results))
 
     query = " ".join(query_parts)
     if not query:

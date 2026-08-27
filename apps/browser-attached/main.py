@@ -383,6 +383,8 @@ HANDLERS = {
 
 
 def run(command, argv):
+    from canonical_argv import normalize_canonical_argv
+    argv = normalize_canonical_argv(argv)
     handler = HANDLERS.get(command)
     if handler is None:
         return {"ok": False, "error": f"unknown command: {command}"}

@@ -743,6 +743,8 @@ def cmd_draft(args):
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_argparse_booleans
+    args = normalize_argparse_booleans(args, bool_flags={"unread"})
     handlers = {
         "send": cmd_send,
         "search": cmd_search,

@@ -620,6 +620,8 @@ COMMANDS = {
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     handler = COMMANDS.get(command)
     if handler is None:
         return {"error": f"unknown command: {command}"}

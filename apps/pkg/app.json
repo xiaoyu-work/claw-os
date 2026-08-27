@@ -85,7 +85,8 @@
         {
           "name": "query",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         },
         {
           "name": "limit",

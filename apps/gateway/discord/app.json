@@ -35,7 +35,8 @@
         {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         }
       ],
       "needs": [

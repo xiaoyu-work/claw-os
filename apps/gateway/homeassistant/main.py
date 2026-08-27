@@ -211,6 +211,9 @@ def _status() -> dict:
 
 
 def run(command: str, args):
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "send":
         service = ""
         text = ""

@@ -1355,6 +1355,9 @@ def _send(args: Any) -> dict[str, Any]:
 
 
 def run(command: str, args: Any) -> dict[str, Any]:
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "configure":
         return _configure(args)
     if command == "start":

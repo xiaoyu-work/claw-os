@@ -85,6 +85,8 @@ def _broker(action, target, source=None, token=None, confirm=False):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"confirm"})
     if command == "inspect":
         if len(args) != 1:
             return {"error": "inspect requires <target>"}

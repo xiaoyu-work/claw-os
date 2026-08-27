@@ -40,6 +40,18 @@ class _Response:
         return self._body.read(size)
 
 
+def test_repeatable_inline_headers_reach_argparse_in_order():
+    parsed = main._build_fetch_parser().parse_args(
+        [
+            "https://example.test",
+            "--header=A: 1",
+            "--header=--urgent",
+            "--header=B: 2",
+        ]
+    )
+    assert parsed.header == ["A: 1", "--urgent", "B: 2"]
+
+
 def _run_download(response, destination):
     with mock.patch.object(main.policy, "require") as require, mock.patch.object(
         main,

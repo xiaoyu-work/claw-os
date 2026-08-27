@@ -138,6 +138,7 @@ export interface Localizedtext {
 export interface Operation {
   label: Localizedtext;
   summary?: Localizedtext;
+  stdin?: boolean;
   args?: Arg[];
   needs?: Need[];
 }
@@ -150,9 +151,11 @@ export interface Arg {
   kind: "path" | "host" | "name" | "text" | "number" | "integer" | "bool";
   binding?: "positional" | "flag";
   required?: boolean;
+  repeatable?: boolean;
+  choices?: unknown[];
   default?: unknown;
   default_from?: Argdefaultbinding;
-  trusted_resolver?: "email-provider";
+  trusted_resolver?: "email-provider" | "calendar-provider";
   label?: Localizedtext;
 }
 

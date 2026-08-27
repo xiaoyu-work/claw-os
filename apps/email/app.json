@@ -29,6 +29,7 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
+          "choices": ["smtp", "gmail", "outlook"],
           "trusted_resolver": "email-provider"
         },
         {
@@ -115,6 +116,7 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
+          "choices": ["gmail", "outlook"],
           "trusted_resolver": "email-provider"
         },
         {
@@ -173,6 +175,7 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
+          "choices": ["gmail", "outlook"],
           "trusted_resolver": "email-provider"
         },
         {
@@ -232,6 +235,7 @@
           "kind": "name",
           "required": false,
           "binding": "flag",
+          "choices": ["gmail", "outlook"],
           "trusted_resolver": "email-provider"
         },
         {
@@ -300,7 +304,8 @@
           "kind": "text",
           "required": false,
           "binding": "flag",
-          "default": "formal"
+          "default": "formal",
+          "choices": ["formal", "casual", "short"]
         }
       ]
     }

@@ -130,6 +130,13 @@ Use `--` to end flag parsing when a positional value itself begins with `--`.
 Any supplied number, integer, or explicit boolean literal that does not match
 its declared kind is rejected before launch.
 
+Use `choices` for a closed scalar enum. Set `repeatable: true` when every
+occurrence is meaningful: the bound value becomes an ordered JSON array and a
+flag is emitted once per item. Repeatable positional arguments must be the
+last positional declaration. Repeatable booleans, derived defaults, and
+trusted resolvers are rejected because their occurrence semantics would be
+ambiguous.
+
 An optional argument may declare a non-null literal `default` matching its
 `kind`. Omit `default` when there is no default; explicit JSON `null` is
 invalid. If its default depends on an earlier string argument, use
@@ -157,9 +164,11 @@ and is rejected for session-tool arguments.
 Defaulted arguments must be optional; defaulted positional arguments follow
 all required positional arguments. The bridge resolves paths before capability
 derivation and materializes defaults using their declared binding: positional
-values remain positional, non-boolean flags become `--name value`, and a true
-boolean flag becomes `--name`. False flags are omitted and positional booleans
-are serialized as `true` or `false`. Flag defaults are placed before an
+values remain positional, non-boolean flags become `--name value` (or
+`--name=value` when the value starts with `--`), and a true boolean flag
+becomes `--name`. An explicitly supplied false flag becomes `--name=false`;
+only an omitted/default-false flag is omitted. Positional booleans are
+serialized as `true` or `false`. Flag defaults are placed before an
 end-of-options delimiter; positional defaults follow supplied positional
 values. The handler must consume that canonical argv rather than recompute a
 separate default.
@@ -168,12 +177,18 @@ Session tools receive a JSON object rather than argv. Before capability
 resolution and MCP forwarding, the kernel inserts every declared literal
 default into that object, including defaults unrelated to a capability scope.
 
-The bundled email app's optional provider selector uses the reserved
-`trusted_resolver: "email-provider"` contract. Before capability derivation,
-the trusted launcher resolves one configured provider, materializes
-`--provider <name>`, and the manifest's `from-arg-map` grants only that
-provider's exact credential scope. Third-party apps and session tools cannot
-use trusted resolvers.
+The bundled email and calendar apps use the reserved `email-provider` and
+`calendar-provider` trusted resolvers. Before capability derivation, the
+trusted launcher selects a provider from credential metadata, materializes
+`--provider <name>`, and the manifest grants only that provider's exact
+credential and host scopes. Calendar falls back to `local` when neither remote
+credential exists. Third-party apps and session tools cannot use trusted
+resolvers.
+
+An operation may set `stdin: true` to receive piped caller input. The bridge
+still closes terminal stdin, so an interactive or agent launch cannot hang
+waiting for a prompt. Python list handlers use `apps/canonical_argv.py`; argparse
+and gateway parsers consume the same inline flags and `--` delimiter directly.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
@@ -342,8 +357,9 @@ point implements behavior for those declared operations; it must not define
 `_schema()`, handle `__schema__`, or maintain a parallel parameter list.
 Static app tests compare manifest operations with dispatcher branches, require
 parser flags to use `binding: "flag"`, and compare argparse required/default/
-integer behavior without importing entrypoints. Optional positional arguments
-cannot precede required positionals. Fixed path scopes use absolute paths or
+integer/repeatable/choice behavior without importing entrypoints. Optional
+positional arguments cannot precede required positionals, and repeatable
+positionals must be last. Fixed path scopes use absolute paths or
 `~/...`; `$HOME`, `$XDG_DATA_HOME`, and other environment placeholders are
 rejected because capability matching does not expand them.
 

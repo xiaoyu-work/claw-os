@@ -179,7 +179,8 @@
           "kind": "text",
           "required": false,
           "binding": "flag",
-          "default": "formal"
+          "default": "formal",
+          "choices": ["formal", "casual", "short"]
         },
         {
           "name": "lang",

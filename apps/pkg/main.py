@@ -435,6 +435,8 @@ def cmd_upgrade_all(args):
 
 def run(command, args):
     """Entry point called by the cos router."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     commands = {
         "need": cmd_need,
         "has": cmd_has,

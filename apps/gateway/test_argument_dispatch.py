@@ -25,7 +25,7 @@ def _load(name):
             "dingtalk",
             [
                 "hello",
-                "--markdown",
+                "--markdown=false",
                 "--title=--urgent",
                 "--keyword",
                 "Key",
@@ -37,7 +37,7 @@ def _load(name):
             ],
             ("hello",),
             {
-                "markdown": True,
+                "markdown": False,
                 "title": "--urgent",
                 "keyword": "Key",
                 "at_mobiles": ["1", "2"],

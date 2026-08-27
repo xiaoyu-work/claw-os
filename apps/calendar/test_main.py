@@ -119,6 +119,23 @@ class TestListValidation(unittest.TestCase):
     def setUp(self):
         _setup_local()
 
+    def test_unknown_provider_is_rejected_before_resource_access(self):
+        with (
+            mock.patch.object(calendar_main, "_require_provider_access") as access,
+            mock.patch.object(calendar_main, "_init_db") as database,
+        ):
+            result = run(
+                "list",
+                [
+                    "--provider=unknown",
+                    "--from=2026-03-25T00:00:00Z",
+                    "--to=2026-03-26T00:00:00Z",
+                ],
+            )
+        self.assertIn("invalid provider", result["error"])
+        access.assert_not_called()
+        database.assert_not_called()
+
     def test_list_missing_from(self):
         result = run("list", ["--to", "2026-03-26T00:00:00Z"])
         self.assertIn("error", result)
@@ -304,26 +321,10 @@ class TestProviderDetection(unittest.TestCase):
         self.assertEqual(calendar_main._detect_provider("outlook"), "outlook")
         self.assertEqual(calendar_main._detect_provider("local"), "local")
 
-    def test_detects_google_token(self):
-        os.environ["GOOGLE_CALENDAR_TOKEN"] = "fake"
-        try:
-            self.assertEqual(calendar_main._detect_provider(), "google")
-        finally:
-            del os.environ["GOOGLE_CALENDAR_TOKEN"]
-
-    def test_detects_canonical_google_token(self):
+    def test_app_side_environment_does_not_select_provider(self):
         os.environ["GOOGLE_ACCESS_TOKEN"] = "fake"
-        try:
-            self.assertEqual(calendar_main._detect_provider(), "google")
-        finally:
-            del os.environ["GOOGLE_ACCESS_TOKEN"]
-
-    def test_detects_outlook_token(self):
         os.environ["MICROSOFT_ACCESS_TOKEN"] = "fake"
-        try:
-            self.assertEqual(calendar_main._detect_provider(), "outlook")
-        finally:
-            del os.environ["MICROSOFT_ACCESS_TOKEN"]
+        self.assertEqual(calendar_main._detect_provider(), "local")
 
     def test_loads_google_token_from_credential_store(self):
         with mock.patch.object(

@@ -143,6 +143,7 @@ pub fn operation_schema(operation: &Operation) -> Value {
     json!({
         "description": operation.summary.current(),
         "parameters": parameters,
+        "stdin": operation.stdin,
     })
 }
 
@@ -155,12 +156,23 @@ fn arg_schema(arg: &Arg) -> Value {
     };
     let mut schema = json!({
         "name": arg.name,
-        "type": value_type,
+        "type": if arg.repeatable { "array" } else { value_type },
         "required": arg.required,
+        "repeatable": arg.repeatable,
         "description": arg.label.current(),
         "kind": arg.effective_binding().as_str(),
         "binding": arg.effective_binding().as_str(),
     });
+    if arg.repeatable {
+        schema["items"] = json!({"type": value_type});
+    }
+    if !arg.choices.is_empty() {
+        if arg.repeatable {
+            schema["items"]["enum"] = serde_json::Value::Array(arg.choices.clone());
+        } else {
+            schema["enum"] = serde_json::Value::Array(arg.choices.clone());
+        }
+    }
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();
     }

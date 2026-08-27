@@ -23,7 +23,8 @@
         {
           "name": "sql",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         }
       ],
       "needs": [
@@ -52,7 +53,8 @@
         {
           "name": "sql",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         }
       ],
       "needs": [

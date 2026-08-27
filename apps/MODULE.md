@@ -56,3 +56,8 @@ PYTHONPATH=claw-os-sdk/python/src:cos-runtime/python/src \
 When available, also run `cos app lint <id>`. Tests should verify that invalid
 arguments are rejected before policy checks and that requested scopes are
 exact.
+
+List-based Python handlers consume bridge-canonical argv through
+`apps/canonical_argv.py`. Do not add another local flag grammar: declare closed
+choices, repeatability, defaults, stdin forwarding, and capability conditions
+in `app.json`, then reuse the shared parser compatibility helpers.

@@ -709,7 +709,7 @@ fn session_tool_plan(
 /// collected so the whole launch can be decided at once.
 fn derive_plan(
     needs: &[Need],
-    resolved: &[Option<Cap>],
+    resolved: &[Vec<Cap>],
     delegation: &Delegation,
 ) -> Result<LaunchPlan, BrokerError> {
     if needs.len() != resolved.len() {
@@ -718,15 +718,16 @@ fn derive_plan(
             .into());
     }
     let mut plan = LaunchPlan::default();
-    for (need, cap) in needs.iter().zip(resolved) {
-        let Some(cap) = cap else {
-            continue;
-        };
+    for (need, caps) in needs.iter().zip(resolved) {
         if matches!(need.scope, ScopeBinding::Wild) {
-            plan.inherit(inherited_wild_caps(need.verb, delegation)?);
+            if !caps.is_empty() {
+                plan.inherit(inherited_wild_caps(need.verb, delegation)?);
+            }
             continue;
         }
-        plan.require(cap.clone(), delegation);
+        for cap in caps {
+            plan.require(cap.clone(), delegation);
+        }
     }
     Ok(plan)
 }

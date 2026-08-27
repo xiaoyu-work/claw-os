@@ -56,6 +56,8 @@ def _broker(action, target=None, state=None, credential=None):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     if command in READ_ACTIONS:
         if args:
             return {"error": f"{command} takes no arguments"}

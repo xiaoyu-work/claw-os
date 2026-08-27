@@ -170,6 +170,24 @@ def _gateway_list_contract(tree: ast.Module):
     return positionals, flags
 
 
+def _normalized_bool_flags(tree: ast.Module) -> set[str]:
+    flags = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {
+                "normalize_canonical_argv",
+                "normalize_argparse_booleans",
+            }
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "bool_flags":
+                flags.update(value.replace("-", "_") for value in _strings(keyword.value, {}))
+    return flags
+
+
 def _function_map(tree: ast.Module) -> dict[str, ast.FunctionDef]:
     return {
         node.name: node
@@ -217,6 +235,36 @@ def _capability_verbs(
         elif isinstance(call.func, ast.Name) and call.func.id in functions:
             verbs.update(_capability_verbs(functions[call.func.id], functions, seen))
     return verbs
+
+
+def _uses_variadic_join(
+    function: ast.FunctionDef,
+    functions: dict[str, ast.FunctionDef],
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    if function.name in seen:
+        return False
+    seen = seen | {function.name}
+    for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+        if (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "join"
+            and call.args
+            and any(
+                isinstance(node, ast.Name)
+                and node.id
+                in {"args", "argv", "rest", "remaining", "positionals", "query_parts"}
+                for node in ast.walk(call.args[0])
+            )
+        ):
+            return True
+        if (
+            isinstance(call.func, ast.Name)
+            and call.func.id in functions
+            and _uses_variadic_join(functions[call.func.id], functions, seen)
+        ):
+            return True
+    return False
 
 
 def _literal(node: ast.AST, assignments: dict[str, ast.expr]):
@@ -286,6 +334,14 @@ def _argparse_contract(
                     "required": required,
                     "kind": kind,
                     "default": default,
+                    "choices": _strings(
+                        keywords.get("choices", ast.Tuple(elts=[])), assignments
+                    ),
+                    "repeatable": action == "append"
+                    or _literal(
+                        keywords.get("nargs", ast.Constant(value=None)), assignments
+                    )
+                    in {"*", "+"},
                 }
             )
     return arguments
@@ -328,6 +384,39 @@ def test_parser_flags_have_flag_bindings() -> None:
     assert not drift, "\n".join(drift)
 
 
+def test_every_direct_list_handler_consumes_canonical_argv() -> None:
+    drift = []
+    for path, tree, manifest in _sources():
+        source = path.read_text(encoding="utf-8")
+        uses_argparse = any(
+            isinstance(node, (ast.Import, ast.ImportFrom))
+            and any(alias.name == "argparse" for alias in node.names)
+            for node in tree.body
+        )
+        uses_gateway_parser = "gateway_args.parse" in source
+        if (
+            not uses_argparse
+            and not uses_gateway_parser
+            and "normalize_canonical_argv" not in source
+            and "parse_canonical_argv" not in source
+        ):
+            drift.append(f"{path.relative_to(APPS_ROOT)} missing canonical parser")
+        declared_bools = {
+            arg["name"].replace("-", "_")
+            for operation in manifest.get("operations", {}).values()
+            for arg in operation.get("args", [])
+            if arg.get("kind") == "bool" and _binding(arg) == "flag"
+        }
+        if not uses_gateway_parser:
+            missing_bools = declared_bools - _normalized_bool_flags(tree)
+            if missing_bools:
+                drift.append(
+                    f"{path.relative_to(APPS_ROOT)} missing bool normalization "
+                    f"{sorted(missing_bools)}"
+                )
+    assert not drift, "\n".join(drift)
+
+
 def test_gateway_list_bindings_match_manifests() -> None:
     drift = {}
     for path, tree, manifest in _sources():
@@ -366,13 +455,18 @@ def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
             ),
         ]:
             optional_seen = False
-            for arg in declaration.get("args", []):
-                if _binding(arg) != "positional":
-                    continue
+            positional_args = [
+                arg
+                for arg in declaration.get("args", [])
+                if _binding(arg) == "positional"
+            ]
+            for index, arg in enumerate(positional_args):
                 if not arg.get("required", False):
                     optional_seen = True
                 elif optional_seen:
                     drift.append(f"{path}:{surface} optional positional before {arg['name']}")
+                if arg.get("repeatable") and index != len(positional_args) - 1:
+                    drift.append(f"{path}:{surface} repeatable positional before {arg['name']}")
             for need in declaration.get("needs", []):
                 scope = need.get("scope", {})
                 fixed = scope.get("scope", {}) if scope.get("kind") == "fixed" else {}
@@ -403,6 +497,39 @@ def test_handler_capability_use_is_declared() -> None:
             declared = {need["verb"] for need in declaration.get("needs", [])}
             for verb in sorted(used - declared):
                 drift.append(f"{path}:{operation} uses undeclared capability {verb}")
+    assert not drift, "\n".join(drift)
+
+
+def test_variadic_join_handlers_declare_repeatable_positionals() -> None:
+    drift = []
+    for path, tree, manifest in _sources():
+        if any(
+            isinstance(node, (ast.Import, ast.ImportFrom))
+            and any(alias.name == "argparse" for alias in node.names)
+            for node in tree.body
+        ):
+            continue
+        functions = _function_map(tree)
+        handlers = _handler_map(tree)
+        for operation, declaration in manifest.get("operations", {}).items():
+            handler_name = handlers.get(operation)
+            if handler_name is None:
+                for candidate in (
+                    f"cmd_{operation.replace('-', '_')}",
+                    f"_cmd_{operation.replace('-', '_')}",
+                ):
+                    if candidate in functions:
+                        handler_name = candidate
+                        break
+            if (
+                handler_name is not None
+                and _uses_variadic_join(functions[handler_name], functions)
+                and not any(
+                    arg.get("repeatable") and _binding(arg) == "positional"
+                    for arg in declaration.get("args", [])
+                )
+            ):
+                drift.append(f"{path}:{operation} variadic join is not repeatable")
     assert not drift, "\n".join(drift)
 
 
@@ -456,6 +583,10 @@ def test_argparse_contracts_match_manifests() -> None:
                     drift.append(f"{path}:{operation}.{parsed['name']} required")
                 if parsed["kind"] is not None and arg.get("kind") != parsed["kind"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} kind")
+                if bool(arg.get("repeatable", False)) != parsed["repeatable"]:
+                    drift.append(f"{path}:{operation}.{parsed['name']} repeatable")
+                if parsed["choices"] and set(arg.get("choices", [])) != parsed["choices"]:
+                    drift.append(f"{path}:{operation}.{parsed['name']} choices")
                 if parsed["default"] is not None and arg.get("default") != parsed["default"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} default")
     assert not drift, "\n".join(drift)
@@ -494,30 +625,54 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 "default_from" in arg or "trusted_resolver" in arg
             ):
                 drift.append(f"{path}:{surface}.{arg.get('name')} session resolver")
+            resolver_app = {
+                "email-provider": "email",
+                "calendar-provider": "calendar",
+            }.get(arg.get("trusted_resolver"))
             if arg.get("trusted_resolver") and (
-                app_id != "email"
+                app_id != resolver_app
                 or arg.get("name") != "provider"
                 or arg.get("kind") != "name"
                 or _binding(arg) != "flag"
                 or arg.get("required", False)
             ):
                 drift.append(f"{path}:{surface}.{arg.get('name')} trusted resolver")
+            if arg.get("repeatable") and (
+                arg.get("kind") == "bool"
+                or "default_from" in arg
+                or "trusted_resolver" in arg
+            ):
+                drift.append(f"{path}:{surface}.{arg.get('name')} repeatable shape")
+            choices = arg.get("choices", [])
+            if arg.get("name") == "provider" and not choices:
+                drift.append(f"{path}:{surface}.provider missing choices")
+            if len(choices) != len({json.dumps(value, sort_keys=True) for value in choices}):
+                drift.append(f"{path}:{surface}.{arg.get('name')} duplicate choices")
             if "default" in arg:
                 value = arg["default"]
                 kind = arg.get("kind")
+                values = value if arg.get("repeatable") and isinstance(value, list) else [value]
                 valid = (
-                    (kind in {"path", "host", "name", "text"} and isinstance(value, str))
-                    or (kind == "bool" and isinstance(value, bool))
-                    or (
-                        kind == "integer"
-                        and isinstance(value, int)
-                        and not isinstance(value, bool)
+                    (not arg.get("repeatable") or isinstance(value, list))
+                    and all(
+                        (
+                            kind in {"path", "host", "name", "text"}
+                            and isinstance(item, str)
+                        )
+                        or (kind == "bool" and isinstance(item, bool))
+                        or (
+                            kind == "integer"
+                            and isinstance(item, int)
+                            and not isinstance(item, bool)
+                        )
+                        or (
+                            kind == "number"
+                            and isinstance(item, (int, float))
+                            and not isinstance(item, bool)
+                        )
+                        for item in values
                     )
-                    or (
-                        kind == "number"
-                        and isinstance(value, (int, float))
-                        and not isinstance(value, bool)
-                    )
+                    and all(not choices or item in choices for item in values)
                 )
                 if not valid:
                     drift.append(f"{path}:{surface}.{arg.get('name')} default type")
@@ -534,6 +689,15 @@ def test_every_manifest_matches_published_schema_contract() -> None:
             if kind not in scope_kinds:
                 drift.append(f"{path}:{surface} unknown scope binding {kind}")
                 continue
+            provider = by_name.get("provider")
+            if (
+                need.get("verb") == "net.dial"
+                and kind == "wild"
+                and provider
+                and provider.get("choices")
+                and provider.get("trusted_resolver") != "email-provider"
+            ):
+                drift.append(f"{path}:{surface} wildcard provider network scope")
             required, forbidden = payloads[kind]
             fields = set(scope)
             unknown = fields - {"kind", "arg", "scope", "values", "wild_when"}
@@ -556,6 +720,11 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                     drift.append(f"{path}:{surface} arg-present has value")
                 if condition_kind == "arg-equals" and "value" not in condition:
                     drift.append(f"{path}:{surface} arg-equals missing value")
+                if (
+                    condition_kind == "arg-equals"
+                    and by_name.get(condition_arg, {}).get("repeatable")
+                ):
+                    drift.append(f"{path}:{surface} arg-equals targets repeatable arg")
             bound_arg = scope.get("arg")
             if bound_arg in by_name:
                 declaration = by_name[bound_arg]

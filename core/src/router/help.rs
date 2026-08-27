@@ -702,6 +702,7 @@ pub(super) fn show_app_command_schema(
             "command": format!("cos app {app_name} {command}"),
             "description": schema["description"].clone(),
             "parameters": schema["parameters"].clone(),
+            "stdin": schema["stdin"].clone(),
         })
         .to_string(),
     ))
@@ -716,6 +717,7 @@ pub(super) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<
             "label": op.label.current(),
             "description": op.summary.current(),
             "parameters": schema["parameters"].clone(),
+            "stdin": schema["stdin"].clone(),
         });
         commands.push(entry);
     }

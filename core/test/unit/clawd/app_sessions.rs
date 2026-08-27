@@ -127,6 +127,36 @@ fn delegation(ceiling: CapSet) -> Delegation {
     }
 }
 
+#[test]
+fn daemon_plan_skips_inactive_calendar_provider_needs() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("apps/calendar/app.json");
+    let manifest =
+        Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap();
+    let operation = &manifest.operations["today"];
+    let values =
+        BTreeMap::from([("provider".to_string(), serde_json::json!("local"))]);
+    let resolved = manifest.resolve_needs("today", &values).unwrap();
+
+    let local = Cap::new(Verb::DATA_DB_READ, Scope::name("calendar"));
+    let google = Cap::new(
+        Verb::SECRET_READ,
+        Scope::name("default/GOOGLE_ACCESS_TOKEN"),
+    );
+    let plan = derive_plan(
+        &operation.needs,
+        &resolved,
+        &delegation(CapSet::from_iter([local.clone(), google.clone()])),
+    )
+    .unwrap();
+
+    assert!(plan.caps.covers(&local));
+    assert!(!plan.caps.covers(&google));
+    assert!(plan.missing.is_empty());
+}
+
 /// Derive and settle a plan the way egister does, so tests exercise
 /// the real authorization path.
 fn operation_caps(

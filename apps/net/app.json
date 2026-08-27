@@ -25,7 +25,8 @@
           "kind": "text",
           "required": false,
           "binding": "flag",
-          "default": "GET"
+          "default": "GET",
+          "choices": ["GET", "POST", "PUT", "DELETE"]
         },
         {
           "name": "data",
@@ -37,7 +38,8 @@
           "name": "header",
           "kind": "text",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "repeatable": true
         },
         {
           "name": "timeout",

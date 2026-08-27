@@ -28,9 +28,9 @@ use super::manifest::{Arg, ArgBinding, ArgKind};
 /// [`Operation::apply_arg_defaults`](crate::caps::manifest::Operation)
 /// so the launcher can also report them back as effective argv.
 ///
-/// Unknown flags are rejected so only manifest-declared fields can reach an
-/// App. Positional tokens bind only to positional declarations; remaining
-/// tokens stay in argv for handlers with variadic positional behavior.
+/// Unknown flags and excess positional tokens are rejected so only
+/// manifest-declared fields can reach an App. Variadic behavior must be
+/// declared with `repeatable`.
 pub fn bind_supplied_cli_args(
     decls: &[Arg],
     raw: &[String],
@@ -74,7 +74,7 @@ pub fn bind_supplied_cli_args(
                         kind_label(decl.kind)
                     )
                 })?;
-                values.insert(decl.name.clone(), parsed);
+                insert_supplied_value(&mut values, decl, parsed)?;
             } else {
                 return Err(format!("unknown operation flag `--{raw_name}`"));
             }
@@ -91,16 +91,21 @@ pub fn bind_supplied_cli_args(
         {
             continue;
         }
-        if let Some(raw) = positional.next() {
-            let parsed = parse_arg_value(decl.kind, Some(&raw)).ok_or_else(|| {
-                format!(
-                    "argument `{}` is not a valid {}",
-                    decl.name,
-                    kind_label(decl.kind)
-                )
-            })?;
+        if decl.repeatable {
+            let parsed = positional
+                .by_ref()
+                .map(|raw| parse_declared_value(decl, Some(&raw)))
+                .collect::<Result<Vec<_>, _>>()?;
+            if !parsed.is_empty() {
+                values.insert(decl.name.clone(), Value::Array(parsed));
+            }
+        } else if let Some(raw) = positional.next() {
+            let parsed = parse_declared_value(decl, Some(&raw))?;
             values.insert(decl.name.clone(), parsed);
         }
+    }
+    if let Some(extra) = positional.next() {
+        return Err(format!("unexpected positional operation argument `{extra}`"));
     }
     Ok(values)
 }
@@ -158,11 +163,27 @@ pub fn resolve_path_args(
         if decl.kind != ArgKind::Path {
             continue;
         }
-        let Some(value) = values.get(&decl.name).and_then(Value::as_str) else {
+        let Some(value) = values.get(&decl.name) else {
             continue;
         };
-        let absolute = absolute_arg_path(value, context)?;
-        values.insert(decl.name.clone(), Value::String(absolute));
+        if decl.repeatable {
+            let resolved = value
+                .as_array()
+                .ok_or_else(|| format!("argument `{}` must be an array", decl.name))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .ok_or_else(|| format!("argument `{}` must contain paths", decl.name))
+                        .and_then(|value| absolute_arg_path(value, context))
+                        .map(Value::String)
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            values.insert(decl.name.clone(), Value::Array(resolved));
+        } else if let Some(value) = value.as_str() {
+            let absolute = absolute_arg_path(value, context)?;
+            values.insert(decl.name.clone(), Value::String(absolute));
+        }
     }
     Ok(())
 }
@@ -203,7 +224,10 @@ pub fn absolute_arg_path(value: &str, context: &PathContext) -> Result<String, S
 pub fn validate_bound_args(decls: &[Arg], values: &BTreeMap<String, Value>) -> Result<(), String> {
     for decl in decls {
         match values.get(&decl.name) {
-            Some(value) if !value_matches_kind(decl.kind, value) => {
+            Some(Value::Array(values)) if decl.required && values.is_empty() => {
+                return Err(format!("argument `{}` is required", decl.name));
+            }
+            Some(value) if !value_matches_declaration(decl, value) => {
                 return Err(format!(
                     "argument `{}` is not a valid {}",
                     decl.name,
@@ -225,6 +249,20 @@ fn value_matches_kind(kind: ArgKind, value: &Value) -> bool {
         ArgKind::Number => value.is_number(),
         ArgKind::Integer => value.as_i64().is_some() || value.as_u64().is_some(),
         ArgKind::Bool => value.is_boolean(),
+    }
+}
+
+fn value_matches_declaration(decl: &Arg, value: &Value) -> bool {
+    let scalar_matches = |value: &Value| {
+        value_matches_kind(decl.kind, value)
+            && (decl.choices.is_empty() || decl.choices.contains(value))
+    };
+    if decl.repeatable {
+        value
+            .as_array()
+            .is_some_and(|values| values.iter().all(scalar_matches))
+    } else {
+        scalar_matches(value)
     }
 }
 
@@ -273,6 +311,62 @@ fn parse_arg_value(kind: ArgKind, raw: Option<&str>) -> Option<Value> {
         ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => {
             raw.map(|value| Value::String(value.to_string()))
         }
+    }
+}
+
+fn parse_declared_value(decl: &Arg, raw: Option<&str>) -> Result<Value, String> {
+    let parsed = parse_arg_value(decl.kind, raw).ok_or_else(|| {
+        format!(
+            "argument `{}` is not a valid {}",
+            decl.name,
+            kind_label(decl.kind)
+        )
+    })?;
+    if !decl.choices.is_empty() && !decl.choices.contains(&parsed) {
+        return Err(format!(
+            "argument `{}` must be one of {}",
+            decl.name,
+            decl.choices
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    Ok(parsed)
+}
+
+fn insert_supplied_value(
+    values: &mut BTreeMap<String, Value>,
+    decl: &Arg,
+    parsed: Value,
+) -> Result<(), String> {
+    if !decl.choices.is_empty() && !decl.choices.contains(&parsed) {
+        return Err(format!(
+            "argument `{}` must be one of {}",
+            decl.name,
+            decl.choices
+                .iter()
+                .map(Value::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if decl.repeatable {
+        values
+            .entry(decl.name.clone())
+            .or_insert_with(|| Value::Array(Vec::new()))
+            .as_array_mut()
+            .expect("repeatable values are initialized as arrays")
+            .push(parsed);
+        Ok(())
+    } else if values.insert(decl.name.clone(), parsed).is_some() {
+        Err(format!(
+            "argument `{}` was supplied more than once but is not repeatable",
+            decl.name
+        ))
+    } else {
+        Ok(())
     }
 }
 

@@ -42,20 +42,15 @@ def _read_stdin_or_file(args):
       - On failure: ``text`` is ``None``, ``source`` is ``None``,
         ``instruction_or_err`` is an error ``dict``.
     """
-    file_path = None
-    instruction = None
-    rest = []
-    i = 0
-    while i < len(args):
-        if args[i] == "--file" and i + 1 < len(args):
-            file_path = args[i + 1]
-            i += 2
-        elif args[i] == "--instruction" and i + 1 < len(args):
-            instruction = args[i + 1]
-            i += 2
-        else:
-            rest.append(args[i])
-            i += 1
+    from canonical_argv import parse_canonical_argv
+    try:
+        rest, options = parse_canonical_argv(
+            args, value_flags={"file", "instruction"}
+        )
+    except ValueError as error:
+        return None, None, {"error": str(error)}
+    file_path = options.get("file")
+    instruction = options.get("instruction")
 
     if file_path:
         read_result = cmd_read([file_path])
@@ -639,6 +634,9 @@ def cmd_convert(args):
 
 def run(command, args):
     """Called by cos router."""
+    from canonical_argv import normalize_canonical_argv
+    if command not in {"summarize", "explain", "rewrite"}:
+        args = normalize_canonical_argv(args)
     commands = {
         "read": cmd_read,
         "info": cmd_info,

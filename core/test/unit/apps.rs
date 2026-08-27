@@ -131,7 +131,7 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
             .iter()
             .map(|arg| arg.name.as_str())
             .collect::<Vec<_>>(),
-        ["command", "timeout", "shell"]
+        ["command", "arguments", "timeout", "shell"]
     );
     assert_eq!(
         exec.operations["script"]
@@ -143,7 +143,7 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     );
     assert_eq!(exec.operations["which"].args[0].name, "name");
     assert_eq!(exec.operations["stop"].args[0].name, "pid");
-    let timeout = &exec.operations["run"].args[1];
+    let timeout = &exec.operations["run"].args[2];
     assert_eq!(timeout.kind, crate::caps::manifest::ArgKind::Integer);
     assert_eq!(
         timeout.effective_binding(),
@@ -212,7 +212,7 @@ fn bundled_conditional_capabilities_are_exact() {
             .join("app.json");
         Manifest::from_json(&std::fs::read_to_string(path).unwrap()).unwrap()
     };
-    let active = |caps: Vec<Option<crate::caps::Cap>>| {
+    let active = |caps: Vec<Vec<crate::caps::Cap>>| {
         caps.into_iter().flatten().collect::<Vec<_>>()
     };
 
@@ -231,6 +231,10 @@ fn bundled_conditional_capabilities_are_exact() {
     assert!(google.iter().any(|cap| {
         cap.verb == crate::caps::Verb::SECRET_READ
             && cap.scope == crate::caps::Scope::name("default/GOOGLE_ACCESS_TOKEN")
+    }));
+    assert!(google.iter().any(|cap| {
+        cap.verb == crate::caps::Verb::NET_DIAL
+            && cap.scope == crate::caps::Scope::host("www.googleapis.com")
     }));
     assert!(google
         .iter()
@@ -297,4 +301,45 @@ fn bundled_conditional_capabilities_are_exact() {
         brave_secrets,
         [crate::caps::Scope::name("default/BRAVE_SEARCH_API_KEY")]
     );
+    assert!(brave.iter().any(|cap| {
+        cap.verb == crate::caps::Verb::NET_DIAL
+            && cap.scope == crate::caps::Scope::host("api.search.brave.com")
+    }));
+    assert!(brave.iter().all(|cap| cap.scope != crate::caps::Scope::Wild));
+}
+
+#[test]
+fn bundled_schema_exposes_repeatables_choices_and_stdin() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let load = |id: &str| {
+        Manifest::from_json(
+            &std::fs::read_to_string(repository.join("apps").join(id).join("app.json"))
+                .unwrap(),
+        )
+        .unwrap()
+    };
+
+    let net = load("net");
+    let schema = operation_schema(&net.operations["fetch"]);
+    let header = schema["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|arg| arg["name"] == "header")
+        .unwrap();
+    assert_eq!(header["type"], "array");
+    assert_eq!(header["items"]["type"], "string");
+    assert_eq!(header["repeatable"], true);
+
+    let calendar = load("calendar");
+    let schema = operation_schema(&calendar.operations["today"]);
+    assert_eq!(
+        schema["parameters"][0]["enum"],
+        serde_json::json!(["local", "google", "outlook"])
+    );
+
+    let doc = load("doc");
+    assert_eq!(operation_schema(&doc.operations["summarize"])["stdin"], true);
 }

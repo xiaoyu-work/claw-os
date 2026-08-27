@@ -24,6 +24,12 @@
           "required": true
         },
         {
+          "name": "arguments",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
+        },
+        {
           "name": "timeout",
           "kind": "integer",
           "required": false,
@@ -63,7 +69,8 @@
         {
           "name": "code",
           "kind": "text",
-          "required": false
+          "required": false,
+          "repeatable": true
         },
         {
           "name": "lang",
@@ -131,6 +138,12 @@
           "name": "command",
           "kind": "name",
           "required": true
+        },
+        {
+          "name": "arguments",
+          "kind": "text",
+          "required": false,
+          "repeatable": true
         }
       ],
       "needs": [

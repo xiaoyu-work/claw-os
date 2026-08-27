@@ -501,6 +501,9 @@ def _send(args) -> dict:
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    if isinstance(args, list):
+        args = normalize_canonical_argv(args)
     if command == "start":
         return _start_loop()
     if command == "stop":

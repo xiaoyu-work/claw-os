@@ -55,6 +55,8 @@ def _broker(action, value=None, confirm=False):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"confirm"})
     if command in ("status", "list"):
         if args:
             return {"error": f"{command} takes no arguments"}

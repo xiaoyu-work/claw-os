@@ -74,6 +74,8 @@ def _mime(value):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"primary", "confirm"})
     primary, values = _options(args)
     if command in {"status", "types"}:
         if values:

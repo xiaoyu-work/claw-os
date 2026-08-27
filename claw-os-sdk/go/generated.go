@@ -136,6 +136,7 @@ type Localizedtext struct {
 type Operation struct {
 	Label Localizedtext `json:"label"`
 	Summary *Localizedtext `json:"summary,omitempty"`
+	Stdin bool `json:"stdin,omitempty"`
 	Args []Arg `json:"args,omitempty"`
 	Needs []Need `json:"needs,omitempty"`
 }
@@ -146,6 +147,8 @@ type Arg struct {
 	Kind string `json:"kind"`
 	Binding string `json:"binding,omitempty"`
 	Required bool `json:"required,omitempty"`
+	Repeatable bool `json:"repeatable,omitempty"`
+	Choices []interface{} `json:"choices,omitempty"`
 	Default *interface{} `json:"default,omitempty"`
 	DefaultFrom *Argdefaultbinding `json:"default_from,omitempty"`
 	TrustedResolver string `json:"trusted_resolver,omitempty"`

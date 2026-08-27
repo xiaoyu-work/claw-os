@@ -79,22 +79,9 @@ def _parse_args(args):
 
 
 def _detect_provider(explicit=None):
-    """Return the calendar provider to use.
-
-    If *explicit* is given use that; otherwise sniff environment variables
-    for Google / Outlook tokens, falling back to ``"local"``.
-    """
-    if explicit:
-        return explicit
-    if (
-        os.environ.get(GOOGLE_ACCESS_TOKEN)
-        or os.environ.get("GOOGLE_CALENDAR_TOKEN")
-        or os.environ.get("GOOGLE_OAUTH_TOKEN")
-    ):
-        return "google"
-    if os.environ.get("MICROSOFT_ACCESS_TOKEN") or os.environ.get("MICROSOFT_OAUTH_TOKEN"):
-        return "outlook"
-    return "local"
+    """Validate the provider materialized by the trusted bridge resolver."""
+    provider = explicit or "local"
+    return provider if provider in {"local", "google", "outlook"} else None
 
 
 def _now_iso():
@@ -118,13 +105,6 @@ def _default_end(start_iso):
 # ---------------------------------------------------------------------------
 
 def _google_token():
-    token = (
-        os.environ.get(GOOGLE_ACCESS_TOKEN)
-        or os.environ.get("GOOGLE_CALENDAR_TOKEN")
-        or os.environ.get("GOOGLE_OAUTH_TOKEN")
-    )
-    if token:
-        return token
     return load_credential(GOOGLE_ACCESS_TOKEN)[0]
 
 
@@ -161,11 +141,6 @@ def _google_event_to_dict(item):
 # ---------------------------------------------------------------------------
 
 def _outlook_token():
-    token = os.environ.get(MICROSOFT_ACCESS_TOKEN) or os.environ.get(
-        "MICROSOFT_OAUTH_TOKEN"
-    )
-    if token:
-        return token
     return load_credential(MICROSOFT_ACCESS_TOKEN)[0]
 
 
@@ -304,6 +279,8 @@ def cmd_list(args):
         return {"error": "usage: calendar list --from <datetime> --to <datetime> [--provider local|google|outlook]"}
 
     provider = _detect_provider(parsed.get("provider"))
+    if provider is None:
+        return {"error": "invalid provider; expected local, google, or outlook"}
     _require_provider_access(provider, write=False)
 
     try:
@@ -404,6 +381,8 @@ def cmd_create(args):
     description = parsed.get("description", "")
     location = parsed.get("location", "")
     provider = _detect_provider(parsed.get("provider"))
+    if provider is None:
+        return {"error": "invalid provider; expected local, google, or outlook"}
     _require_provider_access(provider, write=True)
 
     try:
@@ -516,6 +495,8 @@ def cmd_update(args):
         return {"error": "usage: calendar update --id <event-id> [--title <title>] [--start <datetime>] [--end <datetime>] [--description <text>] [--provider local|google|outlook]"}
 
     provider = _detect_provider(parsed.get("provider"))
+    if provider is None:
+        return {"error": "invalid provider; expected local, google, or outlook"}
     fields = {k: v for k, v in parsed.items() if k in ("title", "start", "end", "description", "location")}
     _require_provider_access(provider, write=True)
 
@@ -586,6 +567,8 @@ def cmd_delete(args):
         return {"error": "usage: calendar delete --id <event-id> [--provider local|google|outlook]"}
 
     provider = _detect_provider(parsed.get("provider"))
+    if provider is None:
+        return {"error": "invalid provider; expected local, google, or outlook"}
     _require_provider_access(provider, write=True)
 
     try:
@@ -678,6 +661,8 @@ COMMANDS = {
 
 def run(command, args):
     """Entry point called by cos."""
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args)
     # Re-read DATA_DIR in case COS_DATA_DIR changed (e.g. in tests).
     global DATA_DIR
     DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")

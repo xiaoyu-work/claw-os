@@ -89,6 +89,8 @@ def _broker(action, repo, credential, **values):
 
 
 def run(command, args):
+    from canonical_argv import normalize_canonical_argv
+    args = normalize_canonical_argv(args, bool_flags={"confirm"})
     confirm = "--confirm" in args
     values = [value for value in args if value != "--confirm"]
     try:

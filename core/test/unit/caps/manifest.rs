@@ -182,9 +182,9 @@ fn resolve_needs_substitutes_runtime_arg_value() {
     args.insert("path".to_string(), serde_json::json!("/home/jay/x.md"));
     let caps = m.resolve_needs("rm", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::FS_DELETE);
+    assert_eq!(caps[0][0].verb, Verb::FS_DELETE);
     assert_eq!(
-        caps[0].as_ref().unwrap().scope,
+        caps[0][0].scope,
         Scope::path("/home/jay/x.md")
     );
 }
@@ -218,9 +218,9 @@ fn resolve_needs_uses_literal_arg_default() {
     let caps = manifest.resolve_needs("search", &args).unwrap();
 
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::FS_READ);
+    assert_eq!(caps[0][0].verb, Verb::FS_READ);
     assert_eq!(
-        caps[0].as_ref().unwrap().scope,
+        caps[0][0].scope,
         Scope::path("/workspace")
     );
 }
@@ -263,7 +263,7 @@ fn resolve_needs_uses_validated_default_binding() {
     let caps = manifest.resolve_needs("download", &args).unwrap();
 
     assert_eq!(
-        caps[0].as_ref().unwrap().scope,
+        caps[0][0].scope,
         Scope::path("~/archive.tar")
     );
 
@@ -273,7 +273,7 @@ fn resolve_needs_uses_validated_default_binding() {
     );
     let fallback = manifest.resolve_needs("download", &args).unwrap();
     assert_eq!(
-        fallback[0].as_ref().unwrap().scope,
+        fallback[0][0].scope,
         Scope::path("~/download")
     );
 }
@@ -378,7 +378,7 @@ fn session_tool_defaults_feed_arguments_and_capabilities() {
     let caps = manifest
         .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
         .unwrap();
-    assert_eq!(caps[0].as_ref().unwrap().scope, Scope::name("primary"));
+    assert_eq!(caps[0][0].scope, Scope::name("primary"));
 }
 
 #[test]
@@ -418,18 +418,18 @@ fn conditional_needs_skip_only_explicit_inactive_cases() {
     let local = manifest
         .resolve_needs("explain", &BTreeMap::new())
         .unwrap();
-    assert_eq!(local, [None, None]);
+    assert_eq!(local, [Vec::new(), Vec::new()]);
 
     let mut cloud_file = BTreeMap::new();
     cloud_file.insert("file".to_string(), serde_json::json!("/workspace/a.txt"));
     cloud_file.insert("provider".to_string(), serde_json::json!("cloud"));
     let active = manifest.resolve_needs("explain", &cloud_file).unwrap();
     assert_eq!(
-        active[0].as_ref().unwrap().scope,
+        active[0][0].scope,
         Scope::path("/workspace/a.txt")
     );
     assert_eq!(
-        active[1].as_ref().unwrap().scope,
+        active[1][0].scope,
         Scope::name("default/TOKEN")
     );
 }
@@ -448,6 +448,57 @@ fn optional_capability_bindings_require_conditions() {
     )
     .unwrap_err();
     assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
+fn repeatable_scope_arguments_resolve_one_capability_per_value() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"repeat","version":"0.1","name":"Repeat",
+            "operations":{"read":{"label":"Read","args":[
+                {"name":"path","kind":"path","binding":"flag","repeatable":true}
+            ],"needs":[
+                {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+                 "when":{"kind":"arg-present","arg":"path"},"why":"Read paths"}
+            ]}}
+        }"#,
+    )
+    .unwrap();
+    let args = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["/workspace/a", "/workspace/b"]),
+    )]);
+    let resolved = manifest.resolve_needs("read", &args).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(
+        resolved[0]
+            .iter()
+            .map(|cap| cap.scope.clone())
+            .collect::<Vec<_>>(),
+        [
+            Scope::path("/workspace/a"),
+            Scope::path("/workspace/b")
+        ]
+    );
+}
+
+#[test]
+fn ambiguous_repeatable_declarations_are_rejected() {
+    for arg in [
+        r#"{"name":"toggle","kind":"bool","repeatable":true}"#,
+        r#"{"name":"first","kind":"text","repeatable":true},
+            {"name":"later","kind":"text"}"#,
+        r#"{"name":"path","kind":"path","repeatable":true,
+            "default_from":{"arg":"source"}}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"bad-repeat","version":"0.1","name":"Bad repeat",
+                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {arg}");
+    }
 }
 
 #[test]
@@ -498,9 +549,9 @@ fn resolve_needs_with_fixed_scope() {
             }"#,
     );
     let caps = m.resolve_needs("tail", &BTreeMap::new()).unwrap();
-    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::DATA_LOG_READ);
+    assert_eq!(caps[0][0].verb, Verb::DATA_LOG_READ);
     assert_eq!(
-        caps[0].as_ref().unwrap().scope,
+        caps[0][0].scope,
         Scope::name("system/*")
     );
 }
@@ -877,11 +928,36 @@ fn session_tool_resolve_needs_from_arg() {
     args.insert("key".to_string(), serde_json::json!("user/jay"));
     let caps = m.resolve_session_tool_needs("kv.get", &args).unwrap();
     assert_eq!(caps.len(), 1);
-    assert_eq!(caps[0].as_ref().unwrap().verb, Verb::DATA_KV_READ);
+    assert_eq!(caps[0][0].verb, Verb::DATA_KV_READ);
     assert_eq!(
-        caps[0].as_ref().unwrap().scope,
+        caps[0][0].scope,
         Scope::name("user/jay")
     );
+}
+
+#[test]
+fn session_repeatable_scope_arg_resolves_every_capability() {
+    let manifest = parse(
+        r#"{
+          "id":"files","version":"0.1","name":"Files",
+          "session":{"tools":[{
+            "name":"files.read","summary":"Read files",
+            "args":[{"name":"path","kind":"path","repeatable":true}],
+            "needs":[{"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+                      "when":{"kind":"arg-present","arg":"path"},"why":"Read files"}]
+          }]}
+        }"#,
+    );
+    let args = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["/workspace/a", "/workspace/b"]),
+    )]);
+    let resolved = manifest
+        .resolve_session_tool_needs("files.read", &args)
+        .unwrap();
+    assert_eq!(resolved[0].len(), 2);
+    assert_eq!(resolved[0][0].scope, Scope::path("/workspace/a"));
+    assert_eq!(resolved[0][1].scope, Scope::path("/workspace/b"));
 }
 
 #[test]
