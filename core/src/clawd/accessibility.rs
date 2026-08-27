@@ -45,7 +45,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         let session_id = required_string(&params, "session")?;
         let action = required_string(&params, "action")?;
         let value = optional_string(&params, "value")?;
-        validate_action(&action, value.as_deref())?;
         let requested = if action == "status" {
             Cap::new(Verb::SYS_OBSERVE, Scope::name("accessibility"))
         } else {
@@ -55,12 +54,16 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             authorize_session(&session_id, peer_pid, requested)
         })
         .await?;
+        validate_action(&action, value.as_deref()).map_err(BrokerError::execution)?;
         let environment = A11yEnvironment::new(uid, gid, home, peer_pid)?;
 
         if action == "status" {
             return accessibility_status(&environment)
                 .await
                 .map_err(BrokerError::execution);
+        }
+        if action == "screen-reader" {
+            busctl_path().map_err(backend_unavailable)?;
         }
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
@@ -71,7 +74,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             BrokerError::unavailable("Accessibility Manager is busy with another mutation")
         })?;
         if action == "screen-reader" {
-            busctl_path().map_err(backend_unavailable)?;
             set_screen_reader(&environment, value.as_deref().unwrap() == "on")
                 .await
                 .map_err(BrokerError::execution)

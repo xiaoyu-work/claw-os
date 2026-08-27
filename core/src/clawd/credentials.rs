@@ -32,7 +32,11 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
         let session_id = required_string(&params, "session")?;
         let namespace = required_string(&params, "namespace")?;
         let credential = required_string(&params, "credential")?;
-        validate_component("namespace", &namespace)?;
+        crate::paths::with_user_override(uid, home.clone(), async {
+            authorize_session(&session_id, peer_pid, &namespace, &credential)
+        })
+        .await?;
+        validate_component("namespace", &namespace).map_err(BrokerError::execution)?;
         if !matches!(
             credential.as_str(),
             "GOOGLE_ACCESS_TOKEN" | "MICROSOFT_ACCESS_TOKEN"
@@ -41,9 +45,7 @@ pub async fn oauth_refresh(params: Value, client: &ClientIdentity) -> Result<Val
                 "credential `{credential}` is not eligible for OAuth refresh"
             )));
         }
-
         crate::paths::with_user_override(uid, home, async move {
-            authorize_session(&session_id, peer_pid, &namespace, &credential)?;
             let _identity = FsIdentityGuard::enter(uid, gid).map_err(BrokerError::execution)?;
             let result =
                 crate::credential::broker_refresh_access_token(&credential, &namespace)

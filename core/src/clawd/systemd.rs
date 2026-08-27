@@ -86,7 +86,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         let action = required_string(&params, "action")?;
         let session_id = required_string(&params, "session")?;
         let unit = required_string(&params, "unit")?;
-        validate_unit_name(&unit)?;
 
         let verb = if action == "status" {
             Verb::SYS_OBSERVE
@@ -97,7 +96,7 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             authorize_session(&session_id, peer_pid, &unit, verb, true)
         })
         .await?;
-        systemctl_path().map_err(backend_unavailable)?;
+        prepare_control(&action, &unit, || systemctl_path().map(|_| ()))?;
 
         if action == "status" {
             return Ok(json!({
@@ -107,15 +106,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
                 "changed": false,
             }));
         }
-        if !matches!(
-            action.as_str(),
-            "start" | "stop" | "restart" | "reload" | "enable" | "disable"
-        ) {
-            return Err(BrokerError::execution(format!(
-                "unsupported systemd action `{action}`; expected status, start, stop, restart, reload, enable, or disable"
-            )));
-        }
-
         let _guard = SYSTEMD_LOCK
             .get_or_init(|| tokio::sync::Mutex::new(()))
             .lock()
@@ -183,7 +173,6 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, Br
             .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
         let session_id = required_string(&params, "session")?;
         let unit = required_string(&params, "unit")?;
-        validate_unit_name(&unit)?;
         let active = required_bool(&params, "active")?;
         let enabled = optional_bool(&params, "enabled")?;
         let mutation_session = required_string(&params, "mutation_session")?;
@@ -191,6 +180,7 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, Br
 
         crate::paths::with_user_override(uid, home, async {
             authorize_session(&session_id, peer_pid, &unit, Verb::SYS_SERVICE, false)?;
+            validate_unit_name(&unit).map_err(BrokerError::execution)?;
             validate_restore_record(&mutation_session, mutation_seq, &unit, active, enabled)
                 .map_err(BrokerError::execution)
         })
@@ -212,6 +202,23 @@ pub async fn restore(params: Value, client: &ClientIdentity) -> Result<Value, Br
 
 fn backend_unavailable(message: String) -> BrokerError {
     BrokerError::unavailable(message)
+}
+
+fn prepare_control(
+    action: &str,
+    unit: &str,
+    probe_backend: impl FnOnce() -> Result<(), String>,
+) -> Result<(), BrokerError> {
+    validate_unit_name(unit).map_err(BrokerError::execution)?;
+    if !matches!(
+        action,
+        "status" | "start" | "stop" | "restart" | "reload" | "enable" | "disable"
+    ) {
+        return Err(BrokerError::execution(format!(
+            "unsupported systemd action `{action}`; expected status, start, stop, restart, reload, enable, or disable"
+        )));
+    }
+    probe_backend().map_err(backend_unavailable)
 }
 
 pub fn restore_unit_state(

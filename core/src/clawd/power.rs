@@ -43,7 +43,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             .get("confirm")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        validate_action(&action, confirm).map_err(BrokerError::execution)?;
         let requested = if action == "status" {
             Cap::new(Verb::SYS_OBSERVE, Scope::name("power"))
         } else {
@@ -53,10 +52,12 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
             authorize_session(&session_id, peer_pid, requested)
         })
         .await?;
+        validate_action(&action, confirm).map_err(BrokerError::execution)?;
 
         if action == "status" {
             return power_status().await.map_err(BrokerError::execution);
         }
+        busctl_path().map_err(backend_unavailable)?;
         let _guard = tokio::time::timeout(
             LOCK_TIMEOUT,
             POWER_LOCK
@@ -65,7 +66,6 @@ pub async fn control(params: Value, client: &ClientIdentity) -> Result<Value, Br
         )
         .await
         .map_err(|_| BrokerError::unavailable("Power Manager is busy with another operation"))?;
-        busctl_path().map_err(backend_unavailable)?;
         request_power_action(&action, uid, &session_id)
             .await
             .map_err(BrokerError::execution)
