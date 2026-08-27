@@ -80,7 +80,7 @@ const DEFAULT_MODELS: &[&str] = &[
     // openai
     "gpt-4o-mini",
     // copilot — pin to the same default the web UI lands on after sign-in
-    "claude-sonnet-4.6",
+    "gpt-4o",
     // gemini
     "gemini-2.5-flash",
     // openrouter
@@ -153,13 +153,23 @@ pub enum Message {
     /// the device-authorization codes. The wizard displays the
     /// `user_code` and starts the polling task.
     OauthStarted {
+        provider_index: usize,
         user_code: String,
         verification_uri: String,
         device_code: String,
         interval: u64,
     },
     /// Polling finished — either authorized or terminal error.
-    OauthCompleted(Result<(), String>),
+    OauthCompleted {
+        provider_index: usize,
+        result: Result<(), String>,
+    },
+    /// Live models fetched after OAuth succeeds. The provider index
+    /// prevents a late response from changing a newly-selected provider.
+    OauthModelsRefreshed {
+        provider_index: usize,
+        result: Result<Vec<String>, String>,
+    },
 }
 
 /// OAuth flow state for providers like GitHub Copilot. Replaces the
@@ -202,6 +212,10 @@ impl From<Message> for crate::Message {
 pub struct Page {
     selected: Option<usize>,
     model: String,
+    /// True only after a text-input event. Provider defaults and live
+    /// OAuth model choices remain automatic so a later provider change
+    /// can replace them without overwriting deliberate user input.
+    model_edited: bool,
     api_key: String,
     api_key_hidden: bool,
     /// Per-provider extra field values, keyed by `ExtraFieldSpec.key`
@@ -223,6 +237,7 @@ impl Default for Page {
         Self {
             selected: None,
             model: String::new(),
+            model_edited: false,
             api_key: String::new(),
             api_key_hidden: true,
             extras: HashMap::new(),
@@ -237,25 +252,53 @@ impl Page {
         Self::default()
     }
 
+    fn replace_automatic_model(&mut self, model: impl Into<String>) {
+        if !self.model_edited {
+            self.model = model.into();
+        }
+    }
+
+    fn refresh_oauth_model(&mut self, provider_index: usize, models: &[String]) {
+        if self.selected != Some(provider_index)
+            || !PROVIDER_KEYS
+                .get(provider_index)
+                .is_some_and(|provider| is_oauth_provider(provider))
+        {
+            return;
+        }
+
+        let preferred = DEFAULT_MODELS
+            .get(provider_index)
+            .copied()
+            .unwrap_or_default();
+        let replacement = models
+            .iter()
+            .find(|model| model.as_str() == preferred)
+            .or_else(|| models.first())
+            .cloned();
+        if let Some(model) = replacement {
+            self.replace_automatic_model(model);
+        }
+    }
+
     pub fn update(&mut self, message: Message) -> Task<page::Message> {
         match message {
             Message::SelectProvider(idx) => {
+                let provider_changed = self.selected != Some(idx);
                 self.selected = Some(idx);
-                // Pre-fill a sensible default model for the picked
-                // provider, but only if the user hasn't already typed
-                // a custom value — never clobber explicit input.
-                if self.model.trim().is_empty()
-                    && let Some(m) = DEFAULT_MODELS.get(idx)
-                {
-                    self.model = (*m).to_string();
+                if provider_changed {
+                    let default = DEFAULT_MODELS.get(idx).copied().unwrap_or_default();
+                    self.replace_automatic_model(default);
+                    // Switching provider resets any in-flight OAuth state
+                    // so a previous Copilot sign-in can't masquerade as
+                    // approval for a different provider. Selecting the same
+                    // provider again leaves its valid OAuth state intact.
+                    self.oauth = OauthState::Idle;
                 }
-                // Switching provider resets any in-flight OAuth state
-                // so a previous Copilot sign-in can't masquerade as
-                // approval for a different provider.
-                self.oauth = OauthState::Idle;
             }
             Message::EditModel(value) => {
                 self.model = value;
+                self.model_edited = true;
             }
             Message::EditApiKey(value) => {
                 self.api_key = value;
@@ -271,16 +314,17 @@ impl Page {
                 }
             }
             Message::StartOauth => {
-                let provider = self
-                    .selected
-                    .and_then(|i| PROVIDER_KEYS.get(i))
-                    .copied()
-                    .unwrap_or_default()
-                    .to_string();
-                if !is_oauth_provider(&provider) {
+                let Some(provider_index) = self.selected else {
+                    return Task::none();
+                };
+                let Some(provider) = PROVIDER_KEYS.get(provider_index).copied() else {
+                    return Task::none();
+                };
+                if !is_oauth_provider(provider) {
                     return Task::none();
                 }
                 self.oauth = OauthState::Starting;
+                let provider = provider.to_string();
                 let fut = async move {
                     let res = tokio::task::spawn_blocking(move || {
                         oauth_start_blocking(&provider)
@@ -289,47 +333,111 @@ impl Page {
                     .unwrap_or_else(|e| Err(format!("internal join error: {e}")));
                     match res {
                         Ok(s) => page::Message::Ai(Message::OauthStarted {
+                            provider_index,
                             user_code: s.user_code,
                             verification_uri: s.verification_uri,
                             device_code: s.device_code,
                             interval: s.interval,
                         }),
-                        Err(e) => page::Message::Ai(Message::OauthCompleted(Err(e))),
+                        Err(e) => page::Message::Ai(Message::OauthCompleted {
+                            provider_index,
+                            result: Err(e),
+                        }),
                     }
                 };
                 return cosmic::task::future(fut);
             }
             Message::OauthStarted {
+                provider_index,
                 user_code,
                 verification_uri,
                 device_code,
                 interval,
             } => {
+                if self.selected != Some(provider_index) {
+                    return Task::none();
+                }
+                let Some(provider) = PROVIDER_KEYS.get(provider_index).copied() else {
+                    return Task::none();
+                };
+                if !is_oauth_provider(provider) {
+                    return Task::none();
+                }
                 self.oauth = OauthState::Polling {
                     user_code,
                     verification_uri,
                 };
-                let provider = self
-                    .selected
-                    .and_then(|i| PROVIDER_KEYS.get(i))
-                    .copied()
-                    .unwrap_or("copilot")
-                    .to_string();
+                let provider = provider.to_string();
                 let fut = async move {
                     let res = tokio::task::spawn_blocking(move || {
                         oauth_poll_blocking(&provider, &device_code, interval)
                     })
                     .await
                     .unwrap_or_else(|e| Err(format!("internal join error: {e}")));
-                    page::Message::Ai(Message::OauthCompleted(res))
+                    page::Message::Ai(Message::OauthCompleted {
+                        provider_index,
+                        result: res,
+                    })
                 };
                 return cosmic::task::future(fut);
             }
-            Message::OauthCompleted(Ok(())) => {
-                self.oauth = OauthState::Authorized;
+            Message::OauthCompleted {
+                provider_index,
+                result,
+            } => {
+                if self.selected != Some(provider_index) {
+                    return Task::none();
+                }
+                let Some(provider) = PROVIDER_KEYS.get(provider_index).copied() else {
+                    return Task::none();
+                };
+                if !is_oauth_provider(provider) {
+                    return Task::none();
+                }
+                match result {
+                    Ok(()) => {
+                        self.oauth = OauthState::Authorized;
+                        let provider = provider.to_string();
+                        let fut = async move {
+                            let result = tokio::task::spawn_blocking(move || {
+                                oauth_models_blocking(&provider)
+                            })
+                            .await
+                            .unwrap_or_else(|e| Err(format!("internal join error: {e}")));
+                            page::Message::Ai(Message::OauthModelsRefreshed {
+                                provider_index,
+                                result,
+                            })
+                        };
+                        return cosmic::task::future(fut);
+                    }
+                    Err(reason) => {
+                        self.oauth = OauthState::Failed(reason);
+                    }
+                }
             }
-            Message::OauthCompleted(Err(reason)) => {
-                self.oauth = OauthState::Failed(reason);
+            Message::OauthModelsRefreshed {
+                provider_index,
+                result,
+            } => {
+                if self.selected != Some(provider_index)
+                    || !matches!(self.oauth, OauthState::Authorized)
+                {
+                    return Task::none();
+                }
+                match result {
+                    Ok(models) => self.refresh_oauth_model(provider_index, &models),
+                    Err(reason) => {
+                        tracing::warn!(
+                            provider = PROVIDER_KEYS
+                                .get(provider_index)
+                                .copied()
+                                .unwrap_or_default(),
+                            error = %reason,
+                            "OAuth succeeded but live model refresh failed"
+                        );
+                    }
+                }
             }
         }
         Task::none()
@@ -703,6 +811,52 @@ fn oauth_start_blocking(provider: &str) -> Result<OauthStart, String> {
         device_code,
         interval,
     })
+}
+
+fn oauth_models_blocking(provider: &str) -> Result<Vec<String>, String> {
+    let argv: Vec<&str> = vec![
+        "cos",
+        "agent",
+        "setup",
+        "text",
+        "models",
+        "--provider",
+        provider,
+    ];
+    let result = cos_runtime::exec::run(&argv, Some(30)).map_err(|why| {
+        if why.is_denied() {
+            tracing::warn!(?why, "exec.run cos agent setup text models denied");
+        } else {
+            tracing::error!(?why, "exec.run cos agent setup text models failed");
+        }
+        format!("{why}")
+    })?;
+    if result.exit_code != 0 {
+        let summary = result.stderr.trim();
+        return Err(if summary.is_empty() {
+            format!("cos exited with status {}", result.exit_code)
+        } else {
+            summary.to_string()
+        });
+    }
+
+    let body: serde_json::Value = serde_json::from_str(&result.stdout)
+        .map_err(|e| format!("models: unexpected output: {e}"))?;
+    let models = body
+        .get("models")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "models: missing models list".to_string())?
+        .iter()
+        .filter_map(|model| {
+            model
+                .as_str()
+                .or_else(|| model.get("name").and_then(serde_json::Value::as_str))
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(ToOwned::to_owned)
+        })
+        .collect();
+    Ok(models)
 }
 
 /// Block-poll `cos agent setup text oauth-poll` until the device-flow
