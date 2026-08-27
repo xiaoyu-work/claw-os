@@ -1332,14 +1332,17 @@ fn valid_token(value: &str) -> bool {
 /// Behaviour:
 ///   - Best-effort: IO failures are swallowed; enforcement never
 ///     blocks on the writer.
-///   - Skips writing when `COS_CAPS_AUDIT=0` (used by the busy unit
-///     tests so they don't spam the user's logs dir).
+///   - Unconditional: there is no runtime switch that turns
+///     capability-decision recording off, and in particular nothing
+///     read from the audited process's environment. The subject of a
+///     decision must not be able to hide it, nor to keep the allows
+///     while dropping the denials, so both classes always reach the
+///     system journal and `caps.jsonl`. Tests that must keep these
+///     writes off the host filesystem redirect `COS_LOG_DIR` and
+///     `COS_DATA_DIR` at a temp dir instead.
 ///   - `timestamp`, `trace_id`, and `span_id` come from
 ///     [`log_event`].
 pub fn log_cap_decision(entry: serde_json::Value) {
-    if std::env::var("COS_CAPS_AUDIT").as_deref() == Ok("0") {
-        return;
-    }
     crate::clawd::system_journal::record_cap_decision(&entry);
     let path = crate::paths::caps_audit_log_path();
     log_event(&path, entry);

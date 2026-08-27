@@ -489,8 +489,11 @@ pub fn agent_audit_log_path() -> PathBuf {
 /// session id, agent label, verb, scope, decision, reason, and the
 /// resolved target resource. Powers Agent-facing permission history.
 ///
-/// Lives at `log_dir()/caps.jsonl`. Set `COS_CAPS_AUDIT=0` to
-/// suppress writing entirely (used by hot-path tests).
+/// Lives at `log_dir()/caps.jsonl`. Recording is unconditional and
+/// cannot be suppressed. The destination is not fixed here: it
+/// follows the deployment-controlled `COS_LOG_DIR`/[`log_dir`]
+/// configuration, which a trusted deployment is responsible for
+/// setting.
 pub fn caps_audit_log_path() -> PathBuf {
     log_dir().join("caps.jsonl")
 }

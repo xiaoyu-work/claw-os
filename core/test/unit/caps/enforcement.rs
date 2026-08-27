@@ -307,11 +307,14 @@ fn audit_record_wild_scope_renders_as_star() {
     assert_eq!(rec["mode"], "permissive");
 }
 
+/// Regression alongside `audit::cap_audit_tests`: `require` records
+/// through the enforcement path even when the checked process sets
+/// the retired `COS_CAPS_AUDIT=0` switch, and it records the allow
+/// and the deny alike.
 #[test]
 fn require_writes_to_caps_jsonl() {
     let _lock = env_lock();
-    let prev_audit = std::env::var_os("COS_CAPS_AUDIT");
-    std::env::remove_var("COS_CAPS_AUDIT");
+    let _audit_flag = crate::test_env::TestEnvVarGuard::set("COS_CAPS_AUDIT", "0");
 
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
@@ -332,9 +335,4 @@ fn require_writes_to_caps_jsonl() {
     assert_eq!(deny["decision"], "deny");
     assert_eq!(deny["verb"], "fs.delete");
     assert_eq!(deny["reason"], "verb-not-granted");
-
-    match prev_audit {
-        Some(v) => std::env::set_var("COS_CAPS_AUDIT", v),
-        None => std::env::remove_var("COS_CAPS_AUDIT"),
-    }
 }

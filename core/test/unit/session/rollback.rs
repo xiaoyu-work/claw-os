@@ -22,17 +22,19 @@ fn rollback_rechecks_caps() {
     let prev_data = std::env::var_os("COS_DATA_DIR");
     std::env::set_var("COS_DATA_DIR", dir.path());
 
+    // Capability decisions are always recorded, so redirect the
+    // caps.jsonl sink into the same tempdir rather than letting the
+    // replay checks below write to /var/log.
+    let prev_log = std::env::var_os("COS_LOG_DIR");
+    std::env::set_var("COS_LOG_DIR", dir.path());
+
     // Force caps::require to deny every call:
     //   - Strict mode: missing session ⇒ denied.
     //   - COS_SESSION unset ⇒ also denied.
     let prev_mode = std::env::var_os("COS_PERMS_MODE");
     let prev_session = std::env::var_os("COS_SESSION");
-    let prev_audit = std::env::var_os("COS_CAPS_AUDIT");
     std::env::set_var("COS_PERMS_MODE", "strict");
     std::env::remove_var("COS_SESSION");
-    // Quiet the caps audit log writer so the test doesn't try
-    // to write to /var/log.
-    std::env::set_var("COS_CAPS_AUDIT", "0");
 
     // Create a session and append one fs.write mutation. We do
     // this AFTER setting strict mode + clearing COS_SESSION so
@@ -65,6 +67,10 @@ fn rollback_rechecks_caps() {
         Some(v) => std::env::set_var("COS_DATA_DIR", v),
         None => std::env::remove_var("COS_DATA_DIR"),
     }
+    match prev_log {
+        Some(v) => std::env::set_var("COS_LOG_DIR", v),
+        None => std::env::remove_var("COS_LOG_DIR"),
+    }
     match prev_mode {
         Some(v) => std::env::set_var("COS_PERMS_MODE", v),
         None => std::env::remove_var("COS_PERMS_MODE"),
@@ -72,9 +78,5 @@ fn rollback_rechecks_caps() {
     match prev_session {
         Some(v) => std::env::set_var("COS_SESSION", v),
         None => std::env::remove_var("COS_SESSION"),
-    }
-    match prev_audit {
-        Some(v) => std::env::set_var("COS_CAPS_AUDIT", v),
-        None => std::env::remove_var("COS_CAPS_AUDIT"),
     }
 }

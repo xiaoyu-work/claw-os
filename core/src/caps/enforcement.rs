@@ -291,8 +291,9 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 /// the approval UI.
 ///
 /// Every call emits one structured record to `${log_dir}/caps.jsonl`
-/// via [`crate::audit::log_cap_decision`]. Suppress with
-/// `COS_CAPS_AUDIT=0`.
+/// via [`crate::audit::log_cap_decision`]. Emission is unconditional
+/// and covers allows and denials alike; the process being checked has
+/// no switch that suppresses either class.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
