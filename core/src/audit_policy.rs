@@ -9,13 +9,11 @@
 //! launch handles, prompts and arbitrary nested caller data to disk
 //! where they outlive the request.
 //!
-//! This module is the only place that decides what may survive. It is
-//! an **allowlist**, never a denylist of suspicious names: a command or
-//! tool is described by an explicit list of fields the owning route has
-//! classified as safe, and anything the policy has never heard of
-//! contributes no payload at all. A new route therefore starts safe and
-//! stays silent until someone adds a policy entry, and there is no
-//! fallback that serializes the raw value.
+//! This module is the only place that defines how approved fields are
+//! projected. The allowlist itself is never a denylist of suspicious
+//! names: each broker route carries its own field rules, while tools
+//! use the table below. Anything without a rule contributes no payload,
+//! and there is no fallback that serializes the raw value.
 //!
 //! What survives is bounded metadata: identities the broker itself
 //! produced, validated resource identifiers, enumerated selectors,
@@ -219,420 +217,13 @@ fn value_kind(value: &Value) -> &'static str {
 // Broker request policy
 // ---------------------------------------------------------------------------
 
-/// The audit policy for one broker command.
-pub struct CommandPolicy {
-    pub command: &'static str,
-    pub fields: &'static [(&'static str, FieldRule)],
-}
-
-/// Every command `clawd` dispatches, with the fields its owning route
-/// has classified as safe to persist.
-///
-/// Adding a broker command means adding a row here. Until then the
-/// command is audited by outcome alone: no name, no arguments. Fields
-/// absent from a row are never written in any form, only counted — that
-/// covers `handle` (replayable launch authority), `token` (restore and
-/// approval bearer values), `credential`/`password` material, `prompt`,
-/// `content`, `payload`, `metadata`, `parent_caps`, `call`, free-text
-/// reasons and titles, and every path or host no route has classified.
-#[rustfmt::skip]
-const COMMAND_POLICIES: &[CommandPolicy] = &[
-    CommandPolicy { command: "daemon.health", fields: &[] },
-    CommandPolicy { command: "daemon.status", fields: &[] },
-    CommandPolicy {
-        command: "task.submit",
-        fields: &[
-            ("session_id", FieldRule::Token),
-            ("max_turns", FieldRule::Count),
-            ("prompt", FieldRule::Size),
-        ],
-    },
-    CommandPolicy { command: "task.list", fields: &[("status", FieldRule::Token)] },
-    CommandPolicy { command: "task.get", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "task.status", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "task.cancel", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "task.stream", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "task.result", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "task.count", fields: &[] },
-    CommandPolicy { command: "context.snapshot", fields: &[] },
-    CommandPolicy { command: "context.sources", fields: &[] },
-    CommandPolicy { command: "context.update", fields: &[("source", FieldRule::Token)] },
-    CommandPolicy {
-        command: "context.event.append",
-        fields: &[
-            ("source", FieldRule::Token),
-            ("event_type", FieldRule::Token),
-            ("app_id", FieldRule::Token),
-            ("entity_id", FieldRule::Token),
-            ("task_id", FieldRule::Token),
-            ("session_id", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "context.event.query",
-        fields: &[
-            ("source", FieldRule::Token),
-            ("event_type", FieldRule::Token),
-            ("session_id", FieldRule::Token),
-            ("order", FieldRule::Token),
-            ("limit", FieldRule::Count),
-        ],
-    },
-    CommandPolicy { command: "permission.pending", fields: &[("limit", FieldRule::Count)] },
-    CommandPolicy { command: "permission.recent", fields: &[("limit", FieldRule::Count)] },
-    CommandPolicy { command: "permission.status", fields: &[("ids", FieldRule::Size)] },
-    CommandPolicy {
-        command: "permission.request",
-        fields: &[
-            ("verb", FieldRule::Identifier),
-            ("session", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "permission.decide",
-        fields: &[
-            ("id", FieldRule::Token),
-            ("decision", FieldRule::Token),
-            ("owner_uid", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.operations",
-        fields: &[("source", FieldRule::Token), ("limit", FieldRule::Count)],
-    },
-    CommandPolicy {
-        command: "memory.history",
-        fields: &[("session_id", FieldRule::Token), ("limit", FieldRule::Count)],
-    },
-    CommandPolicy { command: "memory.sessions", fields: &[("limit", FieldRule::Count)] },
-    // The credential name is an opaque reference, but only the two
-    // literals this route can act on are safe to store: anything else
-    // is caller text that may be the secret itself.
-    CommandPolicy {
-        command: "credential.oauth-refresh",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("namespace", FieldRule::Token),
-            (
-                "credential",
-                FieldRule::Enum(&["GOOGLE_ACCESS_TOKEN", "MICROSOFT_ACCESS_TOKEN"]),
-            ),
-        ],
-    },
-    CommandPolicy {
-        command: "system.audio.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("target", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.accessibility.control",
-        fields: &[("session", FieldRule::Token), ("action", FieldRule::Token)],
-    },
-    CommandPolicy {
-        command: "system.backup.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("snapshot", FieldRule::Token),
-            ("keep_daily", FieldRule::Count),
-            ("keep_weekly", FieldRule::Count),
-            ("keep_monthly", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.bluetooth.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("adapter", FieldRule::Token),
-            ("device", FieldRule::Token),
-            ("pairing_id", FieldRule::Token),
-            ("state", FieldRule::Token),
-            ("seconds", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.camera.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("node_id", FieldRule::Token),
-            ("format", FieldRule::Token),
-            ("width", FieldRule::Count),
-            ("height", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.clipboard.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("mime", FieldRule::Identifier),
-        ],
-    },
-    CommandPolicy {
-        command: "system.container.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("runtime", FieldRule::Token),
-            ("namespace", FieldRule::Token),
-            ("target", FieldRule::Identifier),
-            ("signal", FieldRule::Token),
-            ("lines", FieldRule::Count),
-        ],
-    },
-    // `target` is the /etc file the editor may change; `source` and
-    // `token` are caller paths and restore bearer values.
-    CommandPolicy {
-        command: "system.config.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("target", FieldRule::Identifier),
-            ("confirm", FieldRule::Flag),
-        ],
-    },
-    CommandPolicy {
-        command: "system.crash.inspect",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("id", FieldRule::Token),
-            ("limit", FieldRule::Count),
-            ("since_minutes", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.desktop.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("app_id", FieldRule::Token),
-            ("identifier", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.display.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("output", FieldRule::Token),
-            ("transform", FieldRule::Token),
-            ("percent", FieldRule::Count),
-            ("adaptive_sync", FieldRule::Token),
-            ("backlight", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.events.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("source", FieldRule::Token),
-            ("limit", FieldRule::Count),
-            ("pid", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.firewall.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("direction", FieldRule::Token),
-            ("interface", FieldRule::Token),
-            ("port", FieldRule::Token),
-            ("protocol", FieldRule::Token),
-            ("rule_action", FieldRule::Token),
-            ("rule_id", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.hardware.inspect",
-        fields: &[("session", FieldRule::Token), ("action", FieldRule::Token)],
-    },
-    CommandPolicy {
-        command: "system.location.query",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("accuracy", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.network.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("state", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.package.install",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("mutation_session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("package", FieldRule::Identifier),
-            ("version", FieldRule::Identifier),
-        ],
-    },
-    CommandPolicy {
-        command: "system.package.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("mutation_session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("package", FieldRule::Identifier),
-            ("version", FieldRule::Identifier),
-        ],
-    },
-    CommandPolicy {
-        command: "system.package.restore",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("mutation_session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("package", FieldRule::Identifier),
-            ("previous_version", FieldRule::Identifier),
-            ("was_held", FieldRule::Flag),
-        ],
-    },
-    CommandPolicy {
-        command: "system.power.control",
-        fields: &[("session", FieldRule::Token), ("action", FieldRule::Token)],
-    },
-    CommandPolicy {
-        command: "system.printer.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("printer", FieldRule::Token),
-            ("job_id", FieldRule::Token),
-            ("media", FieldRule::Token),
-            ("sides", FieldRule::Token),
-            ("copies", FieldRule::Count),
-        ],
-    },
-    CommandPolicy {
-        command: "system.security.inspect",
-        fields: &[("session", FieldRule::Token), ("action", FieldRule::Token)],
-    },
-    CommandPolicy {
-        command: "system.service.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("mutation_session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("unit", FieldRule::Identifier),
-        ],
-    },
-    CommandPolicy {
-        command: "system.service.restore",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("mutation_session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("unit", FieldRule::Identifier),
-            ("active", FieldRule::Flag),
-            ("enabled", FieldRule::Flag),
-        ],
-    },
-    CommandPolicy {
-        command: "system.snapshot.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("id", FieldRule::Token),
-        ],
-    },
-    CommandPolicy {
-        command: "system.storage.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("device", FieldRule::Identifier),
-        ],
-    },
-    CommandPolicy {
-        command: "system.usb.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("device", FieldRule::Token),
-            ("rule_id", FieldRule::Token),
-            ("state", FieldRule::Token),
-        ],
-    },
-    // `user` and `group` are account names the route acts on;
-    // `full_name`, `shell`, `groups`, `credential` and `token` are
-    // personal data or authority and are never stored.
-    CommandPolicy {
-        command: "system.users.control",
-        fields: &[
-            ("session", FieldRule::Token),
-            ("action", FieldRule::Token),
-            ("user", FieldRule::Token),
-            ("group", FieldRule::Token),
-        ],
-    },
-    CommandPolicy { command: "transaction.begin", fields: &[] },
-    CommandPolicy { command: "transaction.list", fields: &[] },
-    CommandPolicy { command: "transaction.commit", fields: &[("id", FieldRule::Token)] },
-    CommandPolicy { command: "transaction.rollback", fields: &[("id", FieldRule::Token)] },
-    // App-session routes: the launch handle is bearer authority, the
-    // MCP `command` is a child command line, and `call`/`parent_caps`
-    // are arbitrary nested caller data.
-    CommandPolicy {
-        command: "app_session.register",
-        fields: &[
-            ("app_id", FieldRule::Token),
-            ("kind", FieldRule::Token),
-            ("operation", FieldRule::Token),
-            ("args", FieldRule::Size),
-        ],
-    },
-    CommandPolicy {
-        command: "app_session.register_native",
-        fields: &[("app_id", FieldRule::Token)],
-    },
-    CommandPolicy { command: "mcp_session.register", fields: &[("command", FieldRule::Size)] },
-    CommandPolicy {
-        command: "app_session.bind",
-        fields: &[("session_id", FieldRule::Token), ("pid", FieldRule::Count)],
-    },
-    CommandPolicy {
-        command: "app_session.set_transient",
-        fields: &[("session_id", FieldRule::Token), ("call", FieldRule::Size)],
-    },
-    CommandPolicy {
-        command: "app_session.deregister",
-        fields: &[("session_id", FieldRule::Token)],
-    },
-    // Scheduler arguments carry `--credential` names, prompts and
-    // shell command lines, so only their count is recorded.
-    CommandPolicy {
-        command: "scheduler.run",
-        fields: &[
-            ("subsystem", FieldRule::Enum(&["cron", "triggers"])),
-            ("command", FieldRule::Token),
-            ("args", FieldRule::Size),
-        ],
-    },
-];
-
-pub fn command_policy(command: &str) -> Option<&'static CommandPolicy> {
-    COMMAND_POLICIES
-        .iter()
-        .find(|policy| policy.command == command)
-}
-
-pub fn known_commands() -> impl Iterator<Item = &'static str> {
-    COMMAND_POLICIES.iter().map(|policy| policy.command)
-}
+// Every command's safe fields live on its typed `clawd` route
+// descriptor. This module owns only the projection rules, so adding a
+// command never requires updating a second name-indexed table.
+//
+// Fields absent from a route's metadata are never written in any form,
+// only counted. This covers bearer handles and tokens, credential and
+// password material, prompts, nested payloads, and free-text reasons.
 
 /// Everything a durable record may say about a broker request.
 #[derive(Debug, Clone, Serialize)]
@@ -653,27 +244,36 @@ pub struct RequestFacts {
 }
 
 pub fn request_facts(command: &str, params: &Value) -> RequestFacts {
-    match command_policy(command) {
-        Some(policy) => {
-            let (fields, omitted) = project_fields(policy.fields, params);
-            RequestFacts {
-                command: policy.command,
-                command_text: None,
-                params: fields,
-                params_kind: value_kind(params),
-                params_omitted: omitted,
-            }
-        }
-        None => {
-            let (fields, omitted) = project_fields(&[], params);
-            RequestFacts {
-                command: UNRECOGNIZED,
-                command_text: Some(text_digest(command)),
-                params: fields,
-                params_kind: value_kind(params),
-                params_omitted: omitted,
-            }
-        }
+    let Some(route) = crate::clawd::routes::Command::parse(command).map(|command| command.route())
+    else {
+        return unrecognized_request_facts(command, params);
+    };
+    request_facts_for_route(route.name, route.audit_fields, params)
+}
+
+pub fn request_facts_for_route(
+    command: &'static str,
+    fields: &'static [(&'static str, FieldRule)],
+    params: &Value,
+) -> RequestFacts {
+    let (fields, omitted) = project_fields(fields, params);
+    RequestFacts {
+        command,
+        command_text: None,
+        params: fields,
+        params_kind: value_kind(params),
+        params_omitted: omitted,
+    }
+}
+
+fn unrecognized_request_facts(command: &str, params: &Value) -> RequestFacts {
+    let (fields, omitted) = project_fields(&[], params);
+    RequestFacts {
+        command: UNRECOGNIZED,
+        command_text: Some(text_digest(command)),
+        params: fields,
+        params_kind: value_kind(params),
+        params_omitted: omitted,
     }
 }
 

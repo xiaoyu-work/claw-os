@@ -138,6 +138,7 @@ fn an_unknown_command_fails_closed_before_authorization() {
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::UnknownCommand);
+    assert_eq!(refusal.fault.code(), "unknown_command");
     assert!(
         refusal.command.is_none(),
         "the caller's own string must never become a recorded route name"
@@ -156,6 +157,7 @@ fn an_undeclared_field_fails_closed_before_dispatch() {
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::InvalidParams);
+    assert_eq!(refusal.fault.code(), "invalid_request");
     assert_eq!(refusal.command, Some("system.power.control"));
 }
 
@@ -167,6 +169,7 @@ fn a_user_peer_cannot_reach_a_root_route() {
         .err()
         .expect("refused");
     assert_eq!(refusal.fault, Fault::NotAuthorized);
+    assert_eq!(refusal.fault.code(), "not_authorized");
 
     let admitted = admit(&body, &peer(0), &admission)
         .unwrap_or_else(|error| panic!("root must reach a root route, got {:?}", error.fault));
@@ -327,6 +330,7 @@ async fn an_unknown_command_is_refused_over_the_socket() {
     let response = exchange(&request, Limits::default()).await;
     assert_eq!(response["ok"], json!(false));
     assert_eq!(response["id"], json!("r-probe"));
+    assert_eq!(response["error"]["code"], json!("unknown_command"));
     assert_eq!(
         response["error"]["message"],
         json!(Fault::UnknownCommand.message())
@@ -347,6 +351,7 @@ async fn an_undeclared_field_is_refused_over_the_socket() {
     );
     let response = exchange(&request, Limits::default()).await;
     assert_eq!(response["ok"], json!(false));
+    assert_eq!(response["error"]["code"], json!("invalid_request"));
     assert_eq!(
         response["error"]["message"],
         json!(Fault::InvalidParams.message())
@@ -363,6 +368,7 @@ async fn an_oversized_frame_is_refused_over_the_socket() {
     request.extend_from_slice(&u32::MAX.to_be_bytes());
     let response = exchange(&request, Limits::default()).await;
     assert_eq!(response["ok"], json!(false));
+    assert_eq!(response["error"]["code"], json!("protocol_error"));
     assert_eq!(
         response["error"]["message"],
         json!(Fault::FrameTooLarge.message())
@@ -377,6 +383,7 @@ async fn a_pipelined_second_frame_refuses_the_whole_exchange() {
     request.extend_from_slice(&one);
     let response = exchange(&request, Limits::default()).await;
     assert_eq!(response["ok"], json!(false));
+    assert_eq!(response["error"]["code"], json!("protocol_error"));
     assert_eq!(
         response["error"]["message"],
         json!(Fault::ExtraFrame.message())
@@ -459,6 +466,7 @@ async fn a_route_that_this_peer_cannot_reach_is_refused_over_the_socket() {
     );
     let response = exchange(&request, Limits::default()).await;
     assert_eq!(response["ok"], json!(false));
+    assert_eq!(response["error"]["code"], json!("not_authorized"));
     assert_eq!(
         response["error"]["message"],
         json!(Fault::NotAuthorized.message())

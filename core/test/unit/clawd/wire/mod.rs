@@ -99,6 +99,18 @@ fn every_fault_carries_a_static_class_and_message() {
 }
 
 #[test]
+fn public_failure_categories_are_stable_and_distinct() {
+    assert_eq!(Fault::MalformedBody.code(), "invalid_json");
+    assert_eq!(Fault::InvalidEnvelope.code(), "invalid_request");
+    assert_eq!(Fault::InvalidParams.code(), "invalid_request");
+    assert_eq!(Fault::UnknownCommand.code(), "unknown_command");
+    assert_eq!(Fault::NotAuthorized.code(), "not_authorized");
+    assert_eq!(Fault::RouteBusy.code(), "unavailable");
+    assert_eq!(Fault::RouteTimeout.code(), "unavailable");
+    assert_eq!(Fault::UnsupportedVersion.code(), "protocol_error");
+}
+
+#[test]
 fn the_legacy_notice_is_one_json_line_and_names_no_caller_input() {
     let notice = legacy_upgrade_notice();
     assert!(notice.ends_with(b"\n"));

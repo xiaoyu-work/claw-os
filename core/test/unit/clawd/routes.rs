@@ -112,26 +112,56 @@ fn the_access_allowlist_is_exactly_what_it_was() {
 }
 
 #[test]
-fn every_route_declares_an_audit_policy() {
-    // A route with no policy would be audited as `<unrecognized>` with
-    // no arguments — safe, but silent. Fail loudly instead so a new
-    // command has to classify its own fields.
+fn every_route_owns_its_audit_metadata() {
+    let payload_free: std::collections::BTreeSet<_> = [
+        "daemon.health",
+        "daemon.status",
+        "task.count",
+        "context.snapshot",
+        "context.sources",
+        "transaction.begin",
+        "transaction.list",
+    ]
+    .into_iter()
+    .collect();
+    let mut observed_payload_free = std::collections::BTreeSet::new();
     for route in ROUTES {
-        assert!(
-            route.audit_policy().is_some(),
-            "clawd routes `{}` with no audit policy",
-            route.name
+        let facts = crate::audit_policy::request_facts_for_route(
+            route.name,
+            route.audit_fields,
+            &json!({}),
         );
+        assert_eq!(facts.command, route.name);
+        assert!(facts.command_text.is_none());
+        let mut fields = std::collections::BTreeSet::new();
+        for (field, _) in route.audit_fields {
+            assert!(
+                fields.insert(*field),
+                "{} declares audit field {field} twice",
+                route.name
+            );
+        }
+        if route.audit_fields.is_empty() {
+            observed_payload_free.insert(route.name);
+        }
     }
+    assert_eq!(observed_payload_free, payload_free);
 }
 
 #[test]
-fn the_canonical_route_list_and_the_policy_table_agree() {
-    for command in crate::audit_policy::known_commands() {
-        assert!(
-            Command::parse(command).is_some(),
-            "audit policy names `{command}`, which clawd does not route"
+fn every_route_uses_the_typed_stable_error_policy() {
+    for route in ROUTES {
+        let execution = route.errors.response(
+            crate::clawd::protocol::RequestId::unknown(),
+            BrokerError::from("provider failed".to_string()),
         );
+        assert_eq!(
+            execution.error.expect("error body").code,
+            "execution_failed",
+            "{}",
+            route.name
+        );
+        assert_eq!(route.errors, ErrorPolicy::Typed);
     }
 }
 

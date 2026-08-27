@@ -147,6 +147,7 @@ client (cos / bridge / rollback / approval helper)
   -> access class -> global / per-principal / per-route slots
   -> duplicate check for mutations
   -> handler under the route's budget
+  -> typed boundary error mapping and route-owned audit projection
   -> one bounded response frame, then close
 ```
 
@@ -156,9 +157,11 @@ The length is checked against the direction's ceiling before anything is
 allocated, and a short read is a truncation rather than a record the daemon
 waits on. `core/src/clawd/wire/` owns the envelope and the bounded field types;
 `core/src/clawd/routes.rs` is the single table that ties a wire command name to
-its typed body, access class, mutation kind, concurrency and time budget, and
-handler; `core/src/clawd/transport/` owns framing, per-message credentials and
-admission control.
+its typed body, access class, mutation kind, concurrency and time budget, safe
+audit fields, and handler. It also drives stable unknown, malformed,
+unauthorized, unavailable and execution-failure responses;
+`core/src/clawd/transport/` owns framing, per-message credentials and admission
+control.
 
 Identity comes from the credentials Linux stamps onto each message when
 `SO_PASSCRED` is set on the listener — not from `SO_PEERCRED` captured at
