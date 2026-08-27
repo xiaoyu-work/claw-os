@@ -1,6 +1,8 @@
 """URL authority and redirect checks must use exact effective ports."""
 
 import io
+import json
+from pathlib import Path
 import urllib.error
 import urllib.request
 from unittest import mock
@@ -20,27 +22,29 @@ class _Response:
 
 
 def test_host_scope_includes_effective_ports_and_ipv6_brackets():
-    for url, expected in [
-        ("http://example.test/path", "example.test:80"),
-        ("https://example.test/path", "example.test:443"),
-        ("https://example.test:8443/path", "example.test:8443"),
-        ("http://[2001:db8::1]/path", "[2001:db8::1]:80"),
-        ("https://[2001:db8::2]:9443/path", "[2001:db8::2]:9443"),
-    ]:
-        assert safe_http.host_scope(safe_http.parse_url(url)) == expected
+    vectors = json.loads(
+        Path(safe_http.__file__).with_name("url_host_scope_vectors.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    for vector in vectors:
+        assert (
+            safe_http.host_scope(safe_http.parse_url(vector["url"]))
+            == vector["scope"]
+        )
 
 
 def test_every_redirect_hop_uses_the_same_effective_port_scope():
     first = urllib.error.HTTPError(
-        "http://origin.example/start",
+        "https://bücher.example/start",
         302,
         "Found",
-        {"Location": "https://redirect.example/next"},
+        {"Location": "http://0x7f.1/next"},
         io.BytesIO(),
     )
-    response = _Response("https://redirect.example/next")
-    addresses = [(None, None, None, None, ("203.0.113.10", 443))]
-    request = urllib.request.Request("http://origin.example/start")
+    response = _Response("http://0x7f.1/next")
+    addresses = [(None, None, None, None, ("203.0.113.10", 80))]
+    request = urllib.request.Request("https://bücher.example/start")
 
     with mock.patch.object(
         safe_http, "resolve_public", return_value=addresses
@@ -52,9 +56,9 @@ def test_every_redirect_hop_uses_the_same_effective_port_scope():
         result, final_url, redirects = safe_http.open_url(request, timeout=1)
 
     assert result is response
-    assert final_url == "https://redirect.example/next"
-    assert redirects == ["https://redirect.example/next"]
+    assert final_url == "http://0x7f.1/next"
+    assert redirects == ["http://0x7f.1/next"]
     assert require.call_args_list == [
-        mock.call("net.dial", host="origin.example:80"),
-        mock.call("net.dial", host="redirect.example:443"),
+        mock.call("net.dial", host="xn--bcher-kva.example:443"),
+        mock.call("net.dial", host="127.0.0.1:80"),
     ]

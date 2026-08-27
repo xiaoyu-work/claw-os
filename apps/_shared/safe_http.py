@@ -4,6 +4,7 @@ import ipaddress
 import http.client
 import socket
 import ssl
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,11 +20,82 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
+def _parse_ipv4_number(part):
+    radix = 10
+    digits = part
+    if digits.lower().startswith("0x"):
+        radix = 16
+        digits = digits[2:]
+    elif len(digits) > 1 and digits.startswith("0"):
+        radix = 8
+        digits = digits[1:]
+    if not digits:
+        return 0
+    valid = {
+        8: "01234567",
+        10: "0123456789",
+        16: "0123456789abcdefABCDEF",
+    }[radix]
+    if any(char not in valid for char in digits):
+        return None
+    return int(digits, radix)
+
+
+def _canonical_ipv4(host):
+    parts = host.split(".")
+    if parts and parts[-1] == "":
+        parts.pop()
+    if not parts or len(parts) > 4:
+        return None
+    numbers = [_parse_ipv4_number(part) for part in parts]
+    if numbers[-1] is None:
+        return None
+    if any(number is None for number in numbers):
+        raise ValueError("invalid IPv4 address")
+    if any(number > 255 for number in numbers[:-1]):
+        raise ValueError("invalid IPv4 address")
+    last_limit = 256 ** (5 - len(numbers))
+    if numbers[-1] >= last_limit:
+        raise ValueError("invalid IPv4 address")
+    value = numbers[-1]
+    for index, number in enumerate(numbers[:-1]):
+        value += number * (256 ** (3 - index))
+    return str(ipaddress.IPv4Address(value))
+
+
+def _canonical_domain(host):
+    host = unicodedata.normalize("NFKC", host).translate(
+        str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
+    )
+    labels = host.split(".")
+    canonical = []
+    for label in labels:
+        normalized = unicodedata.normalize("NFC", label).lower()
+        if not normalized:
+            canonical.append("")
+        elif normalized.isascii():
+            canonical.append(normalized)
+        else:
+            canonical.append("xn--" + normalized.encode("punycode").decode("ascii"))
+    return ".".join(canonical)
+
+
+def canonical_host(host):
+    """Canonicalize a URL hostname with the WHATWG forms used by Rust url."""
+    if ":" in host:
+        return ipaddress.IPv6Address(host).compressed
+    ipv4 = _canonical_ipv4(host)
+    if ipv4 is not None:
+        return ipv4
+    return _canonical_domain(host)
+
+
 def host_scope(parsed):
     """Return the exact host:port scope used by kernel URL authority."""
     host = parsed.hostname
     if not host:
         raise ValueError("URL has no host")
+    host = canonical_host(host)
     port = parsed.port
     if port is None:
         if parsed.scheme == "http":
@@ -41,7 +113,7 @@ def _socket_host(parsed):
     host = parsed.hostname
     if not host:
         raise ValueError("URL has no host")
-    return host
+    return canonical_host(host)
 
 
 def parse_url(url):

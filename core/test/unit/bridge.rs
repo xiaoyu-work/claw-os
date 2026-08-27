@@ -820,6 +820,38 @@ fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
 }
 
 #[test]
+fn usb_conditional_confirmation_is_enforced_by_canonical_binder() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["authorize"];
+
+    let enabled = bind_operation_args(operation, &["1-2".into(), "on".into()]).unwrap();
+    assert!(!enabled.values.contains_key("confirm"));
+    assert!(bind_operation_args(
+        operation,
+        &["1-2".into(), "on".into(), "--confirm".into()]
+    )
+    .is_err());
+    assert!(bind_operation_args(operation, &["1-2".into(), "off".into()]).is_err());
+    assert!(bind_operation_args(
+        operation,
+        &["1-2".into(), "off".into(), "--confirm=false".into()]
+    )
+    .is_err());
+    let disabled = bind_operation_args(
+        operation,
+        &["1-2".into(), "off".into(), "--confirm".into()],
+    )
+    .unwrap();
+    assert_eq!(disabled.values["confirm"], serde_json::json!(true));
+}
+
+#[test]
 fn stdin_forwarding_requires_an_explicit_operation_contract() {
     let app = tempfile::tempdir().unwrap();
     std::fs::write(

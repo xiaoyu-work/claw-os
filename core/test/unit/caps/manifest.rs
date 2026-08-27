@@ -550,6 +550,40 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
 }
 
 #[test]
+fn python_and_rust_share_url_host_scope_vectors() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let vectors: Vec<serde_json::Value> = serde_json::from_str(
+        &std::fs::read_to_string(repository.join("apps/_shared/url_host_scope_vectors.json"))
+            .unwrap(),
+    )
+    .unwrap();
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"url-vectors","version":"1","name":"URL vectors",
+            "operations":{"fetch":{"label":"Fetch","args":[
+                {"name":"url","kind":"text","required":true}
+            ],"needs":[{"verb":"net.dial","scope":{
+                "kind":"from-arg","arg":"url","transform":"url-host"
+            },"why":"Fetch URL"}]}}
+        }"#,
+    )
+    .unwrap();
+    for vector in vectors {
+        let url = vector["url"].as_str().unwrap();
+        let expected = vector["scope"].as_str().unwrap();
+        let resolved = manifest
+            .resolve_needs(
+                "fetch",
+                &BTreeMap::from([("url".to_string(), serde_json::json!(url))]),
+            )
+            .unwrap();
+        assert_eq!(resolved[0][0].scope, Scope::host(expected), "{url}");
+    }
+}
+
+#[test]
 fn destructive_confirmation_is_required_and_true_before_capability_resolution() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -581,6 +615,85 @@ fn destructive_confirmation_is_required_and_true_before_capability_resolution() 
         .unwrap();
     assert_eq!(confirmed.values["confirm"], serde_json::json!(true));
     assert_eq!(confirmed.needs[0][0].verb, Verb::NET_FIREWALL);
+}
+
+#[test]
+fn usb_authorize_conditionally_requires_true_confirmation_before_authority() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/usb-guard/app.json")).unwrap(),
+    )
+    .unwrap();
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    let base = |state| {
+        BTreeMap::from([
+            ("device".to_string(), serde_json::json!("1-2")),
+            ("state".to_string(), serde_json::json!(state)),
+        ])
+    };
+    let enabled = manifest
+        .resolve_operation_call("authorize", &base("on"), &paths)
+        .unwrap();
+    assert!(!enabled.values.contains_key("confirm"));
+    assert_eq!(enabled.needs[0][0].verb, Verb::DEVICE_USB);
+    let mut unnecessary = base("on");
+    unnecessary.insert("confirm".to_string(), serde_json::json!(true));
+    assert!(manifest
+        .resolve_operation_call("authorize", &unnecessary, &paths)
+        .is_err());
+
+    assert!(manifest
+        .resolve_operation_call("authorize", &base("off"), &paths)
+        .is_err());
+    let mut denied = base("off");
+    denied.insert("confirm".to_string(), serde_json::json!(false));
+    assert!(manifest
+        .resolve_operation_call("authorize", &denied, &paths)
+        .is_err());
+    denied.insert("confirm".to_string(), serde_json::json!(true));
+    let disabled = manifest
+        .resolve_operation_call("authorize", &denied, &paths)
+        .unwrap();
+    assert_eq!(disabled.needs[0][0].verb, Verb::DEVICE_USB);
+}
+
+#[test]
+fn invalid_conditional_requiredness_is_rejected() {
+    for args in [
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool","required":true,
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}}
+        ]"#,
+        r#"[
+          {"name":"confirm","kind":"bool",
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}},
+          {"name":"mode","kind":"name","required":true}
+        ]"#,
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool","default":false,
+           "required_when":{"kind":"arg-equals","arg":"mode","value":"off"}}
+        ]"#,
+        r#"[
+          {"name":"mode","kind":"name","required":true},
+          {"name":"confirm","kind":"bool",
+           "required_when":{"kind":"arg-equals","arg":"mode","value":false}}
+        ]"#,
+    ] {
+        let body = format!(
+            r#"{{
+              "id":"bad-condition","version":"1","name":"Bad",
+              "operations":{{"run":{{"label":"Run","args":{args}}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err(), "accepted {args}");
+    }
 }
 
 #[test]

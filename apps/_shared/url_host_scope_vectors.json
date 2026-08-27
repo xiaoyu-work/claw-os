@@ -1,0 +1,50 @@
+[
+  {
+    "url": "https://EXAMPLE.COM/path",
+    "scope": "example.com:443"
+  },
+  {
+    "url": "https://bücher.example/path",
+    "scope": "xn--bcher-kva.example:443"
+  },
+  {
+    "url": "https://faß.de/path",
+    "scope": "xn--fa-hia.de:443"
+  },
+  {
+    "url": "https://例え。テスト/path",
+    "scope": "xn--r8jz45g.xn--zckzah:443"
+  },
+  {
+    "url": "https://XN--BCHER-KVA.EXAMPLE:8443/path",
+    "scope": "xn--bcher-kva.example:8443"
+  },
+  {
+    "url": "http://127.1/path",
+    "scope": "127.0.0.1:80"
+  },
+  {
+    "url": "http://0x7f.1/path",
+    "scope": "127.0.0.1:80"
+  },
+  {
+    "url": "http://0177.0.0.1/path",
+    "scope": "127.0.0.1:80"
+  },
+  {
+    "url": "http://2130706433/path",
+    "scope": "127.0.0.1:80"
+  },
+  {
+    "url": "http://0xffffffff/path",
+    "scope": "255.255.255.255:80"
+  },
+  {
+    "url": "http://[2001:0db8:0:0:0:0:0:1]/path",
+    "scope": "[2001:db8::1]:80"
+  },
+  {
+    "url": "https://[2001:db8::1]:9443/path",
+    "scope": "[2001:db8::1]:9443"
+  }
+]

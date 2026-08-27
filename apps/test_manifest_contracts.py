@@ -818,7 +818,8 @@ def test_every_manifest_matches_published_schema_contract() -> None:
     drift: list[str] = []
 
     def check_args(path, app_id, surface, args, *, session=False):
-        for arg in args:
+        positions = {arg["name"]: index for index, arg in enumerate(args)}
+        for index, arg in enumerate(args):
             if arg.get("kind") not in kinds:
                 drift.append(f"{path}:{surface}.{arg.get('name')} unknown kind")
             binding = arg.get("binding")
@@ -828,12 +829,36 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 drift.append(f"{path}:{surface}.{arg.get('name')} null default")
             if (
                 arg.get("kind") == "bool"
-                and arg.get("required", False)
+                and (arg.get("required", False) or "required_when" in arg)
                 and arg.get("choices") != [True]
             ):
                 drift.append(
                     f"{path}:{surface}.{arg.get('name')} required bool must be true-only"
                 )
+            required_when = arg.get("required_when")
+            if required_when is not None:
+                referenced = required_when.get("arg")
+                expected_fields = (
+                    {"kind", "arg"}
+                    if required_when.get("kind") == "arg-present"
+                    else {"kind", "arg", "value"}
+                )
+                if (
+                    arg.get("required", False)
+                    or arg.get("repeatable", False)
+                    or "default" in arg
+                    or "default_from" in arg
+                    or "trusted_resolver" in arg
+                    or required_when.get("kind") not in condition_kinds
+                    or set(required_when) != expected_fields
+                    or referenced not in positions
+                    or positions.get(referenced, index) >= index
+                ):
+                    drift.append(f"{path}:{surface}.{arg.get('name')} invalid required_when")
+            if arg.get("name") == "confirm" and not (
+                arg.get("required", False) or "required_when" in arg
+            ):
+                drift.append(f"{path}:{surface}.confirm is not required")
             if session and (
                 "default_from" in arg
                 or "trusted_resolver" in arg

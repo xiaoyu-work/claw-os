@@ -44,14 +44,20 @@
         {
           "name": "state",
           "kind": "name",
-          "required": true
+          "required": true,
+          "choices": ["on", "off"]
         },
         {
           "name": "confirm",
           "kind": "bool",
           "required": false,
           "binding": "flag",
-          "default": false
+          "choices": [true],
+          "required_when": {
+            "kind": "arg-equals",
+            "arg": "state",
+            "value": "off"
+          }
         }
       ],
       "needs": [

@@ -786,9 +786,10 @@ fn registry_name_for(app_id: &str, tool_name: &str) -> String {
 }
 
 fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
-    use crate::caps::manifest::ArgKind;
+    use crate::caps::manifest::{ArgKind, NeedCondition};
     let mut properties = serde_json::Map::new();
     let mut required: Vec<String> = Vec::new();
+    let mut conditional = Vec::new();
     for a in args {
         let json_type = match a.kind {
             ArgKind::Path | ArgKind::Host | ArgKind::Name | ArgKind::Text => "string",
@@ -826,6 +827,25 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
         if a.required {
             required.push(a.name.clone());
         }
+        if let Some(condition) = &a.required_when {
+            let condition = match condition {
+                NeedCondition::ArgPresent { arg } => json!({"required":[arg]}),
+                NeedCondition::ArgEquals { arg, value } => {
+                    json!({"properties":{arg:{"const":value}},"required":[arg]})
+                }
+                NeedCondition::ArgNotEquals { arg, value } => {
+                    json!({
+                        "required":[arg],
+                        "not":{"properties":{arg:{"const":value}},"required":[arg]}
+                    })
+                }
+            };
+            conditional.push(json!({
+                "if": condition,
+                "then": {"required":[a.name]},
+                "else": {"not":{"required":[a.name]}}
+            }));
+        }
     }
     let mut schema = serde_json::Map::new();
     schema.insert("type".to_string(), Value::String("object".to_string()));
@@ -835,6 +855,9 @@ fn build_schema(args: &[crate::caps::manifest::Arg]) -> Value {
             "required".to_string(),
             Value::Array(required.into_iter().map(Value::String).collect()),
         );
+    }
+    if !conditional.is_empty() {
+        schema.insert("allOf".to_string(), Value::Array(conditional));
     }
     schema.insert("additionalProperties".to_string(), Value::Bool(false));
     Value::Object(schema)

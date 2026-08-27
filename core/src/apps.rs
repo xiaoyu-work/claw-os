@@ -163,6 +163,10 @@ fn arg_schema(arg: &Arg) -> Value {
         "kind": arg.effective_binding().as_str(),
         "binding": arg.effective_binding().as_str(),
     });
+    if let Some(required_when) = &arg.required_when {
+        schema["required_when"] =
+            serde_json::to_value(required_when).expect("NeedCondition serializes");
+    }
     if arg.repeatable {
         schema["items"] = json!({"type": value_type});
     }

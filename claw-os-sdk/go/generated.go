@@ -147,6 +147,7 @@ type Arg struct {
 	Kind string `json:"kind"`
 	Binding string `json:"binding,omitempty"`
 	Required bool `json:"required,omitempty"`
+	RequiredWhen *Needcondition `json:"required_when,omitempty"`
 	Repeatable bool `json:"repeatable,omitempty"`
 	Aliases []string `json:"aliases,omitempty"`
 	PositionalAlias bool `json:"positional_alias,omitempty"`

@@ -17,9 +17,13 @@ invoked.
 - Validate untrusted input before requesting policy/capability authority.
 - Derive HTTP `net.dial` scopes with `_shared.safe_http.host_scope` so App
   checks include the same effective port as manifest `url-host` authority,
-  including redirects and bracketed IPv6.
+  including redirects, IDNA domains, legacy IPv4 forms, and bracketed IPv6.
+  Rust and Python parity is defined by `_shared/url_host_scope_vectors.json`.
 - Declare destructive confirmation booleans as required with `choices: [true]`;
   omission and explicit false must fail before authority is resolved.
+- Use `required_when` for conditional confirmation requirements; it references
+  an earlier argument through the same closed condition model as capability
+  needs.
 - Return structured JSON-compatible results.
 - Return constrained `setup.agent_action` metadata for Agent-resumable
   authorization failures; never place credentials or tokens in that metadata.

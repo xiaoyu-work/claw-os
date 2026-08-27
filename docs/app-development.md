@@ -132,6 +132,13 @@ its declared kind is rejected before launch. Missing required booleans are
 rejected before optional booleans are materialized as `false`. A destructive
 confirmation uses `"required": true, "choices": [true]`, so omission and
 `--confirm=false` both fail before capability resolution.
+For a mode-specific confirmation, use `required_when` with the same
+`arg-present`, `arg-equals`, or `arg-not-equals` condition model as capability
+needs. The argument is accepted exactly when the condition applies and is then
+required. The condition must reference an earlier argument; conditionally
+required arguments cannot be repeatable or also declare `required: true`,
+defaults, or trusted resolvers. A conditional confirmation still declares
+`choices: [true]`.
 
 Use `choices` for a closed scalar enum. Set `repeatable: true` when every
 occurrence is meaningful: the bound value becomes an ordered JSON array and a
@@ -284,7 +291,9 @@ Declare it in `operations.<op>.needs[]`:
   resolves HTTP and HTTPS defaults to ports 80 and 443, preserves explicit
   ports and bracketed IPv6, and rejects schemes without a known or explicit
   port. App-side URL checks must derive the identical scope; HTTP clients use
-  `_shared.safe_http.host_scope`, including for every redirect hop.
+  `_shared.safe_http.host_scope`, including for every redirect hop. The shared
+  `_shared/url_host_scope_vectors.json` corpus locks Rust and Python behavior
+  for IDNA/punycode domains, legacy IPv4 forms, IPv6 compression, and ports.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a

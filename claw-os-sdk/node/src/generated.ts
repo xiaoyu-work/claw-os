@@ -151,6 +151,7 @@ export interface Arg {
   kind: "path" | "host" | "name" | "text" | "number" | "integer" | "bool";
   binding?: "positional" | "flag";
   required?: boolean;
+  required_when?: Needcondition;
   repeatable?: boolean;
   aliases?: string[];
   positional_alias?: boolean;

@@ -85,6 +85,22 @@
           }
         },
         {
+          "if": { "required": ["required_when"] },
+          "then": {
+            "properties": {
+              "required": { "const": false },
+              "repeatable": { "const": false }
+            },
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] },
+                { "required": ["trusted_resolver"] }
+              ]
+            }
+          }
+        },
+        {
           "if": { "properties": { "kind": { "enum": ["path", "host", "name", "text"] } }, "required": ["kind"] },
           "then": { "properties": {
             "default": { "oneOf": [{ "type": "string" }, { "type": "array", "items": { "type": "string" } }] },
@@ -169,6 +185,7 @@
         "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
         "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
         "required": { "type": "boolean" },
+        "required_when": { "$ref": "#/$defs/needCondition", "description": "Require and accept this argument only when an earlier declared argument satisfies the condition." },
         "repeatable": { "type": "boolean", "description": "Bind every occurrence in order and expose an array value. Repeatable positional args must be last; repeatable booleans are rejected." },
         "aliases": { "type": "array", "items": { "type": "string", "pattern": "^(-[A-Za-z0-9]|--[a-z][a-z0-9-]*)$" }, "uniqueItems": true, "description": "Additional short or long option spellings for the same effective argument." },
         "positional_alias": { "type": "boolean", "description": "Accept this optional flag argument as a surplus leading positional before the canonical positional grammar." },

@@ -96,6 +96,7 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Name,
             binding: Some(ArgBinding::Positional),
             required: true,
+            required_when: None,
             repeatable: false,
             aliases: Vec::new(),
             positional_alias: false,
@@ -110,6 +111,7 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Name,
             binding: Some(ArgBinding::Positional),
             required: false,
+            required_when: None,
             repeatable: true,
             aliases: Vec::new(),
             positional_alias: false,
@@ -124,6 +126,7 @@ fn build_schema_marks_required_args() {
             kind: ArgKind::Number,
             binding: Some(ArgBinding::Positional),
             required: false,
+            required_when: None,
             repeatable: false,
             aliases: Vec::new(),
             positional_alias: false,
@@ -149,6 +152,28 @@ fn build_schema_marks_required_args() {
     );
     assert_eq!(schema["properties"]["key"]["type"], "string");
     assert_eq!(schema["properties"]["ttl"]["type"], "number");
+}
+
+#[test]
+fn build_schema_exposes_conditional_requiredness() {
+    let args: Vec<crate::caps::manifest::Arg> =
+        serde_json::from_value(serde_json::json!([
+        {"name":"state","kind":"name","required":true},
+        {
+            "name":"confirm","kind":"bool","choices":[true],
+            "required_when":{"kind":"arg-equals","arg":"state","value":"off"}
+        }
+    ]))
+        .unwrap();
+    let schema = build_schema(&args);
+    assert_eq!(
+        schema["allOf"][0],
+        serde_json::json!({
+            "if":{"properties":{"state":{"const":"off"}},"required":["state"]},
+            "then":{"required":["confirm"]},
+            "else":{"not":{"required":["confirm"]}}
+        })
+    );
 }
 
 /// Spawn the real `apps/kv` server via [`open_session`], drive it

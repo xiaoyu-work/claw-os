@@ -357,6 +357,13 @@ fn bundled_schema_exposes_repeatables_choices_and_stdin() {
     let doc = load("doc");
     assert_eq!(operation_schema(&doc.operations["summarize"])["stdin"], true);
 
+    let usb = load("usb-guard");
+    let authorize = operation_schema(&usb.operations["authorize"]);
+    assert_eq!(
+        authorize["parameters"][2]["required_when"],
+        serde_json::json!({"kind":"arg-equals","arg":"state","value":"off"})
+    );
+
     let googlechat = Manifest::from_json(
         &std::fs::read_to_string(
             repository.join("apps/gateway/googlechat/app.json"),

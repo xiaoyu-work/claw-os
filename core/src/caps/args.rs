@@ -139,23 +139,39 @@ pub fn bind_cli_args(
     raw: &[String],
 ) -> Result<BTreeMap<String, Value>, String> {
     let mut values = bind_supplied_cli_args(decls, raw)?;
-    if let Some(required) = decls
-        .iter()
-        .find(|decl| decl.required && !values.contains_key(&decl.name))
-    {
-        return Err(format!("argument `{}` is required", required.name));
-    }
     for decl in decls {
         if values.contains_key(&decl.name) {
             continue;
         }
-        if decl.kind == ArgKind::Bool && !decl.required {
-            values.insert(
-                decl.name.clone(),
-                decl.default.clone().unwrap_or(Value::Bool(false)),
-            );
-        } else if let Some(default) = &decl.default {
+        if let Some(default) = &decl.default {
             values.insert(decl.name.clone(), default.clone());
+        }
+    }
+    if let Some(disallowed) = decls.iter().find(|decl| {
+        decl.required_when.as_ref().is_some_and(|condition| {
+            !super::manifest::condition_applies(Some(condition), &values)
+                && values.contains_key(&decl.name)
+        })
+    }) {
+        return Err(format!(
+            "argument `{}` is only accepted when required_when applies",
+            disallowed.name
+        ));
+    }
+    if let Some(required) = decls.iter().find(|decl| {
+        super::manifest::argument_is_required(decl, &values)
+            && !values.contains_key(&decl.name)
+    })
+    {
+        return Err(format!("argument `{}` is required", required.name));
+    }
+    validate_bound_args(decls, &values)?;
+    for decl in decls {
+        if decl.kind == ArgKind::Bool
+            && decl.required_when.is_none()
+            && !values.contains_key(&decl.name)
+        {
+            values.insert(decl.name.clone(), Value::Bool(false));
         }
     }
     Ok(values)

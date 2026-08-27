@@ -355,6 +355,10 @@ pub struct Arg {
     pub binding: Option<ArgBinding>,
     #[serde(default)]
     pub required: bool,
+    /// Make this argument required only when another effective argument
+    /// satisfies the declared condition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<NeedCondition>,
     /// Bind every occurrence in order and expose the value as a JSON array.
     #[serde(default)]
     pub repeatable: bool,
@@ -591,15 +595,27 @@ pub(crate) fn resolve_effective_args(
 ) -> Result<(BTreeMap<String, serde_json::Value>, Vec<String>), String> {
     let mut values = supplied.clone();
     let defaulted = apply_arg_defaults(declarations, &mut values)?;
-    if let Some(required) = declarations
-        .iter()
-        .find(|declaration| declaration.required && !values.contains_key(&declaration.name))
+    if let Some(disallowed) = declarations.iter().find(|declaration| {
+        declaration.required_when.as_ref().is_some_and(|condition| {
+            !condition_applies(Some(condition), &values)
+                && values.contains_key(&declaration.name)
+        })
+    }) {
+        return Err(format!(
+            "argument `{}` is only accepted when required_when applies",
+            disallowed.name
+        ));
+    }
+    if let Some(required) = declarations.iter().find(|declaration| {
+        argument_is_required(declaration, &values)
+            && !values.contains_key(&declaration.name)
+    })
     {
         return Err(format!("argument `{}` is required", required.name));
     }
     for declaration in declarations {
         if declaration.kind == ArgKind::Bool
-            && !declaration.required
+            && declaration.required_when.is_none()
             && !values.contains_key(&declaration.name)
         {
             values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
@@ -610,6 +626,17 @@ pub(crate) fn resolve_effective_args(
         super::args::resolve_path_args(declarations, &mut values, paths)?;
     }
     Ok((values, defaulted))
+}
+
+pub(crate) fn argument_is_required(
+    declaration: &Arg,
+    values: &BTreeMap<String, serde_json::Value>,
+) -> bool {
+    declaration.required
+        || declaration
+            .required_when
+            .as_ref()
+            .is_some_and(|condition| condition_applies(Some(condition), values))
 }
 
 fn safe_url_path_basename(value: &str) -> Option<&str> {
@@ -1499,6 +1526,17 @@ impl Manifest {
                     detail,
                 });
             }
+            for (index, arg) in op.args.iter().enumerate() {
+                if let Some(condition) = &arg.required_when {
+                    validate_required_when(arg, condition, index, &op.args, &seen_args).map_err(
+                        |detail| ManifestError::ArgDefaultInvalid {
+                            op: op_name.clone(),
+                            arg: arg.name.clone(),
+                            detail,
+                        },
+                    )?;
+                }
+            }
             // Needs must reference declared args and use compatible kinds.
             for (idx, need) in op.needs.iter().enumerate() {
                 validate_need_condition(need, &seen_args).map_err(|detail| {
@@ -1666,6 +1704,16 @@ impl Manifest {
                         arg,
                         detail,
                     });
+                }
+                for (index, arg) in tool.args.iter().enumerate() {
+                    if let Some(condition) = &arg.required_when {
+                        validate_required_when(arg, condition, index, &tool.args, &seen_args)
+                            .map_err(|detail| ManifestError::SessionArgDefaultInvalid {
+                                tool: tool.name.clone(),
+                                arg: arg.name.clone(),
+                                detail,
+                            })?;
+                    }
                 }
                 if let Some(arg) = tool
                     .args
@@ -1913,7 +1961,7 @@ impl Manifest {
         })?;
         let mut out = Vec::with_capacity(op.needs.len());
         for (idx, need) in op.needs.iter().enumerate() {
-            if !need_applies(need.when.as_ref(), &args) {
+            if !condition_applies(need.when.as_ref(), &args) {
                 out.push(Vec::new());
                 continue;
             }
@@ -2030,7 +2078,7 @@ impl Manifest {
             })?;
         let mut out = Vec::with_capacity(tool.needs.len());
         for (idx, need) in tool.needs.iter().enumerate() {
-            if !need_applies(need.when.as_ref(), &args) {
+            if !condition_applies(need.when.as_ref(), &args) {
                 out.push(Vec::new());
                 continue;
             }
@@ -2221,6 +2269,50 @@ fn validate_need_condition(
     Ok(())
 }
 
+fn validate_required_when(
+    declaration: &Arg,
+    condition: &NeedCondition,
+    index: usize,
+    declarations: &[Arg],
+    args: &BTreeMap<&str, &Arg>,
+) -> Result<(), String> {
+    if declaration.required {
+        return Err("required_when cannot be combined with required=true".to_string());
+    }
+    if declaration.default.is_some()
+        || declaration.default_from.is_some()
+        || declaration.trusted_resolver.is_some()
+        || declaration.repeatable
+    {
+        return Err(
+            "required_when arguments cannot be repeatable or declare defaults or trusted resolvers"
+                .into(),
+        );
+    }
+    let referenced = match condition {
+        NeedCondition::ArgPresent { arg }
+        | NeedCondition::ArgEquals { arg, .. }
+        | NeedCondition::ArgNotEquals { arg, .. } => arg,
+    };
+    if referenced == &declaration.name {
+        return Err("required_when cannot reference its own argument".to_string());
+    }
+    let referenced_index = declarations
+        .iter()
+        .position(|candidate| candidate.name == *referenced)
+        .ok_or_else(|| format!("required_when references undeclared arg `{referenced}`"))?;
+    if referenced_index >= index {
+        return Err("required_when must reference an earlier argument".to_string());
+    }
+    let synthetic_need = Need {
+        verb: Verb::SYS_OBSERVE,
+        scope: ScopeBinding::Wild,
+        when: Some(condition.clone()),
+        why: LocalizedText::default(),
+    };
+    validate_need_condition(&synthetic_need, args)
+}
+
 fn validate_optional_need_binding(
     need: &Need,
     args: &BTreeMap<&str, &Arg>,
@@ -2257,7 +2349,7 @@ fn validate_optional_need_binding(
     }
 }
 
-fn need_applies(
+pub(crate) fn condition_applies(
     condition: Option<&NeedCondition>,
     args: &BTreeMap<String, serde_json::Value>,
 ) -> bool {

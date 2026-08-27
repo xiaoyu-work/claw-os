@@ -186,6 +186,8 @@ pub struct Arg {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<Needcondition>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repeatable: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aliases: Option<Vec<String>>,

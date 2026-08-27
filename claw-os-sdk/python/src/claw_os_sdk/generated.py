@@ -179,6 +179,7 @@ class Arg(_ArgRequired, total=False):
     """
     binding: str
     required: bool
+    required_when: "Needcondition"
     repeatable: bool
     aliases: List[str]
     positional_alias: bool
