@@ -265,7 +265,7 @@ class TestSendCommand(unittest.TestCase):
     def test_send_no_provider(self):
         result = run("send", ["--to", "x@y.com", "--subject", "hi", "--body", "hello"])
         self.assertIn("error", result)
-        self.assertIn("missing required arguments", result["error"])
+        self.assertIn("no email provider configured", result["error"])
 
     def test_send_missing_to(self):
         os.environ["SMTP_HOST"] = "localhost"
@@ -296,7 +296,7 @@ class TestSendCommand(unittest.TestCase):
 
         result = run(
             "send",
-            ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
+            ["--to", "x@y.com", "--subject", "hi", "--body", "hello"],
         )
         self.assertTrue(result.get("sent"))
         self.assertEqual(result["to"], "x@y.com")

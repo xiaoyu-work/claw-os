@@ -64,7 +64,7 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$HOME/.recoll/**"
+              "value": "~/.recoll/**"
             }
           },
           "why": {
@@ -111,7 +111,7 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$HOME/.recoll/**"
+              "value": "~/.recoll/**"
             }
           },
           "why": {
@@ -136,7 +136,7 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$HOME/.recoll/**"
+              "value": "~/.recoll/**"
             }
           },
           "why": {
@@ -161,7 +161,7 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$HOME/.recoll/**"
+              "value": "~/.recoll/**"
             }
           },
           "why": {

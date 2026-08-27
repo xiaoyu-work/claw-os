@@ -38,9 +38,17 @@ pub fn bind_supplied_cli_args(
     let mut values = BTreeMap::new();
     let mut positionals = Vec::new();
     let mut index = 0;
+    let mut options = true;
     while index < raw.len() {
         let token = &raw[index];
-        if let Some(flag) = token.strip_prefix("--") {
+        if options && token == "--" {
+            options = false;
+        } else if options {
+            let Some(flag) = token.strip_prefix("--") else {
+                positionals.push(token.clone());
+                index += 1;
+                continue;
+            };
             let (raw_name, inline) = flag
                 .split_once('=')
                 .map(|(name, value)| (name, Some(value)))
@@ -79,15 +87,19 @@ pub fn bind_supplied_cli_args(
     let mut positional = positionals.into_iter();
     for decl in decls {
         if values.contains_key(&decl.name)
-            || decl.binding != ArgBinding::Positional
-            || decl.kind == ArgKind::Bool
+            || decl.effective_binding() != ArgBinding::Positional
         {
             continue;
         }
         if let Some(raw) = positional.next() {
-            if let Some(parsed) = parse_arg_value(decl.kind, Some(&raw)) {
-                values.insert(decl.name.clone(), parsed);
-            }
+            let parsed = parse_arg_value(decl.kind, Some(&raw)).ok_or_else(|| {
+                format!(
+                    "argument `{}` is not a valid {}",
+                    decl.name,
+                    kind_label(decl.kind)
+                )
+            })?;
+            values.insert(decl.name.clone(), parsed);
         }
     }
     Ok(values)
@@ -231,7 +243,7 @@ fn kind_label(kind: ArgKind) -> &'static str {
 fn match_flag_name<'a>(decls: &'a [Arg], raw: &str) -> Option<&'a str> {
     decls
         .iter()
-        .filter(|decl| decl.binding == ArgBinding::Flag)
+        .filter(|decl| decl.effective_binding() == ArgBinding::Flag)
         .find(|decl| decl.name == raw || flag_name(decl) == raw)
         .map(|decl| decl.name.as_str())
 }
@@ -243,13 +255,12 @@ pub fn flag_name(arg: &Arg) -> String {
 fn parse_arg_value(kind: ArgKind, raw: Option<&str>) -> Option<Value> {
     match kind {
         ArgKind::Bool => Some(Value::Bool(
-            raw.map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes" | "on"
-                )
-            })
-            .unwrap_or(true),
+            match raw.map(|value| value.trim().to_ascii_lowercase()) {
+                None => true,
+                Some(value) if matches!(value.as_str(), "1" | "true" | "yes" | "on") => true,
+                Some(value) if matches!(value.as_str(), "0" | "false" | "no" | "off") => false,
+                Some(_) => return None,
+            },
         )),
         ArgKind::Number => raw
             .and_then(|value| value.parse::<f64>().ok())

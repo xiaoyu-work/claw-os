@@ -48,12 +48,44 @@
       "type": "object",
       "required": ["name", "kind"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "not": { "required": ["default", "default_from"] }
+        },
+        {
+          "if": { "properties": { "required": { "const": true } }, "required": ["required"] },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["default"] },
+                { "required": ["default_from"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": { "properties": { "kind": { "enum": ["path", "host", "name", "text"] } }, "required": ["kind"] },
+          "then": { "properties": { "default": { "type": "string" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "number" } }, "required": ["kind"] },
+          "then": { "properties": { "default": { "type": "number" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "integer" } }, "required": ["kind"] },
+          "then": { "properties": { "default": { "type": "integer" } } }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "bool" } }, "required": ["kind"] },
+          "then": { "properties": { "default": { "type": "boolean" } } }
+        }
+      ],
       "properties": {
         "name": { "type": "string", "description": "Identifier referenced by from-arg scope bindings." },
         "kind": { "type": "string", "enum": ["path", "host", "name", "text", "number", "integer", "bool"], "description": "Value kind. path/host/name can populate a scope; text/number/integer/bool cannot." },
-        "binding": { "type": "string", "enum": ["positional", "flag"], "default": "positional", "description": "How one-shot CLI argv binds this value. Flag arguments use --name value (or a bare --name for true booleans)." },
+        "binding": { "type": "string", "enum": ["positional", "flag"], "description": "How one-shot CLI argv binds this value. Omitted booleans retain their historical flag form; every other omitted binding is positional." },
         "required": { "type": "boolean" },
-        "default": { "description": "Optional default value (any JSON type)." },
+        "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
         "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
@@ -68,6 +100,12 @@
         "prefix": { "type": "string", "default": "" },
         "fallback": { "type": "string", "description": "Safe fallback when the transform produces no value." }
       }
+    },
+    "sessionArg": {
+      "allOf": [
+        { "$ref": "#/$defs/arg" },
+        { "not": { "required": ["default_from"] } }
+      ]
     },
     "need": {
       "type": "object",
@@ -119,6 +157,21 @@
       "description": "A concrete capability scope. value is a glob for path/host/name, the self-reference string for self-ref, and absent for wild.",
       "required": ["kind"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "path" } }, "required": ["kind"] },
+          "then": {
+            "required": ["value"],
+            "properties": {
+              "value": {
+                "type": "string",
+                "pattern": "^[^$]*$",
+                "description": "Absolute or ~/ path glob; environment placeholders are not expanded."
+              }
+            }
+          }
+        }
+      ],
       "properties": {
         "kind": { "type": "string", "enum": ["path", "host", "name", "self-ref", "wild"] },
         "value": { "type": "string" }
@@ -161,7 +214,7 @@
       "properties": {
         "name": { "type": "string", "pattern": "^[a-z][a-z0-9._-]*$", "description": "Globally unique tool name; convention <app_id>.<verb> (e.g. kv.get)." },
         "summary": { "$ref": "#/$defs/localizedText" },
-        "args": { "type": "array", "items": { "$ref": "#/$defs/arg" } },
+        "args": { "type": "array", "items": { "$ref": "#/$defs/sessionArg" } },
         "needs": { "type": "array", "items": { "$ref": "#/$defs/need" } }
       }
     },

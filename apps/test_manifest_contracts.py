@@ -16,6 +16,10 @@ APPS_ROOT = Path(__file__).parent
 FLAG = re.compile(r"^--([a-z][a-z0-9-]*)(?:=.*)?$")
 
 
+def _binding(arg: dict[str, object]) -> str:
+    return str(arg.get("binding") or ("flag" if arg.get("kind") == "bool" else "positional"))
+
+
 def _assignments(tree: ast.Module, run: ast.FunctionDef) -> dict[str, ast.expr]:
     values: dict[str, ast.expr] = {}
     for statement in [*tree.body, *run.body]:
@@ -108,6 +112,16 @@ def _parser_flags(tree: ast.Module) -> set[str]:
             candidates = list(node.args)
         if (
             isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "gateway_args"
+            and node.func.attr == "parse"
+        ):
+            for keyword in node.keywords:
+                if keyword.arg in {"value_flags", "bool_flags"}:
+                    flags.update(_strings(keyword.value, {}))
+        if (
+            isinstance(node, ast.Call)
             and isinstance(node.func, ast.Name)
             and node.func.id == "_parse_args"
             and len(node.args) > 1
@@ -125,6 +139,32 @@ def _parser_flags(tree: ast.Module) -> set[str]:
                     if match:
                         flags.add(match.group(1))
     return flags
+
+
+def _gateway_list_contract(tree: ast.Module):
+    positionals: list[str] = []
+    flags: set[str] = set()
+    for node in ast.walk(tree):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and isinstance(node.func.value, ast.Name)
+            and node.func.value.id == "gateway_args"
+            and node.func.attr == "parse"
+        ):
+            continue
+        for keyword in node.keywords:
+            if keyword.arg == "positional":
+                if isinstance(keyword.value, (ast.Tuple, ast.List)):
+                    positionals.extend(
+                        item.value
+                        for item in keyword.value.elts
+                        if isinstance(item, ast.Constant) and isinstance(item.value, str)
+                    )
+            elif keyword.arg in {"value_flags", "bool_flags"}:
+                values = _strings(keyword.value, {})
+                flags.update(value.replace("-", "_") for value in values)
+    return positionals, flags
 
 
 def _function_map(tree: ast.Module) -> dict[str, ast.FunctionDef]:
@@ -149,6 +189,31 @@ def _handler_map(tree: ast.Module) -> dict[str, str]:
             ):
                 handlers[key.value] = value.id
     return handlers
+
+
+def _capability_verbs(
+    function: ast.FunctionDef,
+    functions: dict[str, ast.FunctionDef],
+    seen: frozenset[str] = frozenset(),
+) -> set[str]:
+    if function.name in seen:
+        return set()
+    verbs: set[str] = set()
+    seen = seen | {function.name}
+    for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+        if (
+            isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == "policy"
+            and call.func.attr in {"require", "check"}
+            and call.args
+            and isinstance(call.args[0], ast.Constant)
+            and isinstance(call.args[0].value, str)
+        ):
+            verbs.add(call.args[0].value)
+        elif isinstance(call.func, ast.Name) and call.func.id in functions:
+            verbs.update(_capability_verbs(functions[call.func.id], functions, seen))
+    return verbs
 
 
 def _literal(node: ast.AST, assignments: dict[str, ast.expr]):
@@ -252,11 +317,89 @@ def test_parser_flags_have_flag_bindings() -> None:
             arg["name"].replace("_", "-")
             for operation in manifest.get("operations", {}).values()
             for arg in operation.get("args", [])
-            if arg.get("binding", "positional") == "flag"
+            if _binding(arg) == "flag"
         }
         missing = _parser_flags(tree) - declared
         if missing:
             drift[str(path.relative_to(APPS_ROOT))] = sorted(missing)
+    assert not drift, "\n".join(drift)
+
+
+def test_gateway_list_bindings_match_manifests() -> None:
+    drift = {}
+    for path, tree, manifest in _sources():
+        positionals, flags = _gateway_list_contract(tree)
+        if not positionals and not flags:
+            continue
+        declaration = manifest["operations"]["send"]
+        manifest_positionals = [
+            arg["name"]
+            for arg in declaration.get("args", [])
+            if _binding(arg) == "positional"
+        ]
+        manifest_flags = {
+            arg["name"].replace("-", "_")
+            for arg in declaration.get("args", [])
+            if _binding(arg) == "flag"
+        }
+        if positionals != manifest_positionals or flags != manifest_flags:
+            drift[str(path.relative_to(APPS_ROOT))] = {
+                "parser_positionals": positionals,
+                "manifest_positionals": manifest_positionals,
+                "parser_flags": sorted(flags),
+                "manifest_flags": sorted(manifest_flags),
+            }
+    assert not drift, drift
+
+
+def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
+    drift: list[str] = []
+    for path, _tree, manifest in _sources():
+        for surface, declaration in [
+            *manifest.get("operations", {}).items(),
+            *(
+                (tool["name"], tool)
+                for tool in manifest.get("session", {}).get("tools", [])
+            ),
+        ]:
+            optional_seen = False
+            for arg in declaration.get("args", []):
+                if _binding(arg) != "positional":
+                    continue
+                if not arg.get("required", False):
+                    optional_seen = True
+                elif optional_seen:
+                    drift.append(f"{path}:{surface} optional positional before {arg['name']}")
+            for need in declaration.get("needs", []):
+                scope = need.get("scope", {})
+                fixed = scope.get("scope", {}) if scope.get("kind") == "fixed" else {}
+                value = fixed.get("value")
+                if fixed.get("kind") == "path" and isinstance(value, str) and "$" in value:
+                    drift.append(f"{path}:{surface} unsupported path placeholder {value}")
+    assert not drift, "\n".join(drift)
+
+
+def test_handler_capability_use_is_declared() -> None:
+    drift: list[str] = []
+    for path, tree, manifest in _sources():
+        functions = _function_map(tree)
+        handlers = _handler_map(tree)
+        for operation, declaration in manifest.get("operations", {}).items():
+            handler_name = handlers.get(operation)
+            if handler_name is None:
+                for candidate in (
+                    f"cmd_{operation.replace('-', '_')}",
+                    f"_cmd_{operation.replace('-', '_')}",
+                ):
+                    if candidate in functions:
+                        handler_name = candidate
+                        break
+            if handler_name is None:
+                continue
+            used = _capability_verbs(functions[handler_name], functions)
+            declared = {need["verb"] for need in declaration.get("needs", [])}
+            for verb in sorted(used - declared):
+                drift.append(f"{path}:{operation} uses undeclared capability {verb}")
     assert not drift, "\n".join(drift)
 
 
@@ -293,15 +436,15 @@ def test_argparse_contracts_match_manifests() -> None:
                 if arg is None:
                     drift.append(f"{path}:{operation} missing {parsed['name']}")
                     continue
-                if parsed["binding"] != arg.get("binding", "positional") and any(
+                if parsed["binding"] != _binding(arg) and any(
                     candidate["name"] == parsed["name"]
-                    and candidate["binding"] == arg.get("binding", "positional")
+                    and candidate["binding"] == _binding(arg)
                     for candidate in parsed_args
                 ):
                     # argparse can retain a compatibility alias while app.json
                     # names the canonical binding (net download's output).
                     continue
-                if arg.get("binding", "positional") != parsed["binding"]:
+                if _binding(arg) != parsed["binding"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} binding")
                 if bool(arg.get("required", False)) != parsed["required"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} required")

@@ -94,7 +94,7 @@ fn build_schema_marks_required_args() {
         Arg {
             name: "key".into(),
             kind: ArgKind::Name,
-            binding: ArgBinding::Positional,
+            binding: Some(ArgBinding::Positional),
             required: true,
             default: None,
             default_from: None,
@@ -103,7 +103,7 @@ fn build_schema_marks_required_args() {
         Arg {
             name: "ttl".into(),
             kind: ArgKind::Number,
-            binding: ArgBinding::Positional,
+            binding: Some(ArgBinding::Positional),
             required: false,
             default: Some(serde_json::json!(60)),
             default_from: None,

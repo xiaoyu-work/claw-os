@@ -312,6 +312,80 @@ fn invalid_arg_defaults_are_rejected() {
 }
 
 #[test]
+fn null_defaults_and_ambiguous_positionals_are_rejected() {
+    for arg in [
+        r#"{"name":"value","kind":"text","default":null}"#,
+        r#"{"name":"value","kind":"text","default_from":null}"#,
+    ] {
+        let body = format!(
+            r#"{{
+                "id":"defaults","version":"0.1","name":"Defaults",
+                "operations":{{"run":{{"label":"Run","args":[{arg}]}}}}
+            }}"#
+        );
+        assert!(Manifest::from_json(&body).is_err());
+    }
+
+    let ambiguous = Manifest::from_json(
+        r#"{
+            "id":"ambiguous","version":"0.1","name":"Ambiguous",
+            "operations":{"run":{"label":"Run","args":[
+                {"name":"destination","kind":"name"},
+                {"name":"text","kind":"text","required":true}
+            ]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        ambiguous,
+        ManifestError::ArgDefaultInvalid { .. }
+    ));
+}
+
+#[test]
+fn session_tool_defaults_feed_arguments_and_capabilities() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"session-defaults","version":"0.1","name":"Session defaults",
+            "session":{"tools":[{
+                "name":"session-defaults.read","summary":"Read",
+                "args":[
+                    {"name":"key","kind":"name","default":"primary"},
+                    {"name":"limit","kind":"integer","default":10}
+                ],
+                "needs":[{"verb":"data.kv.read","scope":{"kind":"from-arg","arg":"key"},"why":"Read"}]
+            }]}
+        }"#,
+    )
+    .unwrap();
+    let resolved = manifest
+        .resolve_session_tool_args("session-defaults.read", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(resolved["key"], serde_json::json!("primary"));
+    assert_eq!(resolved["limit"], serde_json::json!(10));
+    let caps = manifest
+        .resolve_session_tool_needs("session-defaults.read", &BTreeMap::new())
+        .unwrap();
+    assert_eq!(caps[0].scope, Scope::name("primary"));
+}
+
+#[test]
+fn fixed_path_scopes_reject_environment_placeholders() {
+    let error = Manifest::from_json(
+        r#"{
+            "id":"placeholder","version":"0.1","name":"Placeholder",
+            "operations":{"read":{"label":"Read","needs":[{
+                "verb":"fs.read",
+                "scope":{"kind":"fixed","scope":{"kind":"path","value":"$HOME/data/**"}},
+                "why":"Read"
+            }]}}
+        }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::NeedInvalid { .. }));
+}
+
+#[test]
 fn resolve_needs_with_fixed_scope() {
     let m = parse(
         r#"{

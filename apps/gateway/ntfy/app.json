@@ -15,14 +15,16 @@
       },
       "args": [
         {
-          "name": "topic",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "topic",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "title",
@@ -49,13 +51,6 @@
           "binding": "flag"
         },
         {
-          "name": "markdown",
-          "kind": "bool",
-          "required": false,
-          "binding": "flag",
-          "default": false
-        },
-        {
           "name": "server",
           "kind": "text",
           "required": false,
@@ -72,6 +67,13 @@
           "kind": "text",
           "required": false,
           "binding": "flag"
+        },
+        {
+          "name": "markdown",
+          "kind": "bool",
+          "required": false,
+          "binding": "flag",
+          "default": false
         }
       ],
       "needs": [

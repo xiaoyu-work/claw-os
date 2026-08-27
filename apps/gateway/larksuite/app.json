@@ -17,29 +17,34 @@
         {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "card_json",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "post",
           "kind": "bool",
           "required": false,
-          "default": false
-        },
-        {
-          "name": "title",
-          "kind": "text",
-          "required": false
+          "default": false,
+          "binding": "flag"
         },
         {
           "name": "card",
           "kind": "bool",
           "required": false,
-          "default": false
-        },
-        {
-          "name": "card_json",
-          "kind": "text",
-          "required": false
+          "default": false,
+          "binding": "flag"
         }
       ],
       "needs": [

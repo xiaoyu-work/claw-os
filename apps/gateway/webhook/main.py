@@ -51,7 +51,7 @@ import urllib.error
 # as a script (``cos app gateway-webhook …`` execs main.py directly).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "webhook"
@@ -263,51 +263,24 @@ def _parse_args_dict(args: dict) -> dict:
     }
 
 
-def _parse_args_list(args: list) -> dict:
-    """Permissive positional + flag parser to keep parity with the
-    CLI invocation shape ``cos app gateway-webhook send <target> <text>
-    [--bearer X] [--raw] ...``"""
-    out: dict = {
-        "target": "",
-        "text": "",
-        "raw": False,
-        "bearer": None,
-        "basic": None,
-        "api_key": None,
-        "hmac_secret": None,
-    }
-    positional: list[str] = []
-    i = 0
-    while i < len(args):
-        a = str(args[i])
-        if a == "--raw":
-            out["raw"] = True
-            i += 1
-            continue
-        if a == "--bearer" and i + 1 < len(args):
-            out["bearer"] = str(args[i + 1])
-            i += 2
-            continue
-        if a == "--basic" and i + 1 < len(args):
-            out["basic"] = str(args[i + 1])
-            i += 2
-            continue
-        if a == "--api-key" and i + 1 < len(args):
-            out["api_key"] = str(args[i + 1])
-            i += 2
-            continue
-        if a == "--hmac-sha256" and i + 1 < len(args):
-            out["hmac_secret"] = str(args[i + 1])
-            i += 2
-            continue
-        positional.append(a)
-        i += 1
-    if len(positional) >= 2:
-        out["target"], out["text"] = positional[0], positional[1]
-    elif len(positional) == 1:
-        # Single positional: treat as text, target falls back to default.
-        out["text"] = positional[0]
-    return out
+def _parse_args_list(args: list) -> tuple[dict | None, str | None]:
+    parsed, error = gateway_args.parse(
+        args,
+        positional=("text",),
+        value_flags=("target", "bearer", "basic", "api-key", "hmac-sha256"),
+        bool_flags=("raw",),
+    )
+    if error:
+        return None, error
+    return {
+        "target": parsed["target"] or "",
+        "text": parsed["text"],
+        "raw": parsed["raw"],
+        "bearer": parsed["bearer"],
+        "basic": parsed["basic"],
+        "api_key": parsed["api-key"],
+        "hmac_secret": parsed["hmac-sha256"],
+    }, None
 
 
 def run(command: str, args):
@@ -315,7 +288,9 @@ def run(command: str, args):
         if isinstance(args, dict):
             parsed = _parse_args_dict(args)
         elif isinstance(args, list):
-            parsed = _parse_args_list(args)
+            parsed, error = _parse_args_list(args)
+            if error:
+                return {"ok": False, "error": error}
         else:
             return {"ok": False, "error": "invalid args"}
         try:

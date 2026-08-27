@@ -112,8 +112,9 @@ The bridge calls `mod.run(command, args)` exactly once per invocation
 
 Each argument declares a value `kind`: `path`, `host`, `name`, `text`,
 `number`, `integer`, or `bool`. `number` accepts decimal values while
-`integer` rejects fractional input. `binding` is either `positional` (the
-backwards-compatible default) or `flag`:
+`integer` rejects fractional input. `binding` is either `positional` or
+`flag`. When omitted, booleans retain the historical `flag` behavior and every
+other kind remains positional:
 
 ```jsonc
 {
@@ -125,8 +126,13 @@ backwards-compatible default) or `flag`:
 }
 ```
 
-An optional argument may declare a literal `default` matching its `kind`. If
-its default depends on an earlier string argument, use
+Use `--` to end flag parsing when a positional value itself begins with `--`.
+Any supplied number, integer, or explicit boolean literal that does not match
+its declared kind is rejected before launch.
+
+An optional argument may declare a non-null literal `default` matching its
+`kind`. Omit `default` when there is no default; explicit JSON `null` is
+invalid. If its default depends on an earlier string argument, use
 `default_from`:
 
 ```jsonc
@@ -146,13 +152,18 @@ its default depends on an earlier string argument, use
 
 The supported transforms are `identity` and `url-path-basename`.
 `url-path-basename` requires a text source, path destination, and safe
-single-component fallback. `default_from` is limited to one-shot operations.
+single-component fallback. `default_from` is limited to one-shot operations
+and is rejected for session-tool arguments.
 Defaulted arguments must be optional; defaulted positional arguments follow
 all required positional arguments. The bridge resolves paths before capability
 derivation and materializes defaults using their declared binding: positional
 values remain positional, non-boolean flags become `--name value`, and a true
 boolean flag becomes `--name`. The handler must consume that materialized value
 rather than recompute a separate default.
+
+Session tools receive a JSON object rather than argv. Before capability
+resolution and MCP forwarding, the kernel inserts every declared literal
+default into that object, including defaults unrelated to a capability scope.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
@@ -303,7 +314,10 @@ point implements behavior for those declared operations; it must not define
 `_schema()`, handle `__schema__`, or maintain a parallel parameter list.
 Static app tests compare manifest operations with dispatcher branches, require
 parser flags to use `binding: "flag"`, and compare argparse required/default/
-integer behavior without importing entrypoints.
+integer behavior without importing entrypoints. Optional positional arguments
+cannot precede required positionals. Fixed path scopes use absolute paths or
+`~/...`; `$HOME`, `$XDG_DATA_HOME`, and other environment placeholders are
+rejected because capability matching does not expand them.
 
 ## 7. AI features
 

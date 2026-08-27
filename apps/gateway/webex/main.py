@@ -33,7 +33,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "webex"
@@ -200,10 +200,16 @@ def run(command: str, args):
         text = ""
         plain = False
         if isinstance(args, list):
-            if len(args) >= 2:
-                recipient, text = str(args[0]), str(args[1])
-            elif len(args) == 1:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("recipient", "text"),
+                bool_flags=("plain",),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            recipient = parsed["recipient"]
+            text = parsed["text"]
+            plain = parsed["plain"]
         elif isinstance(args, dict):
             recipient = str(args.get("recipient", "") or "")
             text = str(args.get("text", "") or "")

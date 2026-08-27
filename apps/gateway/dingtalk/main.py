@@ -51,7 +51,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "dingtalk"
@@ -248,8 +248,21 @@ def run(command: str, args):
         at_user_ids: list[str] = []
         at_all = False
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=("title", "keyword", "at-mobiles", "at-user-ids"),
+                bool_flags=("markdown", "at-all"),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            markdown = parsed["markdown"]
+            title = parsed["title"]
+            keyword = parsed["keyword"]
+            at_mobiles = _split_csv(parsed["at-mobiles"])
+            at_user_ids = _split_csv(parsed["at-user-ids"])
+            at_all = parsed["at-all"]
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             markdown = bool(args.get("markdown", False))

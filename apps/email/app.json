@@ -27,7 +27,7 @@
         {
           "name": "provider",
           "kind": "name",
-          "required": true,
+          "required": false,
           "binding": "flag"
         },
         {
@@ -68,21 +68,36 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "smtp": {
-                "kind": "name",
-                "value": "default/SMTP_PASSWORD"
-              },
-              "gmail": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/SMTP_PASSWORD"
+            }
+          },
+          "why": {
+            "en": "Read only the credential for the selected provider."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "why": {
+            "en": "Read only the credential for the selected provider."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
             }
           },
           "why": {
@@ -112,7 +127,7 @@
         {
           "name": "provider",
           "kind": "name",
-          "required": true,
+          "required": false,
           "binding": "flag"
         },
         {
@@ -142,17 +157,23 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "gmail": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "why": {
+            "en": "Read only the credential for the selected provider."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
             }
           },
           "why": {
@@ -169,7 +190,7 @@
         {
           "name": "provider",
           "kind": "name",
-          "required": true,
+          "required": false,
           "binding": "flag"
         },
         {
@@ -200,17 +221,23 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "gmail": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "why": {
+            "en": "Read only the credential for the selected provider."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
             }
           },
           "why": {
@@ -227,7 +254,7 @@
         {
           "name": "provider",
           "kind": "name",
-          "required": true,
+          "required": false,
           "binding": "flag"
         },
         {
@@ -250,17 +277,23 @@
         {
           "verb": "secret.read",
           "scope": {
-            "kind": "from-arg-map",
-            "arg": "provider",
-            "values": {
-              "gmail": {
-                "kind": "name",
-                "value": "default/GOOGLE_ACCESS_TOKEN"
-              },
-              "outlook": {
-                "kind": "name",
-                "value": "default/MICROSOFT_ACCESS_TOKEN"
-              }
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/GOOGLE_ACCESS_TOKEN"
+            }
+          },
+          "why": {
+            "en": "Read only the credential for the selected provider."
+          }
+        },
+        {
+          "verb": "secret.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "name",
+              "value": "default/MICROSOFT_ACCESS_TOKEN"
             }
           },
           "why": {

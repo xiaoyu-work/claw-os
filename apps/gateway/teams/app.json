@@ -15,25 +15,29 @@
       },
       "args": [
         {
-          "name": "recipient",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "title",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "legacy",
           "kind": "bool",
           "required": false,
-          "default": false
+          "default": false,
+          "binding": "flag"
         }
       ],
       "needs": [

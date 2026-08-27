@@ -41,7 +41,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "pushover"
@@ -227,8 +227,45 @@ def run(command: str, args):
         retry: int | None = None
         expire: int | None = None
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed_args, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=(
+                    "recipient",
+                    "title",
+                    "priority",
+                    "sound",
+                    "url",
+                    "url-title",
+                    "device",
+                    "ttl",
+                    "retry",
+                    "expire",
+                ),
+                bool_flags=("html",),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed_args["text"]
+            recipient = parsed_args["recipient"]
+            title = parsed_args["title"]
+            sound = parsed_args["sound"]
+            url = parsed_args["url"]
+            url_title = parsed_args["url-title"]
+            device = parsed_args["device"]
+            html = parsed_args["html"]
+            for name in ("priority", "ttl", "retry", "expire"):
+                parsed, error = _coerce_int(parsed_args[name], name)
+                if error:
+                    return {"ok": False, "error": error}
+                if name == "priority":
+                    priority = parsed
+                elif name == "ttl":
+                    ttl = parsed
+                elif name == "retry":
+                    retry = parsed
+                else:
+                    expire = parsed
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             recipient = args.get("recipient") or None

@@ -337,17 +337,27 @@ pub struct Arg {
     /// What kind of value this arg holds; the UI uses this to pick a
     /// widget and to validate the input.
     pub kind: ArgKind,
-    /// How the value is bound on the one-shot CLI.
-    #[serde(default)]
-    pub binding: ArgBinding,
+    /// How the value is bound on the one-shot CLI. Omitted booleans retain
+    /// their historical flag binding; every other omitted binding is
+    /// positional.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<ArgBinding>,
     #[serde(default)]
     pub required: bool,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_default",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default: Option<serde_json::Value>,
     /// Derive an omitted value from another declared argument. The bridge
     /// materializes the result before launching the App so capability
     /// derivation and the handler consume the same value.
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "deserialize_non_null_default_from",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default_from: Option<ArgDefaultBinding>,
     /// Human-readable help. Optional.
     #[serde(default)]
@@ -412,6 +422,50 @@ impl ArgBinding {
             Self::Flag => "flag",
         }
     }
+}
+
+impl Arg {
+    pub fn effective_binding(&self) -> ArgBinding {
+        self.binding.unwrap_or_else(|| {
+            if self.kind == ArgKind::Bool {
+                ArgBinding::Flag
+            } else {
+                ArgBinding::Positional
+            }
+        })
+    }
+}
+
+fn deserialize_non_null_default<'de, D>(
+    deserializer: D,
+) -> Result<Option<serde_json::Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom(
+            "`default` cannot be null; omit it when there is no default",
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn deserialize_non_null_default_from<'de, D>(
+    deserializer: D,
+) -> Result<Option<ArgDefaultBinding>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    if value.is_null() {
+        return Err(serde::de::Error::custom(
+            "`default_from` cannot be null; omit it when unused",
+        ));
+    }
+    serde_json::from_value(value)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
 }
 
 impl ArgKind {
@@ -585,6 +639,15 @@ pub struct SessionTool {
     /// local (kernel still emits an audit row).
     #[serde(default)]
     pub needs: Vec<Need>,
+}
+
+impl SessionTool {
+    fn apply_arg_defaults(
+        &self,
+        values: &mut BTreeMap<String, serde_json::Value>,
+    ) -> Result<Vec<String>, String> {
+        apply_arg_defaults(&self.args, values)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -824,6 +887,18 @@ pub enum ManifestError {
 
 fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
     for (index, arg) in args.iter().enumerate() {
+        if arg.effective_binding() == ArgBinding::Positional
+            && !arg.required
+            && args[index + 1..].iter().any(|later| {
+                later.effective_binding() == ArgBinding::Positional && later.required
+            })
+        {
+            return Err((
+                arg.name.clone(),
+                "optional positional arguments cannot precede required positional arguments"
+                    .to_string(),
+            ));
+        }
         if arg.default.is_some() && arg.default_from.is_some() {
             return Err((
                 arg.name.clone(),
@@ -836,11 +911,13 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
                 "required arguments cannot declare defaults".to_string(),
             ));
         }
-        if arg.binding == ArgBinding::Positional
+        if arg.effective_binding() == ArgBinding::Positional
             && (arg.default.is_some() || arg.default_from.is_some())
             && args[index + 1..]
                 .iter()
-                .any(|later| later.binding == ArgBinding::Positional && later.required)
+                .any(|later| {
+                    later.effective_binding() == ArgBinding::Positional && later.required
+                })
         {
             return Err((
                 arg.name.clone(),
@@ -1038,6 +1115,13 @@ impl Manifest {
             }
             // Needs must reference declared args and use compatible kinds.
             for (idx, need) in op.needs.iter().enumerate() {
+                validate_literal_path_scopes(&need.scope).map_err(|detail| {
+                    ManifestError::NeedInvalid {
+                        op: op_name.clone(),
+                        idx,
+                        detail,
+                    }
+                })?;
                 need.why
                     .validate()
                     .map_err(|d| ManifestError::NeedInvalid {
@@ -1184,6 +1268,13 @@ impl Manifest {
                     });
                 }
                 for (idx, need) in tool.needs.iter().enumerate() {
+                    validate_literal_path_scopes(&need.scope).map_err(|detail| {
+                        ManifestError::SessionNeedInvalid {
+                            tool: tool.name.clone(),
+                            idx,
+                            detail,
+                        }
+                    })?;
                     need.why
                         .validate()
                         .map_err(|d| ManifestError::SessionNeedInvalid {
@@ -1449,6 +1540,7 @@ impl Manifest {
         tool_name: &str,
         args: &BTreeMap<String, serde_json::Value>,
     ) -> Result<Vec<super::cap::Cap>, ManifestError> {
+        let args = self.resolve_session_tool_args(tool_name, args)?;
         let session = self
             .session
             .as_ref()
@@ -1551,6 +1643,67 @@ impl Manifest {
             out.push(super::cap::Cap::new(need.verb, scope));
         }
         Ok(out)
+    }
+
+    /// Validate a session call and apply every literal manifest default.
+    /// This map is shared by capability derivation, transient authority,
+    /// and the forwarded MCP invocation.
+    pub fn resolve_session_tool_args(
+        &self,
+        tool_name: &str,
+        args: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<BTreeMap<String, serde_json::Value>, ManifestError> {
+        let session = self
+            .session
+            .as_ref()
+            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail: "manifest has no `session` block".to_string(),
+            })?;
+        let tool = session
+            .tools
+            .iter()
+            .find(|tool| tool.name == tool_name)
+            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail: "unknown session tool".to_string(),
+            })?;
+        let mut resolved = args.clone();
+        tool.apply_arg_defaults(&mut resolved)
+            .map_err(|detail| ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail,
+            })?;
+        super::args::validate_bound_args(&tool.args, &resolved).map_err(|detail| {
+            ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail,
+            }
+        })?;
+        Ok(resolved)
+    }
+}
+
+fn validate_literal_path_scopes(binding: &ScopeBinding) -> Result<(), String> {
+    let invalid = match binding {
+        ScopeBinding::Fixed {
+            scope: Scope::Path(path),
+        } => path.contains('$').then_some(path),
+        ScopeBinding::FromArgMap { values, .. } => values.values().find_map(|scope| match scope {
+            Scope::Path(path) if path.contains('$') => Some(path),
+            _ => None,
+        }),
+        _ => None,
+    };
+    match invalid {
+        Some(path) => Err(format!(
+            "path scope `{path}` contains an unsupported environment placeholder"
+        )),
+        None => Ok(()),
     }
 }
 

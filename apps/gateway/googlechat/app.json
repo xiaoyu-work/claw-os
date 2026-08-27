@@ -15,24 +15,28 @@
       },
       "args": [
         {
-          "name": "recipient",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "title",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "thread_key",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

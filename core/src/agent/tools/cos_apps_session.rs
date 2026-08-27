@@ -26,11 +26,13 @@
 //!
 //! Every `tools/call` the kernel forwards to an app server is gated:
 //!
-//! 1. [`Manifest::resolve_session_tool_needs`] turns the manifest's
-//!    `needs[]` plus the call's arguments into concrete [`Cap`]s.
-//! 2. [`crate::caps::require`] checks each. A denial short-circuits
+//! 1. [`Manifest::resolve_session_tool_args`] validates the call and
+//!    materializes every declared default.
+//! 2. [`Manifest::resolve_session_tool_needs`] turns the manifest's
+//!    `needs[]` plus those effective arguments into concrete [`Cap`]s.
+//! 3. [`crate::caps::require`] checks each. A denial short-circuits
 //!    before the app server sees the call.
-//! 3. On both allow and deny the kernel emits one
+//! 4. On both allow and deny the kernel emits one
 //!    [`LlmRunRecord`] to `ai.jsonl` with `provider="app:<id>"` and
 //!    `model="tool:<tool_name>"`, matching the `cos ai tool` audit
 //!    shape. App-internal calls that re-enter the kernel (e.g. the
@@ -839,7 +841,26 @@ impl Tool for AppSessionTool {
 
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
-        let args_map = json_to_arg_map(&input);
+        let supplied_args = json_to_arg_map(&input);
+        let args_map = match self
+            .manifest
+            .resolve_session_tool_args(&self.manifest_tool_name, &supplied_args)
+        {
+            Ok(args) => args,
+            Err(error) => {
+                let message = format!("argument resolution failed: {error}");
+                emit_audit(
+                    &self.app_id,
+                    &self.manifest_tool_name,
+                    "",
+                    "denied",
+                    Some(&message),
+                    Some(&message),
+                    started.elapsed(),
+                );
+                return ToolResult::err(message);
+            }
+        };
 
         // 1) Cap gate. resolve_session_tool_needs is cheap; manifest
         // is held in Arc and not re-parsed.
@@ -914,10 +935,10 @@ impl Tool for AppSessionTool {
         };
 
         // 3) Forward tools/call.
-        let arguments = match input {
-            Value::Null => None,
-            Value::Object(ref m) if m.is_empty() => None,
-            other => Some(other),
+        let arguments = if args_map.is_empty() {
+            None
+        } else {
+            Some(Value::Object(args_map.clone().into_iter().collect()))
         };
         let call = client.call_tool(self.manifest_tool_name.clone(), arguments);
         let res = match timeout(self.timeout, call).await {

@@ -47,7 +47,7 @@ import urllib.error
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "larksuite"
@@ -226,8 +226,19 @@ def run(command: str, args):
         card = False
         card_json = None
         if isinstance(args, list):
-            if args:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=("title", "card-json"),
+                bool_flags=("post", "card"),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            post = parsed["post"]
+            title = parsed["title"]
+            card = parsed["card"]
+            card_json = parsed["card-json"]
         elif isinstance(args, dict):
             text = str(args.get("text", "") or "")
             post = bool(args.get("post", False))

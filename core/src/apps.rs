@@ -158,8 +158,8 @@ fn arg_schema(arg: &Arg) -> Value {
         "type": value_type,
         "required": arg.required,
         "description": arg.label.current(),
-        "kind": arg.binding.as_str(),
-        "binding": arg.binding.as_str(),
+        "kind": arg.effective_binding().as_str(),
+        "binding": arg.effective_binding().as_str(),
     });
     if let Some(default) = &arg.default {
         schema["default"] = default.clone();

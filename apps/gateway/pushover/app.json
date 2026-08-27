@@ -17,63 +17,75 @@
         {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
         },
         {
           "name": "recipient",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "title",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "priority",
           "kind": "integer",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "sound",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "url",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "url_title",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "device",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "ttl",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "retry",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "expire",
+          "kind": "integer",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "html",
           "kind": "bool",
           "required": false,
-          "default": false
-        },
-        {
-          "name": "ttl",
-          "kind": "integer",
-          "required": false
-        },
-        {
-          "name": "retry",
-          "kind": "integer",
-          "required": false
-        },
-        {
-          "name": "expire",
-          "kind": "integer",
-          "required": false
+          "default": false,
+          "binding": "flag"
         }
       ],
       "needs": [

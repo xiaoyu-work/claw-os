@@ -20,7 +20,8 @@ fn operation_schema_preserves_literal_and_bound_defaults() {
                        "transform": "url-path-basename",
                        "prefix": "~/",
                        "fallback": "download"
-                     }}
+                     }},
+                    {"name": "verbose", "kind": "bool", "default": false}
                   ]
                 }
               }
@@ -44,6 +45,8 @@ fn operation_schema_preserves_literal_and_bound_defaults() {
         parameters[2]["default_from"]["transform"],
         "url-path-basename"
     );
+    assert_eq!(parameters[3]["type"], "boolean");
+    assert_eq!(parameters[3]["binding"], "flag");
 }
 
 #[test]
@@ -143,7 +146,7 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     let timeout = &exec.operations["run"].args[1];
     assert_eq!(timeout.kind, crate::caps::manifest::ArgKind::Integer);
     assert_eq!(
-        timeout.binding,
+        timeout.effective_binding(),
         crate::caps::manifest::ArgBinding::Flag
     );
     assert_eq!(timeout.default, Some(serde_json::json!(300)));
@@ -172,7 +175,7 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
     assert_eq!(fs.operations["rename"].needs.len(), 2);
     assert_eq!(fs.operations["copy"].needs.len(), 2);
     assert_eq!(
-        fs.operations["read_bytes"].args[1].binding,
+        fs.operations["read_bytes"].args[1].effective_binding(),
         crate::caps::manifest::ArgBinding::Flag
     );
 

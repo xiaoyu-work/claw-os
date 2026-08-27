@@ -68,24 +68,11 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$XDG_DATA_HOME/applications/**"
+              "value": "~/.local/share/applications/**"
             }
           },
           "why": {
             "en": "Read `.desktop` entries installed in your home directory."
-          }
-        },
-        {
-          "verb": "fs.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "path",
-              "value": "$HOME/.local/share/applications/**"
-            }
-          },
-          "why": {
-            "en": "Read `.desktop` entries installed under ~/.local/share/applications."
           }
         }
       ]
@@ -144,24 +131,11 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$XDG_DATA_HOME/applications/**"
+              "value": "~/.local/share/applications/**"
             }
           },
           "why": {
             "en": "Read `.desktop` entries installed in your home directory."
-          }
-        },
-        {
-          "verb": "fs.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "path",
-              "value": "$HOME/.local/share/applications/**"
-            }
-          },
-          "why": {
-            "en": "Read `.desktop` entries installed under ~/.local/share/applications."
           }
         }
       ]
@@ -194,6 +168,45 @@
           },
           "why": {
             "en": "Open the graphical application you asked to launch."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries shipped by system packages."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "/usr/local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed locally as admin."
+          }
+        },
+        {
+          "verb": "fs.read",
+          "scope": {
+            "kind": "fixed",
+            "scope": {
+              "kind": "path",
+              "value": "~/.local/share/applications/**"
+            }
+          },
+          "why": {
+            "en": "Read `.desktop` entries installed in your home directory."
           }
         }
       ]
@@ -250,7 +263,7 @@
             }
           },
           "why": {
-            "en": "Resolve the AppID to its `.desktop` entry so we know which binary to look for."
+            "en": "Read `.desktop` entries shipped by system packages."
           }
         },
         {
@@ -263,7 +276,7 @@
             }
           },
           "why": {
-            "en": "Same, for admin-installed entries."
+            "en": "Read `.desktop` entries installed locally as admin."
           }
         },
         {
@@ -272,24 +285,11 @@
             "kind": "fixed",
             "scope": {
               "kind": "path",
-              "value": "$XDG_DATA_HOME/applications/**"
+              "value": "~/.local/share/applications/**"
             }
           },
           "why": {
-            "en": "Same, for entries under $XDG_DATA_HOME."
-          }
-        },
-        {
-          "verb": "fs.read",
-          "scope": {
-            "kind": "fixed",
-            "scope": {
-              "kind": "path",
-              "value": "$HOME/.local/share/applications/**"
-            }
-          },
-          "why": {
-            "en": "Same, for entries under ~/.local/share/applications."
+            "en": "Read `.desktop` entries installed in your home directory."
           }
         }
       ]

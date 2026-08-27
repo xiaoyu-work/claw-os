@@ -15,20 +15,15 @@
       },
       "args": [
         {
-          "name": "target",
-          "kind": "text",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
         },
         {
-          "name": "raw",
-          "kind": "bool",
+          "name": "target",
+          "kind": "text",
           "required": false,
-          "default": false,
           "binding": "flag"
         },
         {
@@ -53,6 +48,13 @@
           "name": "hmac-sha256",
           "kind": "text",
           "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "raw",
+          "kind": "bool",
+          "required": false,
+          "default": false,
           "binding": "flag"
         }
       ],

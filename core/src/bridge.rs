@@ -953,7 +953,7 @@ fn bind_operation_args(
             .iter()
             .find(|declaration| declaration.name == name)
             .ok_or_else(|| format!("resolved default for undeclared arg `{name}`"))?;
-        match declaration.binding {
+        match declaration.effective_binding() {
             crate::caps::manifest::ArgBinding::Positional => {
                 if declaration.kind != ArgKind::Bool {
                     argv.push(arg_value_to_string(value)?);

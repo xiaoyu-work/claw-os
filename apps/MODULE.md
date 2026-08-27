@@ -12,6 +12,8 @@ invoked.
   `app.json`; entrypoints must not implement `_schema()` or `__schema__`.
 - Declare each argument's positional/flag binding, exact numeric kind, and
   runtime default so validated argv and capability derivation cannot diverge.
+- Keep optional gateway destinations as flags after required message text;
+  fixed path scopes use absolute or `~/` forms, never environment placeholders.
 - Validate untrusted input before requesting policy/capability authority.
 - Return structured JSON-compatible results.
 - Return constrained `setup.agent_action` metadata for Agent-resumable

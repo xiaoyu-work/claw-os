@@ -15,24 +15,28 @@
       },
       "args": [
         {
-          "name": "recipient",
-          "kind": "name",
-          "required": false
-        },
-        {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "recipient",
+          "kind": "name",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "username",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "icon_url",
           "kind": "text",
-          "required": false
+          "required": false,
+          "binding": "flag"
         }
       ],
       "needs": [

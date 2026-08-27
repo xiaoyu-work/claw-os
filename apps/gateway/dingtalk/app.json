@@ -17,39 +17,46 @@
         {
           "name": "text",
           "kind": "text",
-          "required": true
+          "required": true,
+          "binding": "positional"
+        },
+        {
+          "name": "title",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "keyword",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "at_mobiles",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
+        },
+        {
+          "name": "at_user_ids",
+          "kind": "text",
+          "required": false,
+          "binding": "flag"
         },
         {
           "name": "markdown",
           "kind": "bool",
           "required": false,
-          "default": false
-        },
-        {
-          "name": "title",
-          "kind": "text",
-          "required": false
-        },
-        {
-          "name": "keyword",
-          "kind": "text",
-          "required": false
-        },
-        {
-          "name": "at_mobiles",
-          "kind": "text",
-          "required": false
-        },
-        {
-          "name": "at_user_ids",
-          "kind": "text",
-          "required": false
+          "default": false,
+          "binding": "flag"
         },
         {
           "name": "at_all",
           "kind": "bool",
           "required": false,
-          "default": false
+          "default": false,
+          "binding": "flag"
         }
       ],
       "needs": [

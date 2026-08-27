@@ -39,6 +39,46 @@ fn unknown_flags_are_rejected() {
 }
 
 #[test]
+fn legacy_boolean_binding_is_a_flag() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name": "urgent", "kind": "bool"}
+    ]))
+    .unwrap();
+    let values = bind_cli_args(&decls, &raw(&["--urgent"])).unwrap();
+    assert_eq!(values["urgent"], Value::Bool(true));
+}
+
+#[test]
+fn invalid_supplied_scalars_are_rejected() {
+    for declaration in [
+        serde_json::json!({"name": "value", "kind": "number"}),
+        serde_json::json!({"name": "value", "kind": "integer"}),
+        serde_json::json!({"name": "value", "kind": "bool", "binding": "positional"}),
+    ] {
+        let decls: Vec<Arg> = serde_json::from_value(Value::Array(vec![declaration])).unwrap();
+        let error = bind_cli_args(&decls, &raw(&["not-a-value"]))
+            .expect_err("invalid supplied values must not reach an App");
+        assert!(error.contains("value"), "unexpected error: {error}");
+    }
+
+    let bool_flag: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name": "urgent", "kind": "bool"}
+    ]))
+    .unwrap();
+    assert!(bind_cli_args(&bool_flag, &raw(&["--urgent=maybe"])).is_err());
+}
+
+#[test]
+fn end_of_options_allows_flag_shaped_positionals() {
+    let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
+        {"name": "text", "kind": "text", "required": true}
+    ]))
+    .unwrap();
+    let values = bind_cli_args(&decls, &raw(&["--", "--literal"])).unwrap();
+    assert_eq!(values["text"], Value::String("--literal".to_string()));
+}
+
+#[test]
 fn kebab_alias_and_defaults_are_applied() {
     let decls: Vec<Arg> = serde_json::from_value(serde_json::json!([
         {"name": "dry_run", "kind": "bool", "binding": "flag"},

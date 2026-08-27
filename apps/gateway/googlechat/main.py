@@ -35,7 +35,7 @@ import urllib.parse
 # Sibling ``_shared`` package import (script-mode invocation).
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from _shared import gateway_memory, safe_egress, safe_subprocess  # noqa: E402
+from _shared import gateway_args, gateway_memory, safe_egress, safe_subprocess  # noqa: E402
 
 
 PLATFORM = "googlechat"
@@ -195,10 +195,17 @@ def run(command: str, args):
         title = ""
         thread_key = ""
         if isinstance(args, list):
-            if len(args) >= 2:
-                recipient, text = str(args[0]), str(args[1])
-            elif len(args) == 1:
-                text = str(args[0])
+            parsed, error = gateway_args.parse(
+                args,
+                positional=("text",),
+                value_flags=("recipient", "title", "thread-key"),
+            )
+            if error:
+                return {"ok": False, "error": error}
+            text = parsed["text"]
+            recipient = parsed["recipient"] or ""
+            title = parsed["title"] or ""
+            thread_key = parsed["thread-key"] or ""
         elif isinstance(args, dict):
             recipient = str(args.get("recipient", "") or "")
             text = str(args.get("text", "") or "")
