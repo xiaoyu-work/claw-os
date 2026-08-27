@@ -74,6 +74,26 @@ pub(crate) fn build_request_body(
     model: &str,
     stream: bool,
 ) -> Result<serde_json::Value> {
+    build_request_body_inner(request, model, stream, false)
+}
+
+/// Build an official OpenAI streaming request that asks for the terminal
+/// usage chunk. Compatibility providers use [`build_request_body`] because
+/// some otherwise OpenAI-compatible servers reject `stream_options`.
+pub(crate) fn build_request_body_with_stream_usage(
+    request: &ChatRequest,
+    model: &str,
+    stream: bool,
+) -> Result<serde_json::Value> {
+    build_request_body_inner(request, model, stream, true)
+}
+
+fn build_request_body_inner(
+    request: &ChatRequest,
+    model: &str,
+    stream: bool,
+    include_stream_usage: bool,
+) -> Result<serde_json::Value> {
     let has_image = request.messages.iter().any(|message| {
         message
             .content
@@ -146,6 +166,18 @@ pub(crate) fn build_request_body(
         // Merge provider-specific extras (e.g. `seed`, `response_format`).
         for (key, value) in request.provider_extra_fields() {
             obj.insert(key.to_owned(), value.clone());
+        }
+        if stream && include_stream_usage {
+            obj.insert(
+                "stream_options".into(),
+                serde_json::json!({"include_usage": true}),
+            );
+        } else {
+            // This field is not part of the baseline Chat Completions
+            // compatibility contract. Do not let request extras bypass
+            // the provider alias's strict-compatibility selection or send
+            // a streaming-only field on non-streaming requests.
+            obj.remove("stream_options");
         }
     }
     Ok(body)

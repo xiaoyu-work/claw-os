@@ -40,9 +40,9 @@ use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "openai";
 
-/// Names this provider answers to in the registry. Adding an alias here
-/// only changes the `name()` returned and the default base URL — the
-/// wire format is identical.
+/// Names this provider answers to in the registry. Aliases share the core
+/// wire format, while [`compatibility_for_alias`] gates optional OpenAI
+/// request extensions that strict compatibility servers may reject.
 pub const PROVIDER_ALIASES: &[&str] = &[
     "openai",
     "xai",
@@ -69,6 +69,33 @@ const DEFAULT_AZURE_BASE: &str = "";
 // `super::copilot_auth::derive_base_url_from_token`. This constant is
 // the fallback when no proxy-ep is present.
 const DEFAULT_COPILOT_BASE: &str = "https://api.individual.githubcopilot.com";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AliasCompatibility {
+    /// Whether Chat Completions accepts OpenAI's optional
+    /// `stream_options.include_usage` request extension.
+    chat_stream_usage: bool,
+}
+
+impl AliasCompatibility {
+    const OFFICIAL_OPENAI: Self = Self {
+        chat_stream_usage: true,
+    };
+    const STRICT: Self = Self {
+        chat_stream_usage: false,
+    };
+}
+
+/// Resolve optional wire extensions by the explicitly selected provider
+/// alias. Unknown and compatibility aliases fail safe to the baseline
+/// Chat Completions schema; only the official OpenAI alias opts in.
+fn compatibility_for_alias(alias: &str) -> AliasCompatibility {
+    if alias == PROVIDER_NAME {
+        AliasCompatibility::OFFICIAL_OPENAI
+    } else {
+        AliasCompatibility::STRICT
+    }
+}
 
 /// Resolve the default base URL for one of [`PROVIDER_ALIASES`]. Falls
 /// back to OpenAI's URL if the alias is unknown.
@@ -397,10 +424,15 @@ fn build_wire_request_body(
     model: &str,
     stream: bool,
     wire_api: super::copilot_auth::CopilotWireApi,
+    compatibility: AliasCompatibility,
 ) -> Result<serde_json::Value> {
     match wire_api {
         super::copilot_auth::CopilotWireApi::ChatCompletions => {
-            wire::build_request_body(request, model, stream)
+            if compatibility.chat_stream_usage {
+                wire::build_request_body_with_stream_usage(request, model, stream)
+            } else {
+                wire::build_request_body(request, model, stream)
+            }
         }
         super::copilot_auth::CopilotWireApi::Responses => {
             Ok(responses_wire::build_request_body(request, model, stream))
@@ -520,8 +552,13 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match build_wire_request_body(&request, &self.cfg.model, false, target.wire_api)
-        {
+        let body = match build_wire_request_body(
+            &request,
+            &self.cfg.model,
+            false,
+            target.wire_api,
+            compatibility_for_alias(&self.cfg.alias),
+        ) {
             Ok(body) => body,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
@@ -656,7 +693,13 @@ impl Provider for OpenAICompatProvider {
                 return Err(error);
             }
         };
-        let body = match build_wire_request_body(&request, &self.cfg.model, true, target.wire_api) {
+        let body = match build_wire_request_body(
+            &request,
+            &self.cfg.model,
+            true,
+            target.wire_api,
+            compatibility_for_alias(&self.cfg.alias),
+        ) {
             Ok(body) => body,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {

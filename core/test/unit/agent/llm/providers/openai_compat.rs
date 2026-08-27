@@ -370,6 +370,7 @@ fn chat_completions_serializes_mixed_images_and_preserves_tool_history() {
         "gpt-4o",
         false,
         crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+        compatibility_for_alias("openai"),
     )
     .unwrap();
     let messages = body["messages"].as_array().unwrap();
@@ -629,6 +630,77 @@ fn body_marks_stream_when_requested() {
     let r = req_text("hi");
     let body = wire::build_request_body(&r, "m", true).unwrap();
     assert_eq!(body["stream"], true);
+}
+
+#[test]
+fn official_openai_stream_requests_terminal_usage() {
+    let mut request = req_text("hi");
+    request.extra = serde_json::json!({
+        "stream_options": {"include_usage": false}
+    });
+    let body = build_wire_request_body(
+        &request,
+        "gpt-4o-mini",
+        true,
+        crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+        compatibility_for_alias("openai"),
+    )
+    .unwrap();
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["stream_options"]["include_usage"], true);
+
+    let non_streaming = build_wire_request_body(
+        &request,
+        "gpt-4o-mini",
+        false,
+        crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+        compatibility_for_alias("openai"),
+    )
+    .unwrap();
+    assert!(non_streaming.get("stream_options").is_none());
+}
+
+#[test]
+fn compatibility_alias_streams_omit_unsupported_stream_options() {
+    for alias in PROVIDER_ALIASES
+        .iter()
+        .copied()
+        .filter(|alias| *alias != "openai")
+    {
+        let mut request = req_text("hi");
+        request.extra = serde_json::json!({
+            "seed": 7,
+            "stream_options": {"include_usage": true}
+        });
+        let body = build_wire_request_body(
+            &request,
+            "compat-model",
+            true,
+            crate::agent::llm::providers::copilot_auth::CopilotWireApi::ChatCompletions,
+            compatibility_for_alias(alias),
+        )
+        .unwrap();
+        assert_eq!(body["stream"], true, "alias: {alias}");
+        assert_eq!(body["seed"], 7, "alias: {alias}");
+        assert!(
+            body.get("stream_options").is_none(),
+            "strict compatibility alias {alias} received stream_options: {body}"
+        );
+    }
+}
+
+#[test]
+fn responses_requests_do_not_inherit_chat_stream_options() {
+    let body = build_wire_request_body(
+        &req_text("hi"),
+        "gpt-5.6-sol",
+        true,
+        crate::agent::llm::providers::copilot_auth::CopilotWireApi::Responses,
+        AliasCompatibility::OFFICIAL_OPENAI,
+    )
+    .unwrap();
+    assert_eq!(body["stream"], true);
+    assert!(body.get("stream_options").is_none());
 }
 
 #[test]
@@ -1048,6 +1120,82 @@ async fn spawn_one_shot_mock(
     });
 
     (url, handle)
+}
+
+fn request_json_body(request: &[u8]) -> serde_json::Value {
+    let body_start = request
+        .windows(4)
+        .position(|window| window == b"\r\n\r\n")
+        .map(|position| position + 4)
+        .expect("HTTP request has a header terminator");
+    serde_json::from_slice(&request[body_start..]).expect("HTTP request body is JSON")
+}
+
+#[tokio::test]
+async fn official_openai_stream_serializes_usage_option_and_reports_usage() {
+    use futures_util::StreamExt;
+
+    let response_body = concat!(
+        "data: {\"model\":\"gpt-4o-mini\",\"choices\":[{\"delta\":{\"content\":\"ok\"},",
+        "\"finish_reason\":\"stop\"}]}\n\n",
+        "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":17,\"completion_tokens\":3}}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+    let mut config = AgentConfig::default();
+    config.base_url = Some(base_url);
+    config.request_timeout = 5;
+    let provider = OpenAICompatProvider::from_agent_config("openai", "gpt-4o-mini", &config);
+
+    let events: Vec<_> = provider
+        .chat_stream(req_text("hello"))
+        .await
+        .expect("stream request succeeds")
+        .collect()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done { usage, .. }))
+            if usage.input_tokens == 17 && usage.output_tokens == 3
+    ));
+
+    let request = handle.await.unwrap();
+    let body = request_json_body(&request);
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["stream_options"]["include_usage"], true);
+}
+
+#[tokio::test]
+async fn strict_compat_stream_omits_option_and_keeps_missing_usage_explicit() {
+    use futures_util::StreamExt;
+
+    let response_body = concat!(
+        "data: {\"model\":\"llama3\",\"choices\":[{\"delta\":{\"content\":\"ok\"},",
+        "\"finish_reason\":\"stop\"}]}\n\n",
+        "data: [DONE]\n\n"
+    );
+    let (base_url, handle) = spawn_one_shot_mock("HTTP/1.1 200 OK", response_body).await;
+    let mut config = AgentConfig::default();
+    config.base_url = Some(base_url);
+    config.request_timeout = 5;
+    let provider = OpenAICompatProvider::from_agent_config("ollama", "llama3", &config);
+
+    let events: Vec<_> = provider
+        .chat_stream(req_text("hello"))
+        .await
+        .expect("strict compatibility stream succeeds")
+        .collect()
+        .await;
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done { usage, .. }))
+            if usage.input_tokens == 0 && usage.output_tokens == 0
+    ));
+
+    let request = handle.await.unwrap();
+    let body = request_json_body(&request);
+    assert_eq!(body["stream"], true);
+    assert!(body.get("stream_options").is_none());
 }
 
 #[tokio::test]

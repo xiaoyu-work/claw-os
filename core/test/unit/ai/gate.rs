@@ -278,3 +278,67 @@ fn budget_refunded_on_provider_error() {
 
     std::env::remove_var("COS_DATA_DIR");
 }
+
+#[tokio::test]
+async fn system_stream_settles_reported_openai_usage_to_actuals() {
+    use futures_util::StreamExt;
+
+    let (_dir, store) = ephemeral_budget_store_via_tempdir();
+    let reservation =
+        SystemBudgetReservation::reserve(store, 500, 10_000).expect("reserve estimate");
+    let inner: futures_util::stream::BoxStream<'static, crate::agent::llm::Result<StreamEvent>> =
+        Box::pin(futures_util::stream::iter(vec![Ok(StreamEvent::Done {
+            finish: FinishReason::Stop,
+            usage: crate::agent::llm::types::Usage {
+                input_tokens: 17,
+                output_tokens: 3,
+                ..Default::default()
+            },
+        })]));
+
+    let events: Vec<_> = wrap_system_stream(inner, reservation).collect().await;
+    let charged = Store::open()
+        .unwrap()
+        .current(SYSTEM_AGENT_BUCKET)
+        .unwrap()
+        .units_used;
+    std::env::remove_var("COS_DATA_DIR");
+
+    assert!(matches!(
+        events.last(),
+        Some(Ok(StreamEvent::Done { usage, .. }))
+            if usage.input_tokens == 17 && usage.output_tokens == 3
+    ));
+    assert_eq!(
+        charged, 20,
+        "reported streaming usage must replace the conservative reservation"
+    );
+}
+
+#[tokio::test]
+async fn system_stream_without_compat_usage_keeps_conservative_estimate() {
+    use futures_util::StreamExt;
+
+    let (_dir, store) = ephemeral_budget_store_via_tempdir();
+    let reservation =
+        SystemBudgetReservation::reserve(store, 500, 10_000).expect("reserve estimate");
+    let inner: futures_util::stream::BoxStream<'static, crate::agent::llm::Result<StreamEvent>> =
+        Box::pin(futures_util::stream::iter(vec![Ok(StreamEvent::Done {
+            finish: FinishReason::Stop,
+            usage: Default::default(),
+        })]));
+
+    let events: Vec<_> = wrap_system_stream(inner, reservation).collect().await;
+    let charged = Store::open()
+        .unwrap()
+        .current(SYSTEM_AGENT_BUCKET)
+        .unwrap()
+        .units_used;
+    std::env::remove_var("COS_DATA_DIR");
+
+    assert!(events.last().is_some_and(Result::is_ok));
+    assert_eq!(
+        charged, 500,
+        "strict compatibility providers without usage must retain the safe estimate"
+    );
+}
