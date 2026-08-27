@@ -93,6 +93,15 @@ Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
 approvals, and privileged actions cannot bypass the recording path.
 
+Curated `MEMORY.md` facts are an append-only history, not a live inventory.
+Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
+aliases, classifies durable knowledge versus observed environment state, bounds
+observation TTLs, and rejects session state or procedures. Each new fact records
+source session/message provenance and confidence. Prompt assembly leaves the
+human-editable file untouched while projecting canonical chain tails, suppressing
+installation/version contradictions by append order, and excluding expired observations;
+the complete history remains inspectable through the memory tool.
+
 Semantic primitives have a one-way dependency boundary: `claw-embed` owns
 embedding, extraction, chunking, walking, and storage contracts;
 `claw-semantic` depends on those contracts and owns only filesystem daemon

@@ -428,8 +428,8 @@ fn interrupt_cmd(args: &[String]) -> Result<Value, String> {
 ///   extract --session <id> [--limit N] [--min-confidence F]
 ///                          [--dry-run]
 ///       Pull recent messages from <session>, send the transcript
-///       to the auxiliary LLM, and append durable user facts to
-///       MEMORY.md.
+///       to the auxiliary LLM, and append governed durable facts and
+///       bounded observations to MEMORY.md.
 ///   status [--session <id>]
 ///       Show curation log entries (all sessions, or one).
 ///   clear-log [--session <id> | --all]
@@ -559,6 +559,11 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
                         "attribute": f.attribute,
                         "value": f.value,
                         "key": f.key(),
+                        "lifetime": f.lifetime.map(|lifetime| lifetime.as_str()),
+                        "observed_at": f.observed_at,
+                        "ttl_days": f.ttl_days,
+                        "source_session_id": f.source_session_id,
+                        "source_message_id": f.source_message_id,
                     })
                 })
                 .collect();
@@ -574,6 +579,11 @@ fn learn_cmd(args: &[String]) -> Result<Value, String> {
                         "attribute": f.attribute,
                         "value": f.value,
                         "key": f.key(),
+                        "lifetime": f.lifetime.map(|lifetime| lifetime.as_str()),
+                        "observed_at": f.observed_at,
+                        "ttl_days": f.ttl_days,
+                        "source_session_id": f.source_session_id,
+                        "source_message_id": f.source_message_id,
                     })
                 })
                 .collect();
