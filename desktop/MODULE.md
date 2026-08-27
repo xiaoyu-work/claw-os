@@ -22,6 +22,7 @@ component crates plus Claw-specific agent bridges and applets.
 | `justfile` | Desktop build/install orchestration |
 | `agent/` | Native agent bridge and UI |
 | `agent/protocol/` | Versioned desktop Agent HTTP/SSE presentation contract |
+| `agent/ui/MODULE.md` | Agent UI state ownership, effects, views, and test boundaries |
 | `comp/`, `session/`, `panel/` | Shell/compositor/session surfaces |
 | `settings/`, `settings-daemon/` | System settings UI and services |
 | `toolkit/`, `text/`, `theme/` | Shared UI/rendering foundations |

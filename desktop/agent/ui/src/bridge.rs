@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 pub use cos_agent_protocol::{
-    BridgeEndpoint, ChatRequest, DonePayload, ErrorEnvelope, HistoryMessage, ModelsResponse,
-    SessionSummary, StreamEvent, ToolCallView, ToolResultView,
+    BridgeEndpoint, ChatRequest, ErrorEnvelope, HistoryMessage, ModelsResponse, SessionSummary,
+    StreamEvent, ToolCallView, ToolResultView,
 };
 use cos_agent_protocol::{PROTOCOL_VERSION_HEADER, ProtocolMetadata, ProtocolVersion};
 use reqwest::header::HeaderMap;

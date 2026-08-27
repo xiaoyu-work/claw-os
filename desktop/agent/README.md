@@ -25,7 +25,15 @@ desktop/agent/
 │           └── voice.rs    # POST /api/voice/upload → configured STT provider
 └── ui/                     # cos-agent-ui — native libcosmic chat
     ├── src/
-    │   ├── main.rs         #   Application impl, view, subscription
+    │   ├── main.rs         #   Application assembly, routing, subscription
+    │   ├── session.rs      #   Session/history domain and reconciliation
+    │   ├── stream_state.rs #   Generation-aware stream/cancel reducer
+    │   ├── bridge_state.rs #   Connection/model lifecycle state
+    │   ├── effects.rs      #   Async bridge and stream effects
+    │   ├── voice.rs        #   Recording/transcription lifecycle state
+    │   ├── overlay.rs      #   Activation and layer-window state
+    │   ├── views.rs        #   Read-only widget composition
+    │   ├── styles.rs       #   Presentation styles
     │   ├── bridge.rs       #   port discovery + wire types
     │   ├── sse.rs          #   reqwest-based SSE consumer
     │   └── recorder.rs     #   bounded capture, resampling, levels + WAV upload
@@ -67,6 +75,12 @@ version constants. It depends only on Serde and `serde_json`. The bridge
 remains the anti-corruption layer: `bridge/src/translation.rs` decodes generic
 clawd results, removes worker/task storage details and raw memory content, and
 emits only protocol types. The UI does not deserialize clawd or core models.
+
+Within the UI, lifecycle state is split by invariant owner. `main.rs` routes
+typed messages among session, stream, bridge, voice, and overlay state;
+`effects.rs` performs transport work; and `views.rs` only reads state and emits
+messages. Stream generations and cancellation remain centralized in
+`stream_state.rs`, so stale events cannot mutate a newer request.
 
 Tool input is the protocol's only intentionally open JSON field. Tool schemas
 are registered dynamically by the runtime, so their payload cannot be closed
