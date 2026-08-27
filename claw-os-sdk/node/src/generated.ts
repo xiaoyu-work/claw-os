@@ -174,6 +174,12 @@ export interface Optionalpositionalgap {
 }
 
 /**
+ * optionalPositional.
+ */
+export interface Optionalpositional {
+}
+
+/**
  * defaultedPositional.
  */
 export interface Defaultedpositional {
@@ -204,7 +210,7 @@ export interface Need {
  * needCondition.
  */
 export interface Needcondition {
-  kind: "arg-present" | "arg-equals";
+  kind: "arg-present" | "arg-equals" | "arg-not-equals";
   arg: string;
   value?: unknown;
 }

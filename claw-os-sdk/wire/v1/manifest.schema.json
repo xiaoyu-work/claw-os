@@ -46,9 +46,19 @@
           "items": { "$ref": "#/$defs/arg" },
           "description": "Declared input parameters; order is significant for the UI.",
           "not": {
-            "allOf": [
-              { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
-              { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+            "anyOf": [
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+                ]
+              },
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
+                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
+                ]
+              }
             ]
           }
         },
@@ -193,6 +203,17 @@
         { "not": { "anyOf": [{ "required": ["default"] }, { "required": ["default_from"] }] } }
       ]
     },
+    "optionalPositional": {
+      "allOf": [
+        { "$ref": "#/$defs/positionalArg" },
+        {
+          "anyOf": [
+            { "properties": { "required": { "const": false } }, "required": ["required"] },
+            { "not": { "required": ["required"] } }
+          ]
+        }
+      ]
+    },
     "defaultedPositional": {
       "allOf": [
         { "$ref": "#/$defs/positionalArg" },
@@ -258,12 +279,12 @@
           "then": { "not": { "required": ["value"] } }
         },
         {
-          "if": { "properties": { "kind": { "const": "arg-equals" } }, "required": ["kind"] },
+          "if": { "properties": { "kind": { "enum": ["arg-equals", "arg-not-equals"] } }, "required": ["kind"] },
           "then": { "required": ["value"] }
         }
       ],
       "properties": {
-        "kind": { "type": "string", "enum": ["arg-present", "arg-equals"] },
+        "kind": { "type": "string", "enum": ["arg-present", "arg-equals", "arg-not-equals"] },
         "arg": { "type": "string" },
         "value": { "not": { "type": "null" } }
       }
@@ -383,9 +404,19 @@
         "args": {
           "type": "array",
           "not": {
-            "allOf": [
-              { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
-              { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+            "anyOf": [
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositionalGap" } },
+                  { "contains": { "$ref": "#/$defs/defaultedPositional" } }
+                ]
+              },
+              {
+                "allOf": [
+                  { "contains": { "$ref": "#/$defs/optionalPositional" } },
+                  { "contains": { "properties": { "positional_alias": { "const": true } }, "required": ["positional_alias"] } }
+                ]
+              }
             ]
           },
           "items": {

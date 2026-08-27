@@ -979,8 +979,7 @@ fn trusted_pre_dispatch_args(
                 }
                 resolve_calendar_provider()?.to_string()
             }
-            crate::caps::manifest::TrustedArgResolver::NtfyServer => std::env::var("NTFY_SERVER")
-                .unwrap_or_else(|_| "https://ntfy.sh".to_string()),
+            crate::caps::manifest::TrustedArgResolver::NtfyServer => resolve_ntfy_server()?,
         };
         let delimiter = resolved
             .iter()
@@ -989,6 +988,22 @@ fn trusted_pre_dispatch_args(
         resolved.splice(delimiter..delimiter, [format!("--{flag}"), value]);
     }
     Ok(resolved)
+}
+
+fn resolve_ntfy_server() -> Result<String, String> {
+    let normalize = |value: String| value.trim().trim_end_matches('/').to_string();
+    if let Some(configured) = std::env::var("COS_NTFY_SERVER")
+        .ok()
+        .map(&normalize)
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(configured);
+    }
+    Ok(crate::credential::try_load("ntfy_server", "default")
+        .map_err(|error| format!("resolve ntfy server: {error}"))?
+        .map(normalize)
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "https://ntfy.sh".to_string()))
 }
 
 fn resolve_email_provider<'a>(

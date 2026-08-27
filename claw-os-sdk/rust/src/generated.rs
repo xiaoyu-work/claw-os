@@ -213,6 +213,11 @@ pub struct Positionalarg {
 pub struct Optionalpositionalgap {
 }
 
+/// optionalPositional
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Optionalpositional {
+}
+
 /// defaultedPositional
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Defaultedpositional {

@@ -738,7 +738,7 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
     .unwrap();
     let operation = &manifest.operations["send"];
     let _server =
-        crate::test_env::TestEnvVarGuard::set("NTFY_SERVER", "https://notify.example:8443");
+        crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "https://notify.example:8443");
     let trusted =
         trusted_pre_dispatch_args("gateway-ntfy", operation, &["hello".into()]).unwrap();
     assert!(trusted
@@ -751,6 +751,72 @@ fn ntfy_server_is_resolved_before_exact_host_capability() {
         .flatten()
         .any(|cap| cap.verb == Verb::NET_DIAL
             && cap.scope == Scope::host("notify.example:8443")));
+}
+
+#[test]
+fn ntfy_server_resolution_uses_explicit_env_credential_fallback_precedence() {
+    let _env = crate::test_env::lock_env();
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/gateway/ntfy/app.json")).unwrap(),
+    )
+    .unwrap();
+    let send = &manifest.operations["send"];
+    let status = &manifest.operations["status"];
+    let credentials = tempfile::tempdir().unwrap();
+    let process = tempfile::tempdir().unwrap();
+    let _credentials =
+        crate::test_env::TestEnvVarGuard::set("COS_CREDENTIALS_DIR", credentials.path());
+    let _session = crate::test_env::TestSessionGuard::admin(process.path());
+    let _server_env = crate::test_env::TestEnvVarGuard::set("COS_NTFY_SERVER", "");
+    let fallback = trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
+    assert!(fallback
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://ntfy.sh"]));
+    let fallback_bound = bind_operation_args(send, &fallback).unwrap();
+    let fallback_needs = manifest
+        .resolve_needs("send", &fallback_bound.values)
+        .unwrap();
+    assert_eq!(fallback_needs[0][0].scope, Scope::host("ntfy.sh:443"));
+    assert!(fallback_needs[3].is_empty());
+
+    crate::credential::run(
+        "store",
+        &[
+            "ntfy_server".into(),
+            "https://credential.example:9443".into(),
+        ],
+    )
+    .unwrap();
+
+    let from_credential =
+        trusted_pre_dispatch_args("gateway-ntfy", send, &["hello".into()]).unwrap();
+    assert!(from_credential
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://credential.example:9443"]));
+
+    let explicit = trusted_pre_dispatch_args(
+        "gateway-ntfy",
+        send,
+        &[
+            "hello".into(),
+            "--server".into(),
+            "https://explicit.example:7443".into(),
+        ],
+    )
+    .unwrap();
+    assert!(explicit
+        .windows(2)
+        .any(|pair| pair == ["--server", "https://explicit.example:7443"]));
+    assert!(!explicit.iter().any(|arg| arg == "https://credential.example:9443"));
+
+    let status_args = trusted_pre_dispatch_args("gateway-ntfy", status, &[]).unwrap();
+    assert_eq!(
+        status_args,
+        ["--server", "https://credential.example:9443"]
+    );
 }
 
 #[test]

@@ -22,13 +22,29 @@ fn extract_format_recognises_compact_aliases() {
 }
 
 #[test]
+fn extract_format_preserves_delimiter_and_app_data_flags() {
+    let original = vec![
+        "app".to_string(),
+        "exec".to_string(),
+        "run".to_string(),
+        "--".to_string(),
+        "--json".to_string(),
+        "--plain".to_string(),
+        "--compact".to_string(),
+        "--pretty".to_string(),
+    ];
+    let (args, _) = extract_format(original.clone());
+    assert_eq!(args, original);
+}
+
+#[test]
 fn stdin_request_is_explicit_and_respects_end_of_options() {
     let (args, requested) = extract_stdin_request(vec![
         "app".into(),
         "doc".into(),
         "rewrite".into(),
         "--stdin".into(),
-    ]);
+    ], true);
     assert!(requested);
     assert_eq!(args, ["app", "doc", "rewrite"]);
 
@@ -38,7 +54,7 @@ fn stdin_request_is_explicit_and_respects_end_of_options() {
             command.to_string(),
             "--stdin".to_string(),
         ];
-        let (args, requested) = extract_stdin_request(original.clone());
+        let (args, requested) = extract_stdin_request(original.clone(), false);
         assert!(!requested, "{command}");
         assert_eq!(args, original, "{command}");
     }
@@ -49,9 +65,30 @@ fn stdin_request_is_explicit_and_respects_end_of_options() {
         "rewrite".into(),
         "--".into(),
         "--stdin".into(),
-    ]);
+    ], true);
     assert!(!requested);
     assert_eq!(args, ["app", "doc", "rewrite", "--", "--stdin"]);
+}
+
+#[test]
+fn stdin_request_is_not_consumed_for_app_management_or_non_stdin_operations() {
+    for original in [
+        vec!["app".into(), "install".into(), "source".into(), "--stdin".into()],
+        vec!["app".into(), "create".into(), "demo".into(), "--stdin".into()],
+        vec!["app".into(), "tool".into(), "list".into(), "--stdin".into()],
+        vec![
+            "app".into(),
+            "doc".into(),
+            "rewrite".into(),
+            "--schema".into(),
+            "--stdin".into(),
+        ],
+        vec!["app".into(), "fs".into(), "read".into(), "--stdin".into()],
+    ] {
+        let (args, requested) = extract_stdin_request(original.clone(), false);
+        assert!(!requested);
+        assert_eq!(args, original);
+    }
 }
 
 #[test]

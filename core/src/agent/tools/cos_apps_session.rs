@@ -1014,6 +1014,8 @@ impl Tool for AppSessionTool {
 }
 
 fn json_to_arg_map(input: &Value) -> BTreeMap<String, Value> {
+    // MCP protocol metadata lives in the tools/call envelope. The arguments
+    // object contains only manifest-declared values and is validated strictly.
     match input {
         Value::Object(m) => m.iter().map(|(k, v)| (k.clone(), v.clone())).collect(),
         _ => BTreeMap::new(),

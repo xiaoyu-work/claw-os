@@ -165,6 +165,10 @@ type Positionalarg struct {
 type Optionalpositionalgap struct {
 }
 
+// Optionalpositional — optionalPositional.
+type Optionalpositional struct {
+}
+
 // Defaultedpositional — defaultedPositional.
 type Defaultedpositional struct {
 }

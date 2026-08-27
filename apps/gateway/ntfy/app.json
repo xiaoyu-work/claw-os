@@ -127,6 +127,11 @@
           },
           "why": {
             "en": "Read the configured ntfy_token secret required by this gateway."
+          },
+          "when": {
+            "kind": "arg-not-equals",
+            "arg": "server",
+            "value": "https://ntfy.sh"
           }
         },
         {
@@ -148,7 +153,15 @@
       "label": {
         "en": "Show gateway configuration and status"
       },
-      "args": [],
+      "args": [
+        {
+          "name": "server",
+          "kind": "text",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "ntfy-server"
+        }
+      ],
       "needs": [
         {
           "verb": "secret.read",

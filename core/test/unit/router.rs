@@ -3,6 +3,40 @@ use super::help::{command_schemas, show_builtin_schema, show_command_schema};
 use super::*;
 
 #[test]
+fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
+    let root = tempfile::tempdir().unwrap();
+    let app = root.path().join("pipe");
+    std::fs::create_dir_all(&app).unwrap();
+    std::fs::write(
+        app.join("app.json"),
+        r#"{
+            "id":"pipe","version":"0.1","name":"Pipe",
+            "operations":{
+                "read":{"label":"Read"},
+                "write":{"label":"Write","stdin":true}
+            }
+        }"#,
+    )
+    .unwrap();
+
+    let args = |values: &[&str]| values.iter().map(|value| value.to_string()).collect::<Vec<_>>();
+    assert!(app_operation_accepts_stdin_in(
+        &args(&["app", "pipe", "write", "--stdin"]),
+        root.path()
+    ));
+    for invocation in [
+        args(&["app", "pipe", "read", "--stdin"]),
+        args(&["app", "pipe", "unknown", "--stdin"]),
+        args(&["app", "pipe", "write", "--schema", "--stdin"]),
+        args(&["app", "install", "pipe", "--stdin"]),
+        args(&["app", "create", "pipe", "--stdin"]),
+        args(&["app", "tool", "list", "--stdin"]),
+    ] {
+        assert!(!app_operation_accepts_stdin_in(&invocation, root.path()));
+    }
+}
+
+#[test]
 fn recovery_hint_permission_denied() {
     let hint = recovery_hint("Permission denied on /home/cos/file.txt").unwrap();
     assert_eq!(hint["hint"], "Permission denied. Check file permissions.");

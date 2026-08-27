@@ -241,3 +241,29 @@ def test_end_of_options_preserves_flag_shaped_message_text():
     ) as send, mock.patch.object(module.gateway_memory, "remember_send"):
         module.run("send", ["--", "--literal"])
     assert send.call_args.args[:2] == ("", "--literal")
+
+
+def test_ntfy_materialized_server_is_shared_by_send_and_status():
+    module = _load("ntfy")
+    with mock.patch.object(
+        module, "_send", return_value={"ok": True}
+    ) as send, mock.patch.object(module.gateway_memory, "remember_send"):
+        module.run("send", ["hello", "--server=https://notify.example:8443"])
+    assert send.call_args.kwargs["server"] == "https://notify.example:8443"
+
+    status = module.run("status", ["--server=https://notify.example:8443"])
+    assert status["server"] == "https://notify.example:8443"
+
+
+def test_ntfy_fallback_host_never_receives_stored_token():
+    module = _load("ntfy")
+    with mock.patch.object(
+        module, "_load_credential", return_value=("private-token", None)
+    ), mock.patch.object(
+        module.safe_egress,
+        "safe_urlopen",
+        return_value=(200, {}, b"{}"),
+    ) as request:
+        result = module._send("alerts", "hello", server="https://ntfy.sh")
+    assert result["ok"]
+    assert "Authorization" not in request.call_args.kwargs["headers"]

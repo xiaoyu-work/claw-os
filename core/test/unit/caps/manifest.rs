@@ -523,10 +523,13 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
             )]),
         )
         .unwrap();
-    assert_eq!(fetch[0][0].scope, Scope::host("api.example.test"));
+    assert_eq!(fetch[0][0].scope, Scope::host("api.example.test:443"));
     for (url, expected) in [
         ("https://api.example.test:8443/v1", "api.example.test:8443"),
         ("http://[2001:db8::1]:8080/", "[2001:db8::1]:8080"),
+        ("http://[2001:db8::2]/", "[2001:db8::2]:80"),
+        ("ftp://files.example.test:2121/", "files.example.test:2121"),
+        ("ftp://files.example.test:21/", "files.example.test:21"),
     ] {
         let fetch = manifest
             .resolve_needs(
@@ -536,6 +539,14 @@ fn scope_transforms_derive_exact_parent_and_url_host_resources() {
             .unwrap();
         assert_eq!(fetch[0][0].scope, Scope::host(expected));
     }
+    let unsupported = manifest.resolve_needs(
+        "fetch",
+        &BTreeMap::from([(
+            "url".to_string(),
+            serde_json::json!("ftp://files.example.test/archive"),
+        )]),
+    );
+    assert!(unsupported.is_err());
 }
 
 #[test]
@@ -570,6 +581,10 @@ fn positional_default_gaps_and_alias_conflicts_are_rejected() {
         ]"#,
         r#"[
           {"name":"text","kind":"text","repeatable":true},
+          {"name":"target","kind":"name","binding":"flag","positional_alias":true}
+        ]"#,
+        r#"[
+          {"name":"text","kind":"text","required":false},
           {"name":"target","kind":"name","binding":"flag","positional_alias":true}
         ]"#,
     ] {
@@ -1090,6 +1105,14 @@ fn session_effective_call_matches_one_shot_argument_semantics() {
     assert!(manifest
         .resolve_session_tool_call("files.read", &invalid, &paths)
         .is_err());
+    let undeclared = BTreeMap::from([
+        ("path".to_string(), serde_json::json!(["a.txt"])),
+        ("protocol_metadata".to_string(), serde_json::json!("not-an-argument")),
+    ]);
+    let error = manifest
+        .resolve_session_tool_call("files.read", &undeclared, &paths)
+        .unwrap_err();
+    assert!(error.to_string().contains("unknown argument `protocol_metadata`"));
 }
 
 #[test]

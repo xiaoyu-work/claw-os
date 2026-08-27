@@ -234,12 +234,13 @@ pub fn absolute_arg_path(value: &str, context: &PathContext) -> Result<String, S
 /// schema. Run this before any authorization decision so a missing or
 /// wrongly-typed value can never reach scope derivation.
 ///
-/// Undeclared entries are ignored rather than rejected: scope
-/// derivation only ever reads names the manifest declares, so an extra
-/// key cannot influence the issued capabilities, and MCP callers
-/// legitimately carry protocol metadata alongside the declared
-/// arguments.
 pub fn validate_bound_args(decls: &[Arg], values: &BTreeMap<String, Value>) -> Result<(), String> {
+    if let Some(name) = values
+        .keys()
+        .find(|name| !decls.iter().any(|decl| decl.name == name.as_str()))
+    {
+        return Err(format!("unknown argument `{name}`"));
+    }
     for decl in decls {
         match values.get(&decl.name) {
             Some(Value::Array(values)) if decl.required && values.is_empty() => {

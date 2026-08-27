@@ -198,6 +198,11 @@ class Optionalpositionalgap(TypedDict, total=False):
     """
     pass
 
+class Optionalpositional(TypedDict, total=False):
+    """optionalPositional.
+    """
+    pass
+
 class Defaultedpositional(TypedDict, total=False):
     """defaultedPositional.
     """

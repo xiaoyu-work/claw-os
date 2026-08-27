@@ -862,12 +862,14 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 )
             )
             if arg.get("trusted_resolver") and (
-                app_id != resolver_app
+                resolver_app != app_id
                 or (arg.get("name"), arg.get("kind")) != expected_resolver_shape
                 or _binding(arg) != "flag"
                 or arg.get("required", False)
+                or "default" in arg
+                or "default_from" in arg
             ):
-                drift.append(f"{path}:{surface}.{arg.get('name')} trusted resolver")
+                drift.append(f"{path}:{surface}.{arg.get('name')} invalid trusted resolver")
             if arg.get("repeatable") and (
                 arg.get("kind") == "bool"
                 or "default_from" in arg
@@ -907,6 +909,11 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 )
                 if not valid:
                     drift.append(f"{path}:{surface}.{arg.get('name')} default type")
+        if any(arg.get("positional_alias") for arg in args) and any(
+            _binding(arg) == "positional" and not arg.get("required", False)
+            for arg in args
+        ):
+            drift.append(f"{path}:{surface} positional alias with optional positional")
 
     condition_kinds = set(defs["needCondition"]["properties"]["kind"]["enum"])
 
@@ -946,13 +953,13 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                     drift.append(f"{path}:{surface} invalid condition payload")
                 if condition_kind == "arg-present" and "value" in condition:
                     drift.append(f"{path}:{surface} arg-present has value")
-                if condition_kind == "arg-equals" and "value" not in condition:
-                    drift.append(f"{path}:{surface} arg-equals missing value")
+                if condition_kind in {"arg-equals", "arg-not-equals"} and "value" not in condition:
+                    drift.append(f"{path}:{surface} comparison condition missing value")
                 if (
-                    condition_kind == "arg-equals"
+                    condition_kind in {"arg-equals", "arg-not-equals"}
                     and by_name.get(condition_arg, {}).get("repeatable")
                 ):
-                    drift.append(f"{path}:{surface} arg-equals targets repeatable arg")
+                    drift.append(f"{path}:{surface} comparison targets repeatable arg")
             bound_arg = scope.get("arg")
             if bound_arg in by_name:
                 declaration = by_name[bound_arg]
@@ -1011,6 +1018,40 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 tool.get("args", []),
             )
     assert not drift, "\n".join(drift)
+
+
+def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() -> None:
+    from jsonschema import Draft202012Validator
+
+    schema = json.loads(
+        (APPS_ROOT.parent / "claw-os-sdk/wire/v1/manifest.schema.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    validator = Draft202012Validator(schema)
+    for path in APPS_ROOT.rglob("app.json"):
+        validator.validate(json.loads(path.read_text(encoding="utf-8")))
+
+    ambiguous = {
+        "id": "ambiguous",
+        "version": "1",
+        "name": {"en": "Ambiguous"},
+        "operations": {
+            "send": {
+                "label": {"en": "Send"},
+                "args": [
+                    {"name": "text", "kind": "text", "required": False},
+                    {
+                        "name": "target",
+                        "kind": "name",
+                        "binding": "flag",
+                        "positional_alias": True,
+                    },
+                ],
+            }
+        },
+    }
+    assert list(validator.iter_errors(ambiguous))
 
 
 def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:

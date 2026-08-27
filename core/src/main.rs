@@ -22,10 +22,18 @@ const DEFAULT_APP_STDIN_MAX_BYTES: usize = 16 * 1024 * 1024;
 fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
     let mut kept = Vec::with_capacity(argv.len());
     let mut explicit: Option<OutputFormat> = None;
+    let mut options = true;
     for a in argv {
-        match a.as_str() {
-            "--plain" | "--compact" | "--json" => explicit = Some(OutputFormat::Compact),
-            "--pretty" => explicit = Some(OutputFormat::Pretty),
+        if options && a == "--" {
+            options = false;
+            kept.push(a);
+            continue;
+        }
+        match (options, a.as_str()) {
+            (true, "--plain" | "--compact" | "--json") => {
+                explicit = Some(OutputFormat::Compact)
+            }
+            (true, "--pretty") => explicit = Some(OutputFormat::Pretty),
             _ => kept.push(a),
         }
     }
@@ -39,8 +47,8 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
     (kept, fmt)
 }
 
-fn extract_stdin_request(argv: Vec<String>) -> (Vec<String>, bool) {
-    if argv.first().map(String::as_str) != Some("app") || argv.len() < 4 {
+fn extract_stdin_request(argv: Vec<String>, operation_accepts_stdin: bool) -> (Vec<String>, bool) {
+    if !operation_accepts_stdin {
         return (argv, false);
     }
     let mut kept = Vec::with_capacity(argv.len());
@@ -103,8 +111,10 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
 
 fn main() {
     let raw_args: Vec<String> = env::args().skip(1).collect();
-    let (raw_args, stdin_requested) = extract_stdin_request(raw_args);
-    let (args, fmt) = extract_format(raw_args);
+    let (raw_args, fmt) = extract_format(raw_args);
+    let operation_accepts_stdin = router::app_operation_accepts_stdin(&raw_args);
+    let (args, stdin_requested) =
+        extract_stdin_request(raw_args, operation_accepts_stdin);
 
     // Bootstrap a CLI session if the caller didn't already gate us
     // through one (typical for `cos agent setup`, `cos agent chat`,

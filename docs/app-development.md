@@ -143,7 +143,8 @@ Use `aliases` for explicit alternate option spellings, such as
 conflicting forms are rejected. `positional_alias: true` is reserved for an
 optional flag that historically occupied a surplus leading positional slot;
 the one-positional canonical form remains unambiguous and canonical argv emits
-the flag form.
+the flag form. Positional aliases cannot coexist with optional or repeatable
+positional arguments.
 
 An optional argument may declare a non-null literal `default` matching its
 `kind`. Omit `default` when there is no default; explicit JSON `null` is
@@ -276,7 +277,10 @@ Declare it in `operations.<op>.needs[]`:
   reads the named op argument and constructs the scope from it. Without a
   transform it works for `path` / `host` / `name`. The optional safe
   `transform` is `parent` for a path's containing directory or `url-host`
-  for the exact host parsed from a text URL.
+  for the exact host and effective port parsed from a text URL. `url-host`
+  resolves HTTP and HTTPS defaults to ports 80 and 443, preserves explicit
+  ports and bracketed IPv6, and rejects schemes without a known or explicit
+  port.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a
@@ -299,7 +303,9 @@ Needs that apply only in one mode declare `when` explicitly:
 condition omits only that declared need. Once active, missing arguments and
 unmapped `from-arg-map` values remain errors. Binding a capability
 unconditionally to an optional argument without a default or trusted resolver
-is rejected at manifest load time.
+is rejected at manifest load time. `arg-not-equals` provides the inverse
+comparison when a safe fallback must omit authority, such as preventing a
+private credential from being used with a public default endpoint.
 
 Check it at runtime by importing the internal runtime:
 

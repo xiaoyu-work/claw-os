@@ -196,15 +196,13 @@ fn missing_required_argument_is_rejected() {
 }
 
 #[test]
-fn mistyped_declared_arguments_are_rejected_and_extras_ignored() {
+fn mistyped_and_undeclared_arguments_are_rejected() {
     let decls = decls();
     let mut values = BTreeMap::new();
     values.insert("path".to_string(), Value::String("/home/u".to_string()));
     values.insert("smuggled".to_string(), Value::String("x".to_string()));
-    assert!(
-        validate_bound_args(&decls, &values).is_ok(),
-        "an undeclared key cannot bind a scope, so it is not an authorization concern"
-    );
+    let error = validate_bound_args(&decls, &values).expect_err("unknown argument must fail");
+    assert!(error.contains("smuggled"), "unexpected error: {error}");
 
     let mut values = BTreeMap::new();
     values.insert("path".to_string(), Value::Bool(true));

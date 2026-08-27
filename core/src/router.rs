@@ -33,6 +33,37 @@ fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
+/// Return whether argv resolves to an installed manifest operation that opts
+/// into caller stdin. Management, help, schema, and desktop routes never read
+/// stdin eagerly.
+pub fn app_operation_accepts_stdin(args: &[String]) -> bool {
+    app_operation_accepts_stdin_in(args, &apps_dir())
+}
+
+fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
+    if args.first().map(String::as_str) != Some("app") || args.len() < 3 {
+        return false;
+    }
+    let app_id = &args[1];
+    if matches!(
+        app_id.as_str(),
+        "lint" | "tool" | "install" | "create" | "consent"
+    ) {
+        return false;
+    }
+    if app_commands::schema_requested(&args[3..]) {
+        return false;
+    }
+    apps::find(root, app_id)
+        .and_then(|app| {
+            app.manifest
+                .operations
+                .get(&args[2])
+                .map(|operation| operation.stdin)
+        })
+        .unwrap_or(false)
+}
+
 fn data_dir() -> String {
     crate::paths::data_dir().to_string_lossy().into_owned()
 }

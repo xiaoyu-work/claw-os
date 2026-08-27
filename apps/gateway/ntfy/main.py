@@ -16,9 +16,9 @@ Body is sent as ``text/plain; charset=utf-8`` so it works against
 both ntfy.sh and self-hosted ntfy servers without going through
 the JSON-publish endpoint.
 
-Server defaults to ``https://ntfy.sh`` (override via
-``--server`` arg, ``COS_NTFY_SERVER`` env, or ``ntfy_server``
-credential). Topic defaults to ``ntfy_default_topic`` /
+The kernel resolves the server from ``--server``, ``COS_NTFY_SERVER``,
+or the ``ntfy_server`` credential before launch, falling back to
+``https://ntfy.sh``. Topic defaults to ``ntfy_default_topic`` /
 ``COS_NTFY_DEFAULT_TOPIC`` when only the body is supplied.
 
 Stdlib only.
@@ -74,19 +74,23 @@ def _resolve_server(server: str | None) -> str:
     if server and server.strip():
         s = server.strip().rstrip("/")
     else:
-        cred = _env_or_credential("COS_NTFY_SERVER", "ntfy_server")
-        s = (cred or DEFAULT_SERVER).rstrip("/")
+        s = DEFAULT_SERVER
     return s
 
 
 def _resolve_auth_header(
-    bearer: str | None, basic: str | None
+    bearer: str | None,
+    basic: str | None,
+    *,
+    allow_stored_token: bool = True,
 ) -> str | None:
     if bearer and bearer.strip():
         return f"Bearer {bearer.strip()}"
     if basic and basic.strip():
         token = base64.b64encode(basic.encode("utf-8")).decode("ascii")
         return f"Basic {token}"
+    if not allow_stored_token:
+        return None
     cred = _env_or_credential("COS_NTFY_TOKEN", "ntfy_token")
     if cred:
         return f"Bearer {cred}"
@@ -145,7 +149,11 @@ def _send(
         headers["Click"] = str(click).strip()
     if markdown:
         headers["Markdown"] = "yes"
-    auth = _resolve_auth_header(bearer, basic)
+    auth = _resolve_auth_header(
+        bearer,
+        basic,
+        allow_stored_token=resolved_server != DEFAULT_SERVER,
+    )
     if auth:
         headers["Authorization"] = auth
 
@@ -216,8 +224,8 @@ def _send(
         raise
 
 
-def _status() -> dict:
-    server = _env_or_credential("COS_NTFY_SERVER", "ntfy_server") or DEFAULT_SERVER
+def _status(server: str | None = None) -> dict:
+    server = _resolve_server(server)
     topic = _env_or_credential("COS_NTFY_DEFAULT_TOPIC", "ntfy_default_topic")
     has_token = bool(_env_or_credential("COS_NTFY_TOKEN", "ntfy_token"))
     return {
@@ -315,7 +323,12 @@ def run(command: str, args):
         )
         return result
     if command == "status":
-        return _status()
+        if isinstance(args, dict):
+            return _status(args.get("server"))
+        parsed, error = gateway_args.parse(args, value_flags=("server",))
+        if error:
+            return {"ok": False, "error": error}
+        return _status(parsed["server"])
     return {"ok": False, "error": f"unknown command: {command}"}
 
 

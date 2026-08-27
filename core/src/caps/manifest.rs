@@ -789,6 +789,7 @@ pub struct Need {
 pub enum NeedCondition {
     ArgPresent { arg: String },
     ArgEquals { arg: String, value: serde_json::Value },
+    ArgNotEquals { arg: String, value: serde_json::Value },
 }
 
 /// How an operation's scope is determined at invocation time.
@@ -839,10 +840,14 @@ impl ScopeTransform {
 }
 
 #[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
+#[serde(tag = "kind")]
 enum NeedConditionWire {
-    ArgPresent { arg: String },
-    ArgEquals { arg: String, value: serde_json::Value },
+    #[serde(rename = "arg-present")]
+    Present { arg: String },
+    #[serde(rename = "arg-equals")]
+    Equals { arg: String, value: serde_json::Value },
+    #[serde(rename = "arg-not-equals")]
+    NotEquals { arg: String, value: serde_json::Value },
 }
 
 #[derive(Deserialize)]
@@ -903,13 +908,18 @@ impl<'de> Deserialize<'de> for NeedCondition {
         let value = serde_json::Value::deserialize(deserializer)?;
         reject_unknown_tagged_fields::<D::Error>(
             &value,
-            &[("arg-present", &["arg"]), ("arg-equals", &["arg", "value"])],
+            &[
+                ("arg-present", &["arg"]),
+                ("arg-equals", &["arg", "value"]),
+                ("arg-not-equals", &["arg", "value"]),
+            ],
         )?;
         let wire: NeedConditionWire =
             serde_json::from_value(value).map_err(serde::de::Error::custom)?;
         Ok(match wire {
-            NeedConditionWire::ArgPresent { arg } => Self::ArgPresent { arg },
-            NeedConditionWire::ArgEquals { arg, value } => Self::ArgEquals { arg, value },
+            NeedConditionWire::Present { arg } => Self::ArgPresent { arg },
+            NeedConditionWire::Equals { arg, value } => Self::ArgEquals { arg, value },
+            NeedConditionWire::NotEquals { arg, value } => Self::ArgNotEquals { arg, value },
         })
     }
 }
@@ -1086,6 +1096,18 @@ fn validate_arg_defaults(args: &[Arg]) -> Result<(), (String, String)> {
             return Err((
                 defaulted.name.clone(),
                 "defaulted and omitted optional positional arguments cannot be mixed"
+                    .to_string(),
+            ));
+        }
+    }
+    let has_optional_positional = args.iter().any(|arg| {
+        arg.effective_binding() == ArgBinding::Positional && !arg.required
+    });
+    if has_optional_positional {
+        if let Some(alias) = args.iter().find(|arg| arg.positional_alias) {
+            return Err((
+                alias.name.clone(),
+                "positional_alias cannot be combined with optional positional arguments"
                     .to_string(),
             ));
         }
@@ -2168,7 +2190,8 @@ fn validate_need_condition(
     };
     let (arg_name, expected) = match condition {
         NeedCondition::ArgPresent { arg } => (arg, None),
-        NeedCondition::ArgEquals { arg, value } => (arg, Some(value)),
+        NeedCondition::ArgEquals { arg, value }
+        | NeedCondition::ArgNotEquals { arg, value } => (arg, Some(value)),
     };
     let declaration = args
         .get(arg_name.as_str())
@@ -2209,7 +2232,11 @@ fn validate_optional_need_binding(
         || declaration.kind == ArgKind::Bool;
     let explicitly_guarded = matches!(
         &need.when,
-        Some(NeedCondition::ArgPresent { arg } | NeedCondition::ArgEquals { arg, .. })
+        Some(
+            NeedCondition::ArgPresent { arg }
+                | NeedCondition::ArgEquals { arg, .. }
+                | NeedCondition::ArgNotEquals { arg, .. }
+        )
             if arg == bound_arg
     );
     if guaranteed || explicitly_guarded {
@@ -2231,6 +2258,9 @@ fn need_applies(
             .get(arg)
             .is_some_and(|value| value.as_array().is_none_or(|values| !values.is_empty())),
         Some(NeedCondition::ArgEquals { arg, value }) => args.get(arg) == Some(value),
+        Some(NeedCondition::ArgNotEquals { arg, value }) => {
+            args.get(arg).is_some_and(|actual| actual != value)
+        }
     }
 }
 
@@ -2289,6 +2319,7 @@ fn scopes_from_arg_value(
                 normalized = format!("https://{raw}");
                 &normalized
             };
+            let explicit_port = explicit_url_port(raw);
             let parsed = url::Url::parse(raw).ok()?;
             let host = parsed.host()?;
             let rendered = match host {
@@ -2296,11 +2327,15 @@ fn scopes_from_arg_value(
                 url::Host::Ipv4(host) => host.to_string(),
                 url::Host::Ipv6(host) => format!("[{host}]"),
             };
-            let scope = match parsed.port() {
-                Some(port) => format!("{rendered}:{port}"),
-                None => rendered,
+            let port = match explicit_port.or_else(|| parsed.port()) {
+                Some(port) => port,
+                None => match parsed.scheme() {
+                    "http" => 80,
+                    "https" => 443,
+                    _ => return None,
+                },
             };
-            return Some(Scope::host(scope));
+            return Some(Scope::host(format!("{rendered}:{port}")));
         }
         let scope = scope_from_arg_value(arg.kind, value)?;
         match (transform, scope) {
@@ -2319,6 +2354,22 @@ fn scopes_from_arg_value(
     } else {
         scope(value).map(|scope| vec![scope])
     }
+}
+
+fn explicit_url_port(raw: &str) -> Option<u16> {
+    let authority = raw
+        .split_once("://")?
+        .1
+        .split(['/', '?', '#'])
+        .next()?
+        .rsplit('@')
+        .next()?;
+    let port = if let Some(bracketed) = authority.strip_prefix('[') {
+        bracketed.split_once(']')?.1.strip_prefix(':')?
+    } else {
+        authority.rsplit_once(':')?.1
+    };
+    port.parse().ok()
 }
 
 fn mapped_scopes(
