@@ -50,7 +50,10 @@
         "units": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
         }
       }
     },
@@ -64,12 +67,18 @@
         "units_used": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
         },
         "units_cap": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 9007199254740991
+          "maximum": 18446744073709551615,
+          "x-rust-type": "u64",
+          "x-go-type": "uint64",
+          "x-ts-type": "number | bigint"
         }
       }
     },

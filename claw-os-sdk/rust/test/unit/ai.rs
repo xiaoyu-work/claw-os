@@ -59,7 +59,7 @@ fn response_accepts_mathematical_integers_and_unrestricted_tool_input() {
         serde_json::from_str(
             r#"{
                 "text":"hello","model":"m","provider":"p","verb":"ai.chat",
-                "usage":{"input_tokens":1.0,"output_tokens":1e0,"units":2.0},
+                "usage":{"input_tokens":1.0,"output_tokens":1e0,"units":18446744073709551615},
                 "budget":{"period":"2026-08","units_used":2e0,"units_cap":100.0},
                 "review":{"safety":"strict","prompt_redacted":false},
                 "tool_calls":[{"id":"c1","name":"echo","input":["a",1]}]
@@ -70,6 +70,7 @@ fn response_accepts_mathematical_integers_and_unrestricted_tool_input() {
     .unwrap();
     assert_eq!(response.usage.input_tokens, 1);
     assert_eq!(response.usage.output_tokens, 1);
+    assert_eq!(response.usage.units, u64::MAX);
     assert_eq!(response.tool_calls[0].input, serde_json::json!(["a", 1]));
 }
 

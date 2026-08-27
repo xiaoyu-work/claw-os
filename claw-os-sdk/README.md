@@ -154,7 +154,9 @@ version and refuse to run against incompatible kernels.
 
 Generated decoders follow JSON Schema's mathematical-integer semantics:
 finite `1`, `1.0`, and `1e0` values are equivalent integers. Bounds are
-checked after type validation, and all SDK adapters preserve accepted values.
+checked after type validation using lossless decimal-rational lexemes, and all
+SDK adapters preserve accepted values. Node exposes u64-domain values as
+`bigint` only when they cannot be represented safely as `number`.
 
 ## Releases
 

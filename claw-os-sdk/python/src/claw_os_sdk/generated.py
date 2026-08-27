@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import math
+from decimal import Decimal
 
 from typing import Any, Dict, List, Mapping, TypedDict
 
@@ -361,6 +362,36 @@ WIRE_REQUIRED = "WIRE_REQUIRED"
 WIRE_TYPE = "WIRE_TYPE"
 WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD"
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON numeric constant: {value}")
+
+def decode_wire_json(text: str) -> Any:
+    """Decode JSON while preserving every finite number exactly."""
+    return json.loads(
+        text,
+        parse_float=Decimal,
+        parse_int=int,
+        parse_constant=_reject_json_constant,
+    )
+
+def _wire_decimal(value: Any) -> Decimal | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return Decimal(value)
+    if isinstance(value, Decimal):
+        return value if value.is_finite() else None
+    if isinstance(value, float) and math.isfinite(value):
+        return Decimal(str(value))
+    return None
+
+def wire_integer_to_int(value: Any) -> int:
+    """Convert a previously validated mathematical integer exactly."""
+    number = _wire_decimal(value)
+    if number is None or number != number.to_integral_value():
+        raise ValueError("wire value is not an exact integer")
+    return int(number)
+
 def _wire_error(code: str, schema: str, path: str, reason: str) -> WireDecodeError:
     return WireDecodeError(code, schema, path, reason)
 
@@ -390,29 +421,37 @@ def _validate_wire_schema(
         if matches != 1:
             raise _wire_error(WIRE_ONE_OF, schema_name, path, "expected exactly one allowed shape")
         return
+    number = _wire_decimal(value)
     expected = rule.get("type")
     valid = {
         "object": isinstance(value, Mapping),
         "array": isinstance(value, list),
         "string": isinstance(value, str),
-        "integer": (isinstance(value, int) and not isinstance(value, bool)) or (isinstance(value, float) and math.isfinite(value) and value.is_integer()),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value),
+        "integer": number is not None and number == number.to_integral_value(),
+        "number": number is not None,
         "boolean": isinstance(value, bool),
         "null": value is None,
     }
     if isinstance(expected, str) and not valid.get(expected, False):
         raise _wire_error(WIRE_TYPE, schema_name, path, f"expected {expected}")
-    if "const" in rule and value != rule["const"]:
-        raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")
+    if "const" in rule:
+        expected_const = rule["const"]
+        expected_number = _wire_decimal(expected_const)
+        if (number is not None and expected_number is not None and number != expected_number) or (
+            (number is None or expected_number is None) and value != expected_const
+        ):
+            raise _wire_error(WIRE_CONST, schema_name, path, "value does not match const")
     allowed = rule.get("enum")
     if isinstance(allowed, list) and value not in allowed:
         raise _wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum")
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
+    if number is not None:
         minimum = rule.get("minimum")
-        if minimum is not None and value < minimum:
+        minimum_number = _wire_decimal(minimum)
+        if minimum_number is not None and number < minimum_number:
             raise _wire_error(WIRE_MINIMUM, schema_name, path, f"must be >= {minimum}")
         maximum = rule.get("maximum")
-        if maximum is not None and value > maximum:
+        maximum_number = _wire_decimal(maximum)
+        if maximum_number is not None and number > maximum_number:
             raise _wire_error(WIRE_MAXIMUM, schema_name, path, f"must be <= {maximum}")
     if isinstance(value, Mapping):
         required = rule.get("required", [])
@@ -440,25 +479,25 @@ def _validate_wire_schema(
         for index, item in enumerate(value):
             _validate_wire_schema(item_rule, root, item, schema_name, f"{path}[{index}]")
 
-_WIRE_SCHEMA_AI: Dict[str, Any] = json.loads(r'''{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}''')
+_WIRE_SCHEMA_AI: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}''')
 
 def validate_ai(value: Any) -> None:
     """Validate a value against wire/v1/ai.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$")
 
-_WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = json.loads(r'''{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}''')
+_WIRE_SCHEMA_BUDGET_SHOW: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}''')
 
 def validate_budget_show(value: Any) -> None:
     """Validate a value against wire/v1/budget_show.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$")
 
-_WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = json.loads(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
+_WIRE_SCHEMA_TOOL_CATALOG: Dict[str, Any] = decode_wire_json(r'''{"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"}''')
 
 def validate_tool_catalog(value: Any) -> None:
     """Validate a value against wire/v1/tool_catalog.schema.json."""
     _validate_wire_schema(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value, "ToolCatalog", "$")
 
-_WIRE_SCHEMA_TOOL: Dict[str, Any] = json.loads(r'''{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}''')
+_WIRE_SCHEMA_TOOL: Dict[str, Any] = decode_wire_json(r'''{"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"}''')
 
 def validate_tool(value: Any) -> None:
     """Validate a value against wire/v1/tool.schema.json."""

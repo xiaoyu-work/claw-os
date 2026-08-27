@@ -6,6 +6,8 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde_json;
+use num_bigint::BigInt;
+use num_traits::ToPrimitive;
 
 /// Expected wire-version value emitted by the kernel. The
 /// generated [`Envelope`] type's runtime check accepts only
@@ -429,6 +431,61 @@ fn wire_error(
     WireDecodeError { code, schema, path: path.to_string(), reason: reason.into() }
 }
 
+#[derive(Debug, Clone)]
+enum ExactInteger {
+    Value(BigInt),
+    PositiveOverflow,
+    NegativeOverflow,
+}
+
+fn exact_integer(value: &serde_json::Value) -> Option<ExactInteger> {
+    let lexeme = value.as_number()?.to_string();
+    let (mantissa, exponent_text) = lexeme
+        .split_once(['e', 'E'])
+        .map_or((lexeme.as_str(), "0"), |parts| parts);
+    let exponent = exponent_text.parse::<i64>().unwrap_or_else(|_| {
+        if exponent_text.starts_with('-') { i64::MIN } else { i64::MAX }
+    });
+    let negative = mantissa.starts_with('-');
+    let unsigned = mantissa.trim_start_matches('-');
+    let fraction_len = unsigned
+        .split_once('.')
+        .map_or(0, |(_, fraction)| fraction.len());
+    let digits = unsigned.replace('.', "");
+    let digits = digits.trim_start_matches('0');
+    if digits.is_empty() {
+        return Some(ExactInteger::Value(BigInt::from(0)));
+    }
+    let decimal_places = i128::from(fraction_len as i64) - i128::from(exponent);
+    let integer_digits = if decimal_places <= 0 {
+        let zeros = usize::try_from(-decimal_places).ok()?;
+        if zeros > 1024 {
+            return Some(if negative { ExactInteger::NegativeOverflow } else { ExactInteger::PositiveOverflow });
+        }
+        format!("{digits}{}", "0".repeat(zeros))
+    } else {
+        let places = usize::try_from(decimal_places).ok()?;
+        if places > digits.len() || !digits[digits.len() - places..].chars().all(|ch| ch == '0') {
+            return None;
+        }
+        digits[..digits.len() - places].to_string()
+    };
+    let integer_digits = if integer_digits.is_empty() { "0" } else { &integer_digits };
+    let signed = if negative { format!("-{integer_digits}") } else { integer_digits.to_string() };
+    BigInt::parse_bytes(signed.as_bytes(), 10).map(ExactInteger::Value)
+}
+
+fn compare_exact_integers(left: &ExactInteger, right: &ExactInteger) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    match (left, right) {
+        (ExactInteger::NegativeOverflow, ExactInteger::NegativeOverflow)
+        | (ExactInteger::PositiveOverflow, ExactInteger::PositiveOverflow) => Ordering::Equal,
+        (ExactInteger::NegativeOverflow, _) | (_, ExactInteger::PositiveOverflow) => Ordering::Less,
+        (ExactInteger::PositiveOverflow, _) | (_, ExactInteger::NegativeOverflow) => Ordering::Greater,
+        (ExactInteger::Value(left), ExactInteger::Value(right)) => left.cmp(right),
+    }
+}
+
 fn validate_wire_schema(
     rule: &serde_json::Value,
     root: &serde_json::Value,
@@ -457,7 +514,7 @@ fn validate_wire_schema(
             "object" => value.is_object(),
             "array" => value.is_array(),
             "string" => value.is_string(),
-            "integer" => value.as_i64().is_some() || value.as_u64().is_some() || value.as_f64().is_some_and(|number| number.is_finite() && number.fract() == 0.0),
+            "integer" => exact_integer(value).is_some(),
             "number" => value.is_number(),
             "boolean" => value.is_boolean(),
             "null" => value.is_null(),
@@ -468,7 +525,11 @@ fn validate_wire_schema(
         }
     }
     if let Some(expected) = rule.get("const") {
-        if value != expected {
+        let equal = match (exact_integer(value), exact_integer(expected)) {
+            (Some(left), Some(right)) => compare_exact_integers(&left, &right).is_eq(),
+            _ => value == expected,
+        };
+        if !equal {
             return Err(wire_error(WIRE_CONST, schema_name, path, "value does not match const"));
         }
     }
@@ -477,15 +538,15 @@ fn validate_wire_schema(
             return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));
         }
     }
-    if let Some(number) = value.as_f64() {
-        if let Some(minimum) = rule.get("minimum").and_then(serde_json::Value::as_f64) {
-            if number < minimum {
-                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {minimum}")));
+    if let Some(number) = exact_integer(value) {
+        if let Some(minimum) = rule.get("minimum").and_then(exact_integer) {
+            if compare_exact_integers(&number, &minimum).is_lt() {
+                return Err(wire_error(WIRE_MINIMUM, schema_name, path, format!("must be >= {}", rule["minimum"])));
             }
         }
-        if let Some(maximum) = rule.get("maximum").and_then(serde_json::Value::as_f64) {
-            if number > maximum {
-                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {maximum}")));
+        if let Some(maximum) = rule.get("maximum").and_then(exact_integer) {
+            if compare_exact_integers(&number, &maximum).is_gt() {
+                return Err(wire_error(WIRE_MAXIMUM, schema_name, path, format!("must be <= {}", rule["maximum"])));
             }
         }
     }
@@ -554,15 +615,12 @@ fn normalize_wire_integers(
         }
         return;
     }
-    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer")
-        && value.as_i64().is_none()
-        && value.as_u64().is_none()
-    {
-        if let Some(number) = value.as_f64() {
-            if number >= 0.0 && number <= u64::MAX as f64 {
-                *value = serde_json::Value::Number(serde_json::Number::from(number as u64));
-            } else if number >= i64::MIN as f64 && number <= i64::MAX as f64 {
-                *value = serde_json::Value::Number(serde_json::Number::from(number as i64));
+    if rule.get("type").and_then(serde_json::Value::as_str) == Some("integer") {
+        if let Some(ExactInteger::Value(number)) = exact_integer(value) {
+            if let Some(number) = number.to_u64() {
+                *value = serde_json::Value::Number(serde_json::Number::from(number));
+            } else if let Some(number) = number.to_i64() {
+                *value = serde_json::Value::Number(serde_json::Number::from(number));
             }
         }
         return;
@@ -591,7 +649,7 @@ fn normalize_wire_integers(
     }
 }
 
-const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
+const _WIRE_SCHEMA_AI: &str = r###"{"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"}"###;
 pub fn validate_ai(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_AI)
         .expect("generated wire schema must be valid JSON");
@@ -604,7 +662,7 @@ pub fn normalize_ai_integers(value: &mut serde_json::Value) {
     normalize_wire_integers(&schema, &schema, value);
 }
 
-const _WIRE_SCHEMA_BUDGET_SHOW: &str = r###"{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}"###;
+const _WIRE_SCHEMA_BUDGET_SHOW: &str = r###"{"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":18446744073709551615,"minimum":0,"type":"integer","x-go-type":"uint64","x-rust-type":"u64","x-ts-type":"number | bigint"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"}"###;
 pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeError> {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
         .expect("generated wire schema must be valid JSON");

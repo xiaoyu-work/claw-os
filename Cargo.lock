@@ -585,6 +585,8 @@ name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "num-bigint",
+ "num-traits",
  "serde",
  "serde_json",
  "tempfile",

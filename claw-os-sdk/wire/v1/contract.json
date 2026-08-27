@@ -7,7 +7,7 @@
       "tool_catalog",
       "tool"
     ],
-    "integer_semantics": "finite mathematical integers; type validation precedes minimum/maximum checks",
+    "integer_semantics": "lossless JSON decimal-rational lexemes; finite mathematical integers have denominator 1; type validation precedes minimum/maximum checks",
     "error_codes": {
       "const": "WIRE_CONST",
       "enum": "WIRE_ENUM",

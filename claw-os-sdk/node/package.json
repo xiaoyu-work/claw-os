@@ -25,5 +25,8 @@
   "devDependencies": {
     "@types/node": "^18.19.0",
     "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "lossless-json": "^4.3.1"
   }
 }

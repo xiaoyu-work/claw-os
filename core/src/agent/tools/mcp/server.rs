@@ -108,6 +108,20 @@ impl McpServer {
                 t.send(encode_response(&response)).await?;
                 continue;
             }
+            if raw
+                .get("params")
+                .is_some_and(|params| !params.is_object() && !params.is_array())
+            {
+                let response = JsonRpcResponse::err(
+                    extract_id(&raw),
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "request params must be an object or array",
+                    ),
+                );
+                t.send(encode_response(&response)).await?;
+                continue;
+            }
             if raw.get("id").is_none() {
                 match serde_json::from_value::<JsonRpcNotification>(raw) {
                     Ok(_) => continue,
@@ -230,6 +244,11 @@ impl McpServer {
 
     async fn handle_tools_call(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
+        let arguments_present = req
+            .params
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|params| params.contains_key("arguments"));
         let params: CallToolParams = match req.params {
             Some(v) => match serde_json::from_value(v) {
                 Ok(p) => p,
@@ -267,7 +286,13 @@ impl McpServer {
                     JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
                 );
             }
-            None => json!({}),
+            None if !arguments_present => json!({}),
+            None => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
         };
         let result = tool.exec(arguments).await;
         let body = CallToolResult {
@@ -295,10 +320,7 @@ fn encode_response(response: &JsonRpcResponse) -> String {
 
 fn extract_id(raw: &Value) -> RequestId {
     match raw.get("id") {
-        Some(Value::Number(number)) => number
-            .as_i64()
-            .map(RequestId::Num)
-            .unwrap_or(RequestId::Null),
+        Some(Value::Number(number)) => RequestId::Num(number.clone()),
         Some(Value::String(value)) => RequestId::Str(value.clone()),
         _ => RequestId::Null,
     }

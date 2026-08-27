@@ -65,19 +65,29 @@ fn ai_validator_enforces_the_shared_contract() {
 
 #[test]
 fn integer_validation_uses_json_schema_mathematical_semantics() {
-    for units in ["1.0", "1e0", "9007199254740991"] {
+    for units in [
+        "1.0",
+        "1e0",
+        "1.5e1",
+        "9007199254740992",
+        "18446744073709551615",
+    ] {
         validate_ai(&ai_with_units(units)).unwrap();
     }
 
-    let fractional = validate_ai(&ai_with_units("1.5")).unwrap_err();
-    assert_eq!(fractional.code, WIRE_TYPE);
-    assert_eq!(fractional.path, "$.usage.units");
-
-    for units in ["9007199254740992", "18446744073709551616"] {
-        let oversized = validate_ai(&ai_with_units(units)).unwrap_err();
-        assert_eq!(oversized.code, WIRE_MAXIMUM);
-        assert_eq!(oversized.path, "$.usage.units");
+    for units in ["1.5", "15e-1", "1e-400", "9007199254740990.5"] {
+        let fractional = validate_ai(&ai_with_units(units)).unwrap_err();
+        assert_eq!(fractional.code, WIRE_TYPE);
+        assert_eq!(fractional.path, "$.usage.units");
     }
+
+    let oversized = validate_ai(&ai_with_units("18446744073709551616")).unwrap_err();
+    assert_eq!(oversized.code, WIRE_MAXIMUM);
+    assert_eq!(oversized.path, "$.usage.units");
+
+    let fractional_above_max =
+        validate_ai(&ai_with_units("18446744073709551615.5")).unwrap_err();
+    assert_eq!(fractional_above_max.code, WIRE_TYPE);
 }
 
 #[test]

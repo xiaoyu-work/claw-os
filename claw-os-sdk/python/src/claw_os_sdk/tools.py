@@ -59,7 +59,12 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
-from .generated import WireDecodeError, validate_tool, validate_tool_catalog
+from .generated import (
+    WireDecodeError,
+    decode_wire_json,
+    validate_tool,
+    validate_tool_catalog,
+)
 
 
 # Subprocess timeout — covers every shell-out to the `cos` binary so a
@@ -188,8 +193,8 @@ def call(
             f"cos ai tool {name} returned no output (exit {proc.returncode})"
         )
     try:
-        envelope = json.loads(text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ToolUnavailable(
             f"cos ai tool {name} returned non-JSON output: {_truncate(text)}"
         ) from exc
@@ -231,8 +236,8 @@ def catalog() -> List[CatalogEntry]:
             f"cos ai tools returned no output (exit {proc.returncode})"
         )
     try:
-        envelope = json.loads(text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise ToolUnavailable(
             f"cos ai tools returned non-JSON output: {_truncate(text)}"
         ) from exc

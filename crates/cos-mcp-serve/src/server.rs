@@ -177,6 +177,22 @@ impl Server {
                     continue;
                 }
             }
+            if raw
+                .get("params")
+                .is_some_and(|params| !params.is_object() && !params.is_array())
+            {
+                let id = extract_id(&raw);
+                let resp = JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(
+                        ERR_INVALID_REQUEST,
+                        "request params must be an object or array",
+                    ),
+                );
+                t.send(serde_json::to_string(&resp).unwrap_or_default())
+                    .await?;
+                continue;
+            }
 
             let has_id = raw.get("id").is_some();
             if !has_id {
@@ -312,6 +328,11 @@ impl Server {
 
     async fn handle_tools_call(&self, req: JsonRpcRequest) -> JsonRpcResponse {
         let id = req.id.clone();
+        let arguments_present = req
+            .params
+            .as_ref()
+            .and_then(Value::as_object)
+            .is_some_and(|params| params.contains_key("arguments"));
         let params: CallToolParams = match req.params {
             Some(v) => match serde_json::from_value(v) {
                 Ok(p) => p,
@@ -349,7 +370,13 @@ impl Server {
                     JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
                 );
             }
-            None => json!({}),
+            None if !arguments_present => json!({}),
+            None => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, "`arguments` must be an object"),
+                );
+            }
         };
         let result = tool.exec(arguments).await;
         let body = CallToolResult {
@@ -371,10 +398,7 @@ impl Server {
 /// for error responses to malformed requests.
 fn extract_id(raw: &Value) -> RequestId {
     match raw.get("id") {
-        Some(Value::Number(n)) => n
-            .as_i64()
-            .map(RequestId::Num)
-            .unwrap_or(RequestId::Null),
+        Some(Value::Number(number)) => RequestId::Num(number.clone()),
         Some(Value::String(s)) => RequestId::Str(s.clone()),
         _ => RequestId::Null,
     }

@@ -18,6 +18,7 @@
 import { BridgeError, Unavailable, asObject, cosCallJson, hasError } from "./transport";
 import {
   WireDecodeError,
+  materializeWireValue,
   validateTool,
   validateToolCatalog,
 } from "./generated";
@@ -102,8 +103,8 @@ export function call(
     name: env.tool,
     appId: env.app_id,
     status: env.status,
-    value: env.result,
-    raw: env,
+    value: materializeWireValue(env.result),
+    raw: materializeWireValue(env) as Record<string, unknown>,
   };
 }
 
@@ -141,7 +142,7 @@ export function catalog(): CatalogEntry[] {
       stability: row.stability,
       argsSchema: row.args_schema,
       returnsSchema: row.returns_schema,
-      raw: { ...row },
+      raw: materializeWireValue(row) as Record<string, unknown>,
     }));
 }
 

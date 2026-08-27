@@ -57,7 +57,13 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
-from .generated import WireDecodeError, validate_ai, validate_budget_show
+from .generated import (
+    WireDecodeError,
+    decode_wire_json,
+    validate_ai,
+    validate_budget_show,
+    wire_integer_to_int,
+)
 
 
 # Subprocess timeout — covers every shell-out to the `cos` binary. The
@@ -339,8 +345,8 @@ def budget(app_id: Optional[str] = None) -> Budget:
             f"cos agent budget show returned no output (exit {proc.returncode})"
         )
     try:
-        env = json.loads(text)
-    except json.JSONDecodeError as exc:
+        env = decode_wire_json(text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise AiUnavailable(
             f"cos agent budget show returned non-JSON output: {_truncate(text)}"
         ) from exc
@@ -356,7 +362,7 @@ def budget(app_id: Optional[str] = None) -> Budget:
         raise AiUnavailable(f"budget response decode failed: {exc}") from exc
     return Budget(
         period=env["period"],
-        units_used=int(env["units_used"]),
+        units_used=wire_integer_to_int(env["units_used"]),
         units_cap=0,
     )
 
@@ -423,8 +429,8 @@ def _dispatch(
         )
 
     try:
-        envelope = json.loads(payload_text)
-    except json.JSONDecodeError as exc:
+        envelope = decode_wire_json(payload_text)
+    except (json.JSONDecodeError, ValueError) as exc:
         raise AiUnavailable(
             f"cos ai chat returned non-JSON output: {_truncate(payload_text)}"
         ) from exc
@@ -465,14 +471,14 @@ def _parse_response(env: Any) -> AiResponse:
         provider=env["provider"],
         verb=env["verb"],
         usage=Usage(
-            input_tokens=int(usage["input_tokens"]),
-            output_tokens=int(usage["output_tokens"]),
-            units=int(usage["units"]),
+            input_tokens=wire_integer_to_int(usage["input_tokens"]),
+            output_tokens=wire_integer_to_int(usage["output_tokens"]),
+            units=wire_integer_to_int(usage["units"]),
         ),
         budget=Budget(
             period=budget_blk["period"],
-            units_used=int(budget_blk["units_used"]),
-            units_cap=int(budget_blk["units_cap"]),
+            units_used=wire_integer_to_int(budget_blk["units_used"]),
+            units_cap=wire_integer_to_int(budget_blk["units_cap"]),
         ),
         review=Review(
             safety=review["safety"],

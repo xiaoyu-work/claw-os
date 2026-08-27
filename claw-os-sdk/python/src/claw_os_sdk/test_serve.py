@@ -29,6 +29,20 @@ def _drive(app: serve.App, *frames: dict) -> list[dict]:
     return [json.loads(line) for line in out.splitlines() if line.strip()]
 
 
+def _drive_raw(app: serve.App, *lines: str) -> list[dict]:
+    stdin_text = "\n".join(lines) + "\n"
+    real_stdin, real_stdout = sys.stdin, sys.stdout
+    sys.stdin = io.StringIO(stdin_text)
+    sys.stdout = io.StringIO()
+    try:
+        app.serve()
+        sys.stdout.seek(0)
+        out = sys.stdout.read()
+    finally:
+        sys.stdin, sys.stdout = real_stdin, real_stdout
+    return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+
 class HandshakeTests(unittest.TestCase):
     def test_initialize_reports_protocol_and_server_info(self) -> None:
         app = serve.App(name="kv", version="9.9.9")
@@ -216,6 +230,19 @@ class ToolsCallTests(unittest.TestCase):
         self.assertIn("error", out[0])
         self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
 
+    def test_explicit_null_arguments_are_rejected(self) -> None:
+        app = self._kv_app()
+        out = _drive(
+            app,
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {"name": "kv.get", "arguments": None},
+            },
+        )
+        self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
+
     def test_dict_return_value_is_serialised_as_json_text(self) -> None:
         app = serve.App(name="x")
 
@@ -276,6 +303,84 @@ class TransportTests(unittest.TestCase):
         )
         self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_REQUEST)
         self.assertIsNone(out[0]["id"])
+
+    def test_nonfinite_json_constants_are_parse_errors(self) -> None:
+        for constant in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(constant=constant):
+                out = _drive_raw(
+                    serve.App(name="kv"),
+                    f'{{"jsonrpc":"2.0","id":{constant},"method":"ping"}}',
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_PARSE)
+                self.assertIsNone(out[0]["id"])
+
+    def test_primitive_params_are_invalid_before_notification_suppression(self) -> None:
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": True},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": "bad"},
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": 7,
+            },
+        )
+        self.assertEqual([frame["error"]["code"] for frame in out], [
+            serve.ERR_INVALID_REQUEST,
+            serve.ERR_INVALID_REQUEST,
+            serve.ERR_INVALID_REQUEST,
+        ])
+        self.assertEqual(out[2]["id"], None)
+
+    def test_numeric_ids_accept_fractional_and_large_values(self) -> None:
+        large = 9223372036854775808
+        out = _drive(
+            serve.App(name="kv"),
+            {"jsonrpc": "2.0", "id": 1.5, "method": "ping"},
+            {"jsonrpc": "2.0", "id": large, "method": "ping"},
+        )
+        self.assertEqual(out[0]["id"], 1.5)
+        self.assertEqual(out[1]["id"], large)
+
+    def test_initialize_rejects_malformed_known_capabilities(self) -> None:
+        base = {
+            "protocolVersion": serve.PROTOCOL_VERSION,
+            "clientInfo": {"name": "test", "version": "1"},
+        }
+        for capabilities in (
+            {"roots": False},
+            {"roots": {"listChanged": "yes"}},
+            {"experimental": False},
+            {"sampling": []},
+        ):
+            with self.subTest(capabilities=capabilities):
+                out = _drive(
+                    serve.App(name="kv"),
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {**base, "capabilities": capabilities},
+                    },
+                )
+                self.assertEqual(out[0]["error"]["code"], serve.ERR_INVALID_PARAMS)
+
+        out = _drive(
+            serve.App(name="kv"),
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {
+                    **base,
+                    "capabilities": {
+                        "unknown": {"future": True},
+                        "roots": {"listChanged": True, "future": 1},
+                    },
+                },
+            },
+        )
+        self.assertIn("result", out[0])
 
     def test_garbage_line_returns_parse_error_with_null_id(self) -> None:
         app = serve.App(name="kv")

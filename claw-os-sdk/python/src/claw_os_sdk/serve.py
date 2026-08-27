@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import sys
 import traceback
@@ -89,6 +90,17 @@ EXPECTED_WIRE_VERSION = 1
 # before json.loads even sees it. 16 MiB is comfortably above MCP's
 # realistic per-frame ceiling (largest tools/list payloads are < 1 MiB).
 MAX_LINE_BYTES = 16 * 1024 * 1024
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"invalid JSON numeric constant: {value}")
+
+
+def _parse_finite_float(value: str) -> float:
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"JSON number is outside the finite float range: {value}")
+    return number
 
 
 @dataclass
@@ -194,8 +206,12 @@ class App:
 
     def _handle_line(self, line: str) -> None:
         try:
-            msg = json.loads(line)
-        except json.JSONDecodeError as e:
+            msg = json.loads(
+                line,
+                parse_constant=_reject_json_constant,
+                parse_float=_parse_finite_float,
+            )
+        except (json.JSONDecodeError, ValueError) as e:
             # Parse errors get a null-id response per JSON-RPC.
             self._send_error(None, ERR_PARSE, f"parse error: {e}")
             return
@@ -214,9 +230,9 @@ class App:
             raw_id is None
             or isinstance(raw_id, str)
             or (
-                isinstance(raw_id, int)
+                isinstance(raw_id, (int, float))
                 and not isinstance(raw_id, bool)
-                and -(2**63) <= raw_id < 2**63
+                and (not isinstance(raw_id, float) or math.isfinite(raw_id))
             )
         )
         msg_id = raw_id if valid_id else None
@@ -239,6 +255,13 @@ class App:
                 msg_id,
                 ERR_INVALID_REQUEST,
                 "request method must be a string",
+            )
+            return
+        if "params" in msg and not isinstance(params, (dict, list)):
+            self._send_error(
+                msg_id,
+                ERR_INVALID_REQUEST,
+                "request params must be an object or array",
             )
             return
         if not has_id:
@@ -283,8 +306,27 @@ class App:
     def _on_initialize(self, params: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(params.get("protocolVersion"), str):
             raise _RpcError(ERR_INVALID_PARAMS, "missing `protocolVersion`")
-        if not isinstance(params.get("capabilities"), dict):
+        capabilities = params.get("capabilities")
+        if not isinstance(capabilities, dict):
             raise _RpcError(ERR_INVALID_PARAMS, "missing `capabilities`")
+        for name in ("experimental", "sampling"):
+            if name in capabilities and capabilities[name] is not None and not isinstance(
+                capabilities[name], dict
+            ):
+                raise _RpcError(ERR_INVALID_PARAMS, f"`capabilities.{name}` must be an object")
+        if "roots" in capabilities and capabilities["roots"] is not None:
+            roots = capabilities["roots"]
+            if not isinstance(roots, dict):
+                raise _RpcError(ERR_INVALID_PARAMS, "`capabilities.roots` must be an object")
+            if (
+                "listChanged" in roots
+                and roots["listChanged"] is not None
+                and not isinstance(roots["listChanged"], bool)
+            ):
+                raise _RpcError(
+                    ERR_INVALID_PARAMS,
+                    "`capabilities.roots.listChanged` must be a boolean",
+                )
         client_info = params.get("clientInfo")
         if (
             not isinstance(client_info, dict)
@@ -314,9 +356,10 @@ class App:
         name = params.get("name")
         if not isinstance(name, str):
             raise _RpcError(ERR_INVALID_PARAMS, "missing `name`")
-        arguments = params.get("arguments")
-        if arguments is None:
+        if "arguments" not in params:
             arguments = {}
+        else:
+            arguments = params["arguments"]
         if not isinstance(arguments, dict):
             raise _RpcError(ERR_INVALID_PARAMS, "`arguments` must be an object")
         tool = self._tools.get(name)

@@ -17,10 +17,12 @@ from claw_os_sdk.generated import (
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
     WireDecodeError,
+    decode_wire_json,
     validate_ai,
     validate_budget_show,
     validate_tool,
     validate_tool_catalog,
+    wire_integer_to_int,
 )
 
 
@@ -75,23 +77,43 @@ class WireValidationTests(unittest.TestCase):
 
     def test_integer_semantics_and_adapter_conversion(self) -> None:
         template = json.dumps(_valid_ai())
-        for literal in ("1.0", "1e0", "9007199254740991"):
-            payload = json.loads(template.replace('"units": 3', f'"units": {literal}'))
+        accepted = {
+            "1.0": 1,
+            "1e0": 1,
+            "1.5e1": 15,
+            "9007199254740992": 9007199254740992,
+            "18446744073709551615": 18446744073709551615,
+        }
+        for literal, expected in accepted.items():
+            payload = decode_wire_json(
+                template.replace('"units": 3', f'"units": {literal}')
+            )
             validate_ai(payload)
-            self.assertEqual(ai._parse_response(payload).usage.units, int(float(literal)))
+            self.assertEqual(wire_integer_to_int(payload["usage"]["units"]), expected)
+            self.assertEqual(ai._parse_response(payload).usage.units, expected)
 
-        fractional = json.loads(template.replace('"units": 3', '"units": 1.5'))
-        with self.assertRaises(WireDecodeError) as raised:
-            validate_ai(fractional)
-        self.assertEqual(raised.exception.code, WIRE_TYPE)
-
-        for literal in ("9007199254740992", "18446744073709551616"):
-            payload = json.loads(template.replace('"units": 3', f'"units": {literal}'))
+        for literal in ("1.5", "15e-1", "1e-400", "9007199254740990.5"):
+            payload = decode_wire_json(
+                template.replace('"units": 3', f'"units": {literal}')
+            )
             with self.assertRaises(WireDecodeError) as raised:
                 validate_ai(payload)
-            self.assertEqual(raised.exception.code, WIRE_MAXIMUM)
+            self.assertEqual(raised.exception.code, WIRE_TYPE)
             self.assertEqual(raised.exception.path, "$.usage.units")
 
+        oversized = decode_wire_json(
+            template.replace('"units": 3', '"units": 18446744073709551616')
+        )
+        with self.assertRaises(WireDecodeError) as raised:
+            validate_ai(oversized)
+        self.assertEqual(raised.exception.code, WIRE_MAXIMUM)
+
+        fractional_above = decode_wire_json(
+            template.replace('"units": 3', '"units": 18446744073709551615.5')
+        )
+        with self.assertRaises(WireDecodeError) as raised:
+            validate_ai(fractional_above)
+        self.assertEqual(raised.exception.code, WIRE_TYPE)
     def test_adapter_preserves_all_valid_v1_tool_inputs(self) -> None:
         for tool_input in ("scalar", [1, True], None):
             payload = copy.deepcopy(_valid_ai())

@@ -58,31 +58,44 @@ func TestAIValidatorEnforcesSharedContract(t *testing.T) {
 }
 
 func TestIntegerValidationUsesJSONSchemaMathematicalSemantics(t *testing.T) {
-	for _, literal := range []string{"1.0", "1e0", "9007199254740991"} {
+	accepted := map[string]uint64{
+		"1.0":                  1,
+		"1e0":                  1,
+		"1.5e1":                15,
+		"9007199254740992":     9007199254740992,
+		"18446744073709551615": ^uint64(0),
+	}
+	for literal, expected := range accepted {
 		value := validAIWire(t)
 		value["usage"].(map[string]any)["units"] = json.Number(literal)
 		if err := ValidateAi(value); err != nil {
 			t.Fatalf("%s: %v", literal, err)
 		}
 		response, err := parseResponse(value)
-		if err != nil || response.Usage.Units != asUint64(json.Number(literal)) {
+		if err != nil || response.Usage.Units != expected {
 			t.Fatalf("%s: response=%+v error=%v", literal, response, err)
 		}
 	}
 
-	value := validAIWire(t)
-	value["usage"].(map[string]any)["units"] = json.Number("1.5")
-	if err := ValidateAi(value).(*WireDecodeError); err.Code != WireType {
-		t.Fatalf("fractional error = %#v", err)
-	}
-
-	for _, literal := range []string{"9007199254740992", "18446744073709551616"} {
+	for _, literal := range []string{"1.5", "15e-1", "1e-400", "9007199254740990.5"} {
 		value := validAIWire(t)
 		value["usage"].(map[string]any)["units"] = json.Number(literal)
 		err := ValidateAi(value).(*WireDecodeError)
-		if err.Code != WireMaximum || err.Path != "$.usage.units" {
-			t.Fatalf("%s: error = %#v", literal, err)
+		if err.Code != WireType || err.Path != "$.usage.units" {
+			t.Fatalf("%s: fractional error = %#v", literal, err)
 		}
+	}
+
+	value := validAIWire(t)
+	value["usage"].(map[string]any)["units"] = json.Number("18446744073709551616")
+	if err := ValidateAi(value).(*WireDecodeError); err.Code != WireMaximum {
+		t.Fatalf("oversized error = %#v", err)
+	}
+
+	value = validAIWire(t)
+	value["usage"].(map[string]any)["units"] = json.Number("18446744073709551615.5")
+	if err := ValidateAi(value).(*WireDecodeError); err.Code != WireType {
+		t.Fatalf("fractional-above-max error = %#v", err)
 	}
 }
 

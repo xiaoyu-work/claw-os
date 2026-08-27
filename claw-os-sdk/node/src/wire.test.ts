@@ -9,6 +9,7 @@ import {
   WIRE_TYPE,
   WIRE_UNKNOWN_FIELD,
   WireDecodeError,
+  decodeWireJson,
   validateAi,
   validateBudgetShow,
   validateTool,
@@ -67,27 +68,49 @@ test("AI validator enforces the shared contract", () => {
 });
 
 test("integer validation uses JSON Schema mathematical semantics", () => {
-  for (const literal of ["1.0", "1e0", "9007199254740991"]) {
-    const payload = JSON.parse(JSON.stringify(validAi()).replace('"units":3', `"units":${literal}`));
+  const accepted = new Map<string, number | bigint>([
+    ["1.0", 1],
+    ["1e0", 1],
+    ["1.5e1", 15],
+    ["9007199254740992", 9007199254740992n],
+    ["18446744073709551615", 18446744073709551615n],
+  ]);
+  for (const [literal, expected] of accepted) {
+    const payload = decodeWireJson(
+      JSON.stringify(validAi()).replace('"units":3', `"units":${literal}`),
+    ) as Record<string, unknown>;
     assert.doesNotThrow(() => validateAi(payload));
+    assert.equal((payload.usage as Record<string, unknown>).units, expected);
   }
 
-  const fractional = JSON.parse(JSON.stringify(validAi()).replace('"units":3', '"units":1.5'));
-  assert.throws(
-    () => validateAi(fractional),
-    (error: unknown) => error instanceof WireDecodeError && error.code === WIRE_TYPE,
-  );
-
-  for (const literal of ["9007199254740992", "18446744073709551616"]) {
-    const payload = JSON.parse(JSON.stringify(validAi()).replace('"units":3', `"units":${literal}`));
+  for (const literal of ["1.5", "15e-1", "1e-400", "9007199254740990.5"]) {
+    const payload = decodeWireJson(
+      JSON.stringify(validAi()).replace('"units":3', `"units":${literal}`),
+    );
     assert.throws(
       () => validateAi(payload),
       (error: unknown) =>
         error instanceof WireDecodeError &&
-        error.code === WIRE_MAXIMUM &&
+        error.code === WIRE_TYPE &&
         error.path === "$.usage.units",
     );
   }
+
+  const oversized = decodeWireJson(
+    JSON.stringify(validAi()).replace('"units":3', '"units":18446744073709551616'),
+  );
+  assert.throws(
+    () => validateAi(oversized),
+    (error: unknown) => error instanceof WireDecodeError && error.code === WIRE_MAXIMUM,
+  );
+
+  const fractionalAbove = decodeWireJson(
+    JSON.stringify(validAi()).replace('"units":3', '"units":18446744073709551615.5'),
+  );
+  assert.throws(
+    () => validateAi(fractionalAbove),
+    (error: unknown) => error instanceof WireDecodeError && error.code === WIRE_TYPE,
+  );
 });
 
 test("v1 tool inputs remain unrestricted", () => {

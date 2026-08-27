@@ -24,14 +24,14 @@ pub const PROTOCOL_VERSION: &str = "2025-06-18";
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RequestId {
-    Num(i64),
+    Num(serde_json::Number),
     Str(String),
     Null,
 }
 
 impl From<i64> for RequestId {
     fn from(n: i64) -> Self {
-        RequestId::Num(n)
+        RequestId::Num(n.into())
     }
 }
 

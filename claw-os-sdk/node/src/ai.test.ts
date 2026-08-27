@@ -94,11 +94,13 @@ test("chat preserves unrestricted tool input and mathematical integers", () => {
   const payload = OK_CHAT
     .replace('"input_tokens":3', '"input_tokens":1.0')
     .replace('"output_tokens":5', '"output_tokens":1e0')
+    .replace('"units":8', '"units":18446744073709551615')
     .replace('"input":{"path":"/x"}', '"input":["a",1]');
   const fake = installFakeCos(payload);
   const response = withCos(fake, { COS_APP_ID: "notes" }, () => ai.chat("hi"));
   assert.equal(response.usage.inputTokens, 1);
   assert.equal(response.usage.outputTokens, 1);
+  assert.equal(response.usage.units, 18446744073709551615n);
   assert.deepEqual(response.toolCalls[0].input, ["a", 1]);
 });
 

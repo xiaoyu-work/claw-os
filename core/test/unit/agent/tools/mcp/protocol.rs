@@ -20,7 +20,7 @@ fn notification_has_no_id_field() {
 
 #[test]
 fn response_ok_omits_error() {
-    let r = JsonRpcResponse::ok(RequestId::Num(7), serde_json::json!({"ok": true}));
+    let r = JsonRpcResponse::ok(7.into(), serde_json::json!({"ok": true}));
     let v = serde_json::to_value(&r).unwrap();
     assert!(v.get("error").is_none());
     assert_eq!(v["result"]["ok"], true);

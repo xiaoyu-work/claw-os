@@ -17,10 +17,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"time"
 )
@@ -32,7 +30,6 @@ const DefaultTimeout = 60 * time.Second
 // maxOutput caps captured stdout+stderr (8 MiB) — generous for
 // embeddings / base64 artifact paths without unbounded RAM.
 const maxOutput = 8 * 1024 * 1024
-const maxExactJSONInteger = float64(9007199254740991)
 
 // UnavailableError means the `cos` binary could not be invoked, timed
 // out, or returned something that was not a JSON envelope.
@@ -149,49 +146,10 @@ func asString(v any) string {
 	return ""
 }
 
-func asFloat(v any) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case int:
-		return float64(n)
-	case json.Number:
-		value, _ := n.Float64()
-		return value
-	}
-	return 0
-}
-
-func asInt(v any) int64 { return int64(asFloat(v)) }
-
 func asUint64(v any) uint64 {
-	switch n := v.(type) {
-	case json.Number:
-		if value, err := strconv.ParseUint(string(n), 10, 64); err == nil {
-			return value
-		}
-		value, err := n.Float64()
-		if err == nil && !math.IsInf(value, 0) && !math.IsNaN(value) &&
-			value >= 0 && math.Trunc(value) == value && value <= maxExactJSONInteger {
-			return uint64(value)
-		}
-	case uint64:
-		return n
-	case uint32:
-		return uint64(n)
-	case int64:
-		if n >= 0 {
-			return uint64(n)
-		}
-	case int:
-		if n >= 0 {
-			return uint64(n)
-		}
-	case float64:
-		if !math.IsInf(n, 0) && !math.IsNaN(n) && n >= 0 &&
-			math.Trunc(n) == n && n <= maxExactJSONInteger {
-			return uint64(n)
-		}
+	number, ok := wireRational(v)
+	if ok && number.IsInt() && number.Sign() >= 0 && number.Num().IsUint64() {
+		return number.Num().Uint64()
 	}
 	return 0
 }

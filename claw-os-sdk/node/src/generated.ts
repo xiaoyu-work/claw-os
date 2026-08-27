@@ -4,6 +4,8 @@
 
 /* eslint-disable */
 
+import { compareNumber, isLosslessNumber, parse as parseLosslessJson, splitNumber } from "lossless-json";
+
 export const EXPECTED_WIRE_VERSION = 1 as const;
 
 
@@ -29,7 +31,7 @@ export interface Ai {
 export interface AiUsage {
   input_tokens: number;
   output_tokens: number;
-  units: number;
+  units: number | bigint;
 }
 
 /**
@@ -38,8 +40,8 @@ export interface AiUsage {
  */
 export interface AiBudget {
   period: string;
-  units_used: number;
-  units_cap: number;
+  units_used: number | bigint;
+  units_cap: number | bigint;
 }
 
 /**
@@ -79,7 +81,7 @@ export interface App {
 export interface BudgetShow {
   app: string;
   period: string;
-  units_used: number;
+  units_used: number | bigint;
 }
 
 /**
@@ -309,8 +311,54 @@ export const WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD" as const;
 
 type WireRule = Record<string, unknown>;
 
+export function decodeWireJson(text: string): unknown {
+  return parseLosslessJson(text);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+  return typeof value === "object" && value !== null && !Array.isArray(value) && !isLosslessNumber(value);
+}
+
+function wireNumberLexeme(value: unknown): string | undefined {
+  if (isLosslessNumber(value)) return value.value;
+  if (typeof value === "bigint") return value.toString();
+  if (typeof value === "number" && Number.isFinite(value) && Number.isSafeInteger(value)) {
+    return value.toString();
+  }
+  return undefined;
+}
+
+function isMathematicalInteger(value: unknown): boolean {
+  const lexeme = wireNumberLexeme(value);
+  if (lexeme === undefined) return false;
+  const { digits, exponent } = splitNumber(lexeme);
+  return digits === "0" || exponent >= digits.length - 1;
+}
+
+export function wireIntegerToJs(value: unknown): number | bigint {
+  const lexeme = wireNumberLexeme(value);
+  if (lexeme === undefined || !isMathematicalInteger(value)) {
+    throw new TypeError("wire value is not an exact integer");
+  }
+  const { sign, digits, exponent } = splitNumber(lexeme);
+  const zeros = Math.max(0, exponent - digits.length + 1);
+  const integer = BigInt(`${sign}${digits}${"0".repeat(zeros)}`);
+  return integer >= BigInt(Number.MIN_SAFE_INTEGER) && integer <= BigInt(Number.MAX_SAFE_INTEGER)
+    ? Number(integer)
+    : integer;
+}
+
+export function materializeWireValue(value: unknown): unknown {
+  if (isLosslessNumber(value)) {
+    try { return value.valueOf(); } catch { return value; }
+  }
+  if (Array.isArray(value)) return value.map(materializeWireValue);
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [key, materializeWireValue(item)]),
+    );
+  }
+  return value;
 }
 
 function wireError(code: string, schema: string, path: string, reason: string): WireDecodeError {
@@ -352,33 +400,43 @@ function validateWireSchema(
     }
     return;
   }
+  const numberLexeme = wireNumberLexeme(value);
   const expected = rule["type"];
   const valid =
     expected === "object" ? isRecord(value) :
     expected === "array" ? Array.isArray(value) :
     expected === "string" ? typeof value === "string" :
-    expected === "integer" ? typeof value === "number" && Number.isInteger(value) :
-    expected === "number" ? typeof value === "number" && Number.isFinite(value) :
+    expected === "integer" ? isMathematicalInteger(value) :
+    expected === "number" ? numberLexeme !== undefined :
     expected === "boolean" ? typeof value === "boolean" :
     expected === "null" ? value === null : true;
   if (typeof expected === "string" && !valid) {
     throw wireError(WIRE_TYPE, schemaName, path, `expected ${expected}`);
   }
-  if ("const" in rule && !Object.is(value, rule["const"])) {
-    throw wireError(WIRE_CONST, schemaName, path, "value does not match const");
+  if ("const" in rule) {
+    const expectedConst = rule["const"];
+    const expectedLexeme = wireNumberLexeme(expectedConst);
+    const matches = numberLexeme !== undefined && expectedLexeme !== undefined
+      ? compareNumber(numberLexeme, expectedLexeme) === 0
+      : Object.is(value, expectedConst);
+    if (!matches) {
+      throw wireError(WIRE_CONST, schemaName, path, "value does not match const");
+    }
   }
   const allowed = rule["enum"];
   if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {
     throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");
   }
-  if (typeof value === "number") {
+  if (numberLexeme !== undefined) {
     const minimum = rule["minimum"];
-    if (typeof minimum === "number" && value < minimum) {
-      throw wireError(WIRE_MINIMUM, schemaName, path, `must be >= ${minimum}`);
+    const minimumLexeme = wireNumberLexeme(minimum);
+    if (minimumLexeme !== undefined && compareNumber(numberLexeme, minimumLexeme) < 0) {
+      throw wireError(WIRE_MINIMUM, schemaName, path, `must be >= ${minimumLexeme}`);
     }
     const maximum = rule["maximum"];
-    if (typeof maximum === "number" && value > maximum) {
-      throw wireError(WIRE_MAXIMUM, schemaName, path, `must be <= ${maximum}`);
+    const maximumLexeme = wireNumberLexeme(maximum);
+    if (maximumLexeme !== undefined && compareNumber(numberLexeme, maximumLexeme) > 0) {
+      throw wireError(WIRE_MAXIMUM, schemaName, path, `must be <= ${maximumLexeme}`);
     }
   }
   if (isRecord(value)) {
@@ -418,27 +476,86 @@ function validateWireSchema(
   }
 }
 
-const _WIRE_SCHEMA_AI: WireRule = {"$defs":{"AiToolCall":{"additionalProperties":false,"properties":{"id":{"type":"string"},"input":{},"name":{"type":"string"}},"required":["id","name","input"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/ai.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Stable text-chat reply returned by `cos ai chat`.","properties":{"budget":{"additionalProperties":false,"description":"App budget snapshot after the call.","properties":{"period":{"type":"string"},"units_cap":{"maximum":9007199254740991,"minimum":0,"type":"integer"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["period","units_used","units_cap"],"type":"object"},"model":{"description":"Provider model id actually used.","type":"string"},"provider":{"description":"Provider name actually used.","type":"string"},"review":{"additionalProperties":false,"description":"Safety policy actually applied by the kernel.","properties":{"prompt_redacted":{"type":"boolean"},"safety":{"enum":["strict","standard","minimal"],"type":"string"}},"required":["safety","prompt_redacted"],"type":"object"},"text":{"description":"Assistant text returned by the configured provider.","type":"string"},"tool_calls":{"description":"Tool calls proposed by the model. The kernel does not execute them inline.","items":{"$ref":"#/$defs/AiToolCall"},"type":"array"},"usage":{"additionalProperties":false,"description":"Token and unit accounting for this call.","properties":{"input_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"output_tokens":{"maximum":4294967295,"minimum":0,"type":"integer","x-go-type":"uint32","x-rust-type":"u32"},"units":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["input_tokens","output_tokens","units"],"type":"object"},"verb":{"description":"Capability verb derived by the kernel for this call.","enum":["ai.chat","ai.chat.untrusted"],"type":"string"}},"required":["text","model","provider","verb","usage","budget","review"],"title":"AI request / reply","type":"object"};
+function normalizeWireIntegers(rule: WireRule, root: WireRule, value: unknown): void {
+  const reference = rule["$ref"];
+  if (typeof reference === "string") {
+    const defs = root["$defs"];
+    const parts = reference.split("/");
+    const target = isRecord(defs) ? defs[parts[parts.length - 1]] : undefined;
+    if (isRecord(target)) normalizeWireIntegers(target, root, value);
+    return;
+  }
+  const branches = rule["oneOf"];
+  if (Array.isArray(branches)) {
+    const branch = branches.find((candidate) => {
+      if (!isRecord(candidate)) return false;
+      try { validateWireSchema(candidate, root, value, "generated", "$"); return true; }
+      catch (error) { if (error instanceof WireDecodeError) return false; throw error; }
+    });
+    if (isRecord(branch)) normalizeWireIntegers(branch, root, value);
+    return;
+  }
+  if (isRecord(value)) {
+    const properties = rule["properties"];
+    if (isRecord(properties)) {
+      for (const [field, fieldRule] of Object.entries(properties)) {
+        if (!(field in value) || !isRecord(fieldRule)) continue;
+        if (fieldRule["type"] === "integer") value[field] = wireIntegerToJs(value[field]);
+        else normalizeWireIntegers(fieldRule, root, value[field]);
+      }
+    }
+  } else if (Array.isArray(value)) {
+    const itemRule = rule["items"];
+    if (isRecord(itemRule)) {
+      value.forEach((item, index) => {
+        if (itemRule["type"] === "integer") value[index] = wireIntegerToJs(item);
+        else normalizeWireIntegers(itemRule, root, item);
+      });
+    }
+  }
+}
+
+const _WIRE_SCHEMA_AI: WireRule = decodeWireJson("{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateAi(value: unknown): asserts value is Ai & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value, "Ai", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value);
 }
 
-const _WIRE_SCHEMA_BUDGET_SHOW: WireRule = {"$id":"https://claw-os.dev/wire/v1/budget_show.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Shape returned by `cos agent budget show <app>`.","properties":{"app":{"type":"string"},"period":{"type":"string"},"units_used":{"maximum":9007199254740991,"minimum":0,"type":"integer"}},"required":["app","period","units_used"],"title":"AI budget show reply","type":"object"};
+export function normalizeAiIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_AI, _WIRE_SCHEMA_AI, value);
+}
+
+const _WIRE_SCHEMA_BUDGET_SHOW: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateBudgetShow(value: unknown): asserts value is BudgetShow & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value, "BudgetShow", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
 }
 
-const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = {"$defs":{"WireCatalogEntry":{"additionalProperties":true,"properties":{"args_schema":{"additionalProperties":true,"type":"object"},"name":{"type":"string"},"returns_schema":{"additionalProperties":true,"type":"object"},"stability":{"enum":["stable","experimental"],"type":"string"},"summary":{"type":"string"},"verb":{"type":"string"}},"required":["name","summary","verb","stability","args_schema","returns_schema"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/tool_catalog.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tools`.","properties":{"tools":{"items":{"$ref":"#/$defs/WireCatalogEntry"},"type":"array"}},"required":["tools"],"title":"Catalog tool list reply","type":"object"};
+export function normalizeBudgetShowIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateToolCatalog(value: unknown): asserts value is ToolCatalog & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value, "ToolCatalog", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value);
 }
 
-const _WIRE_SCHEMA_TOOL: WireRule = {"$id":"https://claw-os.dev/wire/v1/tool.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":true,"description":"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.","properties":{"app_id":{"description":"App identity under which the tool ran.","type":"string"},"result":{"description":"Tool-specific JSON result."},"status":{"description":"Execution status. Denials are returned as errors, not ToolResult values.","enum":["ok"],"type":"string"},"tool":{"description":"Catalog tool name.","type":"string"}},"required":["tool","app_id","status","result"],"title":"Catalog tool invocation reply","type":"object"};
+export function normalizeToolCatalogIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_TOOL_CATALOG, _WIRE_SCHEMA_TOOL_CATALOG, value);
+}
+
+const _WIRE_SCHEMA_TOOL: WireRule = decodeWireJson("{\"$id\":\"https://claw-os.dev/wire/v1/tool.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tool <name> --app <id> --args '<json>'`.\",\"properties\":{\"app_id\":{\"description\":\"App identity under which the tool ran.\",\"type\":\"string\"},\"result\":{\"description\":\"Tool-specific JSON result.\"},\"status\":{\"description\":\"Execution status. Denials are returned as errors, not ToolResult values.\",\"enum\":[\"ok\"],\"type\":\"string\"},\"tool\":{\"description\":\"Catalog tool name.\",\"type\":\"string\"}},\"required\":[\"tool\",\"app_id\",\"status\",\"result\"],\"title\":\"Catalog tool invocation reply\",\"type\":\"object\"}") as WireRule;
 
 export function validateTool(value: unknown): asserts value is Tool & Record<string, unknown> {
   validateWireSchema(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value, "Tool", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value);
+}
+
+export function normalizeToolIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_TOOL, _WIRE_SCHEMA_TOOL, value);
 }
 

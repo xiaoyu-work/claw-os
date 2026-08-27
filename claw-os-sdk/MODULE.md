@@ -39,7 +39,9 @@ Serialization changes stay backwards compatible unless introduced under a new
 wire version.
 JSON Schema integers use mathematical semantics: finite values with no
 fractional component, including `1.0` and exponent notation. Type validation
-runs before schema minimum/maximum checks in every generated decoder.
+runs before schema minimum/maximum checks in every generated decoder. Wire
+number lexemes are preserved and evaluated as exact decimal rationals before
+conversion; u64-domain Node values materialize as `bigint` when necessary.
 
 ## Tests
 

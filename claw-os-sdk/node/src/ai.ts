@@ -30,6 +30,7 @@ import {
 } from "./transport";
 import {
   WireDecodeError,
+  materializeWireValue,
   validateAi,
   validateBudgetShow,
   type AiBudget,
@@ -65,13 +66,13 @@ export class AiSafetyViolation extends AiDenied {}
 export interface Usage {
   inputTokens: number;
   outputTokens: number;
-  units: number;
+  units: number | bigint;
 }
 
 export interface Budget {
   period: string;
-  unitsUsed: number;
-  unitsCap: number;
+  unitsUsed: number | bigint;
+  unitsCap: number | bigint;
 }
 
 export interface Review {
@@ -315,7 +316,7 @@ function parseResponse(env: unknown): AiResponse {
   const toolCalls: ProposedToolCall[] = (env.tool_calls ?? []).map((toolCall) => ({
     id: toolCall.id,
     name: toolCall.name,
-    input: toolCall.input,
+    input: materializeWireValue(toolCall.input),
   }));
   return {
     text: env.text,
@@ -333,6 +334,6 @@ function parseResponse(env: unknown): AiResponse {
       promptRedacted: review.prompt_redacted,
     },
     toolCalls,
-    raw: env,
+    raw: materializeWireValue(env) as Record<string, unknown>,
   };
 }

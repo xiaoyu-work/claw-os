@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/big"
 	"sort"
 	"strings"
 )
@@ -332,27 +333,29 @@ func wireRule(value any) (map[string]any, bool) {
 	return rule, ok
 }
 
-func wireNumber(value any) (float64, bool) {
-	var number float64
+func wireRational(value any) (*big.Rat, bool) {
 	switch value := value.(type) {
 	case json.Number:
-		parsed, err := value.Float64()
-		if err != nil { return 0, false }
-		number = parsed
+		number, ok := new(big.Rat).SetString(string(value))
+		return number, ok
 	case float64:
-		number = value
+		if !math.IsNaN(value) && !math.IsInf(value, 0) && math.Abs(value) <= 9007199254740991 {
+			number := new(big.Rat).SetFloat64(value)
+			return number, number != nil
+		}
+		return nil, false
 	case int:
-		number = float64(value)
+		return new(big.Rat).SetInt64(int64(value)), true
 	case int64:
-		number = float64(value)
+		return new(big.Rat).SetInt64(value), true
 	case uint64:
-		number = float64(value)
+		integer := new(big.Int).SetUint64(value)
+		return new(big.Rat).SetInt(integer), true
 	case uint32:
-		number = float64(value)
+		return new(big.Rat).SetInt64(int64(value)), true
 	default:
-		return 0, false
+		return nil, false
 	}
-	return number, !math.IsInf(number, 0) && !math.IsNaN(number)
 }
 
 func validateWireSchema(rule, root map[string]any, value any, schemaName, path string) error {
@@ -388,10 +391,10 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 		case "string":
 			_, valid = value.(string)
 		case "integer":
-			number, numeric := wireNumber(value)
-			valid = numeric && math.Trunc(number) == number
+			number, numeric := wireRational(value)
+			valid = numeric && number.IsInt()
 		case "number":
-			_, valid = wireNumber(value)
+			_, valid = wireRational(value)
 		case "boolean":
 			_, valid = value.(bool)
 		case "null":
@@ -402,9 +405,9 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 		}
 	}
 	if expected, present := rule["const"]; present {
-		expectedNumber, expectedNumeric := wireNumber(expected)
-		actualNumber, actualNumeric := wireNumber(value)
-		if (expectedNumeric && (!actualNumeric || expectedNumber != actualNumber)) || (!expectedNumeric && expected != value) {
+		expectedNumber, expectedNumeric := wireRational(expected)
+		actualNumber, actualNumeric := wireRational(value)
+		if (expectedNumeric && (!actualNumeric || expectedNumber.Cmp(actualNumber) != 0)) || (!expectedNumeric && expected != value) {
 			return wireError(WireConst, schemaName, path, "value does not match const")
 		}
 	}
@@ -417,12 +420,12 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 			return wireError(WireEnum, schemaName, path, "value is not in the allowed enum")
 		}
 	}
-	if number, numeric := wireNumber(value); numeric {
-		if minimum, ok := wireNumber(rule["minimum"]); ok && number < minimum {
-			return wireError(WireMinimum, schemaName, path, fmt.Sprintf("must be >= %v", minimum))
+	if number, numeric := wireRational(value); numeric {
+		if minimum, ok := wireRational(rule["minimum"]); ok && number.Cmp(minimum) < 0 {
+			return wireError(WireMinimum, schemaName, path, "must be >= "+minimum.RatString())
 		}
-		if maximum, ok := wireNumber(rule["maximum"]); ok && number > maximum {
-			return wireError(WireMaximum, schemaName, path, fmt.Sprintf("must be <= %v", maximum))
+		if maximum, ok := wireRational(rule["maximum"]); ok && number.Cmp(maximum) > 0 {
+			return wireError(WireMaximum, schemaName, path, "must be <= "+maximum.RatString())
 		}
 	}
 	if object, ok := value.(map[string]any); ok {
@@ -470,7 +473,7 @@ func validateWireSchema(rule, root map[string]any, value any, schemaName, path s
 	return nil
 }
 
-const wireSchemaAi = "{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}"
+const wireSchemaAi = "{\"$defs\":{\"AiToolCall\":{\"additionalProperties\":false,\"properties\":{\"id\":{\"type\":\"string\"},\"input\":{},\"name\":{\"type\":\"string\"}},\"required\":[\"id\",\"name\",\"input\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/ai.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Stable text-chat reply returned by `cos ai chat`.\",\"properties\":{\"budget\":{\"additionalProperties\":false,\"description\":\"App budget snapshot after the call.\",\"properties\":{\"period\":{\"type\":\"string\"},\"units_cap\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"period\",\"units_used\",\"units_cap\"],\"type\":\"object\"},\"model\":{\"description\":\"Provider model id actually used.\",\"type\":\"string\"},\"provider\":{\"description\":\"Provider name actually used.\",\"type\":\"string\"},\"review\":{\"additionalProperties\":false,\"description\":\"Safety policy actually applied by the kernel.\",\"properties\":{\"prompt_redacted\":{\"type\":\"boolean\"},\"safety\":{\"enum\":[\"strict\",\"standard\",\"minimal\"],\"type\":\"string\"}},\"required\":[\"safety\",\"prompt_redacted\"],\"type\":\"object\"},\"text\":{\"description\":\"Assistant text returned by the configured provider.\",\"type\":\"string\"},\"tool_calls\":{\"description\":\"Tool calls proposed by the model. The kernel does not execute them inline.\",\"items\":{\"$ref\":\"#/$defs/AiToolCall\"},\"type\":\"array\"},\"usage\":{\"additionalProperties\":false,\"description\":\"Token and unit accounting for this call.\",\"properties\":{\"input_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"output_tokens\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint32\",\"x-rust-type\":\"u32\"},\"units\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"input_tokens\",\"output_tokens\",\"units\"],\"type\":\"object\"},\"verb\":{\"description\":\"Capability verb derived by the kernel for this call.\",\"enum\":[\"ai.chat\",\"ai.chat.untrusted\"],\"type\":\"string\"}},\"required\":[\"text\",\"model\",\"provider\",\"verb\",\"usage\",\"budget\",\"review\"],\"title\":\"AI request / reply\",\"type\":\"object\"}"
 
 // ValidateAi validates a value against wire/v1/ai.schema.json.
 func ValidateAi(value any) error {
@@ -483,7 +486,7 @@ func ValidateAi(value any) error {
 	return validateWireSchema(schema, schema, value, "Ai", "$")
 }
 
-const wireSchemaBudgetShow = "{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":9007199254740991,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}"
+const wireSchemaBudgetShow = "{\"$id\":\"https://claw-os.dev/wire/v1/budget_show.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Shape returned by `cos agent budget show <app>`.\",\"properties\":{\"app\":{\"type\":\"string\"},\"period\":{\"type\":\"string\"},\"units_used\":{\"maximum\":18446744073709551615,\"minimum\":0,\"type\":\"integer\",\"x-go-type\":\"uint64\",\"x-rust-type\":\"u64\",\"x-ts-type\":\"number | bigint\"}},\"required\":[\"app\",\"period\",\"units_used\"],\"title\":\"AI budget show reply\",\"type\":\"object\"}"
 
 // ValidateBudgetShow validates a value against wire/v1/budget_show.schema.json.
 func ValidateBudgetShow(value any) error {
