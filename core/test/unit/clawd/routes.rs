@@ -1,0 +1,326 @@
+use super::*;
+use serde_json::json;
+
+/// The route surface as it stood before the registry existed.
+///
+/// Kept verbatim so the migration to a declarative table is proved to
+/// have preserved the allowlist rather than quietly widened it.
+const HISTORICAL_USER_COMMANDS: &[&str] = &[
+    "daemon.health",
+    "daemon.status",
+    "task.submit",
+    "task.list",
+    "task.get",
+    "task.status",
+    "task.cancel",
+    "task.stream",
+    "task.result",
+    "task.count",
+    "memory.history",
+    "memory.sessions",
+    "credential.oauth-refresh",
+    "system.audio.control",
+    "system.accessibility.control",
+    "system.backup.control",
+    "system.bluetooth.control",
+    "system.camera.control",
+    "system.clipboard.control",
+    "system.container.control",
+    "system.config.control",
+    "system.crash.inspect",
+    "system.desktop.control",
+    "system.display.control",
+    "system.events.control",
+    "system.firewall.control",
+    "system.hardware.inspect",
+    "system.location.query",
+    "system.network.control",
+    "system.package.install",
+    "system.package.control",
+    "system.package.restore",
+    "system.power.control",
+    "system.printer.control",
+    "system.security.inspect",
+    "system.service.control",
+    "system.service.restore",
+    "system.snapshot.control",
+    "system.storage.control",
+    "system.usb.control",
+    "system.users.control",
+    "scheduler.run",
+    "app_session.register",
+    "app_session.register_native",
+    "mcp_session.register",
+    "app_session.bind",
+    "app_session.set_transient",
+    "app_session.deregister",
+    "permission.pending",
+    "permission.recent",
+    "permission.status",
+    "permission.request",
+    "permission.decide",
+    "context.snapshot",
+    "context.sources",
+    "context.event.append",
+    "context.event.query",
+    "system.operations",
+    "transaction.begin",
+    "transaction.list",
+    "transaction.commit",
+    "transaction.rollback",
+];
+
+const HISTORICAL_ROOT_COMMANDS: &[&str] = &["context.update"];
+
+#[test]
+fn the_table_and_the_command_enum_cannot_drift() {
+    assert_eq!(ROUTES.len(), Command::ALL.len());
+    for (index, command) in Command::ALL.iter().enumerate() {
+        assert_eq!(ROUTES[index].command, *command);
+        assert_eq!(command.route().name, ROUTES[index].name);
+        assert_eq!(Command::parse(command.as_str()), Some(*command));
+    }
+}
+
+#[test]
+fn route_names_are_unique_and_loggable() {
+    let mut seen = std::collections::BTreeSet::new();
+    for route in ROUTES {
+        assert!(seen.insert(route.name), "duplicate route {}", route.name);
+        assert!(
+            crate::audit_policy::is_token(route.name),
+            "route name must be safe to store verbatim: {}",
+            route.name
+        );
+    }
+}
+
+#[test]
+fn the_access_allowlist_is_exactly_what_it_was() {
+    let user: std::collections::BTreeSet<_> = user_commands().collect();
+    let root: std::collections::BTreeSet<_> = root_commands().collect();
+    assert_eq!(
+        user,
+        HISTORICAL_USER_COMMANDS.iter().copied().collect(),
+        "the set of routes a non-root peer may reach changed"
+    );
+    assert_eq!(
+        root,
+        HISTORICAL_ROOT_COMMANDS.iter().copied().collect(),
+        "the set of root-only routes changed"
+    );
+}
+
+#[test]
+fn every_route_declares_an_audit_policy() {
+    // A route with no policy would be audited as `<unrecognized>` with
+    // no arguments — safe, but silent. Fail loudly instead so a new
+    // command has to classify its own fields.
+    for route in ROUTES {
+        assert!(
+            route.audit_policy().is_some(),
+            "clawd routes `{}` with no audit policy",
+            route.name
+        );
+    }
+}
+
+#[test]
+fn the_canonical_route_list_and_the_policy_table_agree() {
+    for command in crate::audit_policy::known_commands() {
+        assert!(
+            Command::parse(command).is_some(),
+            "audit policy names `{command}`, which clawd does not route"
+        );
+    }
+}
+
+#[test]
+fn unrouted_commands_are_not_dispatchable() {
+    assert!(Command::parse("vendor.debug.dump").is_none());
+    assert!(Command::parse("").is_none());
+    assert!(Command::parse("DAEMON.HEALTH").is_none());
+    assert!(Command::parse("context.update").is_some());
+    assert!(Command::parse("scheduler.run").is_some());
+}
+
+#[test]
+fn root_only_commands_are_not_reachable_by_a_user_peer() {
+    let user = ClientIdentity {
+        pid: Some(42),
+        uid: Some(1000),
+        gid: Some(1000),
+        start_time_ticks: Some(1),
+    };
+    let root = ClientIdentity {
+        pid: Some(42),
+        uid: Some(0),
+        gid: Some(0),
+        start_time_ticks: Some(1),
+    };
+    for command in HISTORICAL_ROOT_COMMANDS {
+        let route = Command::parse(command).unwrap().route();
+        assert_eq!(
+            route.authorize(&user),
+            Err(Fault::NotAuthorized),
+            "{command}"
+        );
+        assert_eq!(route.authorize(&root), Ok(()), "{command}");
+    }
+    let health = Command::DaemonHealth.route();
+    assert_eq!(health.authorize(&user), Ok(()));
+}
+
+#[test]
+fn a_peer_without_credentials_reaches_no_route_at_all() {
+    let unknown = ClientIdentity::unknown();
+    for route in ROUTES {
+        assert_eq!(
+            route.authorize(&unknown),
+            Err(Fault::MissingCredentials),
+            "{}",
+            route.name
+        );
+    }
+}
+
+#[test]
+fn every_route_has_a_finite_concurrency_budget() {
+    for route in ROUTES {
+        assert!(
+            route.budget.max_in_flight > 0,
+            "{} may never run",
+            route.name
+        );
+        assert!(
+            route.budget.max_in_flight <= 64,
+            "{} has an unbounded-looking budget",
+            route.name
+        );
+        if let Deadline::Interruptible(limit) = route.budget.deadline {
+            assert!(limit.as_secs() > 0, "{}", route.name);
+        }
+    }
+}
+
+#[test]
+fn mutating_routes_are_never_cancelled_mid_flight() {
+    // Dropping a privileged mutation at an await point can leave a
+    // package half-installed. Those routes bound themselves instead.
+    for route in ROUTES {
+        if route.kind == Kind::Mutation {
+            assert_eq!(
+                route.budget.deadline,
+                Deadline::Uninterruptible,
+                "{} is a mutation and must not be cancelled by the broker",
+                route.name
+            );
+        }
+    }
+}
+
+#[test]
+fn read_only_routes_are_classified_as_queries() {
+    for name in [
+        "daemon.health",
+        "daemon.status",
+        "task.list",
+        "task.get",
+        "task.result",
+        "memory.history",
+        "context.snapshot",
+        "context.event.query",
+        "permission.status",
+        "system.operations",
+        "system.hardware.inspect",
+        "transaction.list",
+    ] {
+        assert_eq!(
+            Command::parse(name).unwrap().route().kind,
+            Kind::Query,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn state_changing_routes_are_classified_as_mutations() {
+    for name in [
+        "task.submit",
+        "task.cancel",
+        "context.update",
+        "context.event.append",
+        "permission.request",
+        "permission.decide",
+        "transaction.begin",
+        "transaction.commit",
+        "transaction.rollback",
+        "scheduler.run",
+        "app_session.register",
+        "app_session.bind",
+        "system.package.install",
+        "system.service.restore",
+        "credential.oauth-refresh",
+    ] {
+        assert_eq!(
+            Command::parse(name).unwrap().route().kind,
+            Kind::Mutation,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn every_route_decodes_through_its_own_typed_body() {
+    // `null` params stand in for "no arguments". Routes with required
+    // fields must refuse it; routes without any must accept it and
+    // produce an empty object rather than a null.
+    for route in ROUTES {
+        match (route.decode)(Value::Null) {
+            Ok(params) => assert_eq!(params, json!({}), "{}", route.name),
+            Err(fault) => assert_eq!(fault, Fault::InvalidParams, "{}", route.name),
+        }
+    }
+}
+
+#[test]
+fn no_route_accepts_an_undeclared_field() {
+    for route in ROUTES {
+        let smuggled = json!({"__clawd_unexpected__": true});
+        assert_eq!(
+            (route.decode)(smuggled),
+            Err(Fault::InvalidParams),
+            "{} accepted an undeclared field",
+            route.name
+        );
+    }
+}
+
+#[test]
+fn no_route_accepts_a_non_object_body() {
+    for route in ROUTES {
+        for body in [json!("text"), json!(7), json!([1, 2]), json!(true)] {
+            assert_eq!(
+                (route.decode)(body),
+                Err(Fault::InvalidParams),
+                "{} accepted a non-object body",
+                route.name
+            );
+        }
+    }
+}
+
+#[test]
+fn a_decoded_body_carries_only_declared_fields() {
+    let route = Command::SystemPackageControl.route();
+    let params = (route.decode)(json!({
+        "session": "sess-1",
+        "action": "remove",
+        "package": "nano",
+    }))
+    .unwrap();
+    assert_eq!(
+        params,
+        json!({"session": "sess-1", "action": "remove", "package": "nano"})
+    );
+}

@@ -10,7 +10,7 @@ use crate::agent::runtime::hooks::{
     self, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary, TurnSummary,
 };
 use crate::audit_policy::{
-    self, InvalidRequestFacts, RequestFacts, ResponseFacts, TextDigest, ToolFacts,
+    self, ProtocolFailureFacts, RequestFacts, ResponseFacts, TextDigest, ToolFacts,
 };
 use crate::session::{self, Mutation, MutationRecord, SessionId};
 
@@ -29,11 +29,11 @@ struct RequestAudit<'a> {
 }
 
 #[derive(Debug, Serialize)]
-struct InvalidRequestAudit<'a> {
+struct ProtocolFailureAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
     #[serde(flatten)]
-    request: &'a InvalidRequestFacts,
+    request: &'a ProtocolFailureFacts,
     #[serde(flatten)]
     outcome: &'a ResponseFacts,
     duration_ms: u128,
@@ -121,15 +121,15 @@ pub fn record_request(
     append_jsonl(&audit)
 }
 
-pub fn record_invalid(
-    request: &InvalidRequestFacts,
+pub fn record_protocol_failure(
+    request: &ProtocolFailureFacts,
     outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) -> Result<(), String> {
-    let audit = InvalidRequestAudit {
+    let audit = ProtocolFailureAudit {
         ts: Utc::now(),
-        event: "clawd.invalid-request",
+        event: "clawd.protocol-failure",
         request,
         outcome,
         duration_ms: duration.as_millis(),

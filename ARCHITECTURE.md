@@ -40,7 +40,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
-| `clawd` broker | Unix-socket RPC, peer/session identity, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` |
+| `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
@@ -133,6 +133,39 @@ core/src/main.rs
 
 Hidden router bridges such as `__policy`, `__memory`, `__package`, and
 `__systemd` are internal protocol surfaces used by bundled apps and services.
+
+### Broker request admission
+
+```text
+client (cos / bridge / rollback / approval helper)
+  -> one length-prefixed v1 frame on /run/cos/clawd.sock
+  -> connection slot for the peer's accounting bucket
+  -> recvmsg: kernel SCM_CREDENTIALS, SCM_RIGHTS closed and refused
+  -> /proc re-verification of the sending process
+  -> versioned envelope parse (no legacy fallback)
+  -> route lookup -> typed deny_unknown_fields decode
+  -> access class -> global / per-principal / per-route slots
+  -> duplicate check for mutations
+  -> handler under the route's budget
+  -> one bounded response frame, then close
+```
+
+Every message on the broker socket is one frame: a fixed 10-byte header of
+magic, kind, flags and a big-endian length, then that many bytes of UTF-8 JSON.
+The length is checked against the direction's ceiling before anything is
+allocated, and a short read is a truncation rather than a record the daemon
+waits on. `core/src/clawd/wire/` owns the envelope and the bounded field types;
+`core/src/clawd/routes.rs` is the single table that ties a wire command name to
+its typed body, access class, mutation kind, concurrency and time budget, and
+handler; `core/src/clawd/transport/` owns framing, per-message credentials and
+admission control.
+
+Identity comes from the credentials Linux stamps onto each message when
+`SO_PASSCRED` is set on the listener — not from `SO_PEERCRED` captured at
+connect, and never from a request field. A peer that attaches descriptors has
+them closed and its request refused. One request is served per connection, so
+responses cannot be crossed and a replayed frame cannot chain a second
+privileged call behind an authenticated one.
 
 ### Agent ask/chat turn
 
@@ -396,6 +429,11 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   tools, reasoning state, usage, and errors.
 - Credential values never enter config files, logs, model prompts, or error
   messages.
+- Broker protocol refusals carry only `&'static str` text and a stable class;
+  refused frames and their ancillary data are never recorded, in any form.
+- `cos` and `clawd` speak one broker protocol version and are replaced
+  together. A mismatched pair fails closed with a named protocol error; there
+  is no permissive dual-stack listener.
 - Memory and audit stores are append/transaction oriented; schema and recovery
   behavior require regression tests.
 - Rootfs/image builds require Linux filesystem semantics and root privileges.

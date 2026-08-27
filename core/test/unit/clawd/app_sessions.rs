@@ -1138,18 +1138,14 @@ fn launch_kind_is_a_closed_set() {
 
 #[test]
 fn only_app_session_commands_are_routed_here() {
-    for command in [
-        "app_session.register",
-        "app_session.register_native",
-        "mcp_session.register",
-        "app_session.bind",
-        "app_session.set_transient",
-        "app_session.deregister",
-    ] {
-        assert!(owns_command(command), "{command} must be routed here");
+    for command in COMMANDS {
+        assert!(
+            crate::clawd::routes::Command::parse(command).is_some(),
+            "{command} must be a broker route"
+        );
     }
-    assert!(!owns_command("system.package.control"));
-    assert!(!owns_command("task.submit"));
+    assert!(!COMMANDS.contains(&"system.package.control"));
+    assert!(!COMMANDS.contains(&"task.submit"));
 }
 
 #[test]

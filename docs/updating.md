@@ -45,12 +45,18 @@ restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed.
 
 `clawd` and `claw-agentd` ship in the same package and are replaced together.
-Agent tasks run in `claw-agentd` processes that `clawd` supervises, so an
-upgrade behaves as follows:
+`cos` ships beside them and speaks the same broker protocol version, so an
+upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
+`clawd` supervises, so an upgrade behaves as follows:
 
 - In-flight workers are killed when the daemon restarts (`PR_SET_PDEATHSIG`),
   and their tasks are reconciled — retried, or failed once they have used up
   their recovery budget — the next time `clawd` starts.
+- A `cos` binary from before broker protocol v1 fails closed against a new
+  `clawd`: the daemon answers one line naming the protocol and closes without
+  parsing, authorizing or dispatching anything. There is no compatibility
+  listener, so the fix is to finish the upgrade — reinstall `claw-os-agent` and
+  re-run the command.
 - A mismatched pair (an old `clawd` with a new `claw-agentd`, or the reverse)
   fails closed: both sides check the worker protocol version and report
   `agentd protocol mismatch`, naming reinstallation as the fix. No task runs

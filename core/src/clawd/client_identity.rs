@@ -1,7 +1,14 @@
 use serde::Serialize;
 use std::path::PathBuf;
-use tokio::net::UnixStream;
 
+use super::transport::PeerProcess;
+
+/// The peer a request came from.
+///
+/// Built from the credentials the kernel attached to the request
+/// message and confirmed against `/proc`, never from anything the
+/// request said about itself. See [`super::transport::peer`] for the
+/// exact Linux semantics.
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientIdentity {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -10,11 +17,25 @@ pub struct ClientIdentity {
     pub uid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gid: Option<u32>,
+    /// Field 22 of `/proc/<pid>/stat`, read when the peer was verified.
+    ///
+    /// Kept out of every serialization: it is an internal
+    /// disambiguator for pid reuse, and audit records already carry the
+    /// pid. Routes that need a start time re-read it themselves at the
+    /// moment they bind to it.
+    #[serde(skip)]
+    pub start_time_ticks: Option<u64>,
 }
 
 impl ClientIdentity {
-    pub fn from_stream(stream: &UnixStream) -> Result<Self, String> {
-        peer_identity(stream)
+    /// The peer behind one authenticated message.
+    pub fn from_peer(process: PeerProcess) -> Self {
+        Self {
+            pid: Some(process.pid),
+            uid: Some(process.uid),
+            gid: Some(process.gid),
+            start_time_ticks: Some(process.start_time_ticks),
+        }
     }
 
     pub fn unknown() -> Self {
@@ -22,6 +43,7 @@ impl ClientIdentity {
             pid: None,
             uid: None,
             gid: None,
+            start_time_ticks: None,
         }
     }
 
@@ -48,24 +70,6 @@ impl ClientIdentity {
         let uid = self.require_uid()?;
         resolve_home(uid).ok_or_else(|| format!("home directory is unavailable for peer uid {uid}"))
     }
-
-}
-
-#[cfg(target_os = "linux")]
-fn peer_identity(stream: &UnixStream) -> Result<ClientIdentity, String> {
-    let cred = stream
-        .peer_cred()
-        .map_err(|err| format!("failed to read clawd peer credentials: {err}"))?;
-    Ok(ClientIdentity {
-        pid: cred.pid().and_then(|pid| u32::try_from(pid).ok()),
-        uid: Some(cred.uid()),
-        gid: Some(cred.gid()),
-    })
-}
-
-#[cfg(not(target_os = "linux"))]
-fn peer_identity(_stream: &UnixStream) -> Result<ClientIdentity, String> {
-    Err("clawd peer credentials are unsupported on this platform".to_string())
 }
 
 #[cfg(unix)]

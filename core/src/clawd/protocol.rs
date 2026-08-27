@@ -1,27 +1,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Request {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<Value>,
-    pub command: String,
-    #[serde(default)]
-    pub params: Value,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct Response {
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub id: Option<Value>,
-    pub ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<ErrorBody>,
-}
+use super::routes::Command;
+pub use super::wire::{Fault, Request, RequestId, Response, PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct ErrorBody {
     pub code: String,
     pub message: String,
@@ -73,6 +57,16 @@ impl BrokerError {
         self.audit_class = Some(class);
         self
     }
+
+    /// A transport or envelope refusal, whose text is `&'static str` by
+    /// construction and whose class is the fault's own name.
+    pub fn fault(fault: Fault) -> Self {
+        Self {
+            message: fault.message().to_string(),
+            data: None,
+            audit_class: Some(fault.class()),
+        }
+    }
 }
 
 impl From<String> for BrokerError {
@@ -91,9 +85,17 @@ impl std::fmt::Display for BrokerError {
     }
 }
 
+impl Request {
+    /// Build a request for a route this crate names at compile time.
+    pub fn build(command: Command, params: Value) -> Self {
+        Self::new(command, params)
+    }
+}
+
 impl Response {
-    pub fn ok(id: Option<Value>, result: Value) -> Self {
+    pub fn ok(id: RequestId, result: Value) -> Self {
         Self {
+            v: PROTOCOL_VERSION,
             id,
             ok: true,
             result: Some(result),
@@ -101,8 +103,9 @@ impl Response {
         }
     }
 
-    pub fn error(id: Option<Value>, code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn error(id: RequestId, code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
+            v: PROTOCOL_VERSION,
             id,
             ok: false,
             result: None,
@@ -118,12 +121,13 @@ impl Response {
     /// Fail with a message the audit trail may name by its stable
     /// class instead of storing a digest of the text.
     pub fn error_classified(
-        id: Option<Value>,
+        id: RequestId,
         code: impl Into<String>,
         class: &'static str,
         message: impl Into<String>,
     ) -> Self {
         Self {
+            v: PROTOCOL_VERSION,
             id,
             ok: false,
             result: None,
@@ -136,12 +140,17 @@ impl Response {
         }
     }
 
-    pub fn error_with_data(
-        id: Option<Value>,
-        code: impl Into<String>,
-        error: BrokerError,
-    ) -> Self {
+    /// Refuse a request at the transport or envelope boundary.
+    ///
+    /// Both the code and the message come from the fault itself, so
+    /// nothing the caller sent is echoed back or classified.
+    pub fn fault(id: RequestId, fault: Fault) -> Self {
+        Self::error_classified(id, fault.code(), fault.class(), fault.message())
+    }
+
+    pub fn error_with_data(id: RequestId, code: impl Into<String>, error: BrokerError) -> Self {
         Self {
+            v: PROTOCOL_VERSION,
             id,
             ok: false,
             result: None,
@@ -168,16 +177,14 @@ impl Response {
     }
 }
 
-pub fn encode_response(response: &Response) -> Result<String, serde_json::Error> {
-    let mut line = serde_json::to_string(response)?;
-    line.push('\n');
-    Ok(line)
+/// Serialize a response body. The frame header is added by the
+/// transport, which is also where the size ceiling is enforced.
+pub fn encode_response(response: &Response) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(response)
 }
 
-pub fn encode_request(request: &Request) -> Result<String, serde_json::Error> {
-    let mut line = serde_json::to_string(request)?;
-    line.push('\n');
-    Ok(line)
+pub fn encode_request(request: &Request) -> Result<Vec<u8>, serde_json::Error> {
+    serde_json::to_vec(request)
 }
 
 #[cfg(test)]

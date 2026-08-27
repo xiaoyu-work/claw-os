@@ -677,31 +677,34 @@ pub fn request_facts(command: &str, params: &Value) -> RequestFacts {
     }
 }
 
-/// Everything a durable record may say about a request body that did
-/// not parse.
+/// Everything a durable record may say about a request the broker
+/// refused before it could run.
+///
+/// The frame is not recorded in any form — not verbatim, not as a
+/// digest. A refused frame is unparsed caller input that may be a
+/// credential, an ancillary payload or a fragment of another protocol,
+/// and its size and classification are enough to count and correlate
+/// probes. The route name, when one was resolved, is the registry's own
+/// `&'static str`, never the caller's string.
 #[derive(Debug, Clone, Serialize)]
-pub struct InvalidRequestFacts {
-    /// `syntax`, `data`, `eof` or `io` — serde's own classification.
-    pub parse_category: &'static str,
-    pub line: usize,
-    pub column: usize,
-    /// Length and keyed digest of the body. The body itself is never
-    /// stored: it is unparsed caller input and may be anything.
-    pub body: TextDigest,
+pub struct ProtocolFailureFacts {
+    /// Stable class from `clawd::wire::Fault`.
+    pub class: &'static str,
+    /// Bytes the daemon had accepted when it refused.
+    pub bytes: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<&'static str>,
 }
 
-pub fn invalid_request_facts(raw: &str, error: &serde_json::Error) -> InvalidRequestFacts {
-    use serde_json::error::Category;
-    InvalidRequestFacts {
-        parse_category: match error.classify() {
-            Category::Io => "io",
-            Category::Syntax => "syntax",
-            Category::Data => "data",
-            Category::Eof => "eof",
-        },
-        line: error.line(),
-        column: error.column(),
-        body: text_digest(raw),
+pub fn protocol_failure_facts(
+    class: &'static str,
+    bytes: usize,
+    command: Option<&'static str>,
+) -> ProtocolFailureFacts {
+    ProtocolFailureFacts {
+        class,
+        bytes,
+        command,
     }
 }
 

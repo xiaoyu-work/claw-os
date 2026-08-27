@@ -3,11 +3,12 @@ use serde_json::{json, Value};
 use super::client;
 use super::config;
 use super::protocol::{Request, Response};
+use super::routes::Command;
 
 const ASK_WAIT_TIMEOUT_MS: u64 = 24 * 60 * 60 * 1_000;
 
 pub fn daemon_status() -> Result<Value, String> {
-    send("daemon.status", Value::Null)
+    send(Command::DaemonStatus, Value::Null)
 }
 
 pub fn ask(prompt: &str) -> Result<Value, String> {
@@ -27,10 +28,10 @@ pub fn ask_in_session_with_timeout(
     if let Some(session_id) = session_id {
         params["session_id"] = json!(session_id);
     }
-    let submitted = send("task.submit", params)?;
+    let submitted = send(Command::TaskSubmit, params)?;
     let task_id = required_field(&submitted, "id")?;
     let result = send(
-        "task.result",
+        Command::TaskResult,
         json!({
             "id": task_id.clone(),
             "timeout_ms": timeout_ms,
@@ -42,7 +43,7 @@ pub fn ask_in_session_with_timeout(
         .and_then(Value::as_str)
         .unwrap_or("unknown");
     if matches!(status, "pending" | "running") {
-        let cancellation = send("task.cancel", json!({ "id": task_id }));
+        let cancellation = send(Command::TaskCancel, json!({ "id": task_id }));
         return match cancellation {
             Ok(_) => Err(format!(
                 "agent task timed out after {timeout_ms}ms; cancellation requested"
@@ -65,14 +66,14 @@ pub fn service_cmd(args: &[String]) -> Result<Value, String> {
         "list" => service_list(rest),
         "status" => {
             if rest.is_empty() {
-                send("daemon.status", Value::Null)
+                send(Command::DaemonStatus, Value::Null)
             } else {
-                send("task.get", json!({ "id": rest[0] }))
+                send(Command::TaskGet, json!({ "id": rest[0] }))
             }
         }
         "result" => service_result(rest),
         "cancel" => service_cancel(rest),
-        "context" => send("context.snapshot", Value::Null),
+        "context" => send(Command::ContextSnapshot, Value::Null),
         "events" => service_events(rest),
         "operations" => service_operations(rest),
         "work" => Err("agent workers are owned by system clawd.service".to_string()),
@@ -139,7 +140,7 @@ fn service_submit(args: &[String]) -> Result<Value, String> {
         params["max_turns"] = json!(max_turns);
     }
 
-    let job = send("task.submit", params)?;
+    let job = send(Command::TaskSubmit, params)?;
     Ok(json!({
         "status": "submitted",
         "backend": "clawd",
@@ -170,7 +171,7 @@ fn service_list(args: &[String]) -> Result<Value, String> {
             s => return Err(format!("unknown flag: {s}")),
         }
     }
-    let mut result = send("task.list", params)?;
+    let mut result = send(Command::TaskList, params)?;
     result["backend"] = json!("clawd");
     Ok(result)
 }
@@ -194,7 +195,7 @@ fn service_result(args: &[String]) -> Result<Value, String> {
         }
     }
     send(
-        "task.result",
+        Command::TaskResult,
         json!({
             "id": id,
             "timeout_ms": wait_secs.saturating_mul(1_000),
@@ -207,7 +208,7 @@ fn service_cancel(args: &[String]) -> Result<Value, String> {
         .first()
         .filter(|s| !s.trim().is_empty())
         .ok_or("usage: cos agent service cancel <task_id>")?;
-    send("task.cancel", json!({ "id": id }))
+    send(Command::TaskCancel, json!({ "id": id }))
 }
 
 fn service_operations(args: &[String]) -> Result<Value, String> {
@@ -228,7 +229,7 @@ fn service_operations(args: &[String]) -> Result<Value, String> {
             s => return Err(format!("unknown flag: {s}")),
         }
     }
-    send("system.operations", params)
+    send(Command::SystemOperations, params)
 }
 
 fn service_events(args: &[String]) -> Result<Value, String> {
@@ -279,7 +280,7 @@ fn service_events(args: &[String]) -> Result<Value, String> {
             s => return Err(format!("unknown flag: {s}")),
         }
     }
-    send("context.event.query", params)
+    send(Command::ContextEventQuery, params)
 }
 
 fn task_result_to_ask_response(job: Value) -> Result<Value, String> {
@@ -315,12 +316,8 @@ fn presented_answer(job: &Value) -> Value {
     }
 }
 
-fn send(command: &str, params: Value) -> Result<Value, String> {
-    let request = Request {
-        id: None,
-        command: command.to_string(),
-        params,
-    };
+fn send(command: Command, params: Value) -> Result<Value, String> {
+    let request = Request::build(command, params);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

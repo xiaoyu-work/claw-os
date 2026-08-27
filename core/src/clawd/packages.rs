@@ -196,10 +196,9 @@ pub fn restore_package_state(
             .map_err(|_| "package rollback requires COS_SESSION".to_string())?;
         let response = crate::clawd::client::request_blocking(
             crate::paths::clawd_socket_path(),
-            crate::clawd::protocol::Request {
-                id: None,
-                command: "system.package.restore".to_string(),
-                params: json!({
+            crate::clawd::protocol::Request::build(
+                crate::clawd::routes::Command::SystemPackageRestore,
+                json!({
                     "session": session,
                     "mutation_session": mutation_session.as_str(),
                     "mutation_seq": mutation_seq,
@@ -207,7 +206,7 @@ pub fn restore_package_state(
                     "previous_version": previous_version,
                     "was_held": was_held,
                 }),
-            },
+            ),
         )?;
         if response.ok {
             Ok(())

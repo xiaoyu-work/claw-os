@@ -109,8 +109,7 @@ fn the_grant_the_supervisor_mints_only_carries_worker_channel_routes() {
     assert_eq!(claims.routes, protocol::worker_routes());
     assert!(claims.expires_at_ms > claims.issued_at_ms);
     for route in &claims.routes {
-        assert!(!crate::clawd::server::USER_COMMANDS.contains(&route.as_str()));
-        assert!(!crate::clawd::server::ROOT_COMMANDS.contains(&route.as_str()));
+        assert!(crate::clawd::routes::Command::parse(route).is_none());
     }
 }
 

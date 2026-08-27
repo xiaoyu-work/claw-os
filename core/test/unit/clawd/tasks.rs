@@ -66,6 +66,7 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         pid: Some(std::process::id()),
         uid: Some(0),
         gid: Some(0),
+        start_time_ticks: Some(1),
     };
     let error = submit(json!({ "prompt": "hello" }), &root)
         .await

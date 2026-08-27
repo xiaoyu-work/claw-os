@@ -20,7 +20,10 @@ and agent tasks.
 
 | Path | Role |
 | --- | --- |
-| `server.rs` | Socket lifecycle, request routing, peer checks, agentd supervision start |
+| `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
+| `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
+| `wire/` | Versioned envelope, bounded field types, one typed request body per route |
+| `routes.rs` | The route registry: wire name, typed decode, access class, budget, handler |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch handles |
@@ -29,6 +32,62 @@ and agent tasks.
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |
 
+## Wire Protocol
+
+`/run/cos/clawd.sock` carries broker protocol v1: one length-prefixed frame per
+message, one request per connection, then close. The header is `CBK1`, a kind
+byte, a reserved flag byte that must be zero, and a big-endian `u32` length. The
+length is checked against the direction's ceiling before a body buffer exists,
+so a peer cannot make the daemon reserve memory it has not justified, and there
+is no terminator to scan for — a short read is a truncation, not a partial
+record the daemon waits on.
+
+The body is a closed envelope: `deny_unknown_fields` over a version, a bounded
+correlation id, the route name, and that route's parameters. There is no legacy
+shape and no fallback parse. A frame that does not carry the magic is refused
+with a named error; a peer that opens with the pre-v1 newline protocol receives
+one newline-terminated JSON error so an out-of-date `cos` prints something
+actionable, but nothing it sent is parsed, authorized or dispatched. The
+correlation id is correlation only — it selects no uid, pid or session, and one
+request per connection means responses cannot be crossed.
+
+Identity is per message, not per connection. `SO_PASSCRED` is set on the
+listener before the first `accept`, Linux copies the flag onto every accepted
+socket, and the kernel stamps `struct ucred` onto each `sk_buff` at `sendmsg`
+time from the sending task — including on connections still sitting in the
+accept queue. Every segment of a frame must carry the same credentials, so a
+descriptor handed to another process mid-request is a fault rather than an
+identity change. `SO_PEERCRED` is used for exactly one thing: choosing which
+accounting bucket a new connection counts against, before any message exists.
+The credentials are then re-verified through `/proc`, and a peer whose real and
+effective uid disagree with what the kernel stamped is refused.
+
+`clawd` accepts no descriptor from any peer. Ancillary data is received
+deliberately — never with a null `msg_control`, which would drop passed
+descriptors into the daemon unnoticed — every `SCM_RIGHTS` descriptor is closed
+with `MSG_CMSG_CLOEXEC` set, and the request is refused.
+
+`routes.rs` is the only route surface. A row declares the wire name, the typed
+`deny_unknown_fields` body, the access class, whether the route mutates, its
+concurrency and time budget, and its handler; the `Command` enum, the table and
+the name lookup are all generated from those rows, so a route cannot exist
+without declaring every one of them, and an in-repo client cannot name a route
+that does not exist. Unknown commands, undeclared fields, wrong types,
+oversized strings and over-deep payloads all fail closed *before* the access
+class is consulted. Mutating routes are never cancelled by the broker: dropping
+one at an await point could leave a package half-installed, so they are bounded
+by their own tool and lock timeouts plus a per-route in-flight ceiling.
+
+Resource ceilings are fixed at startup and live in `transport/limits.rs`:
+connections and in-flight requests, globally and per authenticated principal;
+per-route concurrency from the route's own budget; a read deadline that bounds
+slowloris; a write deadline; a response byte cap; and a fixed-capacity record of
+recent mutations so a replayed frame cannot repeat a non-idempotent privileged
+call. Root has a larger — but still finite — allowance, because `clawd`'s own
+rollback and approval clients run as root and must not be starved by a user
+flooding the socket.
+
+
 ## Dependencies
 
 The broker consumes capability definitions and service providers. Callers use
@@ -36,16 +95,24 @@ RPC clients rather than importing server internals. Never trust request fields
 for identity or authority; derive them from the connection/session boundary.
 
 Nothing a caller sends is written to a durable record on trust.
-`server.rs` projects every request through [`crate::audit_policy`] before
-dispatch and hands the same projection to the broker audit log and the system
-operations journal, so the two sinks cannot disagree. That policy is an
+`server.rs` projects every dispatched request through [`crate::audit_policy`]
+before dispatch and hands the same projection to the broker audit log and the
+system operations journal, so the two sinks cannot disagree. That policy is an
 allowlist keyed by command: a route contributes only the fields it has
 classified as safe, and a command with no entry is audited by outcome alone —
-no name, no arguments. `USER_COMMANDS` and `ROOT_COMMANDS` in `server.rs` are
-the canonical route list a unit test checks the policy table against, so a new
-command cannot reach a sink unclassified. Handler messages are caller-derived
-and are stored as a length plus a keyed digest; a route that wants its failure
-named uses `BrokerError::classified` or `Response::error_classified`.
+no name, no arguments. [`routes::ROUTES`](routes.rs) is the canonical route list
+a unit test checks the policy table against, so a new command cannot reach a
+sink unclassified. Handler messages are caller-derived and are stored as a
+length plus a keyed digest; a route that wants its failure named uses
+`BrokerError::classified` or `Response::error_classified`.
+
+A request refused before dispatch is recorded differently and more narrowly: a
+stable class from `wire::Fault`, the byte count the daemon had accepted, and —
+only when a route was actually resolved — the registry's own `&'static str`
+name. The frame itself is never stored, not verbatim and not as a digest, and
+neither is its ancillary data or any `serde` message: a refused frame is
+unparsed caller input that may be a credential or a fragment of another
+protocol.
 
 App and MCP session rows are root-owned authority that privileged providers
 later trust. `app_sessions.rs` therefore mints them from the installed manifest
@@ -127,7 +194,14 @@ bounded by the same home-scoped ceiling its executor applies.
 
 ```bash
 cargo test -p cos clawd:: -- --test-threads=1
+cargo test -p cos --test clawd_broker_socket -- --test-threads=1
 ```
 
 For a service change, include malformed input, exact scope, broker error, and
 successful provider-path coverage.
+
+For a transport or route change, `clawd_broker_socket` is the one that binds a
+real listener and connects to it, so it is the only place the `accept`-time
+inheritance of `SO_PASSCRED` and the pre-accept credential window are actually
+proved. A new route must not be able to pass `clawd::routes` without a typed
+body, an access class, a budget and an audit policy.

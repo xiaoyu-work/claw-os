@@ -15,6 +15,7 @@ use crate::audit;
 use crate::bridge;
 use crate::caps;
 use crate::checkpoint;
+use crate::clawd::routes::Command;
 use crate::credential;
 use crate::cron;
 use crate::engine_pkg;
@@ -84,11 +85,7 @@ struct SchedulerCallError {
 }
 
 fn scheduler_request(params: &Value) -> Result<Value, SchedulerCallError> {
-    let request = crate::clawd::protocol::Request {
-        id: None,
-        command: "scheduler.run".to_string(),
-        params: params.clone(),
-    };
+    let request = crate::clawd::protocol::Request::build(Command::SchedulerRun, params.clone());
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)
             .map_err(|message| SchedulerCallError {
@@ -138,7 +135,7 @@ const SCHEDULER_APPROVAL_POLL: std::time::Duration = std::time::Duration::from_m
 fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
     let deadline = Instant::now() + SCHEDULER_APPROVAL_WAIT;
     loop {
-        let result = request_clawd("permission.status", json!({ "ids": ids }))?;
+        let result = request_clawd(Command::PermissionStatus, json!({ "ids": ids }))?;
         let statuses = result
             .get("statuses")
             .and_then(Value::as_array)
@@ -172,12 +169,8 @@ fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
     }
 }
 
-fn request_clawd(command: &str, params: Value) -> Result<Value, String> {
-    let request = crate::clawd::protocol::Request {
-        id: None,
-        command: command.to_string(),
-        params,
-    };
+fn request_clawd(command: Command, params: Value) -> Result<Value, String> {
+    let request = crate::clawd::protocol::Request::build(command, params);
     let response =
         crate::clawd::client::request_blocking(crate::paths::clawd_socket_path(), request)?;
     if response.ok {
@@ -278,7 +271,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal package install requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.package.control",
+            Command::SystemPackageControl,
             json!({
                 "session": session,
                 "action": action,
@@ -300,7 +293,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal systemd command requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.service.control",
+            Command::SystemServiceControl,
             json!({
                 "session": session,
                 "action": action,
@@ -317,7 +310,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal snapshot command requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.snapshot.control",
+            Command::SystemSnapshotControl,
             json!({
                 "session": session,
                 "action": action,
@@ -353,7 +346,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.network.control",
+            Command::SystemNetworkControl,
             json!({
                 "session": session,
                 "action": action,
@@ -389,7 +382,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.crash.inspect",
+            Command::SystemCrashInspect,
             json!({
                 "session": session,
                 "action": action,
@@ -421,7 +414,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.storage.control",
+            Command::SystemStorageControl,
             json!({
                 "session": session,
                 "action": action,
@@ -453,7 +446,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.audio.control",
+            Command::SystemAudioControl,
             json!({
                 "session": session,
                 "action": action,
@@ -486,7 +479,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.desktop.control",
+            Command::SystemDesktopControl,
             json!({
                 "session": session,
                 "action": action,
@@ -544,7 +537,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.bluetooth.control",
+            Command::SystemBluetoothControl,
             json!({
                 "session": session,
                 "action": action,
@@ -573,7 +566,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             }
         }
         let value = request_clawd(
-            "system.power.control",
+            Command::SystemPowerControl,
             json!({
                 "session": session,
                 "action": action,
@@ -593,7 +586,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal hardware command requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.hardware.inspect",
+            Command::SystemHardwareInspect,
             json!({
                 "session": session,
                 "action": action,
@@ -612,7 +605,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
         let session = env::var("COS_SESSION")
             .map_err(|_| "internal security command requires COS_SESSION".to_string())?;
         let value = request_clawd(
-            "system.security.inspect",
+            Command::SystemSecurityInspect,
             json!({
                 "session": session,
                 "action": action,
@@ -658,7 +651,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.container.control",
+            Command::SystemContainerControl,
             json!({
                 "session": session,
                 "action": action,
@@ -706,7 +699,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.config.control",
+            Command::SystemConfigControl,
             json!({
                 "session": session,
                 "action": action,
@@ -743,7 +736,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.events.control",
+            Command::SystemEventsControl,
             json!({
                 "session": session,
                 "action": action,
@@ -800,7 +793,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.backup.control",
+            Command::SystemBackupControl,
             json!({
                 "session": session,
                 "action": action,
@@ -862,7 +855,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.firewall.control",
+            Command::SystemFirewallControl,
             json!({
                 "session": session,
                 "action": action,
@@ -921,7 +914,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.users.control",
+            Command::SystemUsersControl,
             json!({
                 "session": session,
                 "action": action,
@@ -979,7 +972,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.printer.control",
+            Command::SystemPrinterControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1033,7 +1026,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             }
         }
         let value = request_clawd(
-            "system.clipboard.control",
+            Command::SystemClipboardControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1076,7 +1069,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.camera.control",
+            Command::SystemCameraControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1111,7 +1104,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.accessibility.control",
+            Command::SystemAccessibilityControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1176,7 +1169,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.display.control",
+            Command::SystemDisplayControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1235,7 +1228,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.usb.control",
+            Command::SystemUsbControl,
             json!({
                 "session": session,
                 "action": action,
@@ -1270,7 +1263,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
             index += 2;
         }
         let value = request_clawd(
-            "system.location.query",
+            Command::SystemLocationQuery,
             json!({
                 "session": session,
                 "action": action,

@@ -2565,15 +2565,14 @@ fn request_brokered_oauth_refresh(name: &str, namespace: &str) -> Result<Value, 
         .ok_or_else(|| "OAuth refresh broker requires an active session".to_string())?;
     let response = crate::clawd::client::request_blocking(
         crate::paths::clawd_socket_path(),
-        crate::clawd::protocol::Request {
-            id: None,
-            command: "credential.oauth-refresh".to_string(),
-            params: json!({
+        crate::clawd::protocol::Request::build(
+            crate::clawd::routes::Command::CredentialOauthRefresh,
+            json!({
                 "session": session,
                 "namespace": namespace,
                 "credential": name,
             }),
-        },
+        ),
     )?;
     if response.ok {
         Ok(response.result.unwrap_or(Value::Null))

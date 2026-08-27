@@ -197,41 +197,20 @@ fn requester_identity(uid: u32, pid: u32, start_time_ticks: Option<u64>) -> Stri
     }
 }
 
-/// Commands this authority owns. Routed separately from the broker's
-/// general dispatch so denials can answer with structured data.
-pub fn owns_command(command: &str) -> bool {
-    matches!(
-        command,
-        "app_session.register"
-            | "app_session.register_native"
-            | "mcp_session.register"
-            | "app_session.bind"
-            | "app_session.set_transient"
-            | "app_session.deregister"
-    )
-}
-
-pub async fn dispatch(
-    command: &str,
-    params: Value,
-    client: &ClientIdentity,
-) -> Result<Value, BrokerError> {
-    match command {
-        "app_session.register" => register(params, client).await,
-        "app_session.register_native" => {
-            register_native(params, client).await.map_err(BrokerError::from)
-        }
-        "mcp_session.register" => register_mcp(params, client).await.map_err(BrokerError::from),
-        "app_session.bind" => bind(params, client).await.map_err(BrokerError::from),
-        "app_session.set_transient" => set_transient(params, client)
-            .await
-            .map_err(BrokerError::from),
-        "app_session.deregister" => deregister(params, client).await.map_err(BrokerError::from),
-        other => Err(BrokerError::from(format!(
-            "unknown App session command: {other}"
-        ))),
-    }
-}
+/// Routes this authority owns.
+///
+/// Each one is a row in [`crate::clawd::routes`] pointing straight at
+/// the function below it, so there is no second dispatcher here that
+/// could drift from the registry's access class, budget or typed
+/// decode.
+pub const COMMANDS: &[&str] = &[
+    "app_session.register",
+    "app_session.register_native",
+    "mcp_session.register",
+    "app_session.bind",
+    "app_session.set_transient",
+    "app_session.deregister",
+];
 
 pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
     let uid = client.require_uid()?;

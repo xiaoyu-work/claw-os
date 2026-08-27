@@ -34,7 +34,7 @@ fn query_returns_recent_operations() {
     std::env::set_var("COS_DATA_DIR", tmp.path());
 
     let client = ClientIdentity::unknown();
-    let response = Response::ok(None, json!({"status": "ok"}));
+    let response = Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"status": "ok"}));
     record_clawd_request(
         &audit_policy::request_facts("daemon.health", &Value::Null),
         &response.audit_facts(),
@@ -56,7 +56,7 @@ fn the_journal_projection_matches_the_broker_audit_projection() {
     // Both sinks are handed the same facts, so a value masked in one
     // can never survive in the other.
     let params = json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242});
-    let response = Response::ok(None, json!({"bound": true}));
+    let response = Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true}));
     let facts = audit_policy::request_facts("app_session.bind", &params);
     let record = journal_record("app_session.bind", params, &response);
     assert_eq!(record["request"], serde_json::to_value(&facts).unwrap());
@@ -68,7 +68,7 @@ fn launch_handles_are_masked_in_the_system_journal() {
     let record = journal_record(
         "app_session.bind",
         json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
-        &Response::ok(None, json!({"bound": true})),
+        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true})),
     );
     assert_eq!(record["operation"], json!("app_session.bind"));
     assert_eq!(record["request"]["params"]["session_id"], json!("app-1"));
@@ -82,7 +82,7 @@ fn peer_only_denial_data_never_reaches_the_system_journal() {
         "app_session.register",
         json!({"app_id": "user-manager", "handle": "d34db33f-launch-handle"}),
         &Response::error_with_data(
-            None,
+            crate::clawd::protocol::RequestId::unknown(),
             "request_failed",
             BrokerError::with_data(
                 "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
@@ -105,7 +105,7 @@ fn scheduler_credentials_are_counted_not_journalled() {
             "command": "add",
             "args": ["--credential", "hunter2-password"],
         }),
-        &Response::ok(None, json!({"added": true})),
+        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"added": true})),
     );
     assert_eq!(record["request"]["params"]["command"], json!("add"));
     assert_eq!(
@@ -116,25 +116,28 @@ fn scheduler_credentials_are_counted_not_journalled() {
 }
 
 #[test]
-fn malformed_bodies_are_journalled_as_metadata() {
-    let raw = r#"{"command":"credential.oauth-refresh","params":{"t":"ya29.oauth-access-token""#;
-    let error =
-        serde_json::from_str::<crate::clawd::protocol::Request>(raw).expect_err("must not parse");
-    let response =
-        Response::error_classified(None, "invalid_json", "invalid_json", error.to_string());
-    let record = invalid_request_record(
-        &audit_policy::invalid_request_facts(raw, &error),
+fn refused_frames_are_journalled_as_metadata() {
+    let response = Response::fault(
+        crate::clawd::protocol::RequestId::unknown(),
+        crate::clawd::wire::Fault::MalformedBody,
+    );
+    let record = protocol_failure_record(
+        &audit_policy::protocol_failure_facts("invalid_json", 78, None),
         &response.audit_facts(),
         Duration::from_millis(1),
         &ClientIdentity::unknown(),
     );
     let rendered = serde_json::to_string(&record).unwrap();
     assert_clean(&rendered);
-    assert_eq!(record["request"]["parse_category"], json!("eof"));
-    assert_eq!(record["request"]["body"]["bytes"], json!(raw.len()));
+    assert_eq!(record["operation"], json!("invalid_json"));
+    assert_eq!(record["request"]["bytes"], json!(78));
     assert!(
         record.get("raw").is_none(),
-        "the body itself is never stored"
+        "the frame itself is never stored"
+    );
+    assert!(
+        record["request"].get("body").is_none(),
+        "not even a digest of the frame is stored"
     );
 }
 

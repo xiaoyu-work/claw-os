@@ -226,15 +226,19 @@ fn non_object_params_are_recorded_as_a_kind_and_a_count() {
 }
 
 #[test]
-fn malformed_bodies_are_described_never_stored() {
-    let raw =
-        r#"{"command":"credential.oauth-refresh","params":{"token":"ya29.oauth-access-token""#;
-    let error = serde_json::from_str::<Value>(raw).expect_err("must not parse");
-    let facts = invalid_request_facts(raw, &error);
-    assert_eq!(facts.parse_category, "eof");
-    assert_eq!(facts.body.bytes, raw.len());
-    assert_eq!(facts.body.digest.len(), DIGEST_HEX_LEN);
+fn refused_frames_are_described_never_stored() {
+    // The frame that produced this refusal quoted a credential. What
+    // survives is the stable class, the byte count, and — only when a
+    // route was actually resolved — the registry's own static name.
+    let facts = protocol_failure_facts("invalid_json", 4096, None);
+    assert_eq!(facts.class, "invalid_json");
+    assert_eq!(facts.bytes, 4096);
+    assert!(facts.command.is_none());
     assert_no_secrets(&render(&facts));
+
+    let named = protocol_failure_facts("invalid_params", 128, Some("credential.oauth-refresh"));
+    assert_eq!(named.command, Some("credential.oauth-refresh"));
+    assert_no_secrets(&render(&named));
 }
 
 #[test]

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 
 use crate::agent::service::Job;
 use crate::approvals::{Request as ApprovalRequest, Resolved as ResolvedApproval};
-use crate::audit_policy::{self, InvalidRequestFacts, RequestFacts, ResponseFacts};
+use crate::audit_policy::{self, ProtocolFailureFacts, RequestFacts, ResponseFacts};
 
 use super::client_identity::ClientIdentity;
 
@@ -44,17 +44,17 @@ fn clawd_request_record(
     })
 }
 
-pub fn record_invalid_request(
-    request: &InvalidRequestFacts,
+pub fn record_protocol_failure(
+    request: &ProtocolFailureFacts,
     outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) {
-    let _ = append(invalid_request_record(request, outcome, duration, client));
+    let _ = append(protocol_failure_record(request, outcome, duration, client));
 }
 
-fn invalid_request_record(
-    request: &InvalidRequestFacts,
+fn protocol_failure_record(
+    request: &ProtocolFailureFacts,
     outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
@@ -62,8 +62,8 @@ fn invalid_request_record(
     json!({
         "ts": Utc::now(),
         "event": "system.operation",
-        "source": "clawd.invalid-request",
-        "operation": "invalid_json",
+        "source": "clawd.protocol-failure",
+        "operation": request.class,
         "ok": outcome.ok,
         "duration_ms": duration.as_millis(),
         "client": client,

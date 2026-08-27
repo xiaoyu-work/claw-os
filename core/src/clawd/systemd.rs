@@ -215,10 +215,9 @@ pub fn restore_unit_state(
             .map_err(|_| "systemd rollback requires COS_SESSION".to_string())?;
         let response = crate::clawd::client::request_blocking(
             crate::paths::clawd_socket_path(),
-            crate::clawd::protocol::Request {
-                id: None,
-                command: "system.service.restore".to_string(),
-                params: json!({
+            crate::clawd::protocol::Request::build(
+                crate::clawd::routes::Command::SystemServiceRestore,
+                json!({
                     "session": session,
                     "mutation_session": mutation_session.as_str(),
                     "mutation_seq": mutation_seq,
@@ -226,7 +225,7 @@ pub fn restore_unit_state(
                     "active": active,
                     "enabled": enabled,
                 }),
-            },
+            ),
         )?;
         if response.ok {
             Ok(())

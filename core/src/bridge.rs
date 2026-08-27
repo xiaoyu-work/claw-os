@@ -1,12 +1,13 @@
 use std::path::Path;
+use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-use std::process::{Command, Stdio};
 
 use std::collections::BTreeMap;
 
 use crate::caps::manifest::{ArgKind, Manifest, Need, Operation, Runtime, ScopeBinding};
 use crate::caps::{Cap, CapSet, Scope, Verb};
+use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
 pub(crate) fn app_runner_path() -> std::path::PathBuf {
@@ -132,7 +133,7 @@ impl McpProcSession {
                 return Err("MCP parent session has no capabilities".to_string());
             }
             let result = clawd_request(
-                "mcp_session.register",
+                ClawdCommand::McpSessionRegister,
                 serde_json::json!({
                     "command": command,
                     "parent_caps": parent.caps,
@@ -172,7 +173,7 @@ impl McpProcSession {
 
     pub fn bind_process(&self, pid: u32) -> Result<(), String> {
         clawd_request(
-            "app_session.bind",
+            ClawdCommand::AppSessionBind,
             serde_json::json!({
                 "session_id": self.session_id,
                 "handle": self.handle,
@@ -187,7 +188,7 @@ impl McpProcSession {
 impl Drop for McpProcSession {
     fn drop(&mut self) {
         if let Err(error) = clawd_request(
-            "app_session.deregister",
+            ClawdCommand::AppSessionDeregister,
             serde_json::json!({
                 "session_id": self.session_id,
                 "handle": self.handle,
@@ -216,7 +217,7 @@ impl AppSessionControl {
 impl AppIdentitySession {
     pub fn for_native_host(app_id: &str) -> Result<Self, String> {
         let result = clawd_request(
-            "app_session.register_native",
+            ClawdCommand::AppSessionRegisterNative,
             serde_json::json!({"app_id": app_id}),
         )?;
         let session_id = result
@@ -376,7 +377,7 @@ impl AppIdentitySession {
         // requests the daemon filed. This process stays alive and waits,
         // then retries over the same connection identity, so the user
         // never has to rerun anything and no secret has to travel.
-        let result = match clawd_request("app_session.register", params.clone()) {
+        let result = match clawd_request(ClawdCommand::AppSessionRegister, params.clone()) {
             Ok(result) => result,
             Err(error) => {
                 let ids = approval_requests(&error);
@@ -384,7 +385,7 @@ impl AppIdentitySession {
                     return Err(error.message);
                 }
                 wait_for_approvals(&ids)?;
-                clawd_request("app_session.register", params).map_err(String::from)?
+                clawd_request(ClawdCommand::AppSessionRegister, params).map_err(String::from)?
             }
         };
         let session_id = result
@@ -478,7 +479,7 @@ impl AppIdentitySession {
                 crate::proc::bind_session_process(&self.session_id, pid)
             }
             AppSessionBackend::Clawd { handle, .. } => clawd_request(
-                "app_session.bind",
+                ClawdCommand::AppSessionBind,
                 serde_json::json!({
                     "session_id": self.session_id,
                     "handle": handle,
@@ -640,11 +641,10 @@ fn set_app_session_transient_call(
                 "call": call,
             });
             if let Some(parent_caps) = parent_caps {
-                params["parent_caps"] = serde_json::to_value(parent_caps).map_err(|error| {
-                    format!("failed to serialize parent capabilities: {error}")
-                })?;
+                params["parent_caps"] = serde_json::to_value(parent_caps)
+                    .map_err(|error| format!("failed to serialize parent capabilities: {error}"))?;
             }
-            clawd_request("app_session.set_transient", params)
+            clawd_request(ClawdCommand::AppSessionSetTransient, params)
                 .map(|_| ())
                 .map_err(String::from)
         }
@@ -686,16 +686,12 @@ impl std::fmt::Display for ClawdCallError {
 }
 
 fn clawd_request(
-    command: &str,
+    command: ClawdCommand,
     params: serde_json::Value,
 ) -> Result<serde_json::Value, ClawdCallError> {
     let response = crate::clawd::client::request_blocking(
         crate::paths::clawd_socket_path(),
-        crate::clawd::protocol::Request {
-            id: None,
-            command: command.to_string(),
-            params,
-        },
+        crate::clawd::protocol::Request::build(command, params),
     )
     .map_err(|message| ClawdCallError {
         message,
@@ -735,8 +731,9 @@ fn approval_requests(error: &ClawdCallError) -> Vec<String> {
     error
         .data
         .as_ref()
-        .filter(|data| data.get("status").and_then(serde_json::Value::as_str)
-            == Some("approval_required"))
+        .filter(|data| {
+            data.get("status").and_then(serde_json::Value::as_str) == Some("approval_required")
+        })
         .and_then(|data| data.get("approval_requests"))
         .and_then(serde_json::Value::as_array)
         .map(|ids| {
@@ -762,7 +759,7 @@ fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
             return Err("waiting for App launch approval was cancelled".to_string());
         }
         let result = clawd_request(
-            "permission.status",
+            ClawdCommand::PermissionStatus,
             serde_json::json!({"ids": ids}),
         )
         .map_err(String::from)?;
@@ -1039,7 +1036,7 @@ impl Drop for AppIdentitySession {
             AppSessionBackend::Local { .. } => deregister_session(&self.session_id),
             AppSessionBackend::Clawd { handle, .. } => {
                 if let Err(error) = clawd_request(
-                    "app_session.deregister",
+                    ClawdCommand::AppSessionDeregister,
                     serde_json::json!({
                         "session_id": self.session_id,
                         "handle": handle,
@@ -1099,10 +1096,7 @@ const PANEL_APPLET_ENV_KEYS: &[&str] = &[
     "COSMIC_PANEL_SIZE",
 ];
 
-fn preserved_app_environment<F>(
-    panel_applet: bool,
-    mut value_for: F,
-) -> Vec<(String, String)>
+fn preserved_app_environment<F>(panel_applet: bool, mut value_for: F) -> Vec<(String, String)>
 where
     F: FnMut(&str) -> Option<String>,
 {
@@ -1114,15 +1108,12 @@ where
     SAFE_APP_ENV_KEYS
         .iter()
         .chain(panel_keys)
-        .filter_map(|key| {
-            value_for(key).map(|value| ((*key).to_string(), value))
-        })
+        .filter_map(|key| value_for(key).map(|value| ((*key).to_string(), value)))
         .collect()
 }
 
 fn reset_app_environment(command: &mut Command, panel_applet: bool) {
-    let preserved =
-        preserved_app_environment(panel_applet, |key| std::env::var(key).ok());
+    let preserved = preserved_app_environment(panel_applet, |key| std::env::var(key).ok());
     command.env_clear();
     command.envs(preserved);
 }
@@ -1692,8 +1683,5 @@ pub fn launch_gui(
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/bridge.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/bridge.rs"));
 }

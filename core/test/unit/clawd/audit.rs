@@ -42,7 +42,7 @@ fn launch_handles_are_never_written_to_the_audit_trail() {
     let rendered = request_audit(
         "app_session.bind",
         json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
-        &Response::ok(None, json!({"bound": true})),
+        &Response::ok(crate::clawd::protocol::RequestId::unknown(), json!({"bound": true})),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -66,7 +66,7 @@ fn credential_material_never_reaches_the_audit_trail() {
             "credential": "ya29.oauth-access-token",
             "refresh_token": "hunter2-password",
         }),
-        &Response::error(None, "request_failed", "credential is not eligible"),
+        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", "credential is not eligible"),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -81,7 +81,7 @@ fn handler_errors_that_echo_input_are_stored_as_class_and_digest() {
     let rendered = request_audit(
         "system.users.control",
         json!({"session": "app-1", "action": "create"}),
-        &Response::error(None, "request_failed", message),
+        &Response::error(crate::clawd::protocol::RequestId::unknown(), "request_failed", message),
     );
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
@@ -97,7 +97,7 @@ fn error_data_never_reaches_the_audit_record() {
         "app_session.register",
         json!({"app_id": "user-manager", "kind": "operation", "operation": "create-user"}),
         &Response::error_with_data(
-            None,
+            crate::clawd::protocol::RequestId::unknown(),
             "request_failed",
             BrokerError::with_data(
                 "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
@@ -119,7 +119,7 @@ fn unknown_commands_are_audited_by_outcome_alone() {
         "vendor.debug.dump",
         json!({"authorization": "ya29.oauth-access-token"}),
         &Response::error_classified(
-            None,
+            crate::clawd::protocol::RequestId::unknown(),
             "request_failed",
             "unknown_command",
             "unknown clawd command: vendor.debug.dump",
@@ -138,17 +138,18 @@ fn unknown_commands_are_audited_by_outcome_alone() {
 }
 
 #[test]
-fn malformed_requests_are_audited_as_bounded_metadata() {
-    let raw = r#"{"command":"credential.oauth-refresh","params":{"t":"ya29.oauth-access-token""#;
-    let error =
-        serde_json::from_str::<crate::clawd::protocol::Request>(raw).expect_err("must not parse");
-    let facts = audit_policy::invalid_request_facts(raw, &error);
-    let response =
-        Response::error_classified(None, "invalid_json", "invalid_json", error.to_string());
+fn refused_frames_are_audited_as_bounded_metadata() {
+    // The refused frame quoted an OAuth token. Nothing of it — not
+    // verbatim, not as a digest — may reach the record.
+    let facts = audit_policy::protocol_failure_facts("invalid_json", 78, None);
+    let response = Response::fault(
+        crate::clawd::protocol::RequestId::unknown(),
+        crate::clawd::wire::Fault::MalformedBody,
+    );
     let outcome = response.audit_facts();
-    let audit = InvalidRequestAudit {
+    let audit = ProtocolFailureAudit {
         ts: Utc::now(),
-        event: "clawd.invalid-request",
+        event: "clawd.protocol-failure",
         request: &facts,
         outcome: &outcome,
         duration_ms: 1,
@@ -157,9 +158,13 @@ fn malformed_requests_are_audited_as_bounded_metadata() {
     let rendered = serde_json::to_string(&audit).expect("serialize");
     assert_clean(&rendered);
     let record: Value = serde_json::from_str(&rendered).expect("parse");
-    assert_eq!(record["parse_category"], json!("eof"));
-    assert_eq!(record["body"]["bytes"], json!(raw.len()));
+    assert_eq!(record["class"], json!("invalid_json"));
+    assert_eq!(record["bytes"], json!(78));
     assert_eq!(record["error"]["class"], json!("invalid_json"));
+    assert!(
+        record.get("body").is_none(),
+        "the frame itself is never stored in any form"
+    );
 }
 
 #[test]

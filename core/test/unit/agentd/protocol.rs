@@ -24,12 +24,9 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
     // The broker socket's own routes must not be reachable from a
     // worker grant: no admin, App-session, scheduler or
     // permission-decision surface exists on this channel.
-    for route in crate::clawd::server::USER_COMMANDS
-        .iter()
-        .chain(crate::clawd::server::ROOT_COMMANDS.iter())
-    {
+    for route in crate::clawd::routes::ROUTES.iter().map(|route| route.name) {
         assert!(
-            !WORKER_ROUTES.contains(route),
+            !WORKER_ROUTES.contains(&route),
             "broker route `{route}` leaked onto the worker channel"
         );
     }

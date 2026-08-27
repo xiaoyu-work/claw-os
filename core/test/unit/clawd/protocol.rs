@@ -1,25 +1,74 @@
 use serde_json::json;
 
 use super::*;
+use crate::clawd::routes::Command;
 
 #[test]
-fn request_defaults_params_to_null() {
-    let request: Request = serde_json::from_value(json!({
-        "id": 1,
-        "command": "daemon.health"
-    }))
-    .unwrap();
-
-    assert_eq!(request.id, Some(json!(1)));
-    assert_eq!(request.params, Value::Null);
+fn a_request_carries_the_protocol_version_and_a_fresh_id() {
+    let request = Request::build(Command::DaemonHealth, Value::Null);
+    assert_eq!(request.v, PROTOCOL_VERSION);
+    assert_eq!(request.command, Command::DaemonHealth);
+    assert_ne!(
+        Request::build(Command::DaemonHealth, Value::Null).id,
+        request.id,
+        "each request must mint its own correlation id"
+    );
 }
 
 #[test]
-fn response_error_omits_result() {
-    let response = Response::error(Some(json!("r1")), "bad_request", "missing command");
-    let value = serde_json::to_value(response).unwrap();
+fn a_response_echoes_the_id_and_omits_the_unused_half() {
+    let id = RequestId::parse("r-1").unwrap();
+    let ok = serde_json::to_value(Response::ok(id.clone(), json!({"status": "ok"}))).unwrap();
+    assert_eq!(ok["v"], json!(PROTOCOL_VERSION));
+    assert_eq!(ok["id"], json!("r-1"));
+    assert_eq!(ok["ok"], json!(true));
+    assert!(ok.get("error").is_none());
 
-    assert_eq!(value["ok"], false);
-    assert!(value.get("result").is_none());
-    assert_eq!(value["error"]["code"], "bad_request");
+    let failed =
+        serde_json::to_value(Response::error(id, "bad_request", "missing command")).unwrap();
+    assert_eq!(failed["ok"], json!(false));
+    assert!(failed.get("result").is_none());
+    assert_eq!(failed["error"]["code"], json!("bad_request"));
+}
+
+#[test]
+fn a_fault_response_carries_only_static_text() {
+    let response = Response::fault(RequestId::unknown(), Fault::InvalidParams);
+    let error = response.error.as_ref().expect("error body");
+    assert_eq!(error.code, Fault::InvalidParams.code());
+    assert_eq!(error.message, Fault::InvalidParams.message());
+    assert_eq!(error.audit_class, Some(Fault::InvalidParams.class()));
+    assert!(error.data.is_none());
+    assert_eq!(response.id.as_str(), "unknown");
+}
+
+#[test]
+fn the_audit_projection_never_carries_the_handler_message_or_peer_payload() {
+    let error = BrokerError::with_data(
+        "credential ya29.oauth-access-token was rejected",
+        json!({"approval_requests": ["req-1"]}),
+    );
+    let response = Response::error_with_data(RequestId::unknown(), "request_failed", error);
+    let facts = response.audit_facts();
+    let rendered = serde_json::to_string(&facts).unwrap();
+    assert!(!rendered.contains("ya29.oauth-access-token"), "{rendered}");
+    assert!(!rendered.contains("approval_requests"), "{rendered}");
+}
+
+#[test]
+fn the_error_body_is_closed_against_unknown_fields() {
+    let smuggled = json!({
+        "code": "request_failed",
+        "message": "no",
+        "audit_class": "spoofed",
+    });
+    assert!(serde_json::from_value::<ErrorBody>(smuggled).is_err());
+}
+
+#[test]
+fn a_response_encodes_to_the_body_the_transport_frames() {
+    let response = Response::ok(RequestId::parse("r-1").unwrap(), json!({"n": 1}));
+    let body = encode_response(&response).unwrap();
+    let decoded: Response = serde_json::from_slice(&body).unwrap();
+    assert_eq!(decoded, response);
 }

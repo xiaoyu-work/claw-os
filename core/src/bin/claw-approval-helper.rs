@@ -1,4 +1,5 @@
 use cos::clawd::protocol::Request;
+use cos::clawd::routes::Command;
 use cos::clawd::{client, config};
 use serde_json::json;
 
@@ -54,11 +55,7 @@ fn main() {
         params["note"] = json!(note);
     }
 
-    let request = Request {
-        id: Some(json!(1)),
-        command: "permission.decide".to_string(),
-        params,
-    };
+    let request = Request::build(Command::PermissionDecide, params);
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -73,12 +70,7 @@ fn main() {
             .unwrap_or_else(|| "clawd rejected the approval decision".to_string());
         fail(&message);
     }
-    println!(
-        "{}",
-        response
-            .result
-            .unwrap_or_else(|| json!({"ok": true}))
-    );
+    println!("{}", response.result.unwrap_or_else(|| json!({"ok": true})));
 }
 
 fn fail(message: &str) -> ! {
