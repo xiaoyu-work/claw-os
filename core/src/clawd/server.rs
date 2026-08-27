@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::agent::service::{self, WorkerOptions};
+use crate::audit_policy;
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -128,32 +129,32 @@ async fn handle_client(
         let started = Instant::now();
         let response = match serde_json::from_str::<Request>(line) {
             Ok(request) => {
-                let response = dispatch(request.clone(), &state, &client).await;
-                if let Err(err) = audit::record_request(
-                    &request.command,
-                    &request.params,
-                    &response,
-                    started.elapsed(),
-                    &client,
-                ) {
+                // Projected before dispatch and shared by both sinks:
+                // the raw command and params never reach a record.
+                let facts = audit_policy::request_facts(&request.command, &request.params);
+                let response = dispatch(request, &state, &client).await;
+                let outcome = response.audit_facts();
+                let elapsed = started.elapsed();
+                if let Err(err) = audit::record_request(&facts, &outcome, elapsed, &client) {
                     tracing::error!(error = %err, "failed to write clawd audit record");
                 }
-                system_journal::record_clawd_request(
-                    &request.command,
-                    &request.params,
-                    &response,
-                    started.elapsed(),
-                    &client,
-                );
+                system_journal::record_clawd_request(&facts, &outcome, elapsed, &client);
                 response
             }
             Err(err) => {
-                let response = Response::error(None, "invalid_json", err.to_string());
-                if let Err(err) = audit::record_invalid(line, &response, started.elapsed(), &client)
-                {
+                let facts = audit_policy::invalid_request_facts(line, &err);
+                let response = Response::error_classified(
+                    None,
+                    "invalid_json",
+                    "invalid_json",
+                    err.to_string(),
+                );
+                let outcome = response.audit_facts();
+                let elapsed = started.elapsed();
+                if let Err(err) = audit::record_invalid(&facts, &outcome, elapsed, &client) {
                     tracing::error!(error = %err, "failed to write clawd invalid-request audit record");
                 }
-                system_journal::record_invalid_request(line, &response, started.elapsed(), &client);
+                system_journal::record_invalid_request(&facts, &outcome, elapsed, &client);
                 response
             }
         };
@@ -174,7 +175,18 @@ async fn handle_client(
 async fn dispatch(request: Request, state: &DaemonState, client: &ClientIdentity) -> Response {
     let id = request.id.clone();
     if let Err(message) = authorize_command(&request.command, client) {
-        return Response::error(id, "request_failed", message);
+        return Response::error_classified(id, "request_failed", "command_not_authorized", message);
+    }
+    if !is_dispatchable(&request.command) {
+        // Named separately from handler failures so the audit trail can
+        // count probes for routes that do not exist without storing the
+        // caller's string.
+        return Response::error_classified(
+            id,
+            "request_failed",
+            "unknown_command",
+            format!("unknown clawd command: {}", request.command),
+        );
     }
     // App-session and scheduler routes answer denials with structured
     // data (the approval request ids the caller must wait on), which
@@ -275,78 +287,94 @@ async fn dispatch_result(
     }
 }
 
+/// Commands any authenticated peer may issue. The daemon still derives
+/// identity and capability from the connection; this list only decides
+/// what a non-root uid is allowed to reach.
+pub(crate) const USER_COMMANDS: &[&str] = &[
+    "daemon.health",
+    "daemon.status",
+    "task.submit",
+    "task.list",
+    "task.get",
+    "task.status",
+    "task.cancel",
+    "task.stream",
+    "task.result",
+    "task.count",
+    "memory.history",
+    "memory.sessions",
+    "credential.oauth-refresh",
+    "system.audio.control",
+    "system.accessibility.control",
+    "system.backup.control",
+    "system.bluetooth.control",
+    "system.camera.control",
+    "system.clipboard.control",
+    "system.container.control",
+    "system.config.control",
+    "system.crash.inspect",
+    "system.desktop.control",
+    "system.display.control",
+    "system.events.control",
+    "system.firewall.control",
+    "system.hardware.inspect",
+    "system.location.query",
+    "system.network.control",
+    "system.package.install",
+    "system.package.control",
+    "system.package.restore",
+    "system.power.control",
+    "system.printer.control",
+    "system.security.inspect",
+    "system.service.control",
+    "system.service.restore",
+    "system.snapshot.control",
+    "system.storage.control",
+    "system.usb.control",
+    "system.users.control",
+    "scheduler.run",
+    "app_session.register",
+    "app_session.register_native",
+    "mcp_session.register",
+    "app_session.bind",
+    "app_session.set_transient",
+    "app_session.deregister",
+    "permission.pending",
+    "permission.recent",
+    "permission.status",
+    "permission.request",
+    "permission.decide",
+    "context.snapshot",
+    "context.sources",
+    "context.event.append",
+    "context.event.query",
+    "system.operations",
+    "transaction.begin",
+    "transaction.list",
+    "transaction.commit",
+    "transaction.rollback",
+];
+
+/// Commands only root may issue.
+pub(crate) const ROOT_COMMANDS: &[&str] = &["context.update"];
+
+/// Whether the broker routes this command at all.
+///
+/// Together with [`USER_COMMANDS`] and [`ROOT_COMMANDS`] this is the
+/// canonical set of broker routes, so
+/// [`crate::audit_policy::known_commands`] can be checked against it and
+/// a new route cannot reach a sink without an audit policy.
+fn is_dispatchable(command: &str) -> bool {
+    USER_COMMANDS.contains(&command) || ROOT_COMMANDS.contains(&command)
+}
+
 fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), String> {
     let uid = client.require_uid()?;
     if uid == 0 {
         return Ok(());
     }
 
-    let allowed = matches!(
-        command,
-        "daemon.health"
-            | "daemon.status"
-            | "task.submit"
-            | "task.list"
-            | "task.get"
-            | "task.status"
-            | "task.cancel"
-            | "task.stream"
-            | "task.result"
-            | "task.count"
-            | "memory.history"
-            | "memory.sessions"
-            | "credential.oauth-refresh"
-            | "system.audio.control"
-            | "system.accessibility.control"
-            | "system.backup.control"
-            | "system.bluetooth.control"
-            | "system.camera.control"
-            | "system.clipboard.control"
-            | "system.container.control"
-            | "system.config.control"
-            | "system.crash.inspect"
-            | "system.desktop.control"
-            | "system.display.control"
-            | "system.events.control"
-            | "system.firewall.control"
-            | "system.hardware.inspect"
-            | "system.location.query"
-            | "system.network.control"
-            | "system.package.install"
-            | "system.package.control"
-            | "system.package.restore"
-            | "system.power.control"
-            | "system.printer.control"
-            | "system.security.inspect"
-            | "system.service.control"
-            | "system.service.restore"
-            | "system.snapshot.control"
-            | "system.storage.control"
-            | "system.usb.control"
-            | "system.users.control"
-            | "scheduler.run"
-            | "app_session.register"
-            | "app_session.register_native"
-            | "mcp_session.register"
-            | "app_session.bind"
-            | "app_session.set_transient"
-            | "app_session.deregister"
-            | "permission.pending"
-            | "permission.recent"
-            | "permission.status"
-            | "permission.request"
-            | "permission.decide"
-            | "context.snapshot"
-            | "context.sources"
-            | "context.event.append"
-            | "context.event.query"
-            | "system.operations"
-            | "transaction.begin"
-            | "transaction.list"
-            | "transaction.commit"
-            | "transaction.rollback"
-    );
-    if allowed {
+    if USER_COMMANDS.contains(&command) {
         Ok(())
     } else {
         Err(format!("clawd command requires root: {command}"))
@@ -386,4 +414,12 @@ fn set_socket_permissions(socket_path: &PathBuf, mode: u32) -> Result<(), String
 #[cfg(not(unix))]
 fn set_socket_permissions(_socket_path: &PathBuf, _mode: u32) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/server.rs"
+    ));
 }

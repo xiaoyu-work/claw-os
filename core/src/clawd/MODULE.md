@@ -31,6 +31,18 @@ The broker consumes capability definitions and service providers. Callers use
 RPC clients rather than importing server internals. Never trust request fields
 for identity or authority; derive them from the connection/session boundary.
 
+Nothing a caller sends is written to a durable record on trust.
+`server.rs` projects every request through [`crate::audit_policy`] before
+dispatch and hands the same projection to the broker audit log and the system
+operations journal, so the two sinks cannot disagree. That policy is an
+allowlist keyed by command: a route contributes only the fields it has
+classified as safe, and a command with no entry is audited by outcome alone —
+no name, no arguments. `USER_COMMANDS` and `ROOT_COMMANDS` in `server.rs` are
+the canonical route list a unit test checks the policy table against, so a new
+command cannot reach a sink unclassified. Handler messages are caller-derived
+and are stored as a length plus a keyed digest; a route that wants its failure
+named uses `BrokerError::classified` or `Response::error_classified`.
+
 App and MCP session rows are root-owned authority that privileged providers
 later trust. `app_sessions.rs` therefore mints them from the installed manifest
 plus schema-validated arguments, bounded by the launcher authority resolved
@@ -54,7 +66,7 @@ Nothing carries between processes: knowing a request id authorises nothing.
 
 Mutating a registered session requires the opaque launch handle issued at
 registration, bound to the launching process and single-use for the pid bind.
-It is masked in both the broker audit log and the system journal.
+It never appears in any durable record.
 Caller-supplied capabilities may only narrow the ceiling.
 
 `scheduler.rs` applies the same rule to proactive jobs, whose stored capability

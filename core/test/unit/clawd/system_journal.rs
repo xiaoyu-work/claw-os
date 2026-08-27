@@ -1,5 +1,32 @@
 use super::*;
 
+use crate::clawd::protocol::{BrokerError, Response};
+
+const FORBIDDEN: &[&str] = &[
+    "d34db33f-launch-handle",
+    "ya29.oauth-access-token",
+    "hunter2-password",
+    "approval_requests",
+];
+
+fn assert_clean(rendered: &str) {
+    for secret in FORBIDDEN {
+        assert!(
+            !rendered.contains(secret),
+            "system journal leaked {secret}: {rendered}"
+        );
+    }
+}
+
+fn journal_record(command: &str, params: Value, response: &Response) -> Value {
+    clawd_request_record(
+        &audit_policy::request_facts(command, &params),
+        &response.audit_facts(),
+        Duration::from_millis(1),
+        &ClientIdentity::unknown(),
+    )
+}
+
 #[test]
 fn query_returns_recent_operations() {
     let tmp = tempfile::tempdir().unwrap();
@@ -9,9 +36,8 @@ fn query_returns_recent_operations() {
     let client = ClientIdentity::unknown();
     let response = Response::ok(None, json!({"status": "ok"}));
     record_clawd_request(
-        "daemon.health",
-        &Value::Null,
-        &response,
+        &audit_policy::request_facts("daemon.health", &Value::Null),
+        &response.audit_facts(),
         Duration::from_millis(3),
         &client,
     );
@@ -26,46 +52,147 @@ fn query_returns_recent_operations() {
 }
 
 #[test]
-fn launch_handles_are_masked_in_the_system_journal() {
-    let client = ClientIdentity::unknown();
+fn the_journal_projection_matches_the_broker_audit_projection() {
+    // Both sinks are handed the same facts, so a value masked in one
+    // can never survive in the other.
+    let params = json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242});
     let response = Response::ok(None, json!({"bound": true}));
-    let record = clawd_request_record(
+    let facts = audit_policy::request_facts("app_session.bind", &params);
+    let record = journal_record("app_session.bind", params, &response);
+    assert_eq!(record["request"], serde_json::to_value(&facts).unwrap());
+    assert_clean(&serde_json::to_string(&record).unwrap());
+}
+
+#[test]
+fn launch_handles_are_masked_in_the_system_journal() {
+    let record = journal_record(
         "app_session.bind",
-        &json!({"session_id": "app-1", "handle": "d34db33f", "pid": 4242}),
-        &response,
-        Duration::from_millis(1),
-        &client,
+        json!({"session_id": "app-1", "handle": "d34db33f-launch-handle", "pid": 4242}),
+        &Response::ok(None, json!({"bound": true})),
     );
-    assert_eq!(record["params"]["handle"], json!("<redacted>"));
-    assert_eq!(record["params"]["session_id"], json!("app-1"));
-    assert!(
-        !serde_json::to_string(&record).unwrap().contains("d34db33f"),
-        "the journal projection must not carry replayable launch authority"
-    );
+    assert_eq!(record["operation"], json!("app_session.bind"));
+    assert_eq!(record["request"]["params"]["session_id"], json!("app-1"));
+    assert!(record["request"]["params"].get("handle").is_none());
+    assert_clean(&serde_json::to_string(&record).unwrap());
 }
 
 #[test]
 fn peer_only_denial_data_never_reaches_the_system_journal() {
-    let client = ClientIdentity::unknown();
-    let response = Response::error_with_data(
-        None,
-        "request_failed",
-        crate::clawd::protocol::BrokerError::with_data(
-            "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
-            json!({"status": "approval_required", "approval_requests": ["ap-1"]}),
+    let record = journal_record(
+        "app_session.register",
+        json!({"app_id": "user-manager", "handle": "d34db33f-launch-handle"}),
+        &Response::error_with_data(
+            None,
+            "request_failed",
+            BrokerError::with_data(
+                "launcher cannot delegate sys.identity:name:accounts; awaiting approval",
+                json!({"status": "approval_required", "approval_requests": ["ap-1"]}),
+            )
+            .classified("approval_required"),
         ),
     );
-    let record = clawd_request_record(
-        "app_session.register",
-        &json!({"app_id": "user-manager", "handle": "deadbeef"}),
-        &response,
+    assert_eq!(record["error"]["class"], json!("approval_required"));
+    assert_eq!(record["request"]["params"]["app_id"], json!("user-manager"));
+    assert_clean(&serde_json::to_string(&record).unwrap());
+}
+
+#[test]
+fn scheduler_credentials_are_counted_not_journalled() {
+    let record = journal_record(
+        "scheduler.run",
+        json!({
+            "subsystem": "cron",
+            "command": "add",
+            "args": ["--credential", "hunter2-password"],
+        }),
+        &Response::ok(None, json!({"added": true})),
+    );
+    assert_eq!(record["request"]["params"]["command"], json!("add"));
+    assert_eq!(
+        record["request"]["params"]["args"],
+        json!({"type": "array", "len": 2})
+    );
+    assert_clean(&serde_json::to_string(&record).unwrap());
+}
+
+#[test]
+fn malformed_bodies_are_journalled_as_metadata() {
+    let raw = r#"{"command":"credential.oauth-refresh","params":{"t":"ya29.oauth-access-token""#;
+    let error =
+        serde_json::from_str::<crate::clawd::protocol::Request>(raw).expect_err("must not parse");
+    let response =
+        Response::error_classified(None, "invalid_json", "invalid_json", error.to_string());
+    let record = invalid_request_record(
+        &audit_policy::invalid_request_facts(raw, &error),
+        &response.audit_facts(),
         Duration::from_millis(1),
-        &client,
+        &ClientIdentity::unknown(),
     );
-    let rendered = serde_json::to_string(&record).expect("serialize");
-    assert_eq!(record["params"]["handle"], json!("<redacted>"));
+    let rendered = serde_json::to_string(&record).unwrap();
+    assert_clean(&rendered);
+    assert_eq!(record["request"]["parse_category"], json!("eof"));
+    assert_eq!(record["request"]["body"]["bytes"], json!(raw.len()));
     assert!(
-        !rendered.contains("deadbeef") && !rendered.contains("approval_requests"),
-        "neither the launch handle nor peer-only denial data may be journalled"
+        record.get("raw").is_none(),
+        "the body itself is never stored"
     );
+}
+
+#[test]
+fn approval_reasons_are_journalled_as_metadata() {
+    let request = crate::approvals::Request {
+        id: "ap-1".to_string(),
+        verb: "secret.read".to_string(),
+        scope: crate::caps::Scope::name("default/GOOGLE_ACCESS_TOKEN"),
+        session: "app-1".to_string(),
+        reason: "needs hunter2-password to continue".to_string(),
+        requested_at: 0,
+        owner_uid: Some(1000),
+        requester: Some("uid:1000".to_string()),
+    };
+    let record = approval_request_record(&request);
+    let rendered = serde_json::to_string(&record).unwrap();
+    assert_clean(&rendered);
+    assert_eq!(record["approval_id"], json!("ap-1"));
+    assert_eq!(record["session_id"], json!("app-1"));
+    assert_eq!(record["verb"], json!("secret.read"));
+    assert_eq!(record["reason"]["bytes"], json!(request.reason.len()));
+}
+
+#[test]
+fn worker_failures_are_journalled_as_metadata() {
+    let error = "provider rejected key hunter2-password";
+    let job: Job = serde_json::from_value(json!({
+        "id": "job-1",
+        "prompt": "summarise ya29.oauth-access-token",
+        "status": "error",
+        "created_at": "2026-01-01T00:00:00Z",
+        "session_id": "sess-1",
+        "provider": "anthropic",
+        "model": "claude",
+        "error": error,
+        "owner_uid": 1000,
+    }))
+    .expect("job");
+    let record = task_event_record("task.failed", &job);
+    let rendered = serde_json::to_string(&record).unwrap();
+    assert_clean(&rendered);
+    assert_eq!(record["job_id"], json!("job-1"));
+    assert_eq!(record["provider"], json!("anthropic"));
+    assert_eq!(record["error"]["bytes"], json!(error.len()));
+    assert!(
+        !rendered.contains("summarise"),
+        "the prompt is never journalled: {rendered}"
+    );
+}
+
+#[test]
+fn owner_scoped_queries_hide_other_owners() {
+    let mine = json!({"client": {"uid": 1000}, "source": "clawd.request"});
+    let theirs = json!({"client": {"uid": 1001}, "source": "clawd.request"});
+    let root_owned = json!({"owner_uid": 0, "source": "clawd.task"});
+    assert!(operation_visible_to(&mine, Some(1000)));
+    assert!(!operation_visible_to(&theirs, Some(1000)));
+    assert!(!operation_visible_to(&root_owned, Some(1000)));
+    assert!(operation_visible_to(&theirs, None));
 }

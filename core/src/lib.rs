@@ -14,6 +14,7 @@ pub mod ai;
 pub mod approvals;
 pub mod apps;
 pub mod audit;
+pub mod audit_policy;
 pub mod bridge;
 pub mod browser;
 pub mod caps;

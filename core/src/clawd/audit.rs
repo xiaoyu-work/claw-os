@@ -3,72 +3,71 @@ use std::time::Duration;
 
 use chrono::Utc;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::json;
 
 use crate::agent::llm::ToolCall;
 use crate::agent::runtime::hooks::{
     self, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary, TurnSummary,
 };
+use crate::audit_policy::{
+    self, InvalidRequestFacts, RequestFacts, ResponseFacts, TextDigest, ToolFacts,
+};
 use crate::session::{self, Mutation, MutationRecord, SessionId};
 
 use super::client_identity::ClientIdentity;
-use super::protocol::Response;
 
 #[derive(Debug, Serialize)]
 struct RequestAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
-    command: &'a str,
-    ok: bool,
+    #[serde(flatten)]
+    request: &'a RequestFacts,
+    #[serde(flatten)]
+    outcome: &'a ResponseFacts,
     duration_ms: u128,
-    params: &'a Value,
     client: &'a ClientIdentity,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_code: Option<&'a str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_message: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
 struct InvalidRequestAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
-    ok: bool,
+    #[serde(flatten)]
+    request: &'a InvalidRequestFacts,
+    #[serde(flatten)]
+    outcome: &'a ResponseFacts,
     duration_ms: u128,
-    raw: &'a str,
     client: &'a ClientIdentity,
-    error_code: &'a str,
-    error_message: &'a str,
 }
 
 #[derive(Debug, Serialize)]
 struct TaskAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
-    job_id: &'a str,
+    job_id: String,
     status: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    session_id: Option<&'a str>,
+    session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     worker_pid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     worker_start_time_ticks: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    provider: Option<&'a str>,
+    provider: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    model: Option<&'a str>,
+    model: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
+    error: Option<TextDigest>,
 }
 
 #[derive(Debug, Serialize)]
 struct RuntimeTurnAudit<'a> {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
-    session_id: &'a str,
+    session_id: String,
     turn_index: u32,
-    provider: &'a str,
-    model: &'a str,
+    provider: String,
+    model: String,
     success: bool,
     latency_ms: u64,
     input_tokens: u32,
@@ -77,94 +76,64 @@ struct RuntimeTurnAudit<'a> {
     cache_write_tokens: u32,
     tool_calls_made: u32,
     stop_reason: &'a str,
+    /// Provider and tool failures quote request bodies, headers and
+    /// caller arguments, so the text never reaches the log.
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
+    error: Option<TextDigest>,
 }
 
 #[derive(Debug, Serialize)]
-struct RuntimeToolAudit<'a> {
+struct RuntimeToolAudit {
     ts: chrono::DateTime<Utc>,
     event: &'static str,
-    session_id: &'a str,
+    session_id: String,
     turn_index: u32,
-    tool_name: &'a str,
-    tool_use_id: &'a str,
+    #[serde(flatten)]
+    tool: ToolFacts,
+    tool_use_id: String,
     success: bool,
     latency_ms: u64,
     bytes_returned: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<&'a str>,
+    error: Option<TextDigest>,
 }
 
+/// Append the broker's record of a dispatched request.
+///
+/// Both this log and [`super::system_journal`] are handed the same
+/// [`RequestFacts`] and [`ResponseFacts`], which only
+/// [`crate::audit_policy`] can build — neither sink ever sees the raw
+/// `params`, so one cannot mask a value the other writes in the clear.
 pub fn record_request(
-    command: &str,
-    params: &Value,
-    response: &Response,
+    request: &RequestFacts,
+    outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) -> Result<(), String> {
-    let redacted = redact_params(params);
     let audit = RequestAudit {
         ts: Utc::now(),
         event: "clawd.request",
-        command,
-        ok: response.ok,
+        request,
+        outcome,
         duration_ms: duration.as_millis(),
-        params: redacted.as_ref().unwrap_or(params),
         client,
-        error_code: response.error.as_ref().map(|err| err.code.as_str()),
-        error_message: response.error.as_ref().map(|err| err.message.as_str()),
     };
     append_jsonl(&audit)
 }
 
-/// Request fields that are bearer authority rather than description.
-/// The App-session launch handle authorises binding, re-scoping and
-/// tearing down a registered session, so it must not be replayable from
-/// any record of the request.
-const REDACTED_PARAM_KEYS: &[&str] = &["handle"];
-
-/// Return a copy of `params` with bearer fields masked, or `None` when
-/// there is nothing to mask so the common path stays allocation-free.
-///
-/// Shared with [`super::system_journal::record_clawd_request`] so both
-/// sinks that persist raw broker requests mask exactly the same fields.
-pub(crate) fn redact_params(params: &Value) -> Option<Value> {
-    let Value::Object(map) = params else {
-        return None;
-    };
-    if !REDACTED_PARAM_KEYS.iter().any(|key| map.contains_key(*key)) {
-        return None;
-    }
-    let mut redacted = map.clone();
-    for key in REDACTED_PARAM_KEYS {
-        if let Some(value) = redacted.get_mut(*key) {
-            *value = Value::String("<redacted>".to_string());
-        }
-    }
-    Some(Value::Object(redacted))
-}
-
 pub fn record_invalid(
-    raw: &str,
-    response: &Response,
+    request: &InvalidRequestFacts,
+    outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) -> Result<(), String> {
-    let (error_code, error_message) = response
-        .error
-        .as_ref()
-        .map(|err| (err.code.as_str(), err.message.as_str()))
-        .unwrap_or(("invalid_json", "invalid JSON request"));
     let audit = InvalidRequestAudit {
         ts: Utc::now(),
         event: "clawd.invalid-request",
-        ok: response.ok,
+        request,
+        outcome,
         duration_ms: duration.as_millis(),
-        raw,
         client,
-        error_code,
-        error_message,
     };
     append_jsonl(&audit)
 }
@@ -173,17 +142,17 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
     let audit = TaskAudit {
         ts: Utc::now(),
         event,
-        job_id: &job.id,
+        job_id: audit_policy::safe_identity(&job.id),
         status: job.status.as_str(),
-        session_id: job.session_id.as_deref(),
+        session_id: job.session_id.as_deref().map(audit_policy::safe_identity),
         worker_pid: job.worker_pid,
         worker_start_time_ticks: job.worker_start_time_ticks,
-        provider: job.provider.as_deref(),
-        model: job.model.as_deref(),
-        error: job.error.as_deref(),
+        provider: job.provider.as_deref().map(audit_policy::safe_identity),
+        model: job.model.as_deref().map(audit_policy::safe_identity),
+        error: audit_policy::optional_text_digest(job.error.as_deref()),
     };
     if let Err(err) = append_jsonl(&audit) {
-        tracing::error!(error = %err, event, job_id = %job.id, "failed to write clawd task audit record");
+        tracing::error!(error = %err, event, "failed to write clawd task audit record");
     }
     super::system_journal::record_task_event(event, job);
 }
@@ -204,10 +173,10 @@ impl Hook for ClawdRuntimeAuditHook {
         let audit = RuntimeToolAudit {
             ts: Utc::now(),
             event: "clawd.agent.tool.started",
-            session_id: &ctx.session_id,
+            session_id: audit_policy::safe_identity(&ctx.session_id),
             turn_index: ctx.turn_index,
-            tool_name: &tool_call.name,
-            tool_use_id: &tool_call.id,
+            tool: audit_policy::tool_facts(&tool_call.name, &tool_call.input),
+            tool_use_id: audit_policy::safe_identity(&tool_call.id),
             success: true,
             latency_ms: 0,
             bytes_returned: 0,
@@ -225,23 +194,24 @@ impl Hook for ClawdRuntimeAuditHook {
         tool_call: &ToolCall,
         result: &ToolResultSummary,
     ) -> HookOutcome {
+        let facts = audit_policy::tool_facts(&tool_call.name, &tool_call.input);
         let audit = RuntimeToolAudit {
             ts: Utc::now(),
             event: "clawd.agent.tool.finished",
-            session_id: &ctx.session_id,
+            session_id: audit_policy::safe_identity(&ctx.session_id),
             turn_index: ctx.turn_index,
-            tool_name: &tool_call.name,
-            tool_use_id: &tool_call.id,
+            tool: facts.clone(),
+            tool_use_id: audit_policy::safe_identity(&tool_call.id),
             success: result.success,
             latency_ms: result.latency_ms,
             bytes_returned: result.bytes_returned,
-            error: result.error.as_deref(),
+            error: audit_policy::optional_text_digest(result.error.as_deref()),
         };
         if let Err(err) = append_jsonl(&audit) {
             tracing::error!(error = %err, "failed to write clawd post-tool audit record");
         }
         if result.success {
-            record_tool_mutation(ctx, tool_call, result);
+            record_tool_mutation(ctx, tool_call, &facts, result);
         }
         HookOutcome::Continue
     }
@@ -250,10 +220,10 @@ impl Hook for ClawdRuntimeAuditHook {
         let audit = RuntimeTurnAudit {
             ts: Utc::now(),
             event: "clawd.agent.turn.finished",
-            session_id: &ctx.session_id,
+            session_id: audit_policy::safe_identity(&ctx.session_id),
             turn_index: ctx.turn_index,
-            provider: &ctx.provider,
-            model: &ctx.model,
+            provider: audit_policy::safe_identity(&ctx.provider),
+            model: audit_policy::safe_identity(&ctx.model),
             success: summary.success,
             latency_ms: summary.latency_ms,
             input_tokens: summary.input_tokens,
@@ -262,7 +232,7 @@ impl Hook for ClawdRuntimeAuditHook {
             cache_write_tokens: summary.cache_write_tokens,
             tool_calls_made: summary.tool_calls_made,
             stop_reason: &summary.stop_reason,
-            error: summary.error.as_deref(),
+            error: audit_policy::optional_text_digest(summary.error.as_deref()),
         };
         if let Err(err) = append_jsonl(&audit) {
             tracing::error!(error = %err, "failed to write clawd turn audit record");
@@ -271,7 +241,19 @@ impl Hook for ClawdRuntimeAuditHook {
     }
 }
 
-fn record_tool_mutation(ctx: &HookContext, tool_call: &ToolCall, result: &ToolResultSummary) {
+/// Wrap a successful tool call in a session mutation record.
+///
+/// `mutations.jsonl` is durable, user-readable and replayed by
+/// rollback, so the forward payload carries the same allowlisted
+/// [`ToolFacts`] the audit log records — never `tool_call.input`, which
+/// is model-authored text and has held prompts, queries and file
+/// contents.
+fn record_tool_mutation(
+    ctx: &HookContext,
+    tool_call: &ToolCall,
+    facts: &ToolFacts,
+    result: &ToolResultSummary,
+) {
     if ctx.session_id.is_empty() {
         return;
     }
@@ -283,11 +265,13 @@ fn record_tool_mutation(ctx: &HookContext, tool_call: &ToolCall, result: &ToolRe
     }
 
     let record = MutationRecord::new(Mutation::Opaque {
-        verb: format!("agent.tool.{}", tool_call.name),
+        verb: format!("agent.tool.{}", facts.tool),
         forward: json!({
-            "tool": tool_call.name,
-            "tool_use_id": tool_call.id,
-            "input": tool_call.input,
+            "tool": facts.tool,
+            "tool_known": facts.known,
+            "tool_use_id": audit_policy::safe_identity(&tool_call.id),
+            "input": facts.input,
+            "input_omitted": facts.input_omitted,
             "turn_index": ctx.turn_index,
         }),
         inverse: json!({
@@ -303,7 +287,7 @@ fn record_tool_mutation(ctx: &HookContext, tool_call: &ToolCall, result: &ToolRe
         tracing::warn!(
             error = %err,
             session_id = %session_id.as_str(),
-            tool = %tool_call.name,
+            tool = %facts.tool,
             "failed to record clawd tool mutation wrapper"
         );
     }

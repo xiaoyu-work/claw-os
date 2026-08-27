@@ -26,6 +26,7 @@ agent orchestration, persistence, and structured primitive dispatch.
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/audit.rs` | Hash-chained audit persistence |
+| `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |
 | `src/session/` | Session storage and lifecycle |
 
 ## Dependencies

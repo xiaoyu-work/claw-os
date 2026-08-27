@@ -676,6 +676,7 @@ fn request_approvals(
             "approval_requests": ids,
         }),
     )
+    .classified("approval_required")
 }
 
 /// Session installed for exactly one scheduler operation.

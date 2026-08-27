@@ -516,12 +516,19 @@ fn audit_hook_records_error_field_on_failure() {
     let h = AuditHook::at(&p);
     let mut bad = tool_result_ok();
     bad.success = false;
-    bad.error = Some("boom".into());
+    bad.error = Some("boom: token sk-live-abc".into());
     let _ = h.post_tool(&ctx(), &sample_tool_call(), &bad);
     let events = read_jsonl(&p);
     let e = &events[0];
     assert_eq!(e["success"], serde_json::json!(false));
-    assert_eq!(e["error"], serde_json::json!("boom"));
+    // Tool failures quote the model's own arguments, so the chained
+    // log keeps a length and keyed digest instead of the text.
+    assert_eq!(e["error"]["bytes"], serde_json::json!(23));
+    assert!(e["error"]["digest"].is_string());
+    assert!(
+        !serde_json::to_string(e).unwrap().contains("sk-live-abc"),
+        "the failure text must not reach the audit chain"
+    );
 }
 
 #[test]

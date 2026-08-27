@@ -567,7 +567,9 @@ impl Hook for AuditHook {
                 "cache_read_tokens": summary.cache_read_tokens,
                 "cache_write_tokens": summary.cache_write_tokens,
                 "tool_calls_made": summary.tool_calls_made,
-                "error": summary.error,
+                // Turn failures quote provider payloads and prompt
+                // text, so only their size and keyed digest survive.
+                "error": crate::audit_policy::optional_text_digest(summary.error.as_deref()),
             }),
         );
         HookOutcome::Continue
@@ -580,8 +582,8 @@ impl Hook for AuditHook {
                 "kind": "pre_tool",
                 "session_id": ctx.session_id,
                 "turn": ctx.turn_index,
-                "tool_call_id": tool_call.id,
-                "tool_name": tool_call.name,
+                "tool_call_id": crate::audit_policy::safe_identity(&tool_call.id),
+                "tool_name": crate::audit_policy::safe_identity(&tool_call.name),
             }),
         );
         ToolDecision::Allow
@@ -599,12 +601,13 @@ impl Hook for AuditHook {
                 "kind": "post_tool",
                 "session_id": ctx.session_id,
                 "turn": ctx.turn_index,
-                "tool_call_id": tool_call.id,
-                "tool_name": tool_call.name,
+                "tool_call_id": crate::audit_policy::safe_identity(&tool_call.id),
+                "tool_name": crate::audit_policy::safe_identity(&tool_call.name),
                 "success": result.success,
                 "latency_ms": result.latency_ms,
                 "bytes_returned": result.bytes_returned,
-                "error": result.error,
+                // Tool failures quote the arguments the model passed.
+                "error": crate::audit_policy::optional_text_digest(result.error.as_deref()),
             }),
         );
         HookOutcome::Continue

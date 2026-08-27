@@ -27,22 +27,35 @@ pub struct ErrorBody {
     pub message: String,
     /// Structured payload delivered only on this connection's response.
     ///
-    /// Broker audit and journal records persist `code` and `message`,
-    /// never this field, so it is where a handler answers the calling
-    /// peer with machine-readable detail — currently the approval
-    /// request ids an App launch is waiting on.
+    /// Neither this field nor `message` is ever persisted, so this is
+    /// where a handler answers the calling peer with machine-readable
+    /// detail — currently the approval request ids an App launch is
+    /// waiting on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub data: Option<Value>,
+    /// Stable, input-free classification of this failure.
+    ///
+    /// Handler messages are built with `format!` from request fields,
+    /// resolved paths and provider text, so audit sinks reduce
+    /// `message` to a length and keyed digest. A route that wants its
+    /// failure named in the audit trail sets this to a `&'static str`,
+    /// which by construction cannot carry caller or secret material.
+    /// Never crosses the wire.
+    #[serde(default, skip)]
+    pub audit_class: Option<&'static str>,
 }
 
-/// A broker failure, optionally carrying structured data for the peer.
+/// A broker failure, optionally carrying structured data for the peer
+/// and a stable class for the audit trail.
 ///
 /// Handlers that have nothing extra to say keep returning `String`;
-/// `From<String>` makes those paths unchanged.
+/// `From<String>` makes those paths unchanged, and their messages stay
+/// unclassified — recorded as size and digest only.
 #[derive(Debug, Clone)]
 pub struct BrokerError {
     pub message: String,
     pub data: Option<Value>,
+    pub audit_class: Option<&'static str>,
 }
 
 impl BrokerError {
@@ -50,7 +63,15 @@ impl BrokerError {
         Self {
             message: message.into(),
             data: Some(data),
+            audit_class: None,
         }
+    }
+
+    /// Attach the stable class audit records store in place of the
+    /// message text.
+    pub fn classified(mut self, class: &'static str) -> Self {
+        self.audit_class = Some(class);
+        self
     }
 }
 
@@ -59,6 +80,7 @@ impl From<String> for BrokerError {
         Self {
             message,
             data: None,
+            audit_class: None,
         }
     }
 }
@@ -88,6 +110,28 @@ impl Response {
                 code: code.into(),
                 message: message.into(),
                 data: None,
+                audit_class: None,
+            }),
+        }
+    }
+
+    /// Fail with a message the audit trail may name by its stable
+    /// class instead of storing a digest of the text.
+    pub fn error_classified(
+        id: Option<Value>,
+        code: impl Into<String>,
+        class: &'static str,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            id,
+            ok: false,
+            result: None,
+            error: Some(ErrorBody {
+                code: code.into(),
+                message: message.into(),
+                data: None,
+                audit_class: Some(class),
             }),
         }
     }
@@ -105,6 +149,20 @@ impl Response {
                 code: code.into(),
                 message: error.message,
                 data: error.data,
+                audit_class: error.audit_class,
+            }),
+        }
+    }
+
+    /// Reduce this response to what a durable record may say about it.
+    ///
+    /// The handler message and the peer-only `data` payload are left
+    /// behind here, so no sink can reach them.
+    pub fn audit_facts(&self) -> crate::audit_policy::ResponseFacts {
+        crate::audit_policy::ResponseFacts {
+            ok: self.ok,
+            error: self.error.as_ref().map(|err| {
+                crate::audit_policy::error_facts(&err.code, err.audit_class, &err.message)
             }),
         }
     }

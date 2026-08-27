@@ -7,76 +7,69 @@ use serde_json::{json, Value};
 
 use crate::agent::service::Job;
 use crate::approvals::{Request as ApprovalRequest, Resolved as ResolvedApproval};
+use crate::audit_policy::{self, InvalidRequestFacts, RequestFacts, ResponseFacts};
 
 use super::client_identity::ClientIdentity;
-use super::protocol::Response;
 
+/// Journal the broker's own view of a dispatched request.
+///
+/// This journal is a user-visible projection that also feeds agent
+/// context, so it is handed exactly the [`RequestFacts`] the broker
+/// audit log receives. Neither sink can see the raw `params`.
 pub fn record_clawd_request(
-    command: &str,
-    params: &Value,
-    response: &Response,
+    request: &RequestFacts,
+    outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) {
-    let _ = append(clawd_request_record(
-        command, params, response, duration, client,
-    ));
+    let _ = append(clawd_request_record(request, outcome, duration, client));
 }
 
 fn clawd_request_record(
-    command: &str,
-    params: &Value,
-    response: &Response,
+    request: &RequestFacts,
+    outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) -> Value {
-    let error = response.error.as_ref().map(|err| {
-        json!({
-            "code": err.code,
-            "message": err.message,
-        })
-    });
-    // Same masking as the broker audit log: this journal is a
-    // user-visible projection, so a launch handle written here would be
-    // replayable bearer authority.
-    let redacted = super::audit::redact_params(params);
     json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "clawd.request",
-        "operation": command,
-        "ok": response.ok,
+        "operation": request.command,
+        "ok": outcome.ok,
         "duration_ms": duration.as_millis(),
         "client": client,
-        "params": redacted.as_ref().unwrap_or(params),
-        "error": error,
+        "request": request,
+        "error": outcome.error,
     })
 }
 
 pub fn record_invalid_request(
-    raw: &str,
-    response: &Response,
+    request: &InvalidRequestFacts,
+    outcome: &ResponseFacts,
     duration: Duration,
     client: &ClientIdentity,
 ) {
-    let error = response.error.as_ref().map(|err| {
-        json!({
-            "code": err.code,
-            "message": err.message,
-        })
-    });
-    let record = json!({
+    let _ = append(invalid_request_record(request, outcome, duration, client));
+}
+
+fn invalid_request_record(
+    request: &InvalidRequestFacts,
+    outcome: &ResponseFacts,
+    duration: Duration,
+    client: &ClientIdentity,
+) -> Value {
+    json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "clawd.invalid-request",
         "operation": "invalid_json",
-        "ok": false,
+        "ok": outcome.ok,
         "duration_ms": duration.as_millis(),
         "client": client,
-        "raw": raw,
-        "error": error,
-    });
-    let _ = append(record);
+        "request": request,
+        "error": outcome.error,
+    })
 }
 
 pub fn record_cap_decision(entry: &Value) {
@@ -106,60 +99,78 @@ pub fn record_cap_decision(entry: &Value) {
 }
 
 pub fn record_approval_request(request: &ApprovalRequest) {
-    let record = json!({
+    let _ = append(approval_request_record(request));
+}
+
+fn approval_request_record(request: &ApprovalRequest) -> Value {
+    json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "permission.request",
         "operation": &request.verb,
         "ok": true,
-        "approval_id": &request.id,
-        "session_id": &request.session,
+        "approval_id": audit_policy::safe_reference(&request.id),
+        "session_id": audit_policy::safe_reference(&request.session),
         "verb": &request.verb,
         "scope": &request.scope,
-        "reason": &request.reason,
+        // Free text the requester supplied for the user's prompt; the
+        // approvals store keeps it, this projection does not.
+        "reason": audit_policy::text_digest(&request.reason),
         "requester": &request.requester,
         "owner_uid": request.owner_uid,
-    });
-    let _ = append(record);
+    })
 }
 
 pub fn record_approval_decision(resolved: &ResolvedApproval) {
-    let record = json!({
+    let _ = append(approval_decision_record(resolved));
+}
+
+fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
+    json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "permission.decision",
         "operation": &resolved.request.verb,
         "ok": resolved.decision.outcome == crate::approvals::Outcome::Approved,
-        "approval_id": &resolved.request.id,
-        "session_id": &resolved.request.session,
+        "approval_id": audit_policy::safe_reference(&resolved.request.id),
+        "session_id": audit_policy::safe_reference(&resolved.request.session),
         "verb": &resolved.request.verb,
         "scope": &resolved.request.scope,
         "outcome": resolved.decision.outcome,
         "duration": resolved.decision.duration,
         "decided_by": &resolved.decision.decided_by,
+        // The approver's free-text note is never journalled.
+        "note": resolved
+            .decision
+            .note
+            .as_deref()
+            .map(audit_policy::text_digest),
         "owner_uid": resolved.request.owner_uid,
-    });
-    let _ = append(record);
+    })
 }
 
 pub fn record_task_event(event: &'static str, job: &Job) {
-    let record = json!({
+    let _ = append(task_event_record(event, job));
+}
+
+fn task_event_record(event: &'static str, job: &Job) -> Value {
+    json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "clawd.task",
         "operation": event,
         "ok": job.error.is_none(),
-        "job_id": &job.id,
+        "job_id": audit_policy::safe_identity(&job.id),
         "status": job.status.as_str(),
-        "session_id": &job.session_id,
+        "session_id": job.session_id.as_deref().map(audit_policy::safe_reference),
         "worker_pid": job.worker_pid,
         "worker_start_time_ticks": job.worker_start_time_ticks,
-        "provider": &job.provider,
-        "model": &job.model,
-        "error": &job.error,
+        "provider": job.provider.as_deref().map(audit_policy::safe_identity),
+        "model": job.model.as_deref().map(audit_policy::safe_identity),
+        // Worker failures quote provider responses and prompt text.
+        "error": audit_policy::optional_text_digest(job.error.as_deref()),
         "owner_uid": job.owner_uid,
-    });
-    let _ = append(record);
+    })
 }
 
 pub fn record_power_intent(

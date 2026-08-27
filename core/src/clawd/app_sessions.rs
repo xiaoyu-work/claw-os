@@ -817,6 +817,7 @@ fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
             "approval_requests": ids,
         }),
     )
+    .classified("approval_required")
 }
 
 /// Resolve a manifest wildcard need against the launcher's own scopes.
