@@ -1067,12 +1067,22 @@ dependencies = [
  "axum",
  "bytes",
  "clawd-client",
+ "cos-agent-protocol",
  "futures",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "cos-agent-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1082,6 +1092,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "bytes",
+ "cos-agent-protocol",
  "cpal",
  "futures",
  "futures-util",

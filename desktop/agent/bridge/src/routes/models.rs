@@ -2,15 +2,15 @@
 
 use std::time::Duration;
 
-use axum::{Json, extract::State, http::StatusCode};
-use serde::Serialize;
-use serde_json::{Value, json};
+use axum::{Json, extract::State};
+use cos_agent_protocol::{ModelSummary, ModelsResponse};
+use serde::{Deserialize, de::DeserializeOwned};
 use tokio::{
     io::{AsyncRead, AsyncReadExt},
     process::Command,
 };
 
-use crate::state::AppState;
+use crate::{api_error::ApiError, state::AppState};
 
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_OUTPUT_BYTES: usize = 2 * 1024 * 1024;
@@ -20,33 +20,43 @@ struct CapturedOutput {
     truncated: bool,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct Model {
-    pub id: String,
-    pub provider: String,
-    pub label: String,
+#[derive(Debug, Default, Deserialize)]
+struct ModelStatus {
+    #[serde(default)]
+    ready: bool,
+    #[serde(default)]
+    provider: String,
+    #[serde(default)]
+    model: String,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
-pub struct ModelsResponse {
-    pub ready: bool,
-    pub provider: String,
-    pub model: String,
-    pub label: String,
-    pub models: Vec<Model>,
+#[derive(Debug, Default, Deserialize)]
+struct ModelCatalogue {
+    #[serde(default)]
+    providers: Vec<ProviderEntry>,
 }
 
-pub async fn list(
-    State(_state): State<AppState>,
-) -> Result<Json<ModelsResponse>, (StatusCode, Json<Value>)> {
-    let status = run_json(&["agent", "setup", "text", "--status"]).await?;
-    let catalogue = run_json(&["agent", "setup", "text", "--providers"]).await?;
-    build_response(&status, &catalogue)
-        .map(Json)
-        .map_err(|error| (StatusCode::BAD_GATEWAY, Json(json!({ "error": error }))))
+#[derive(Debug, Deserialize)]
+struct ProviderEntry {
+    name: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    models: Vec<ModelEntry>,
 }
 
-async fn run_json(args: &[&str]) -> Result<Value, (StatusCode, Json<Value>)> {
+#[derive(Debug, Deserialize)]
+struct ModelEntry {
+    name: String,
+}
+
+pub async fn list(State(_state): State<AppState>) -> Result<Json<ModelsResponse>, ApiError> {
+    let status: ModelStatus = run_json(&["agent", "setup", "text", "--status"]).await?;
+    let catalogue: ModelCatalogue = run_json(&["agent", "setup", "text", "--providers"]).await?;
+    Ok(Json(build_response(&status, &catalogue)))
+}
+
+async fn run_json<T: DeserializeOwned>(args: &[&str]) -> Result<T, ApiError> {
     let binary = std::env::var("COS_BIN").unwrap_or_else(|_| "cos".to_string());
     let mut command = Command::new(binary);
     command
@@ -55,22 +65,21 @@ async fn run_json(args: &[&str]) -> Result<Value, (StatusCode, Json<Value>)> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
-    let mut child = command.spawn().map_err(|error| {
-        (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(json!({ "error": format!("failed to run cos: {error}") })),
-        )
-    })?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| ApiError::service_unavailable(format!("failed to run cos: {error}")))?;
     let stdout = child.stdout.take().ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "model status stdout pipe is unavailable" })),
+        ApiError::new(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            cos_agent_protocol::ErrorCode::Internal,
+            "model status stdout pipe is unavailable",
         )
     })?;
     let stderr = child.stderr.take().ok_or_else(|| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "model status stderr pipe is unavailable" })),
+        ApiError::new(
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            cos_agent_protocol::ErrorCode::Internal,
+            "model status stderr pipe is unavailable",
         )
     })?;
     let communicate = async {
@@ -83,41 +92,31 @@ async fn run_json(args: &[&str]) -> Result<Value, (StatusCode, Json<Value>)> {
     let (status, stdout, stderr) = match tokio::time::timeout(COMMAND_TIMEOUT, communicate).await {
         Ok(Ok(output)) => output,
         Ok(Err(error)) => {
-            return Err((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": format!("failed to read model status: {error}") })),
-            ));
+            return Err(ApiError::bad_gateway(format!(
+                "failed to read model status: {error}"
+            )));
         }
         Err(_) => {
             let _ = child.kill().await;
             let _ = child.wait().await;
-            return Err((
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(json!({ "error": "model status command timed out" })),
+            return Err(ApiError::new(
+                axum::http::StatusCode::GATEWAY_TIMEOUT,
+                cos_agent_protocol::ErrorCode::Timeout,
+                "model status command timed out",
             ));
         }
     };
     if stdout.truncated || stderr.truncated {
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": "model status response was too large" })),
-        ));
+        return Err(ApiError::bad_gateway("model status response was too large"));
     }
     if !status.success() {
         let stderr = String::from_utf8_lossy(&stderr.bytes);
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            Json(json!({
-                "error": stderr.trim().chars().take(512).collect::<String>(),
-            })),
+        return Err(ApiError::bad_gateway(
+            stderr.trim().chars().take(512).collect::<String>(),
         ));
     }
-    serde_json::from_slice(&stdout.bytes).map_err(|error| {
-        (
-            StatusCode::BAD_GATEWAY,
-            Json(json!({ "error": format!("invalid model status JSON: {error}") })),
-        )
-    })
+    serde_json::from_slice(&stdout.bytes)
+        .map_err(|error| ApiError::bad_gateway(format!("invalid model status JSON: {error}")))
 }
 
 async fn read_bounded<R>(mut reader: R, limit: usize) -> std::io::Result<CapturedOutput>
@@ -140,50 +139,32 @@ where
     Ok(CapturedOutput { bytes, truncated })
 }
 
-fn build_response(status: &Value, catalogue: &Value) -> Result<ModelsResponse, String> {
-    let provider = status
-        .get("provider")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let model = status
-        .get("model")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let ready = status
-        .get("ready")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+fn build_response(status: &ModelStatus, catalogue: &ModelCatalogue) -> ModelsResponse {
+    let provider = status.provider.trim().to_string();
+    let model = status.model.trim().to_string();
+    let ready = status.ready;
 
     let provider_entry = catalogue
-        .get("providers")
-        .and_then(Value::as_array)
-        .and_then(|providers| {
-            providers
-                .iter()
-                .find(|entry| entry.get("name").and_then(Value::as_str) == Some(provider.as_str()))
-        });
+        .providers
+        .iter()
+        .find(|entry| entry.name == provider);
     let provider_label = provider_entry
-        .and_then(|entry| entry.get("label"))
-        .and_then(Value::as_str)
-        .filter(|label| !label.trim().is_empty())
+        .map(|entry| entry.label.trim())
+        .filter(|label| !label.is_empty())
         .unwrap_or(provider.as_str())
         .to_string();
 
     let mut models = provider_entry
-        .and_then(|entry| entry.get("models"))
-        .and_then(Value::as_array)
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| row.get("name").and_then(Value::as_str))
-                .filter(|name| !name.trim().is_empty())
-                .map(|name| Model {
-                    id: name.to_string(),
+        .map(|entry| {
+            entry
+                .models
+                .iter()
+                .map(|row| row.name.trim())
+                .filter(|name| !name.is_empty())
+                .map(|name| ModelSummary {
+                    id: name.to_owned(),
                     provider: provider.clone(),
-                    label: name.to_string(),
+                    label: name.to_owned(),
                 })
                 .collect::<Vec<_>>()
         })
@@ -191,7 +172,7 @@ fn build_response(status: &Value, catalogue: &Value) -> Result<ModelsResponse, S
     if !model.is_empty() && !models.iter().any(|entry| entry.id == model) {
         models.insert(
             0,
-            Model {
+            ModelSummary {
                 id: model.clone(),
                 provider: provider.clone(),
                 label: model.clone(),
@@ -205,13 +186,13 @@ fn build_response(status: &Value, catalogue: &Value) -> Result<ModelsResponse, S
         (true, false) => model.clone(),
         (false, false) => format!("{provider_label} · {model}"),
     };
-    Ok(ModelsResponse {
+    ModelsResponse {
         ready,
         provider,
         model,
         label,
         models,
-    })
+    }
 }
 
 #[cfg(test)]

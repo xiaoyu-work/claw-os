@@ -8,7 +8,7 @@ fn init_i18n() {
 fn relative_labels_use_real_timestamps() {
     init_i18n();
     assert_eq!(relative_time_label(1_000_000, 1_020_000), "now");
-    let plain = |label: String| label.replace('\u{2068}', "").replace('\u{2069}', "");
+    let plain = |label: String| label.replace(['\u{2068}', '\u{2069}'], "");
     assert_eq!(plain(relative_time_label(1_000_000, 1_300_000)), "5m");
     assert_eq!(plain(relative_time_label(1_000_000, 8_200_000)), "2h");
 }

@@ -14,15 +14,16 @@ use std::time::{Duration, Instant};
 
 use axum::{
     Json,
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, State, rejection::JsonRejection},
     response::sse::{Event, KeepAlive, Sse},
 };
+use cos_agent_protocol::{
+    CancelResponse, ChatRequest, DeltaPayload, ErrorCode, StreamError, StreamEvent,
+};
 use futures::stream::Stream;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::state::AppState;
+use crate::{api_error::ApiError, state::AppState, translation};
 use clawd_client::{Client, Command};
 
 /// Hard ceiling on a single chat turn. `task.stream` blocks ~1s per poll, so
@@ -72,198 +73,34 @@ impl Drop for CancelOnDrop {
     }
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-pub struct ChatRequest {
-    /// Single-prompt form used by the simple chat shell.
-    #[serde(default)]
-    pub prompt: Option<String>,
-    /// Multi-turn form for richer clients. We pick the last `user`
-    /// message and feed it to `clawd` for now; full history
-    /// will land once the agent kernel grows a structured-NDJSON
-    /// variant.
-    #[serde(default)]
-    pub messages: Vec<ChatMessage>,
-    /// Reserved: future agent session_id pinning.
-    #[serde(default)]
-    pub session_id: Option<String>,
-    /// Reserved: future model override (`cos agent ask` doesn't take
-    /// `--model` today).
-    #[serde(default)]
-    pub model: Option<String>,
-    /// Transient app/window context shown to the model but not
-    /// persisted as the user's visible message.
-    #[serde(default)]
-    pub context: Option<String>,
-    /// Prior visible messages used to seed a newly branched retry
-    /// session. Persisted as hidden system memory by clawd.
-    #[serde(default)]
-    pub branch_context: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: String,
-}
-
-impl ChatRequest {
-    fn resolve_prompt(&self) -> String {
-        if let Some(p) = self.prompt.as_ref().filter(|s| !s.trim().is_empty()) {
-            return p.clone();
-        }
-        self.messages
-            .iter()
-            .rev()
-            .find(|m| m.role == "user")
-            .map(|m| m.content.clone())
-            .unwrap_or_default()
-    }
-}
-
 fn delta_event(text: &str) -> Event {
-    Event::default()
-        .event("delta")
-        .json_data(json!({ "type": "delta", "text": text }))
-        .unwrap_or_default()
+    protocol_event(StreamEvent::Delta(DeltaPayload::new(text)))
 }
 
 fn error_event(message: &str) -> Event {
-    Event::default()
-        .event("error")
-        .json_data(json!({ "type": "error", "message": message }))
-        .unwrap_or_default()
+    protocol_event(StreamEvent::Error(StreamError::new(message)))
 }
 
-fn done_event(envelope: Value) -> Event {
-    Event::default()
-        .event("done")
-        .json_data(envelope)
-        .unwrap_or_default()
-}
-
-fn json_event(name: &'static str, payload: Value) -> Event {
-    Event::default()
-        .event(name)
-        .json_data(payload)
-        .unwrap_or_default()
-}
-
-fn visible_tool_progress(progress: &Value) -> Option<(&'static str, Value)> {
-    let kind = progress.get("kind").and_then(Value::as_str).unwrap_or("");
-    match kind {
-        "tool_start" => Some((
-            "tool_start",
-            json!({
-                "kind": kind,
-                "id": progress.get("id").cloned().unwrap_or(Value::Null),
-                "name": progress.get("name").cloned().unwrap_or(Value::Null),
-            }),
-        )),
-        "tool_result" => Some((
-            "tool_result",
-            json!({
-                "kind": kind,
-                "id": progress.get("id").cloned().unwrap_or(Value::Null),
-                "name": progress.get("name").cloned().unwrap_or(Value::Null),
-                "ok": progress.get("ok").cloned().unwrap_or(Value::Null),
-            }),
-        )),
-        _ => None,
-    }
-}
-
-/// Translate one persisted clawd stream record into desktop SSE
-/// frames. `task.stream` returns records shaped as `{ts, event}` for
-/// model events and `{ts, progress}` for runtime tool progress.
-fn events_from_stream_record(
-    record: &Value,
-    turn_emitted_text: &mut bool,
-    emitted_any_text: &mut bool,
-) -> Vec<Event> {
-    if let Some(progress) = record.get("progress") {
-        return visible_tool_progress(progress)
-            .map(|(name, payload)| vec![json_event(name, payload)])
-            .unwrap_or_default();
-    }
-
-    let Some(event) = record.get("event") else {
-        return Vec::new();
-    };
-    let kind = event.get("kind").and_then(Value::as_str).unwrap_or("");
-    match kind {
-        "text_delta" => {
-            let text = event.get("text").and_then(Value::as_str).unwrap_or("");
-            if text.is_empty() {
-                Vec::new()
-            } else {
-                *turn_emitted_text = true;
-                *emitted_any_text = true;
-                vec![delta_event(text)]
-            }
-        }
-        "tool_use_start" => vec![json_event(
-            "tool_use_start",
-            json!({
-                "id": event.get("id").cloned().unwrap_or(Value::Null),
-                "name": event.get("name").cloned().unwrap_or(Value::Null),
-            }),
-        )],
-        "tool_input_delta" => Vec::new(),
-        "tool_use" => vec![json_event(
-            "tool_use",
-            json!({
-                "id": event.get("id").cloned().unwrap_or(Value::Null),
-                "name": event.get("name").cloned().unwrap_or(Value::Null),
-            }),
-        )],
-        "message" => {
-            let mut frames = Vec::new();
-            if !*turn_emitted_text
-                && let Some(text) = extract_message_text(event)
-                && !text.is_empty()
-            {
-                *emitted_any_text = true;
-                frames.push(delta_event(&text));
-            }
-            if let Some(calls) = event.get("tool_calls").and_then(Value::as_array) {
-                for call in calls {
-                    frames.push(json_event(
-                        "tool_use",
-                        json!({
-                            "id": call.get("id").cloned().unwrap_or(Value::Null),
-                            "name": call.get("name").cloned().unwrap_or(Value::Null),
-                        }),
-                    ));
-                }
-            }
-            frames
-        }
-        "done" => {
-            *turn_emitted_text = false;
-            vec![json_event(
-                "turn_done",
-                json!({
-                    "finish": event.get("finish").cloned().unwrap_or(Value::Null),
-                    "usage": event.get("usage").cloned().unwrap_or(Value::Null),
-                }),
-            )]
-        }
-        "warning" => vec![json_event(
-            "warning",
-            json!({
-                "message": event.get("message").cloned().unwrap_or(Value::Null),
-            }),
-        )],
-        _ => Vec::new(),
-    }
+fn protocol_event(event: StreamEvent) -> Event {
+    let name = event.event_name();
+    let data = event.to_json().unwrap_or_else(|_| {
+        r#"{"type":"error","message":"failed to serialize stream event"}"#.to_string()
+    });
+    Event::default().event(name).data(data)
 }
 
 pub async fn stream_chat(
     State(state): State<AppState>,
-    Json(req): Json<ChatRequest>,
-) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let prompt = req.resolve_prompt();
+    request: Result<Json<ChatRequest>, JsonRejection>,
+) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, ApiError> {
+    let Json(req) = request.map_err(|_| {
+        ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "invalid chat request",
+        )
+    })?;
+    let prompt = req.resolved_prompt();
     let session_id = req.session_id.clone();
     let clawd = state.clawd.clone();
 
@@ -296,25 +133,16 @@ pub async fn stream_chat(
             }
         };
 
-        let task_id = match submitted.get("id").and_then(Value::as_str) {
-            Some(id) => id.to_string(),
-            None => {
-                yield Ok(error_event("clawd task.submit returned no task id"));
+        let started = match translation::task_started(submitted) {
+            Ok(started) => started,
+            Err(error) => {
+                yield Ok(error_event(&error));
                 return;
             }
         };
-        let submitted_session_id = submitted
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
+        let task_id = started.task_id.clone();
         let mut cancel_on_drop = CancelOnDrop::new(clawd.clone(), task_id.clone());
-        yield Ok(json_event(
-            "task",
-            json!({
-                "task_id": task_id.clone(),
-                "session_id": submitted_session_id,
-            }),
-        ));
+        yield Ok(protocol_event(StreamEvent::TaskStarted(started)));
 
         let mut cursor = 0u64;
         let mut emitted_text = false;
@@ -336,102 +164,67 @@ pub async fn stream_chat(
                     return;
                 }
             };
-            cursor = frame
-                .get("cursor")
-                .and_then(Value::as_u64)
-                .unwrap_or(cursor);
-            if let Some(events) = frame.get("events").and_then(Value::as_array) {
-                for event in events {
-                    for outgoing in events_from_stream_record(
-                        event,
-                        &mut turn_emitted_text,
-                        &mut emitted_text,
-                    ) {
-                        yield Ok(outgoing);
-                    }
+            let frame = match translation::task_stream(frame) {
+                Ok(frame) => frame,
+                Err(error) => {
+                    yield Ok(error_event(&error));
+                    return;
+                }
+            };
+            cursor = frame.cursor;
+            for record in frame.events {
+                for outgoing in translation::stream_events(
+                    record,
+                    &mut turn_emitted_text,
+                    &mut emitted_text,
+                ) {
+                    yield Ok(protocol_event(outgoing));
                 }
             }
-            if frame
-                .get("terminal")
-                .and_then(Value::as_bool)
-                .unwrap_or(false)
-            {
-                break frame.get("job").cloned().unwrap_or(Value::Null);
+            if frame.terminal {
+                break frame.job;
             }
         };
 
-        let mut payload = result;
-        if let Value::Object(ref mut map) = payload {
-            if map.get("status").and_then(Value::as_str) == Some("error") {
-                let message = map
-                    .get("error")
-                    .and_then(Value::as_str)
-                    .unwrap_or("agent task failed");
-                yield Ok(error_event(message));
+        let payload = match result.into_done() {
+            Ok(payload) => payload,
+            Err(error) => {
+                yield Ok(error_event(&error));
                 return;
             }
-            if let Some(answer) = map
-                .get("response")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-            {
-                map.entry("answer".to_string())
-                    .or_insert(Value::from(answer.clone()));
-                if !emitted_text && !answer.is_empty() {
-                    yield Ok(delta_event(&answer));
-                }
-            }
-            map.entry("type".to_string())
-                .or_insert(Value::from("done"));
-            map.entry("task_id".to_string())
-                .or_insert(Value::from(task_id.clone()));
+        };
+        if let Some(answer) = payload.presented_answer()
+            && !emitted_text
+        {
+            yield Ok(delta_event(&answer));
         }
 
         cancel_on_drop.disarm();
-        yield Ok(done_event(payload));
+        yield Ok(protocol_event(StreamEvent::Done(payload)));
     };
 
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Ok(Sse::new(stream).keep_alive(KeepAlive::default()))
 }
 
 pub async fn cancel_chat(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
-) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+) -> Result<Json<CancelResponse>, ApiError> {
     if task_id.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "task id is required" })),
+        return Err(ApiError::new(
+            axum::http::StatusCode::BAD_REQUEST,
+            ErrorCode::InvalidRequest,
+            "task id is required",
         ));
     }
-    state
+    let value = state
         .clawd
         .call(Command::TaskCancel, json!({ "id": task_id }))
         .await
+        .map_err(|error| ApiError::bad_gateway(error.to_string()))?;
+    translation::cancel_response(value)
         .map(Json)
-        .map_err(|error| {
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(json!({ "error": error.to_string() })),
-            )
-        })
-}
-
-fn extract_message_text(event: &Value) -> Option<String> {
-    let content = event.get("content").and_then(Value::as_array)?;
-    let mut text = String::new();
-    for block in content {
-        if (block.get("type").and_then(Value::as_str) == Some("text")
-            || block.get("kind").and_then(Value::as_str) == Some("text"))
-            && let Some(chunk) = block.get("text").and_then(Value::as_str)
-        {
-            if !text.is_empty() {
-                text.push('\n');
-            }
-            text.push_str(chunk);
-        }
-    }
-    if text.is_empty() { None } else { Some(text) }
+        .map_err(ApiError::bad_gateway)
 }
 
 #[cfg(test)]

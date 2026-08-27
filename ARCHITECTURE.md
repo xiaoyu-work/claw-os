@@ -50,7 +50,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
-| Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries | `desktop/` |
+| Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
 | Image composition | Reusable rootfs features and profile definitions | `rootfs/`, `scripts/lib/image-profiles.sh` |
 | Web desktop | React/Vite Linux desktop whose browser opens the embedded marketing site; independently built before Pages composition | `web/`, `.github/workflows/publish-website.yml` |
 | Distribution | WSL/Docker/VM/ISO/Azure packaging, Debian packages, signed APT repo, releases | `targets/`, `packaging/`, `.github/workflows/` |
@@ -507,6 +507,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - Desktop broker consumers use the unprivileged `crates/clawd-client` library
   for socket discovery, v1 framing, correlation, deadlines, bounds, and stable
   errors; the library depends on neither desktop UI nor privileged core logic.
+- The desktop Agent UI and HTTP bridge compile against
+  `desktop/agent/protocol`; the bridge translates clawd/core models into this
+  versioned presentation contract and rejects incompatible versions explicitly.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.
