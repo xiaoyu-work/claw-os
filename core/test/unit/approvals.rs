@@ -274,3 +274,145 @@ fn list_pending_ignores_tmp_files() {
         "should ignore tmp file, got {pending:?}"
     );
 }
+
+
+const LAUNCHER: &str = "app-launch:uid=1000:pid=42:start=7";
+
+fn approve_for(verb: Verb, scope: Scope, duration: GrantDuration) -> String {
+    let id = submit_owned(verb, scope, LAUNCHER, "launch", None, Some(1000)).unwrap();
+    approve_for_owner(&id, duration, Some("uid:0".into()), None, Some(1000)).unwrap();
+    id
+}
+
+#[test]
+fn grant_set_consumption_retires_every_duration_once() {
+    for duration in [
+        GrantDuration::Once,
+        GrantDuration::Session,
+        GrantDuration::Forever,
+    ] {
+        let _tmp = isolated_env();
+        let id = approve_for(Verb::SYS_IDENTITY, Scope::name("accounts"), duration);
+        let required = vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"))];
+
+        assert!(consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
+        assert!(
+            !approved_dir().join(format!("{id}.json")).exists(),
+            "{duration:?} must not stay reusable after an App launch"
+        );
+        assert!(consumed_dir().join(format!("{id}.json")).exists());
+        assert!(!consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
+    }
+}
+
+#[test]
+fn grant_set_consumption_requires_an_exact_session_owner_verb_and_scope() {
+    let _tmp = isolated_env();
+    let id = approve_for(
+        Verb::SYS_IDENTITY,
+        Scope::name("accounts"),
+        GrantDuration::Once,
+    );
+
+    let cases = [
+        ("app-launch:uid=1000:pid=43:start=9", Verb::SYS_IDENTITY, Scope::name("accounts"), Some(1000)),
+        (LAUNCHER, Verb::SYS_CONFIG, Scope::name("accounts"), Some(1000)),
+        (LAUNCHER, Verb::SYS_IDENTITY, Scope::name("other"), Some(1000)),
+        (LAUNCHER, Verb::SYS_IDENTITY, Scope::name("accounts"), Some(1001)),
+    ];
+    for (session, verb, scope, owner) in cases {
+        let required = vec![Cap::new(verb, scope.clone())];
+        assert!(
+            !consume_grant_set_once_for_owner(session, &required, owner).unwrap(),
+            "grant matching must stay exact for {session} {}",
+            verb.as_str()
+        );
+    }
+    assert!(approved_dir().join(format!("{id}.json")).exists());
+}
+
+#[test]
+fn grant_set_consumption_is_all_or_none() {
+    let _tmp = isolated_env();
+    let approved = approve_for(
+        Verb::SYS_IDENTITY,
+        Scope::name("accounts"),
+        GrantDuration::Once,
+    );
+    let required = vec![
+        Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts")),
+        Cap::new(Verb::SYS_CONFIG, Scope::path("/etc/cos/agent.toml")),
+    ];
+
+    assert!(
+        !consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap(),
+        "a partly approved set must not be settled"
+    );
+    assert!(
+        approved_dir().join(format!("{approved}.json")).exists(),
+        "the approved half must not be burned while the other half is pending"
+    );
+
+    let second = approve_for(
+        Verb::SYS_CONFIG,
+        Scope::path("/etc/cos/agent.toml"),
+        GrantDuration::Once,
+    );
+    assert!(consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
+    for id in [approved, second] {
+        assert!(!approved_dir().join(format!("{id}.json")).exists());
+        assert!(consumed_dir().join(format!("{id}.json")).exists());
+    }
+}
+
+#[test]
+fn grant_set_consumption_needs_one_grant_per_capability() {
+    let _tmp = isolated_env();
+    approve_for(Verb::SYS_OBSERVE, Scope::name("**"), GrantDuration::Once);
+    let required = vec![
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("packages")),
+        Cap::new(Verb::SYS_OBSERVE, Scope::name("services")),
+    ];
+    assert!(
+        !consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap(),
+        "one approval must not satisfy two required capabilities"
+    );
+}
+
+#[test]
+fn status_reports_the_decision_state_for_the_owner_only() {
+    let _tmp = isolated_env();
+    let pending = submit_owned(
+        Verb::SYS_IDENTITY,
+        Scope::name("accounts"),
+        LAUNCHER,
+        "launch",
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Pending);
+    assert_eq!(status_for_owner(&pending, Some(1001)), RequestStatus::Unknown);
+    assert_eq!(status_for_owner("ap-missing", Some(1000)), RequestStatus::Unknown);
+    assert_eq!(status_for_owner("../escape", Some(1000)), RequestStatus::Unknown);
+
+    approve_for_owner(&pending, GrantDuration::Once, Some("uid:0".into()), None, Some(1000))
+        .unwrap();
+    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Approved);
+
+    let required = vec![Cap::new(Verb::SYS_IDENTITY, Scope::name("accounts"))];
+    assert!(consume_grant_set_once_for_owner(LAUNCHER, &required, Some(1000)).unwrap());
+    assert_eq!(status_for_owner(&pending, Some(1000)), RequestStatus::Consumed);
+
+    let denied = submit_owned(
+        Verb::SYS_CONFIG,
+        Scope::path("/etc/cos/agent.toml"),
+        LAUNCHER,
+        "launch",
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    deny_for_owner(&denied, Some("uid:0".into()), None, Some(1000)).unwrap();
+    assert_eq!(status_for_owner(&denied, Some(1000)), RequestStatus::Denied);
+}

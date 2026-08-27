@@ -492,7 +492,7 @@ impl ActiveCallGuard {
 
 impl Drop for ActiveCallGuard {
     fn drop(&mut self) {
-        let clear = self.control.set_transient_caps(None);
+        let clear = self.control.set_transient_call(None);
         if let Err(error) = &clear {
             tracing::warn!(
                 child_pid = self.child_pid,
@@ -512,6 +512,8 @@ impl Drop for ActiveCallGuard {
 
 async fn begin_active_session_call(
     app_id: &str,
+    tool: &str,
+    args: &BTreeMap<String, Value>,
     caps: &[crate::caps::Cap],
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id)?;
@@ -528,10 +530,12 @@ async fn begin_active_session_call(
         )
     };
     let lock = call_lock.lock_owned().await;
-    if let Err(error) =
-        control.set_transient_caps(Some(crate::caps::CapSet::from_caps(caps.iter().cloned())))
-    {
-        let clear_error = control.set_transient_caps(None).err();
+    if let Err(error) = control.set_transient_call(Some(crate::bridge::TransientCall {
+        tool,
+        args,
+        caps: crate::caps::CapSet::from_caps(caps.iter().cloned()),
+    })) {
+        let clear_error = control.set_transient_call(None).err();
         #[cfg(unix)]
         unsafe {
             libc::kill(child_pid as i32, libc::SIGKILL);
@@ -890,7 +894,14 @@ impl Tool for AppSessionTool {
                 return ToolResult::err(format!("could not bring up app `{}`: {e}", self.app_id));
             }
         };
-        let mut active_call = match begin_active_session_call(&self.app_id, &caps).await {
+        let mut active_call = match begin_active_session_call(
+            &self.app_id,
+            &self.manifest_tool_name,
+            &args_map,
+            &caps,
+        )
+        .await
+        {
             Ok(guard) => guard,
             Err(error) => {
                 close_session(&self.app_id).await;

@@ -27,7 +27,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::caps::{Scope, Verb};
+use crate::caps::{Cap, Scope, Verb};
 
 /// How long a grant lasts after the user approves it.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -500,50 +500,211 @@ pub fn consume_matching_grant_for_owner(
 ) -> Result<Option<GrantDuration>, String> {
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     for path in list_dir(&approved_dir()) {
-        let Ok(data) = fs::read_to_string(&path) else {
+        let Some(resolved) = load_matching_grant(&path, session, verb, requested_scope, owner_uid)
+        else {
             continue;
         };
-        let Ok(resolved) = serde_json::from_str::<Resolved>(&data) else {
-            continue;
-        };
-        if resolved.request.session != session {
-            continue;
-        }
-        if owner_uid.is_some() && resolved.request.owner_uid != owner_uid {
-            continue;
-        }
-        if Verb::parse(&resolved.request.verb) != Some(verb) {
-            continue;
-        }
-        if resolved.decision.outcome != Outcome::Approved {
-            continue;
-        }
-        if !resolved.request.scope.covers(requested_scope) {
-            continue;
-        }
 
         let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
         if duration != GrantDuration::Once {
             return Ok(Some(duration));
         }
 
-        let Some(file_name) = path.file_name() else {
-            continue;
-        };
-        let dest = consumed_dir().join(file_name);
-        match fs::rename(&path, &dest) {
-            Ok(()) => {
-                sync_dir(&approved_dir());
-                sync_dir(&consumed_dir());
-                return Ok(Some(duration));
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => continue,
-            Err(err) => {
-                return Err(format!("consume approved grant {}: {err}", path.display()));
-            }
+        if consume_grant_file(&path)? {
+            return Ok(Some(duration));
         }
     }
     Ok(None)
+}
+
+/// True when an approved, unconsumed grant already covers this exact
+/// capability for this session and owner. Non-consuming: used when
+/// re-filing a launch's approval requests so a decision the user has
+/// already made is not asked for twice.
+pub fn has_approved_grant_for_owner(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+) -> Result<bool, String> {
+    ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
+    Ok(list_dir(&approved_dir()).into_iter().any(|path| {
+        load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()
+    }))
+}
+
+/// Decision state of one request, as reported to the requester.
+///
+/// Carries no payload beyond the state itself: a requester learns
+/// whether it may proceed, never anything about another launcher.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestStatus {
+    Pending,
+    Approved,
+    /// Approved earlier and already spent.
+    Consumed,
+    Denied,
+    /// No such request is visible to this owner.
+    Unknown,
+}
+
+impl RequestStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RequestStatus::Pending => "pending",
+            RequestStatus::Approved => "approved",
+            RequestStatus::Consumed => "consumed",
+            RequestStatus::Denied => "denied",
+            RequestStatus::Unknown => "unknown",
+        }
+    }
+}
+
+/// Report where `id` currently sits, scoped to `owner_uid`.
+pub fn status_for_owner(id: &str, owner_uid: Option<u32>) -> RequestStatus {
+    if validate_approval_id(id).is_err() {
+        return RequestStatus::Unknown;
+    }
+    let file = format!("{id}.json");
+    for (dir, status) in [
+        (pending_dir(), RequestStatus::Pending),
+        (approved_dir(), RequestStatus::Approved),
+        (consumed_dir(), RequestStatus::Consumed),
+        (denied_dir(), RequestStatus::Denied),
+    ] {
+        let Ok(data) = fs::read_to_string(dir.join(&file)) else {
+            continue;
+        };
+        let visible = match status {
+            RequestStatus::Pending => serde_json::from_str::<Request>(&data)
+                .map(|request| request_visible_to(&request, owner_uid))
+                .unwrap_or(false),
+            _ => serde_json::from_str::<Resolved>(&data)
+                .map(|resolved| request_visible_to(&resolved.request, owner_uid))
+                .unwrap_or(false),
+        };
+        if visible {
+            return status;
+        }
+    }
+    RequestStatus::Unknown
+}
+
+/// Retire a whole set of approved grants for one action, all or none.
+///
+/// Every requested capability must have its own approved grant bound to
+/// this session and owner. If even one is missing nothing is consumed,
+/// so a launcher can never burn part of an approval set and leave the
+/// user re-approving the remainder forever. The scan and the moves run
+/// under one store-wide lock, and a failure part-way rolls the already
+/// retired grants back.
+///
+/// Duration is deliberately ignored: `session`/`forever` grants exist so
+/// a user-facing session stops being re-prompted, and must not become
+/// reusable ambient authority on a path that mints capability-bearing
+/// App sessions.
+pub fn consume_grant_set_once_for_owner(
+    session: &str,
+    required: &[Cap],
+    owner_uid: Option<u32>,
+) -> Result<bool, String> {
+    if required.is_empty() {
+        return Ok(true);
+    }
+    ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        let mut claimed: Vec<PathBuf> = Vec::new();
+        for cap in required {
+            let found = list_dir(&approved_dir()).into_iter().find(|path| {
+                !claimed.contains(path)
+                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid)
+                        .is_some()
+            });
+            match found {
+                Some(path) => claimed.push(path),
+                // Nothing has moved yet, so there is nothing to undo.
+                None => return Ok(false),
+            }
+        }
+
+        let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new();
+        for path in claimed {
+            let Some(file_name) = path.file_name().map(ToOwned::to_owned) else {
+                rollback_consumed(&moved);
+                return Err("approved grant has no file name".to_string());
+            };
+            let dest = consumed_dir().join(&file_name);
+            match fs::rename(&path, &dest) {
+                Ok(()) => moved.push((path, dest)),
+                Err(err) => {
+                    rollback_consumed(&moved);
+                    return Err(format!("consume approved grant {}: {err}", path.display()));
+                }
+            }
+        }
+        sync_dir(&approved_dir());
+        sync_dir(&consumed_dir());
+        Ok(true)
+    })
+}
+
+fn rollback_consumed(moved: &[(PathBuf, PathBuf)]) {
+    for (original, dest) in moved {
+        let _ = fs::rename(dest, original);
+    }
+    sync_dir(&approved_dir());
+    sync_dir(&consumed_dir());
+}
+
+fn grant_lock_path() -> PathBuf {
+    root().join("grants")
+}
+
+/// Load `path` when it holds an approved grant covering this exact
+/// session, owner, verb and scope.
+fn load_matching_grant(
+    path: &Path,
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+) -> Option<Resolved> {
+    let data = fs::read_to_string(path).ok()?;
+    let resolved = serde_json::from_str::<Resolved>(&data).ok()?;
+    if resolved.request.session != session {
+        return None;
+    }
+    if owner_uid.is_some() && resolved.request.owner_uid != owner_uid {
+        return None;
+    }
+    if Verb::parse(&resolved.request.verb) != Some(verb) {
+        return None;
+    }
+    if resolved.decision.outcome != Outcome::Approved {
+        return None;
+    }
+    if !resolved.request.scope.covers(requested_scope) {
+        return None;
+    }
+    Some(resolved)
+}
+
+/// Atomically retire an approved grant. `Ok(false)` means another
+/// caller won the race and consumed it first.
+fn consume_grant_file(path: &Path) -> Result<bool, String> {
+    let Some(file_name) = path.file_name() else {
+        return Ok(false);
+    };
+    let dest = consumed_dir().join(file_name);
+    match fs::rename(path, &dest) {
+        Ok(()) => {
+            sync_dir(&approved_dir());
+            sync_dir(&consumed_dir());
+            Ok(true)
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(err) => Err(format!("consume approved grant {}: {err}", path.display())),
+    }
 }
 
 fn list_dir(dir: &Path) -> Vec<PathBuf> {

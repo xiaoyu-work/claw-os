@@ -18,13 +18,29 @@ pub fn record_clawd_request(
     duration: Duration,
     client: &ClientIdentity,
 ) {
+    let _ = append(clawd_request_record(
+        command, params, response, duration, client,
+    ));
+}
+
+fn clawd_request_record(
+    command: &str,
+    params: &Value,
+    response: &Response,
+    duration: Duration,
+    client: &ClientIdentity,
+) -> Value {
     let error = response.error.as_ref().map(|err| {
         json!({
             "code": err.code,
             "message": err.message,
         })
     });
-    let record = json!({
+    // Same masking as the broker audit log: this journal is a
+    // user-visible projection, so a launch handle written here would be
+    // replayable bearer authority.
+    let redacted = super::audit::redact_params(params);
+    json!({
         "ts": Utc::now(),
         "event": "system.operation",
         "source": "clawd.request",
@@ -32,10 +48,9 @@ pub fn record_clawd_request(
         "ok": response.ok,
         "duration_ms": duration.as_millis(),
         "client": client,
-        "params": params,
+        "params": redacted.as_ref().unwrap_or(params),
         "error": error,
-    });
-    let _ = append(record);
+    })
 }
 
 pub fn record_invalid_request(

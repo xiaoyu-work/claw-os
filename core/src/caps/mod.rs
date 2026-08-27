@@ -37,6 +37,7 @@
 //! sites lands. This crate ships the data layer first so the rest of
 //! the system can begin moving over without a big-bang switch.
 
+pub mod args;
 pub mod cap;
 pub mod catalog;
 pub mod denial;

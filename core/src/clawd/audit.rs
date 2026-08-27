@@ -103,18 +103,46 @@ pub fn record_request(
     duration: Duration,
     client: &ClientIdentity,
 ) -> Result<(), String> {
+    let redacted = redact_params(params);
     let audit = RequestAudit {
         ts: Utc::now(),
         event: "clawd.request",
         command,
         ok: response.ok,
         duration_ms: duration.as_millis(),
-        params,
+        params: redacted.as_ref().unwrap_or(params),
         client,
         error_code: response.error.as_ref().map(|err| err.code.as_str()),
         error_message: response.error.as_ref().map(|err| err.message.as_str()),
     };
     append_jsonl(&audit)
+}
+
+/// Request fields that are bearer authority rather than description.
+/// The App-session launch handle authorises binding, re-scoping and
+/// tearing down a registered session, so it must not be replayable from
+/// any record of the request.
+const REDACTED_PARAM_KEYS: &[&str] = &["handle"];
+
+/// Return a copy of `params` with bearer fields masked, or `None` when
+/// there is nothing to mask so the common path stays allocation-free.
+///
+/// Shared with [`super::system_journal::record_clawd_request`] so both
+/// sinks that persist raw broker requests mask exactly the same fields.
+pub(crate) fn redact_params(params: &Value) -> Option<Value> {
+    let Value::Object(map) = params else {
+        return None;
+    };
+    if !REDACTED_PARAM_KEYS.iter().any(|key| map.contains_key(*key)) {
+        return None;
+    }
+    let mut redacted = map.clone();
+    for key in REDACTED_PARAM_KEYS {
+        if let Some(value) = redacted.get_mut(*key) {
+            *value = Value::String("<redacted>".to_string());
+        }
+    }
+    Some(Value::Object(redacted))
 }
 
 pub fn record_invalid(
@@ -286,4 +314,12 @@ fn append_jsonl<T: Serialize>(record: &T) -> Result<(), String> {
     let line = serde_json::to_string(record).map_err(|err| err.to_string())?;
     crate::filelock::append_locked(&path, &line)
         .map_err(|err| format!("failed to write clawd audit log {}: {err}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/audit.rs"
+    ));
 }

@@ -58,6 +58,36 @@ pub fn recent(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     Ok(json!({ "requests": requests }))
 }
 
+/// Decision state for a set of request ids this caller already knows.
+///
+/// A denied App launch is handed the ids of the requests it filed and
+/// waits here for the user's decision. Only the state is returned, and
+/// only for requests visible to this owner, so nothing about another
+/// launcher's request leaks — and knowing an id authorises nothing:
+/// grants are still matched against the daemon-derived launcher
+/// identity when the launch is retried.
+pub fn status(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let owner = owner_filter(client)?;
+    let ids = match params.get("ids") {
+        Some(Value::Array(items)) => items,
+        _ => return Err("ids must be an array of approval request ids".to_string()),
+    };
+    if ids.len() > 64 {
+        return Err("too many approval request ids".to_string());
+    }
+    let mut statuses = Vec::with_capacity(ids.len());
+    for id in ids {
+        let id = id
+            .as_str()
+            .ok_or_else(|| "ids must contain only strings".to_string())?;
+        statuses.push(json!({
+            "id": id,
+            "status": approvals::status_for_owner(id, owner).as_str(),
+        }));
+    }
+    Ok(json!({ "statuses": statuses }))
+}
+
 pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     if client.require_uid()? != 0 {
         return Err("permission decisions require the privileged approval helper".to_string());

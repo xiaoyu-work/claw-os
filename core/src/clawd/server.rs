@@ -173,6 +173,19 @@ async fn handle_client(
 
 async fn dispatch(request: Request, state: &DaemonState, client: &ClientIdentity) -> Response {
     let id = request.id.clone();
+    if let Err(message) = authorize_command(&request.command, client) {
+        return Response::error(id, "request_failed", message);
+    }
+    // App-session routes answer denials with structured data (the
+    // approval request ids the launcher must wait on), which has to
+    // reach the peer without being flattened into the message that
+    // audit records persist.
+    if app_sessions::owns_command(&request.command) {
+        return match app_sessions::dispatch(&request.command, request.params, client).await {
+            Ok(result) => Response::ok(id, result),
+            Err(error) => Response::error_with_data(id, "request_failed", error),
+        };
+    }
     match dispatch_result(request, state, client).await {
         Ok(result) => Response::ok(id, result),
         Err(message) => Response::error(id, "request_failed", message),
@@ -184,7 +197,6 @@ async fn dispatch_result(
     state: &DaemonState,
     client: &ClientIdentity,
 ) -> Result<Value, String> {
-    authorize_command(&request.command, client)?;
     match request.command.as_str() {
         "daemon.health" => Ok(json!({
             "status": "ok",
@@ -214,6 +226,7 @@ async fn dispatch_result(
         "context.event.query" => context_events::query_for_client(request.params, client),
         "permission.pending" => permissions::pending(request.params, client),
         "permission.recent" => permissions::recent(request.params, client),
+        "permission.status" => permissions::status(request.params, client),
         "permission.request" => permissions::request(request.params, client),
         "permission.decide" => permissions::decide(request.params, client),
         "system.operations" => system_journal::query_for_client(request.params, client),
@@ -249,18 +262,6 @@ async fn dispatch_result(
         "system.usb.control" => usb_guard::control(request.params, client).await,
         "system.users.control" => users::control(request.params, client).await,
         "scheduler.run" => scheduler::run(request.params, client).await,
-        "app_session.register" => app_sessions::register(request.params, client).await,
-        "app_session.register_native" => {
-            app_sessions::register_native(request.params, client).await
-        }
-        "mcp_session.register" => app_sessions::register_mcp(request.params, client).await,
-        "app_session.bind" => app_sessions::bind(request.params, client).await,
-        "app_session.set_transient" => {
-            app_sessions::set_transient(request.params, client).await
-        }
-        "app_session.deregister" => {
-            app_sessions::deregister(request.params, client).await
-        }
         "transaction.begin" => transactions::begin(state, request.params, client),
         "transaction.list" => transactions::list(state, client),
         "transaction.commit" => transactions::commit(state, request.params, client),
@@ -327,6 +328,7 @@ fn authorize_command(command: &str, client: &ClientIdentity) -> Result<(), Strin
             | "app_session.deregister"
             | "permission.pending"
             | "permission.recent"
+            | "permission.status"
             | "permission.request"
             | "permission.decide"
             | "context.snapshot"

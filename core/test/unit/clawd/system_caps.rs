@@ -34,3 +34,32 @@ fn system_agent_caps_include_exactly_low_and_medium_risk_verbs() {
         );
     }
 }
+
+#[test]
+fn local_launcher_ceiling_is_an_unprivileged_home_bounded_policy() {
+    let home = Path::new("/home/test");
+    let caps = local_launcher_ceiling(home);
+    assert!(caps.covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("pkg"))));
+    assert!(caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/home/test/notes.txt"))));
+    assert!(!caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/etc/shadow"))));
+    assert!(!caps.covers(&Cap::new(Verb::FS_READ, Scope::path("/**"))));
+
+    for meta in crate::caps::catalog::CATALOG {
+        let held = caps.verbs().contains(&meta.verb);
+        let expected = meta.risk <= Risk::Medium && !LOCAL_LAUNCH_DENIED_VERBS.contains(&meta.verb);
+        assert_eq!(
+            held,
+            expected,
+            "unexpected unregistered-launcher policy for {} ({:?})",
+            meta.verb.as_str(),
+            meta.risk
+        );
+    }
+    for verb in LOCAL_LAUNCH_DENIED_VERBS {
+        assert!(
+            !caps.verbs().contains(verb),
+            "{} must never reach an unregistered launcher",
+            verb.as_str()
+        );
+    }
+}
