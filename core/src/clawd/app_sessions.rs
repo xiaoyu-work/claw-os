@@ -654,20 +654,13 @@ fn operation_plan(
         .operations
         .get(operation)
         .ok_or_else(|| format!("App `{}` has no operation `{operation}`", app.manifest.id))?;
-    let mut values = crate::caps::args::bind_cli_args(&declared.args, args)
+    let supplied = crate::caps::args::bind_supplied_cli_args(&declared.args, args)
         .map_err(|error| format!("App `{}` operation `{operation}`: {error}", app.manifest.id))?;
-    crate::caps::args::validate_bound_args(&declared.args, &values)
-        .map_err(|error| format!("App `{}` operation `{operation}`: {error}", app.manifest.id))?;
-    // Resolve paths exactly as the launcher did, against the peer's own
-    // home and working directory, so a scope names the resource the App
-    // receives rather than the token it was typed as.
-    crate::caps::args::resolve_path_args(&declared.args, &mut values, &delegation.paths)
-        .map_err(|error| format!("App `{}` operation `{operation}`: {error}", app.manifest.id))?;
-    let resolved = app
+    let effective = app
         .manifest
-        .resolve_needs(operation, &values)
+        .resolve_operation_call(operation, &supplied, &delegation.paths)
         .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
-    derive_plan(&declared.needs, &resolved, delegation)
+    derive_plan(&declared.needs, &effective.needs, delegation)
 }
 
 fn session_tool_plan(
@@ -688,13 +681,11 @@ fn session_tool_plan(
         .as_ref()
         .and_then(|session| session.tools.iter().find(|tool| tool.name == tool_name))
         .ok_or_else(|| format!("App `{app_id}` has no session tool `{tool_name}`"))?;
-    crate::caps::args::validate_bound_args(&tool.args, &args)
-        .map_err(|error| format!("App `{app_id}` tool `{tool_name}`: {error}"))?;
-    let resolved = app
+    let effective = app
         .manifest
-        .resolve_session_tool_needs(&tool_name, &args)
+        .resolve_session_tool_call(&tool_name, &args, &delegation.paths)
         .map_err(|error| format!("resolve `{tool_name}` capabilities: {error}"))?;
-    derive_plan(&tool.needs, &resolved, delegation)
+    derive_plan(&tool.needs, &effective.needs, delegation)
 }
 
 /// Turn manifest needs into a complete capability plan.
@@ -837,7 +828,7 @@ fn request_approvals(delegation: &Delegation, missing: &[Cap]) -> BrokerError {
 fn inherited_wild_caps(verb: Verb, delegation: &Delegation) -> Result<Vec<Cap>, BrokerError> {
     let mut inherited = Vec::new();
     for cap in delegation.ceiling.iter().filter(|held| held.verb == verb) {
-        if matches!(cap.scope, Scope::Wild) && verb_addresses_a_resource(verb) {
+        if cap.scope.is_wildcard() && verb_addresses_a_resource(verb) {
             return Err(format!(
                 "wildcard `{}` need cannot inherit unbounded authority; \
                  the launching session must hold a bounded {} scope",
@@ -906,9 +897,7 @@ fn gui_plan(app: &App, exec: &str, delegation: &Delegation) -> Result<LaunchPlan
                 }
             }
             ScopeBinding::Wild => {
-                if let Ok(inherited) = inherited_wild_caps(need.verb, delegation) {
-                    plan.inherit(inherited);
-                }
+                plan.inherit(inherited_wild_caps(need.verb, delegation)?);
             }
             ScopeBinding::FromArg { .. }
             | ScopeBinding::FromArgMap { .. }

@@ -483,6 +483,11 @@ class TestRunDispatch(unittest.TestCase):
     def test_find_without_query_returns_error(self):
         self.assertIn("error", main.run("find", []))
 
+    def test_find_preserves_delimited_option_shaped_query(self):
+        with mock.patch.object(main, "_scan_apps", return_value={}):
+            result = main.run("find", ["--", "--limit"])
+        self.assertEqual(result["query"], "--limit")
+
     def test_is_running_without_app_id_returns_error(self):
         self.assertIn("error", main.run("is-running", []))
 

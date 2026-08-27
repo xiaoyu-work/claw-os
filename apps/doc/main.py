@@ -58,11 +58,14 @@ def _read_stdin_or_file(args):
             return None, None, read_result
         text = read_result.get("content", "") if isinstance(read_result, dict) else ""
         return text, file_path, instruction
-    # Fall back to stdin (used by Edit / Term piping a buffer).
-    if not sys.stdin.isatty():
-        return sys.stdin.read(), "<stdin>", instruction
     if rest:
         return " ".join(rest), None, instruction
+    # Fall back to explicitly forwarded stdin only when no positional text
+    # was supplied. A closed stdin reads as empty and is not valid content.
+    if not sys.stdin.isatty():
+        piped = sys.stdin.read()
+        if piped:
+            return piped, "<stdin>", instruction
     return None, None, {"error": "no input — supply --file PATH or pipe text on stdin"}
 
 

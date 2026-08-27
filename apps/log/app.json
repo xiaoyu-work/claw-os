@@ -127,7 +127,8 @@
         {
           "name": "message",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         },
         {
           "name": "level",

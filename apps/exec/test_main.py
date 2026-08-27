@@ -217,6 +217,16 @@ class TestShellScope(unittest.TestCase):
         self.assertTrue(spawns, "cmd_run --shell never reached proc.spawn check")
         self.assertTrue(any(c.get("wild") is True for c in spawns))
 
+    def test_delimited_shell_token_remains_a_positional_command(self):
+        captured, spy = self._capture()
+        with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(
+            "claw_test_exec_main._run_bounded",
+            side_effect=FileNotFoundError,
+        ):
+            self.main.cmd_run(["--", "--shell"])
+        spawns = [call for call in captured if call["verb"] == "proc.spawn"]
+        self.assertEqual(spawns, [{"verb": "proc.spawn", "name": "--shell"}])
+
     def test_shell_run_with_env_assignment_still_requires_wild(self):
         captured, spy = self._capture()
         with mock.patch.object(self.main.policy, "require", side_effect=spy), mock.patch(

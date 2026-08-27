@@ -116,6 +116,17 @@ fn audit_path() -> PathBuf {
 
 /// Main dispatch: parse CLI args and route to the appropriate handler.
 pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
+    dispatch_with_stdin(args, None)
+}
+
+/// Dispatch a top-level CLI invocation with explicitly supplied stdin bytes.
+///
+/// Internal callers use [`dispatch`] and therefore cannot accidentally pass a
+/// control pipe or service stdin through to an App.
+pub fn dispatch_with_stdin(
+    args: &[String],
+    stdin_data: Option<&[u8]>,
+) -> Result<Option<String>, String> {
     if args.is_empty() {
         return show_overview();
     }
@@ -1187,7 +1198,7 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 
     // "app" namespace → route to declared app runtimes
     if name == "app" {
-        return dispatch_app(&args[1..]);
+        return dispatch_app(&args[1..], stdin_data);
     }
 
     // Built-in OS primitives
@@ -1225,6 +1236,7 @@ fn run_app_command(
     command: &str,
     args: &[String],
     app: &apps::App,
+    stdin_data: Option<&[u8]>,
 ) -> Result<Option<String>, String> {
     let start = Instant::now();
     let audit = audit_path();
@@ -1243,7 +1255,8 @@ fn run_app_command(
         }
     }
 
-    let result = bridge::run_app(&app.dir, command, args, &data, &apps);
+    let result =
+        bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
 
     match result {
         Ok(output) => {

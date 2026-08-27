@@ -334,6 +334,13 @@ pub struct Operation {
     pub needs: Vec<Need>,
 }
 
+#[derive(Clone, Debug)]
+pub struct EffectiveCall {
+    pub values: BTreeMap<String, serde_json::Value>,
+    pub needs: Vec<Vec<super::cap::Cap>>,
+    pub defaulted: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Arg {
     /// Identifier referenced by `from-arg` scope bindings.
@@ -406,6 +413,7 @@ pub enum ArgDefaultTransform {
 #[serde(rename_all = "kebab-case")]
 pub enum TrustedArgResolver {
     EmailProvider,
+    EmailHost,
     CalendarProvider,
 }
 
@@ -520,15 +528,6 @@ impl ArgKind {
     }
 }
 
-impl Operation {
-    pub(crate) fn apply_arg_defaults(
-        &self,
-        values: &mut BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<String>, String> {
-        apply_arg_defaults(&self.args, values)
-    }
-}
-
 fn apply_arg_defaults(
     declarations: &[Arg],
     values: &mut BTreeMap<String, serde_json::Value>,
@@ -575,6 +574,25 @@ fn apply_arg_defaults(
         }
     }
     Ok(applied)
+}
+
+pub(crate) fn resolve_effective_args(
+    declarations: &[Arg],
+    supplied: &BTreeMap<String, serde_json::Value>,
+    paths: Option<&super::args::PathContext>,
+) -> Result<(BTreeMap<String, serde_json::Value>, Vec<String>), String> {
+    let mut values = supplied.clone();
+    let defaulted = apply_arg_defaults(declarations, &mut values)?;
+    for declaration in declarations {
+        if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
+            values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
+        }
+    }
+    super::args::validate_bound_args(declarations, &values)?;
+    if let Some(paths) = paths {
+        super::args::resolve_path_args(declarations, &mut values, paths)?;
+    }
+    Ok((values, defaulted))
 }
 
 fn safe_url_path_basename(value: &str) -> Option<&str> {
@@ -675,15 +693,6 @@ pub struct SessionTool {
     /// local (kernel still emits an audit row).
     #[serde(default)]
     pub needs: Vec<Need>,
-}
-
-impl SessionTool {
-    fn apply_arg_defaults(
-        &self,
-        values: &mut BTreeMap<String, serde_json::Value>,
-    ) -> Result<Vec<String>, String> {
-        apply_arg_defaults(&self.args, values)
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -789,6 +798,8 @@ pub enum NeedCondition {
 pub enum ScopeBinding {
     FromArg {
         arg: String,
+        #[serde(default, skip_serializing_if = "ScopeTransform::is_identity")]
+        transform: ScopeTransform,
     },
     FromArgMap {
         arg: String,
@@ -804,6 +815,21 @@ pub enum ScopeBinding {
     Wild,
 }
 
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ScopeTransform {
+    #[default]
+    Identity,
+    Parent,
+    UrlHost,
+}
+
+impl ScopeTransform {
+    fn is_identity(&self) -> bool {
+        *self == Self::Identity
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum NeedConditionWire {
@@ -816,6 +842,8 @@ enum NeedConditionWire {
 enum ScopeBindingWire {
     FromArg {
         arg: String,
+        #[serde(default)]
+        transform: ScopeTransform,
     },
     FromArgMap {
         arg: String,
@@ -887,7 +915,7 @@ impl<'de> Deserialize<'de> for ScopeBinding {
         reject_unknown_tagged_fields::<D::Error>(
             &value,
             &[
-                ("from-arg", &["arg"]),
+                ("from-arg", &["arg", "transform"]),
                 ("from-arg-map", &["arg", "values"]),
                 ("from-arg-or-wild", &["arg", "wild_when"]),
                 ("fixed", &["scope"]),
@@ -897,7 +925,7 @@ impl<'de> Deserialize<'de> for ScopeBinding {
         let wire: ScopeBindingWire =
             serde_json::from_value(value).map_err(serde::de::Error::custom)?;
         Ok(match wire {
-            ScopeBindingWire::FromArg { arg } => Self::FromArg { arg },
+            ScopeBindingWire::FromArg { arg, transform } => Self::FromArg { arg, transform },
             ScopeBindingWire::FromArgMap { arg, values } => Self::FromArgMap { arg, values },
             ScopeBindingWire::FromArgOrWild { arg, wild_when } => {
                 Self::FromArgOrWild { arg, wild_when }
@@ -1306,15 +1334,22 @@ impl Manifest {
                         arg: arg.name.clone(),
                     });
                 }
-                let trusted_app_matches = match arg.trusted_resolver {
-                    Some(TrustedArgResolver::EmailProvider) => self.id == "email",
-                    Some(TrustedArgResolver::CalendarProvider) => self.id == "calendar",
+                let trusted_shape_matches = match arg.trusted_resolver {
+                    Some(TrustedArgResolver::EmailProvider) => {
+                        self.id == "email" && arg.name == "provider" && arg.kind == ArgKind::Name
+                    }
+                    Some(TrustedArgResolver::EmailHost) => {
+                        self.id == "email" && arg.name == "host" && arg.kind == ArgKind::Host
+                    }
+                    Some(TrustedArgResolver::CalendarProvider) => {
+                        self.id == "calendar"
+                            && arg.name == "provider"
+                            && arg.kind == ArgKind::Name
+                    }
                     None => true,
                 };
                 if arg.trusted_resolver.is_some()
-                    && (!trusted_app_matches
-                        || arg.name != "provider"
-                        || arg.kind != ArgKind::Name
+                    && (!trusted_shape_matches
                         || arg.effective_binding() != ArgBinding::Flag
                         || arg.required
                         || arg.default.is_some()
@@ -1376,7 +1411,7 @@ impl Manifest {
                 }
 
                 match &need.scope {
-                    ScopeBinding::FromArg { arg } => {
+                    ScopeBinding::FromArg { arg, transform } => {
                         let a = seen_args.get(arg.as_str()).ok_or_else(|| {
                             ManifestError::NeedRefsUndeclaredArg {
                                 op: op_name.clone(),
@@ -1384,7 +1419,12 @@ impl Manifest {
                                 arg: arg.clone(),
                             }
                         })?;
-                        if !a.kind.binds_to_scope() {
+                        let compatible = match transform {
+                            ScopeTransform::Identity => a.kind.binds_to_scope(),
+                            ScopeTransform::Parent => a.kind == ArgKind::Path,
+                            ScopeTransform::UrlHost => a.kind == ArgKind::Text,
+                        };
+                        if !compatible {
                             return Err(ManifestError::NeedArgKindMismatch {
                                 op: op_name.clone(),
                                 idx,
@@ -1541,7 +1581,7 @@ impl Manifest {
                     }
 
                     match &need.scope {
-                        ScopeBinding::FromArg { arg } => {
+                        ScopeBinding::FromArg { arg, transform } => {
                             let a = seen_args.get(arg.as_str()).ok_or_else(|| {
                                 ManifestError::SessionNeedRefsUndeclaredArg {
                                     tool: tool.name.clone(),
@@ -1549,7 +1589,12 @@ impl Manifest {
                                     arg: arg.clone(),
                                 }
                             })?;
-                            if !a.kind.binds_to_scope() {
+                            let compatible = match transform {
+                                ScopeTransform::Identity => a.kind.binds_to_scope(),
+                                ScopeTransform::Parent => a.kind == ArgKind::Path,
+                                ScopeTransform::UrlHost => a.kind == ArgKind::Text,
+                            };
+                            if !compatible {
                                 return Err(ManifestError::SessionNeedArgKindMismatch {
                                     tool: tool.name.clone(),
                                     idx,
@@ -1670,8 +1715,37 @@ impl Manifest {
         }
         Ok(())
     }
-    /// for a specific invocation.
-    ///
+    /// Resolve effective argument values and aligned capabilities together.
+    pub fn resolve_operation_call(
+        &self,
+        op_name: &str,
+        supplied: &BTreeMap<String, serde_json::Value>,
+        paths: &super::args::PathContext,
+    ) -> Result<EffectiveCall, ManifestError> {
+        let operation =
+            self.operations
+                .get(op_name)
+                .ok_or_else(|| ManifestError::NeedInvalid {
+                    op: op_name.to_string(),
+                    idx: 0,
+                    detail: "unknown operation".to_string(),
+                })?;
+        let (values, defaulted) =
+            resolve_effective_args(&operation.args, supplied, Some(paths)).map_err(|detail| {
+                ManifestError::NeedInvalid {
+                    op: op_name.to_string(),
+                    idx: 0,
+                    detail,
+                }
+            })?;
+        let needs = self.resolve_needs(op_name, &values)?;
+        Ok(EffectiveCall {
+            values,
+            needs,
+            defaulted,
+        })
+    }
+
     /// `op_name` selects which operation; `args` is a map of arg name
     /// → JSON-encoded value (the same shape the bridge already passes
     /// through). Unknown args produce `None`; needs that bind to a
@@ -1689,13 +1763,13 @@ impl Manifest {
                 idx: 0,
                 detail: "unknown operation".into(),
             })?;
-        let mut args = args.clone();
-        op.apply_arg_defaults(&mut args)
-            .map_err(|detail| ManifestError::NeedInvalid {
+        let (args, _) = resolve_effective_args(&op.args, args, None).map_err(|detail| {
+            ManifestError::NeedInvalid {
                 op: op_name.to_string(),
                 idx: 0,
                 detail,
-            })?;
+            }
+        })?;
         let mut out = Vec::with_capacity(op.needs.len());
         for (idx, need) in op.needs.iter().enumerate() {
             if !need_applies(need.when.as_ref(), &args) {
@@ -1703,7 +1777,7 @@ impl Manifest {
                 continue;
             }
             let scopes = match &need.scope {
-                ScopeBinding::FromArg { arg } => {
+                ScopeBinding::FromArg { arg, transform } => {
                     let val = args.get(arg).ok_or_else(|| ManifestError::NeedInvalid {
                         op: op_name.to_string(),
                         idx,
@@ -1716,7 +1790,7 @@ impl Manifest {
                             arg: arg.clone(),
                         }
                     })?;
-                    scopes_from_arg_value(arg_decl, val).ok_or_else(|| {
+                    scopes_from_arg_value(arg_decl, val, *transform).ok_or_else(|| {
                         ManifestError::NeedInvalid {
                             op: op_name.to_string(),
                             idx,
@@ -1763,7 +1837,7 @@ impl Manifest {
                                     idx,
                                     arg: arg.clone(),
                                 })?;
-                        scopes_from_arg_value(decl, value).ok_or_else(|| {
+                        scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(|| {
                             ManifestError::NeedInvalid {
                                 op: op_name.to_string(),
                                 idx,
@@ -1821,7 +1895,7 @@ impl Manifest {
             }
             let scopes =
                 match &need.scope {
-                    ScopeBinding::FromArg { arg } => {
+                    ScopeBinding::FromArg { arg, transform } => {
                         let val =
                             args.get(arg)
                                 .ok_or_else(|| ManifestError::SessionNeedInvalid {
@@ -1837,7 +1911,7 @@ impl Manifest {
                                     arg: arg.clone(),
                                 }
                             })?;
-                        scopes_from_arg_value(arg_decl, val).ok_or_else(|| {
+                        scopes_from_arg_value(arg_decl, val, *transform).ok_or_else(|| {
                             ManifestError::SessionNeedInvalid {
                                 tool: tool_name.to_string(),
                                 idx,
@@ -1886,7 +1960,7 @@ impl Manifest {
                                     arg: arg.clone(),
                                 },
                             )?;
-                            scopes_from_arg_value(decl, value).ok_or_else(|| {
+                            scopes_from_arg_value(decl, value, ScopeTransform::Identity).ok_or_else(|| {
                                 ManifestError::SessionNeedInvalid {
                                     tool: tool_name.to_string(),
                                     idx,
@@ -1906,6 +1980,37 @@ impl Manifest {
             );
         }
         Ok(out)
+    }
+
+    pub fn resolve_session_tool_call(
+        &self,
+        tool_name: &str,
+        supplied: &BTreeMap<String, serde_json::Value>,
+        paths: &super::args::PathContext,
+    ) -> Result<EffectiveCall, ManifestError> {
+        let tool = self
+            .session
+            .as_ref()
+            .and_then(|session| session.tools.iter().find(|tool| tool.name == tool_name))
+            .ok_or_else(|| ManifestError::SessionNeedInvalid {
+                tool: tool_name.to_string(),
+                idx: 0,
+                detail: "unknown session tool".to_string(),
+            })?;
+        let (values, defaulted) =
+            resolve_effective_args(&tool.args, supplied, Some(paths)).map_err(|detail| {
+                ManifestError::SessionNeedInvalid {
+                    tool: tool_name.to_string(),
+                    idx: 0,
+                    detail,
+                }
+            })?;
+        let needs = self.resolve_session_tool_needs(tool_name, &values)?;
+        Ok(EffectiveCall {
+            values,
+            needs,
+            defaulted,
+        })
     }
 
     /// Validate a session call and apply every literal manifest default.
@@ -1933,14 +2038,7 @@ impl Manifest {
                 idx: 0,
                 detail: "unknown session tool".to_string(),
             })?;
-        let mut resolved = args.clone();
-        tool.apply_arg_defaults(&mut resolved)
-            .map_err(|detail| ManifestError::SessionNeedInvalid {
-                tool: tool_name.to_string(),
-                idx: 0,
-                detail,
-            })?;
-        super::args::validate_bound_args(&tool.args, &resolved).map_err(|detail| {
+        let (resolved, _) = resolve_effective_args(&tool.args, args, None).map_err(|detail| {
             ManifestError::SessionNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
@@ -1986,7 +2084,7 @@ fn validate_optional_need_binding(
     args: &BTreeMap<&str, &Arg>,
 ) -> Result<(), String> {
     let bound_arg = match &need.scope {
-        ScopeBinding::FromArg { arg }
+        ScopeBinding::FromArg { arg, .. }
         | ScopeBinding::FromArgMap { arg, .. }
         | ScopeBinding::FromArgOrWild { arg, .. } => arg,
         ScopeBinding::Fixed { .. } | ScopeBinding::Wild => return Ok(()),
@@ -2066,15 +2164,40 @@ fn scope_from_arg_value(kind: ArgKind, value: &serde_json::Value) -> Option<Scop
     })
 }
 
-fn scopes_from_arg_value(arg: &Arg, value: &serde_json::Value) -> Option<Vec<Scope>> {
+fn scopes_from_arg_value(
+    arg: &Arg,
+    value: &serde_json::Value,
+    transform: ScopeTransform,
+) -> Option<Vec<Scope>> {
+    let scope = |value: &serde_json::Value| {
+        if transform == ScopeTransform::UrlHost {
+            let raw = value.as_str()?;
+            let normalized;
+            let raw = if raw.contains("://") {
+                raw
+            } else {
+                normalized = format!("https://{raw}");
+                &normalized
+            };
+            let parsed = url::Url::parse(raw).ok()?;
+            return Some(Scope::host(parsed.host_str()?));
+        }
+        let scope = scope_from_arg_value(arg.kind, value)?;
+        match (transform, scope) {
+            (ScopeTransform::Identity, scope) => Some(scope),
+            (ScopeTransform::Parent, Scope::Path(path)) => {
+                let path = std::path::Path::new(&path);
+                let parent = path.parent().unwrap_or(path);
+                Some(Scope::path(parent.to_string_lossy()))
+            }
+            (ScopeTransform::Parent, _) => None,
+            (ScopeTransform::UrlHost, _) => unreachable!(),
+        }
+    };
     if arg.repeatable {
-        value
-            .as_array()?
-            .iter()
-            .map(|value| scope_from_arg_value(arg.kind, value))
-            .collect()
+        value.as_array()?.iter().map(scope).collect()
     } else {
-        scope_from_arg_value(arg.kind, value).map(|scope| vec![scope])
+        scope(value).map(|scope| vec![scope])
     }
 }
 

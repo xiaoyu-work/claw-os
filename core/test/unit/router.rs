@@ -251,6 +251,15 @@ fn show_command_schema_unknown_command_returns_error() {
 }
 
 #[test]
+fn app_schema_switch_only_applies_before_end_of_options() {
+    assert!(app_commands::schema_requested(&["--schema".to_string()]));
+    assert!(!app_commands::schema_requested(&[
+        "--".to_string(),
+        "--schema".to_string(),
+    ]));
+}
+
+#[test]
 fn show_command_schema_has_param_details() {
     let result = show_command_schema("checkpoint", "create");
     let output = result.unwrap().unwrap();

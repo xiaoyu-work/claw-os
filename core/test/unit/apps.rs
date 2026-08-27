@@ -261,7 +261,10 @@ fn bundled_conditional_capabilities_are_exact() {
     let network = load(&["network-manager"]);
     let open_wifi = active(
         network
-            .resolve_needs("wifi-connect", &BTreeMap::new())
+            .resolve_needs(
+                "wifi-connect",
+                &BTreeMap::from([("ssid".to_string(), serde_json::json!("guest"))]),
+            )
             .unwrap(),
     );
     assert!(open_wifi
@@ -271,10 +274,13 @@ fn bundled_conditional_capabilities_are_exact() {
         network
             .resolve_needs(
                 "wifi-connect",
-                &BTreeMap::from([(
-                    "credential".to_string(),
-                    serde_json::json!("wifi/home"),
-                )]),
+                &BTreeMap::from([
+                    ("ssid".to_string(), serde_json::json!("home")),
+                    (
+                        "credential".to_string(),
+                        serde_json::json!("wifi/home"),
+                    ),
+                ]),
             )
             .unwrap(),
     );
@@ -288,7 +294,10 @@ fn bundled_conditional_capabilities_are_exact() {
         search
             .resolve_needs(
                 "web",
-                &BTreeMap::from([("provider".to_string(), serde_json::json!("brave"))]),
+                &BTreeMap::from([
+                    ("provider".to_string(), serde_json::json!("brave")),
+                    ("query".to_string(), serde_json::json!(["claw"])),
+                ]),
             )
             .unwrap(),
     );

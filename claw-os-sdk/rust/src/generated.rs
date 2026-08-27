@@ -241,6 +241,8 @@ pub struct Scopebinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub arg: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub values: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub wild_when: Option<String>,

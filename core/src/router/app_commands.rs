@@ -22,7 +22,10 @@ fn applications_dir() -> PathBuf {
 }
 
 /// Dispatch to apps under the "cos app" namespace.
-pub(super) fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
+pub(super) fn dispatch_app(
+    args: &[String],
+    stdin_data: Option<&[u8]>,
+) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
     let discovered = apps::discover(&apps_dir);
 
@@ -109,8 +112,9 @@ pub(super) fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
     let cmd_args: Vec<String> = args[2..].to_vec();
     let app = &discovered[app_name.as_str()];
 
-    // If --schema is in args, return app command schema
-    if cmd_args.contains(&"--schema".to_string()) {
+    // Only the option region may request schema. After `--`, the same token
+    // is ordinary App data and must reach the manifest binder unchanged.
+    if schema_requested(&cmd_args) {
         return show_app_command_schema(app_name, command, app);
     }
 
@@ -122,7 +126,13 @@ pub(super) fn dispatch_app(args: &[String]) -> Result<Option<String>, String> {
         ));
     }
 
-    run_app_command(app_name, command, &cmd_args, app)
+    run_app_command(app_name, command, &cmd_args, app, stdin_data)
+}
+
+pub(super) fn schema_requested(args: &[String]) -> bool {
+    args.iter()
+        .take_while(|arg| arg.as_str() != "--")
+        .any(|arg| arg == "--schema")
 }
 
 /// `cos app lint [<name>]` — refuse apps that smuggle in AI SDKs.

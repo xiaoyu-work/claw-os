@@ -59,7 +59,7 @@ def _run_download(response, destination):
         return_value=(response, "https://example.com/file", []),
     ):
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
     require.assert_called_once_with("fs.write", path=os.path.realpath(destination))
     return result
@@ -79,7 +79,7 @@ def test_network_open_failure_preserves_existing_destination(tmp_path):
         side_effect=urllib.error.URLError("offline"),
     ), mock.patch.object(main.tempfile, "mkstemp") as mkstemp:
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
 
     require.assert_called_once_with("fs.write", path=os.path.realpath(destination))
@@ -228,7 +228,7 @@ def test_success_uses_private_same_directory_temp_and_replaces_after_fsync(tmp_p
         main.os, "replace", side_effect=replace
     ):
         result = main.cmd_download(
-            ["https://example.com/file", "--output", os.fspath(destination)]
+            ["https://example.com/file", os.fspath(destination)]
         )
 
     required.assert_called_once_with("fs.write", path=os.path.realpath(destination))

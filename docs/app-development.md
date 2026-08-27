@@ -175,7 +175,9 @@ separate default.
 
 Session tools receive a JSON object rather than argv. Before capability
 resolution and MCP forwarding, the kernel inserts every declared literal
-default into that object, including defaults unrelated to a capability scope.
+default and omitted boolean into that object, validates choices and repeatable
+arrays, and normalizes path values. One shared effective-call resolver feeds
+the in-process gate, daemon gate, and forwarded tool arguments.
 
 The bundled email and calendar apps use the reserved `email-provider` and
 `calendar-provider` trusted resolvers. Before capability derivation, the
@@ -185,10 +187,14 @@ credential and host scopes. Calendar falls back to `local` when neither remote
 credential exists. Third-party apps and session tools cannot use trusted
 resolvers.
 
-An operation may set `stdin: true` to receive piped caller input. The bridge
-still closes terminal stdin, so an interactive or agent launch cannot hang
-waiting for a prompt. Python list handlers use `apps/canonical_argv.py`; argparse
-and gateway parsers consume the same inline flags and `--` delimiter directly.
+An operation may set `stdin: true` to receive explicitly forwarded caller
+input. The top-level CLI opts in with `--stdin`, for example
+`printf data | cos --stdin app fs write /workspace/out.txt`. The CLI reads
+those bytes and passes them as invocation data; the bridge never inherits or
+probes process stdin. Agent, session, service, and ordinary CLI calls therefore
+keep child stdin closed. Python list handlers use `apps/canonical_argv.py`;
+argparse and gateway parsers consume the same inline flags and `--` delimiter
+directly.
 
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
@@ -252,9 +258,10 @@ Declare it in `operations.<op>.needs[]`:
 * `"fixed"` — hard-code a scope: `{"kind": "fixed", "scope": {...}}`.
   Useful for ops that always touch the same resource.
 * `"from-arg"` — late binding: `{"kind": "from-arg", "arg": "path"}`
-  reads the named op argument and constructs the scope from it. Only
-  works for args of `kind` `path` / `host` / `name`; text args must
-  use `"wild"` and the handler narrows the scope at runtime.
+  reads the named op argument and constructs the scope from it. Without a
+  transform it works for `path` / `host` / `name`. The optional safe
+  `transform` is `parent` for a path's containing directory or `url-host`
+  for the exact host parsed from a text URL.
 * `"from-arg-map"` — map explicit argument values to predefined scopes:
   `{"kind": "from-arg-map", "arg": "mode", "values": {...}}`.
 * `"from-arg-or-wild"` — derive a scope from an argument normally, but use a

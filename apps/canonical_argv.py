@@ -1,6 +1,28 @@
 """Compatibility helpers for manifest-canonical operation argv."""
 
 
+class _PositionalToken(str):
+    """A string that cannot be reclassified as an option by legacy handlers."""
+
+    def __eq__(self, other):
+        if isinstance(other, _PositionalToken):
+            return super().__eq__(other)
+        if isinstance(other, str) and other.startswith("--"):
+            return False
+        return super().__eq__(other)
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+    __hash__ = str.__hash__
+
+    def startswith(self, prefix, *args):
+        prefixes = (prefix,) if isinstance(prefix, str) else prefix
+        if any(candidate == "--" for candidate in prefixes):
+            return False
+        return super().startswith(prefix, *args)
+
+
 def parse_canonical_argv(args, *, value_flags=(), bool_flags=(), repeatable_flags=()):
     """Parse the complete canonical grammar into positionals and options."""
     value_flags = {name.replace("_", "-") for name in value_flags}
@@ -79,7 +101,7 @@ def normalize_canonical_argv(args, *, bool_flags=()):
             else:
                 normalized.extend((flag, value))
             continue
-        normalized.append(token)
+        normalized.append(token if options else _PositionalToken(token))
     return normalized
 
 

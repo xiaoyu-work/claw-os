@@ -1,6 +1,7 @@
 """Tests for fs app output size limits + the binary / move / copy verbs."""
 
 import base64
+import io
 import os
 import pathlib
 import tempfile
@@ -368,6 +369,27 @@ class TestWriteBytes(unittest.TestCase):
             self.assertEqual(result["path"], destination)
             with open(destination, encoding="utf-8") as file:
                 self.assertEqual(file.read(), "--urgent")
+
+    def test_run_writes_forwarded_stdin_when_content_flag_is_absent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = os.path.join(directory, "piped.txt")
+            with mock.patch.object(fs_main.sys, "stdin", io.StringIO("piped data")):
+                result = fs_main.run("write", [destination])
+            self.assertEqual(result["path"], destination)
+            with open(destination, encoding="utf-8") as file:
+                self.assertEqual(file.read(), "piped data")
+
+
+class TestTagScope(unittest.TestCase):
+    def test_tag_checks_the_parent_directory_written_by_sidecar(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "note.txt")
+            with open(path, "w", encoding="utf-8") as file:
+                file.write("note")
+            with mock.patch.object(fs_main.policy, "require") as require:
+                result = fs_main.run("tag", [path, "blue"])
+            require.assert_called_once_with("fs.write", path=directory)
+            self.assertEqual(result["tags"], ["blue"])
 
 
 class TestSymlinkEscape(unittest.TestCase):

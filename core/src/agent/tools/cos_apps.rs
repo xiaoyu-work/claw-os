@@ -516,7 +516,7 @@ fn render_app_detail(app: &crate::apps::App) -> String {
                 .iter()
                 .map(|n| {
                     let scope = match &n.scope {
-                        crate::caps::manifest::ScopeBinding::FromArg { arg } => {
+                        crate::caps::manifest::ScopeBinding::FromArg { arg, .. } => {
                             format!("from-arg({arg})")
                         }
                         crate::caps::manifest::ScopeBinding::FromArgMap { arg, .. } => {

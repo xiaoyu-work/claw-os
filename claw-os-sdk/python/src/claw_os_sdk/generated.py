@@ -228,6 +228,7 @@ class Scopebinding(_ScopebindingRequired, total=False):
     an explicit wildcard (no implicit '*').
     """
     arg: str
+    transform: str
     values: Dict[str, Any]
     wild_when: str
     scope: "Scope"

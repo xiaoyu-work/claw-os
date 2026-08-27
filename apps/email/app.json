@@ -33,6 +33,13 @@
           "trusted_resolver": "email-provider"
         },
         {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
           "name": "to",
           "kind": "text",
           "required": true,
@@ -61,7 +68,8 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "host"
           },
           "why": {
             "en": "Open a network connection to the SMTP server or provider API to deliver the message."
@@ -120,6 +128,13 @@
           "trusted_resolver": "email-provider"
         },
         {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
           "name": "query",
           "kind": "text",
           "required": true,
@@ -137,7 +152,8 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "host"
           },
           "why": {
             "en": "Call the provider's API to search your mailbox."
@@ -179,6 +195,13 @@
           "trusted_resolver": "email-provider"
         },
         {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
           "name": "max-results",
           "kind": "integer",
           "required": false,
@@ -197,7 +220,8 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "host"
           },
           "why": {
             "en": "Call the provider's API to list recent messages."
@@ -239,6 +263,13 @@
           "trusted_resolver": "email-provider"
         },
         {
+          "name": "host",
+          "kind": "host",
+          "required": false,
+          "binding": "flag",
+          "trusted_resolver": "email-host"
+        },
+        {
           "name": "id",
           "kind": "text",
           "required": true,
@@ -249,7 +280,8 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "host"
           },
           "why": {
             "en": "Call the provider's API to fetch the message body."

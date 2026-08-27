@@ -369,10 +369,10 @@ def cmd_tag(args):
         raise Exception("tag requires a path and at least one tag")
     path = _abs(args[0])
     new_tags = args[1:]
-    directory = os.path.dirname(path) if os.path.isfile(path) else path
+    if not os.path.isfile(path):
+        return {"error": f"not a file: {path}"}
+    directory = os.path.dirname(path)
     policy.require("fs.write", path=directory)
-    if not os.path.exists(path):
-        return {"error": f"not found: {path}"}
     basename = os.path.basename(path)
     meta = _load_meta(directory)
     if basename not in meta:

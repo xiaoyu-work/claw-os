@@ -288,7 +288,7 @@ fn operation_defaults_bind_the_same_argv_and_narrow_caps() {
     assert_eq!(search.argv, vec!["needle", "/workspace"]);
     assert!(bind_operation_args(&manifest.operations["search"], &[])
         .unwrap_err()
-        .contains("required operation arg `query`"));
+        .contains("argument `query` is required"));
     let mut search_parent = CapSet::new();
     search_parent.insert(Cap::new(Verb::FS_READ, Scope::path("/workspace")));
     let search_resolved = manifest.resolve_needs("search", &search.values).unwrap();
@@ -618,6 +618,27 @@ fn explicit_false_overrides_true_default_for_authority_and_child() {
 }
 
 #[test]
+fn in_process_wild_need_rejects_typed_wildcard_authority() {
+    let manifest = Manifest::from_json(
+        r#"{"id":"wild","version":"1","name":"Wild",
+             "operations":{"dial":{"label":"Dial","needs":[
+               {"verb":"net.dial","scope":{"kind":"wild"},"why":"Dial"}
+             ]}}}"#,
+    )
+    .unwrap();
+    let operation = &manifest.operations["dial"];
+    let resolved = manifest.resolve_needs("dial", &BTreeMap::new()).unwrap();
+    let parent = CapSet::from_caps([Cap::new(Verb::NET_DIAL, Scope::host("**"))]);
+    assert!(constrained_operation_caps(
+        &parent,
+        true,
+        &operation.needs,
+        &resolved
+    )
+    .is_err());
+}
+
+#[test]
 fn trusted_email_provider_is_bound_before_capability_derivation() {
     let credentials = tempfile::tempdir().unwrap();
     let _credentials =
@@ -629,20 +650,28 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
             "operations":{"send":{"label":"Send","args":[
                 {"name":"body","kind":"text","required":true},
                 {"name":"provider","kind":"name","binding":"flag",
-                 "trusted_resolver":"email-provider"}
+                 "trusted_resolver":"email-provider"},
+                {"name":"host","kind":"host","binding":"flag",
+                 "trusted_resolver":"email-host"}
             ],"needs":[{"verb":"secret.read","scope":{
                 "kind":"from-arg-map","arg":"provider","values":{
                     "smtp":{"kind":"name","value":"default/SMTP_PASSWORD"},
                     "gmail":{"kind":"name","value":"default/GOOGLE_ACCESS_TOKEN"}
-                }},"why":"Read provider credential"}]}}
+                }},"why":"Read provider credential"},
+                {"verb":"net.dial","scope":{"kind":"from-arg","arg":"host"},
+                 "why":"Connect to provider"}]}}
         }"#,
     )
     .unwrap();
     let operation = &manifest.operations["send"];
     let trusted = trusted_pre_dispatch_args("email", operation, &["hello".into()]).unwrap();
-    assert_eq!(trusted, ["hello", "--provider", "smtp"]);
+    assert_eq!(
+        trusted,
+        ["hello", "--provider", "smtp", "--host", "mail.example.test"]
+    );
     let bound = bind_operation_args(operation, &trusted).unwrap();
     assert_eq!(bound.values["provider"], serde_json::json!("smtp"));
+    assert_eq!(bound.values["host"], serde_json::json!("mail.example.test"));
     assert_eq!(bound.argv, trusted);
 
     let resolved = manifest.resolve_needs("send", &bound.values).unwrap();
@@ -650,6 +679,7 @@ fn trusted_email_provider_is_bound_before_capability_derivation() {
         resolved[0][0].scope,
         Scope::name("default/SMTP_PASSWORD")
     );
+    assert_eq!(resolved[1][0].scope, Scope::host("mail.example.test"));
 }
 
 #[test]
@@ -715,6 +745,97 @@ fn stdin_forwarding_requires_an_explicit_operation_contract() {
     assert!(!operation_forwards_stdin(app.path(), "closed").unwrap());
 }
 
+#[cfg(unix)]
+#[test]
+fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
+    let _env = crate::test_env::lock_env();
+    let state = tempfile::tempdir().unwrap();
+    let _session = crate::test_env::TestSessionGuard::admin(state.path());
+    let _local_sessions =
+        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let runner = state.path().join("claw-app-runner");
+    std::fs::write(
+        &runner,
+        "#!/bin/sh\n[ \"$1\" = \"--\" ] && shift\nexec \"$@\"\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&runner, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let _runner = crate::test_env::TestEnvVarGuard::set("CLAW_APP_RUNNER_BIN", &runner);
+
+    let python = state.path().join("python-app");
+    std::fs::create_dir_all(&python).unwrap();
+    std::fs::write(
+        python.join("app.json"),
+        r#"{"id":"python-app","version":"1","name":"Pipe",
+             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        python.join("main.py"),
+        "import sys\ndef run(command, args):\n    return {'input': sys.stdin.read()}\n",
+    )
+    .unwrap();
+    let state_text = state.path().to_string_lossy();
+    let output = run_python_app_with_stdin(
+        &python,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+        Some(b"python input"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["input"],
+        "python input"
+    );
+    let closed = run_python_app(
+        &python,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&closed).unwrap()["input"],
+        ""
+    );
+
+    let shell = state.path().join("shell-app");
+    std::fs::create_dir_all(&shell).unwrap();
+    std::fs::write(
+        shell.join("app.json"),
+        r#"{"id":"shell-app","version":"1","name":"Pipe","runtime":"shell",
+             "operations":{"read":{"label":"Read","stdin":true}}}"#,
+    )
+    .unwrap();
+    let entry = shell.join("main.sh");
+    std::fs::write(
+        &entry,
+        "#!/bin/sh\npayload=$(cat)\nprintf '{\"input\":\"%s\"}\\n' \"$payload\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = run_app_with_stdin(
+        &shell,
+        "read",
+        &[],
+        &state_text,
+        &state_text,
+        Some(b"shell input"),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&output).unwrap()["input"],
+        "shell input"
+    );
+}
+
 #[test]
 fn bundled_lone_limits_bind_before_optional_selectors() {
     let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -769,5 +890,18 @@ fn bundled_lone_limits_bind_before_optional_selectors() {
     assert_eq!(
         containerd.argv,
         ["containerd", "web", "25", "--namespace", "default"]
+    );
+
+    let net = load(&["net"]);
+    let output = effective_app_home().join("download.bin");
+    let args = vec![
+        "https://example.test/download.bin".to_string(),
+        output.to_string_lossy().into_owned(),
+    ];
+    let download = bind_operation_args(&net.operations["download"], &args).unwrap();
+    assert_eq!(download.argv, args);
+    assert_eq!(
+        download.values["output"],
+        serde_json::json!(output.to_string_lossy())
     );
 }

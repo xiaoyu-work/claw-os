@@ -857,11 +857,15 @@ impl Tool for AppSessionTool {
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
         let supplied_args = json_to_arg_map(&input);
-        let args_map = match self
+        let paths = match crate::bridge::launcher_path_context() {
+            Ok(paths) => paths,
+            Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
+        };
+        let effective = match self
             .manifest
-            .resolve_session_tool_args(&self.manifest_tool_name, &supplied_args)
+            .resolve_session_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
         {
-            Ok(args) => args,
+            Ok(effective) => effective,
             Err(error) => {
                 let message = format!("argument resolution failed: {error}");
                 emit_audit(
@@ -877,27 +881,8 @@ impl Tool for AppSessionTool {
             }
         };
 
-        // 1) Cap gate. resolve_session_tool_needs is cheap; manifest
-        // is held in Arc and not re-parsed.
-        let caps = match self
-            .manifest
-            .resolve_session_tool_needs(&self.manifest_tool_name, &args_map)
-        {
-            Ok(c) => c.into_iter().flatten().collect::<Vec<_>>(),
-            Err(e) => {
-                let msg = format!("cap resolution failed: {e}");
-                emit_audit(
-                    &self.app_id,
-                    &self.manifest_tool_name,
-                    "",
-                    "denied",
-                    Some(&msg),
-                    Some(&msg),
-                    started.elapsed(),
-                );
-                return ToolResult::err(msg);
-            }
-        };
+        let args_map = effective.values;
+        let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
 
         for cap in &caps {
             if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {

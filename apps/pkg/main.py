@@ -199,29 +199,9 @@ def cmd_has(args):
 
 def _parse_search_args(args):
     """Pull out --limit / -n and return (query, limit)."""
-    limit = DEFAULT_SEARCH_LIMIT
-    query_parts = []
-    i = 0
-    while i < len(args):
-        tok = args[i]
-        if tok in ("--limit", "-n"):
-            if i + 1 >= len(args):
-                raise ValueError(f"{tok} requires a value")
-            try:
-                limit = int(args[i + 1])
-            except ValueError as exc:
-                raise ValueError(f"{tok} expects an integer, got {args[i + 1]!r}") from exc
-            i += 2
-            continue
-        if tok.startswith("--limit="):
-            try:
-                limit = int(tok.split("=", 1)[1])
-            except ValueError as exc:
-                raise ValueError(f"--limit expects an integer, got {tok!r}") from exc
-            i += 1
-            continue
-        query_parts.append(tok)
-        i += 1
+    from canonical_argv import parse_canonical_argv
+    query_parts, options = parse_canonical_argv(args, value_flags={"limit"})
+    limit = int(options.get("limit", DEFAULT_SEARCH_LIMIT))
     if limit <= 0:
         raise ValueError("--limit must be positive")
     if limit > MAX_SEARCH_LIMIT:
@@ -435,8 +415,12 @@ def cmd_upgrade_all(args):
 
 def run(command, args):
     """Entry point called by the cos router."""
-    from canonical_argv import normalize_canonical_argv
-    args = normalize_canonical_argv(args)
+    if command != "search":
+        from canonical_argv import parse_canonical_argv
+        try:
+            args, _ = parse_canonical_argv(args)
+        except ValueError as error:
+            return {"error": str(error)}
     commands = {
         "need": cmd_need,
         "has": cmd_has,

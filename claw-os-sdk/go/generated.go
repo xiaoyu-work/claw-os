@@ -186,6 +186,7 @@ type Needcondition struct {
 type Scopebinding struct {
 	Kind string `json:"kind"`
 	Arg string `json:"arg,omitempty"`
+	Transform string `json:"transform,omitempty"`
 	Values map[string]interface{} `json:"values,omitempty"`
 	WildWhen string `json:"wild_when,omitempty"`
 	Scope *Scope `json:"scope,omitempty"`

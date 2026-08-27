@@ -97,6 +97,7 @@
         "en": "Write to a file",
         "zh-CN": "写入文件"
       },
+      "stdin": true,
       "args": [
         {
           "name": "path",
@@ -252,7 +253,8 @@
           "verb": "fs.write",
           "scope": {
             "kind": "from-arg",
-            "arg": "path"
+            "arg": "path",
+            "transform": "parent"
           },
           "why": {
             "en": "Update the metadata sidecar next to the file with the new tags."
@@ -448,6 +450,7 @@
       "label": {
         "en": "Write binary file data"
       },
+      "stdin": true,
       "args": [
         {
           "name": "path",

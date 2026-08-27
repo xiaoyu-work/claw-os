@@ -107,8 +107,6 @@
           "if": { "required": ["trusted_resolver"] },
           "then": {
             "properties": {
-              "name": { "const": "provider" },
-              "kind": { "const": "name" },
               "binding": { "const": "flag" },
               "required": { "const": false }
             },
@@ -119,6 +117,14 @@
                 { "required": ["default_from"] }
               ]
             }
+          }
+        },
+        {
+          "if": { "properties": { "trusted_resolver": { "const": "email-host" } }, "required": ["trusted_resolver"] },
+          "then": { "properties": { "name": { "const": "host" }, "kind": { "const": "host" } } },
+          "else": {
+            "if": { "required": ["trusted_resolver"] },
+            "then": { "properties": { "name": { "const": "provider" }, "kind": { "const": "name" } } }
           }
         }
       ],
@@ -131,7 +137,7 @@
         "choices": { "type": "array", "uniqueItems": true, "description": "Optional closed set of accepted scalar values." },
         "default": { "description": "Optional non-null default whose JSON type must match kind. Omit this property when there is no default." },
         "default_from": { "$ref": "#/$defs/argDefaultBinding", "description": "Derive an omitted string value from an earlier declared argument." },
-        "trusted_resolver": { "type": "string", "enum": ["email-provider", "calendar-provider"], "description": "Trusted pre-dispatch provider resolver, restricted by the kernel to its matching bundled app." },
+        "trusted_resolver": { "type": "string", "enum": ["email-provider", "email-host", "calendar-provider"], "description": "Trusted pre-dispatch resolver, restricted by the kernel to its matching bundled app." },
         "label": { "$ref": "#/$defs/localizedText" }
       }
     },
@@ -221,33 +227,34 @@
           "if": { "properties": { "kind": { "const": "from-arg-map" } }, "required": ["kind"] },
           "then": {
             "required": ["arg", "values"],
-            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }] }
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "from-arg-or-wild" } }, "required": ["kind"] },
           "then": {
             "required": ["arg", "wild_when"],
-            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }] }
+            "not": { "anyOf": [{ "required": ["scope"] }, { "required": ["values"] }, { "required": ["transform"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "fixed" } }, "required": ["kind"] },
           "then": {
             "required": ["scope"],
-            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
           }
         },
         {
           "if": { "properties": { "kind": { "const": "wild" } }, "required": ["kind"] },
           "then": {
-            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }] }
+            "not": { "anyOf": [{ "required": ["arg"] }, { "required": ["scope"] }, { "required": ["values"] }, { "required": ["wild_when"] }, { "required": ["transform"] }] }
           }
         }
       ],
       "properties": {
         "kind": { "type": "string", "enum": ["from-arg", "from-arg-map", "from-arg-or-wild", "fixed", "wild"] },
         "arg": { "type": "string", "description": "Arg name to bind from (kind=from-arg)." },
+        "transform": { "type": "string", "enum": ["identity", "parent", "url-host"], "description": "Safe transformation applied after binding a scope source." },
         "values": { "type": "object", "additionalProperties": { "$ref": "#/$defs/scope" }, "description": "Explicit argument-value to scope mapping for kind=from-arg-map." },
         "wild_when": { "type": "string", "description": "Boolean argument that selects wildcard scope for kind=from-arg-or-wild." },
         "scope": { "$ref": "#/$defs/scope", "description": "Hard-coded scope (kind=fixed)." }

@@ -11,10 +11,17 @@ from canonical_argv import (
 
 
 def test_normalizes_inline_values_boolean_false_and_delimiter():
-    assert normalize_canonical_argv(
+    normalized = normalize_canonical_argv(
         ["--confirm=false", "--label=--urgent", "--", "--literal"],
         bool_flags={"confirm"},
-    ) == ["--label", "--urgent", "--literal"]
+    )
+    assert [str(value) for value in normalized] == [
+        "--label",
+        "--urgent",
+        "--literal",
+    ]
+    assert normalized[-1] != "--literal"
+    assert not normalized[-1].startswith("--")
 
 
 def test_preserves_repeatable_occurrence_order():

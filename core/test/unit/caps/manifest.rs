@@ -483,6 +483,50 @@ fn repeatable_scope_arguments_resolve_one_capability_per_value() {
 }
 
 #[test]
+fn scope_transforms_derive_exact_parent_and_url_host_resources() {
+    let manifest = Manifest::from_json(
+        r#"{
+            "id":"transforms","version":"0.1","name":"Transforms",
+            "operations":{
+                "tag":{"label":"Tag","args":[
+                    {"name":"path","kind":"path","required":true}
+                ],"needs":[
+                    {"verb":"fs.write","scope":{"kind":"from-arg","arg":"path",
+                     "transform":"parent"},"why":"Write sidecar"}
+                ]},
+                "fetch":{"label":"Fetch","args":[
+                    {"name":"url","kind":"text","required":true}
+                ],"needs":[
+                    {"verb":"net.dial","scope":{"kind":"from-arg","arg":"url",
+                     "transform":"url-host"},"why":"Fetch host"}
+                ]}
+            }
+        }"#,
+    )
+    .unwrap();
+    let tag = manifest
+        .resolve_needs(
+            "tag",
+            &BTreeMap::from([(
+                "path".to_string(),
+                serde_json::json!("/workspace/note.txt"),
+            )]),
+        )
+        .unwrap();
+    assert_eq!(tag[0][0].scope, Scope::path("/workspace"));
+    let fetch = manifest
+        .resolve_needs(
+            "fetch",
+            &BTreeMap::from([(
+                "url".to_string(),
+                serde_json::json!("https://api.example.test/v1?q=1"),
+            )]),
+        )
+        .unwrap();
+    assert_eq!(fetch[0][0].scope, Scope::host("api.example.test"));
+}
+
+#[test]
 fn ambiguous_repeatable_declarations_are_rejected() {
     for arg in [
         r#"{"name":"toggle","kind":"bool","repeatable":true}"#,
@@ -580,7 +624,7 @@ fn resolve_needs_missing_arg_at_runtime_is_error() {
     match err {
         ManifestError::NeedInvalid { op, detail, .. } => {
             assert_eq!(op, "rm");
-            assert!(detail.contains("not supplied"));
+            assert!(detail.contains("required"));
         }
         other => panic!("expected NeedInvalid, got {other:?}"),
     }
@@ -958,6 +1002,56 @@ fn session_repeatable_scope_arg_resolves_every_capability() {
     assert_eq!(resolved[0].len(), 2);
     assert_eq!(resolved[0][0].scope, Scope::path("/workspace/a"));
     assert_eq!(resolved[0][1].scope, Scope::path("/workspace/b"));
+}
+
+#[test]
+fn session_effective_call_matches_one_shot_argument_semantics() {
+    let manifest = parse(
+        r#"{
+          "id":"session-parity","version":"0.1","name":"Session parity",
+          "session":{"tools":[{
+            "name":"files.read","summary":"Read files",
+            "args":[
+              {"name":"path","kind":"path","repeatable":true},
+              {"name":"mode","kind":"name","binding":"flag",
+               "choices":["safe","fast"],"default":"safe"},
+              {"name":"enabled","kind":"bool"}
+            ],
+            "needs":[
+              {"verb":"fs.read","scope":{"kind":"from-arg","arg":"path"},
+               "when":{"kind":"arg-present","arg":"path"},"why":"Read files"},
+              {"verb":"data.kv.read","scope":{"kind":"fixed",
+               "scope":{"kind":"name","value":"enabled"}},
+               "when":{"kind":"arg-equals","arg":"enabled","value":true},
+               "why":"Read enabled state"}
+            ]
+          }]}
+        }"#,
+    );
+    let paths = crate::caps::args::PathContext {
+        home: "/home/test".into(),
+        cwd: Some("/workspace".into()),
+    };
+    let supplied = BTreeMap::from([(
+        "path".to_string(),
+        serde_json::json!(["a.txt", "b.txt"]),
+    )]);
+    let effective = manifest
+        .resolve_session_tool_call("files.read", &supplied, &paths)
+        .unwrap();
+    assert_eq!(
+        effective.values["path"],
+        serde_json::json!(["/workspace/a.txt", "/workspace/b.txt"])
+    );
+    assert_eq!(effective.values["mode"], serde_json::json!("safe"));
+    assert_eq!(effective.values["enabled"], serde_json::json!(false));
+    assert_eq!(effective.needs[0].len(), 2);
+    assert!(effective.needs[1].is_empty());
+
+    let invalid = BTreeMap::from([("mode".to_string(), serde_json::json!("unsafe"))]);
+    assert!(manifest
+        .resolve_session_tool_call("files.read", &invalid, &paths)
+        .is_err());
 }
 
 #[test]

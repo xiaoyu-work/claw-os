@@ -61,3 +61,6 @@ List-based Python handlers consume bridge-canonical argv through
 `apps/canonical_argv.py`. Do not add another local flag grammar: declare closed
 choices, repeatability, defaults, stdin forwarding, and capability conditions
 in `app.json`, then reuse the shared parser compatibility helpers.
+The parser preserves post-`--` positional classification; never strip the
+delimiter and re-run local flag detection. Stdin is closed unless the
+top-level CLI explicitly supplies `--stdin` and the operation opts in.

@@ -22,6 +22,28 @@ fn extract_format_recognises_compact_aliases() {
 }
 
 #[test]
+fn stdin_request_is_explicit_and_respects_end_of_options() {
+    let (args, requested) = extract_stdin_request(vec![
+        "app".into(),
+        "--stdin".into(),
+        "doc".into(),
+        "rewrite".into(),
+    ]);
+    assert!(requested);
+    assert_eq!(args, ["app", "doc", "rewrite"]);
+
+    let (args, requested) = extract_stdin_request(vec![
+        "app".into(),
+        "doc".into(),
+        "rewrite".into(),
+        "--".into(),
+        "--stdin".into(),
+    ]);
+    assert!(!requested);
+    assert_eq!(args, ["app", "doc", "rewrite", "--", "--stdin"]);
+}
+
+#[test]
 fn render_pretty_indents_json() {
     let out = render("{\"a\":1,\"b\":[2,3]}", OutputFormat::Pretty);
     assert!(out.contains("\n"));

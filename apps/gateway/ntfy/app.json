@@ -54,7 +54,8 @@
           "name": "server",
           "kind": "text",
           "required": false,
-          "binding": "flag"
+          "binding": "flag",
+          "default": "https://ntfy.sh"
         },
         {
           "name": "bearer",
@@ -80,7 +81,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "server",
+            "transform": "url-host"
           },
           "why": {
             "en": "Connect to the remote gateway service to perform the send operation."

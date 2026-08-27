@@ -32,7 +32,8 @@
         {
           "name": "packages",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         }
       ]
     },

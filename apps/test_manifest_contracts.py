@@ -179,6 +179,7 @@ def _normalized_bool_flags(tree: ast.Module) -> set[str]:
             and node.func.id in {
                 "normalize_canonical_argv",
                 "normalize_argparse_booleans",
+                "parse_canonical_argv",
             }
         ):
             continue
@@ -241,10 +242,35 @@ def _uses_variadic_join(
     function: ast.FunctionDef,
     functions: dict[str, ast.FunctionDef],
     seen: frozenset[str] = frozenset(),
+    check_direct_loops: bool = True,
 ) -> bool:
     if function.name in seen:
         return False
     seen = seen | {function.name}
+    for loop in (
+        node
+        for node in ast.walk(function)
+        if check_direct_loops and isinstance(node, ast.For)
+    ):
+        if not (
+            isinstance(loop.iter, ast.Name)
+            and loop.iter.id in {"args", "argv", "positionals"}
+            and isinstance(loop.target, ast.Name)
+        ):
+            continue
+        target = loop.target.id
+        for call in (
+            node
+            for statement in loop.body
+            for node in ast.walk(statement)
+            if isinstance(node, ast.Call)
+        ):
+            if any(isinstance(node, ast.Name) and node.id == target for node in ast.walk(call)):
+                if (
+                    isinstance(call.func, ast.Attribute)
+                    and call.func.attr in {"append", "extend", "require"}
+                ):
+                    return True
     for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
         if (
             isinstance(call.func, ast.Attribute)
@@ -261,7 +287,36 @@ def _uses_variadic_join(
         if (
             isinstance(call.func, ast.Name)
             and call.func.id in functions
-            and _uses_variadic_join(functions[call.func.id], functions, seen)
+            and _uses_variadic_join(
+                functions[call.func.id], functions, seen, check_direct_loops=False
+            )
+        ):
+            return True
+    return False
+
+
+def _reads_stdin(
+    function: ast.FunctionDef,
+    functions: dict[str, ast.FunctionDef],
+    seen: frozenset[str] = frozenset(),
+) -> bool:
+    if function.name in seen:
+        return False
+    seen = seen | {function.name}
+    for call in (node for node in ast.walk(function) if isinstance(node, ast.Call)):
+        if (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == "read"
+            and isinstance(call.func.value, ast.Attribute)
+            and call.func.value.attr == "stdin"
+            and isinstance(call.func.value.value, ast.Name)
+            and call.func.value.value.id == "sys"
+        ):
+            return True
+        if (
+            isinstance(call.func, ast.Name)
+            and call.func.id in functions
+            and _reads_stdin(functions[call.func.id], functions, seen)
         ):
             return True
     return False
@@ -471,6 +526,11 @@ def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
                 scope = need.get("scope", {})
                 fixed = scope.get("scope", {}) if scope.get("kind") == "fixed" else {}
                 value = fixed.get("value")
+                if (
+                    fixed.get("kind") in {"path", "host", "name"}
+                    and value in {"*", "**", "/**", "/"}
+                ):
+                    drift.append(f"{path}:{surface} typed wildcard scope {value}")
                 if fixed.get("kind") == "path" and isinstance(value, str) and "$" in value:
                     drift.append(f"{path}:{surface} unsupported path placeholder {value}")
     assert not drift, "\n".join(drift)
@@ -533,6 +593,30 @@ def test_variadic_join_handlers_declare_repeatable_positionals() -> None:
     assert not drift, "\n".join(drift)
 
 
+def test_stdin_readers_require_manifest_opt_in() -> None:
+    drift = []
+    for path, tree, manifest in _sources():
+        functions = _function_map(tree)
+        handlers = _handler_map(tree)
+        for operation, declaration in manifest.get("operations", {}).items():
+            handler_name = handlers.get(operation)
+            if handler_name is None:
+                for candidate in (
+                    f"cmd_{operation.replace('-', '_')}",
+                    f"_cmd_{operation.replace('-', '_')}",
+                ):
+                    if candidate in functions:
+                        handler_name = candidate
+                        break
+            if (
+                handler_name is not None
+                and _reads_stdin(functions[handler_name], functions)
+                and not declaration.get("stdin", False)
+            ):
+                drift.append(f"{path}:{operation} reads undeclared stdin")
+    assert not drift, "\n".join(drift)
+
+
 def test_argparse_contracts_match_manifests() -> None:
     drift: list[str] = []
     for path, tree, manifest in _sources():
@@ -566,19 +650,11 @@ def test_argparse_contracts_match_manifests() -> None:
                 if arg is None:
                     drift.append(f"{path}:{operation} missing {parsed['name']}")
                     continue
-                if parsed["binding"] != _binding(arg) and any(
-                    candidate["name"] == parsed["name"]
-                    and candidate["binding"] == _binding(arg)
-                    for candidate in parsed_args
-                ):
-                    # argparse can retain a compatibility alias while app.json
-                    # names the canonical binding (net download's output).
-                    continue
                 if _binding(arg) != parsed["binding"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} binding")
-                handler_required = bool(arg.get("required", False)) or bool(
-                    arg.get("trusted_resolver")
-                )
+                handler_required = bool(arg.get("required", False)) or arg.get(
+                    "trusted_resolver"
+                ) in {"email-provider", "calendar-provider"}
                 if handler_required != parsed["required"]:
                     drift.append(f"{path}:{operation}.{parsed['name']} required")
                 if parsed["kind"] is not None and arg.get("kind") != parsed["kind"]:
@@ -605,10 +681,10 @@ def test_every_manifest_matches_published_schema_contract() -> None:
     scope_kinds = set(defs["scopeBinding"]["properties"]["kind"]["enum"])
     payloads = {
         "from-arg": ({"arg"}, {"scope", "values", "wild_when"}),
-        "from-arg-map": ({"arg", "values"}, {"scope", "wild_when"}),
-        "from-arg-or-wild": ({"arg", "wild_when"}, {"scope", "values"}),
-        "fixed": ({"scope"}, {"arg", "values", "wild_when"}),
-        "wild": (set(), {"arg", "scope", "values", "wild_when"}),
+        "from-arg-map": ({"arg", "values"}, {"scope", "wild_when", "transform"}),
+        "from-arg-or-wild": ({"arg", "wild_when"}, {"scope", "values", "transform"}),
+        "fixed": ({"scope"}, {"arg", "values", "wild_when", "transform"}),
+        "wild": (set(), {"arg", "scope", "values", "wild_when", "transform"}),
     }
     drift: list[str] = []
 
@@ -627,12 +703,17 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 drift.append(f"{path}:{surface}.{arg.get('name')} session resolver")
             resolver_app = {
                 "email-provider": "email",
+                "email-host": "email",
                 "calendar-provider": "calendar",
             }.get(arg.get("trusted_resolver"))
+            expected_resolver_shape = (
+                ("host", "host")
+                if arg.get("trusted_resolver") == "email-host"
+                else ("provider", "name")
+            )
             if arg.get("trusted_resolver") and (
                 app_id != resolver_app
-                or arg.get("name") != "provider"
-                or arg.get("kind") != "name"
+                or (arg.get("name"), arg.get("kind")) != expected_resolver_shape
                 or _binding(arg) != "flag"
                 or arg.get("required", False)
             ):
@@ -689,18 +770,15 @@ def test_every_manifest_matches_published_schema_contract() -> None:
             if kind not in scope_kinds:
                 drift.append(f"{path}:{surface} unknown scope binding {kind}")
                 continue
-            provider = by_name.get("provider")
             if (
                 need.get("verb") == "net.dial"
                 and kind == "wild"
-                and provider
-                and provider.get("choices")
-                and provider.get("trusted_resolver") != "email-provider"
+                and by_name.keys() & {"provider", "url", "urls", "server", "host"}
             ):
-                drift.append(f"{path}:{surface} wildcard provider network scope")
+                drift.append(f"{path}:{surface} wildcard dynamic network scope")
             required, forbidden = payloads[kind]
             fields = set(scope)
-            unknown = fields - {"kind", "arg", "scope", "values", "wild_when"}
+            unknown = fields - {"kind", "arg", "scope", "values", "wild_when", "transform"}
             if not required <= fields or forbidden & fields or unknown:
                 drift.append(f"{path}:{surface} invalid {kind} payload")
             condition = need.get("when")
@@ -728,6 +806,10 @@ def test_every_manifest_matches_published_schema_contract() -> None:
             bound_arg = scope.get("arg")
             if bound_arg in by_name:
                 declaration = by_name[bound_arg]
+                if scope.get("transform") == "parent" and declaration.get("kind") != "path":
+                    drift.append(f"{path}:{surface} parent transform requires path")
+                if scope.get("transform") == "url-host" and declaration.get("kind") != "text":
+                    drift.append(f"{path}:{surface} url-host transform requires text")
                 guaranteed = (
                     declaration.get("required", False)
                     or "default" in declaration

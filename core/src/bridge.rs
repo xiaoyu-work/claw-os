@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use std::process::{Command, Stdio};
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::IsTerminal;
+use std::io::Write;
 
 use crate::caps::manifest::{ArgKind, Manifest, Need, Operation, Runtime, ScopeBinding};
 use crate::caps::{Cap, CapSet, Scope, Verb};
@@ -871,6 +871,21 @@ fn constrained_operation_caps(
                     .filter(|cap| cap.verb == need.verb)
                     .cloned()
                     .collect::<Vec<_>>();
+                if inherited.iter().any(|cap| cap.scope.is_wildcard())
+                    && matches!(
+                        crate::caps::lookup_meta(need.verb).map(|meta| meta.scope_kind),
+                        Some(
+                            crate::caps::ScopeKind::Path
+                                | crate::caps::ScopeKind::Host
+                                | crate::caps::ScopeKind::Name
+                        ) | None
+                    )
+                {
+                    return Err(format!(
+                        "wildcard `{}` need cannot inherit unbounded authority",
+                        need.verb.as_str()
+                    ));
+                }
                 if inherited.is_empty() && !parent_is_app {
                     let requested = Cap::new(need.verb, Scope::Wild);
                     crate::caps::require(requested.verb, requested.scope.clone())
@@ -904,25 +919,14 @@ fn bind_operation_args(
     operation: &Operation,
     args: &[String],
 ) -> Result<BoundOperationArgs, String> {
-    let mut values = parse_supplied_operation_args(operation, args)?;
-    let supplied = values.keys().cloned().collect::<BTreeSet<_>>();
-    for declaration in &operation.args {
-        if declaration.required && !values.contains_key(&declaration.name) {
-            return Err(format!(
-                "required operation arg `{}` was not supplied",
-                declaration.name
-            ));
-        }
-    }
-    let defaulted = operation
-        .apply_arg_defaults(&mut values)
-        .map_err(|error| format!("resolve operation defaults: {error}"))?;
-    normalize_path_args(operation, &mut values)?;
-    for declaration in &operation.args {
-        if declaration.kind == ArgKind::Bool && !values.contains_key(&declaration.name) {
-            values.insert(declaration.name.clone(), serde_json::Value::Bool(false));
-        }
-    }
+    let supplied_values = parse_supplied_operation_args(operation, args)?;
+    let supplied = supplied_values.keys().cloned().collect::<BTreeSet<_>>();
+    let (values, defaulted) = crate::caps::manifest::resolve_effective_args(
+        &operation.args,
+        &supplied_values,
+        Some(&launcher_path_context()?),
+    )
+    .map_err(|error| format!("resolve operation arguments: {error}"))?;
     let argv = canonical_operation_argv(operation, args, &values, &defaulted, &supplied)?;
     Ok(BoundOperationArgs { values, argv })
 }
@@ -932,48 +936,56 @@ fn trusted_pre_dispatch_args(
     operation: &Operation,
     args: &[String],
 ) -> Result<Vec<String>, String> {
-    let Some(selector) = operation
+    let mut resolved = args.to_vec();
+    for selector in operation
         .args
         .iter()
-        .find(|arg| arg.trusted_resolver.is_some())
-    else {
-        return Ok(args.to_vec());
-    };
-    let resolver = selector
-        .trusted_resolver
-        .ok_or_else(|| "trusted resolver disappeared during dispatch".to_string())?;
-    let flag = crate::caps::args::flag_name(selector);
-    if args
-        .iter()
-        .take_while(|arg| arg.as_str() != "--")
-        .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")))
+        .filter(|arg| arg.trusted_resolver.is_some())
     {
-        return Ok(args.to_vec());
-    }
-
-    let provider = match resolver {
-        crate::caps::manifest::TrustedArgResolver::EmailProvider => {
-            resolve_email_provider(operation, selector)?
+        let resolver = selector
+            .trusted_resolver
+            .ok_or_else(|| "trusted resolver disappeared during dispatch".to_string())?;
+        let flag = crate::caps::args::flag_name(selector);
+        let supplied = resolved
+            .iter()
+            .take_while(|arg| arg.as_str() != "--")
+            .any(|arg| arg == &format!("--{flag}") || arg.starts_with(&format!("--{flag}=")));
+        if supplied
+            && resolver == crate::caps::manifest::TrustedArgResolver::EmailHost
+        {
+            return Err("`--host` is reserved for trusted email resolution".to_string());
         }
-        crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
-            if app_id != "calendar" {
-                return Err(format!(
-                    "App `{app_id}` is not allowed to use the calendar provider resolver"
-                ));
+        if supplied {
+            continue;
+        }
+        let value = match resolver {
+            crate::caps::manifest::TrustedArgResolver::EmailProvider => {
+                resolve_email_provider(operation, selector)?.to_string()
             }
-            resolve_calendar_provider()?
-        }
-    };
-
-    let mut resolved = args.to_vec();
-    let delimiter = resolved
-        .iter()
-        .position(|arg| arg == "--")
-        .unwrap_or(resolved.len());
-    resolved.splice(
-        delimiter..delimiter,
-        [format!("--{flag}"), provider.to_string()],
-    );
+            crate::caps::manifest::TrustedArgResolver::EmailHost => {
+                let bound =
+                    crate::caps::args::bind_supplied_cli_args(&operation.args, &resolved)?;
+                let provider = bound
+                    .get("provider")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| "email host resolver requires provider resolution".to_string())?;
+                resolve_email_host(provider)?
+            }
+            crate::caps::manifest::TrustedArgResolver::CalendarProvider => {
+                if app_id != "calendar" {
+                    return Err(format!(
+                        "App `{app_id}` is not allowed to use the calendar provider resolver"
+                    ));
+                }
+                resolve_calendar_provider()?.to_string()
+            }
+        };
+        let delimiter = resolved
+            .iter()
+            .position(|arg| arg == "--")
+            .unwrap_or(resolved.len());
+        resolved.splice(delimiter..delimiter, [format!("--{flag}"), value]);
+    }
     Ok(resolved)
 }
 
@@ -1036,6 +1048,15 @@ fn resolve_calendar_provider() -> Result<&'static str, String> {
         }
     }
     Ok("local")
+}
+
+fn resolve_email_host(provider: &str) -> Result<String, String> {
+    match provider {
+        "gmail" => Ok("gmail.googleapis.com".to_string()),
+        "outlook" => Ok("graph.microsoft.com".to_string()),
+        "smtp" => Ok(std::env::var("SMTP_HOST").unwrap_or_else(|_| "localhost".to_string())),
+        other => Err(format!("unsupported email provider `{other}`")),
+    }
 }
 
 fn canonical_operation_argv(
@@ -1149,15 +1170,8 @@ fn parse_supplied_operation_args(
     crate::caps::args::bind_supplied_cli_args(&operation.args, args)
 }
 
-fn normalize_path_args(
-    operation: &Operation,
-    values: &mut BTreeMap<String, serde_json::Value>,
-) -> Result<(), String> {
-    crate::caps::args::resolve_path_args(&operation.args, values, &launcher_path_context()?)
-}
-
 /// Where this launcher resolves relative and `~` path arguments.
-fn launcher_path_context() -> Result<crate::caps::args::PathContext, String> {
+pub(crate) fn launcher_path_context() -> Result<crate::caps::args::PathContext, String> {
     Ok(crate::caps::args::PathContext {
         home: effective_app_home(),
         cwd: Some(
@@ -1488,8 +1502,8 @@ if result is not None:
 
 /// Run a Python app's main.py via subprocess.
 ///
-/// Spawns `python3 <app_dir>/main.py` with the command and args passed
-/// via a JSON payload on stdin. The app writes JSON to stdout.
+/// Spawns the Python wrapper with command and args embedded as JSON literals.
+/// Explicit invocation stdin, when present, remains available to the App.
 ///
 /// Returns the raw JSON string from stdout, or an error.
 pub fn run_python_app(
@@ -1498,6 +1512,17 @@ pub fn run_python_app(
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
+) -> Result<Option<String>, String> {
+    run_python_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+}
+
+pub fn run_python_app_with_stdin(
+    app_dir: &Path,
+    command: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    stdin_data: Option<&[u8]>,
 ) -> Result<Option<String>, String> {
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
@@ -1510,15 +1535,15 @@ pub fn run_python_app(
     let (mut app_session, effective_args) =
         AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
-    let forward_stdin = operation_forwards_stdin(app_dir, command)? && !std::io::stdin().is_terminal();
+    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
 
     let mut command = app_command(python);
     reset_app_environment(&mut command, false);
     command
         .arg("-c")
         .arg(&wrapper)
-        .stdin(if forward_stdin {
-            Stdio::inherit()
+        .stdin(if stdin_data.is_some() {
+            Stdio::piped()
         } else {
             Stdio::null()
         })
@@ -1548,6 +1573,7 @@ pub fn run_python_app(
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
     bind_child_session(&mut app_session, &mut child)?;
+    let stdin_writer = write_child_stdin(&mut child, stdin_data)?;
 
     // wait_with_output() drains stdout and stderr in background threads
     // BEFORE the child can fill the kernel pipe buffer (Linux default
@@ -1559,6 +1585,7 @@ pub fn run_python_app(
     let output = child
         .wait_with_output()
         .map_err(|e| format!("python3 wait failed: {e}"))?;
+    finish_child_stdin(stdin_writer)?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
@@ -1597,6 +1624,53 @@ fn operation_forwards_stdin(app_dir: &Path, operation: &str) -> Result<bool, Str
         .unwrap_or(false))
 }
 
+fn validated_operation_stdin<'a>(
+    app_dir: &Path,
+    operation: &str,
+    stdin_data: Option<&'a [u8]>,
+) -> Result<Option<&'a [u8]>, String> {
+    if stdin_data.is_none() {
+        return Ok(None);
+    }
+    if !operation_forwards_stdin(app_dir, operation)? {
+        return Err(format!(
+            "App operation `{operation}` does not declare stdin input"
+        ));
+    }
+    Ok(stdin_data)
+}
+
+fn write_child_stdin(
+    child: &mut std::process::Child,
+    data: Option<&[u8]>,
+) -> Result<Option<std::thread::JoinHandle<Result<(), String>>>, String> {
+    let Some(data) = data else {
+        return Ok(None);
+    };
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "App child stdin pipe is unavailable".to_string())?;
+    let data = data.to_vec();
+    Ok(Some(std::thread::spawn(move || {
+        let mut stdin = stdin;
+        stdin
+            .write_all(&data)
+            .map_err(|error| format!("write App stdin: {error}"))
+    })))
+}
+
+fn finish_child_stdin(
+    writer: Option<std::thread::JoinHandle<Result<(), String>>>,
+) -> Result<(), String> {
+    let Some(writer) = writer else {
+        return Ok(());
+    };
+    writer
+        .join()
+        .map_err(|_| "App stdin writer panicked".to_string())?
+}
+
 /// Generic polyglot bridge: read `app_dir/app.json`, pick the runtime
 /// based on the `runtime` field (default: python), and invoke the
 /// app's entry point.
@@ -1621,6 +1695,17 @@ pub fn run_app(
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
+) -> Result<Option<String>, String> {
+    run_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+}
+
+pub fn run_app_with_stdin(
+    app_dir: &Path,
+    command: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    stdin_data: Option<&[u8]>,
 ) -> Result<Option<String>, String> {
     // Load the manifest if present so we can pick a runtime. Apps
     // that ship without app.json default to the Python runtime — this
@@ -1660,7 +1745,14 @@ pub fn run_app(
                  file an issue if you need a per-app entry override"
             ));
         }
-        return run_python_app(app_dir, command, args, data_dir, apps_dir);
+        return run_python_app_with_stdin(
+            app_dir,
+            command,
+            args,
+            data_dir,
+            apps_dir,
+            stdin_data,
+        );
     }
 
     let entry_path = app_dir.join(&entry);
@@ -1695,7 +1787,12 @@ pub fn run_app(
         .map_err(|e| format!("failed to serialize args: {e}"))?;
     reset_app_environment(&mut cmd, false);
 
-    cmd.stdin(Stdio::null())
+    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
+    cmd.stdin(if stdin_data.is_some() {
+        Stdio::piped()
+    } else {
+        Stdio::null()
+    })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .env("COS_COMMAND", command)
@@ -1721,6 +1818,7 @@ pub fn run_app(
         .spawn()
         .map_err(|e| format!("failed to spawn {runtime:?} app: {e}"))?;
     bind_child_session(&mut app_session, &mut child)?;
+    let stdin_writer = write_child_stdin(&mut child, stdin_data)?;
 
     // wait_with_output() avoids the deadlock that occurs when the
     // child writes more than ~64KB to stdout / stderr while we wait
@@ -1729,6 +1827,7 @@ pub fn run_app(
     let output = child
         .wait_with_output()
         .map_err(|e| format!("{runtime:?} app wait failed: {e}"))?;
+    finish_child_stdin(stdin_writer)?;
     let status = output.status;
     let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();

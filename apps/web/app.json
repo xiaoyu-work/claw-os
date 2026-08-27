@@ -79,7 +79,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open a network connection to the URL you asked to load."
@@ -95,7 +97,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "urls",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open network connections to each URL you asked to load."
@@ -106,7 +110,8 @@
         {
           "name": "urls",
           "kind": "text",
-          "required": true
+          "required": true,
+          "repeatable": true
         },
         {
           "name": "eval",
@@ -186,7 +191,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open a network connection to the URL you asked to capture."
@@ -239,7 +246,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "POST to the URL you asked to submit data to."
@@ -262,7 +271,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open a network connection to the URL so its text can be fetched."

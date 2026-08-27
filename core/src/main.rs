@@ -1,6 +1,6 @@
 use cos::{caps, router};
 use std::env;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read};
 use std::process;
 
 /// Output formatting mode resolved from argv + tty detection.
@@ -37,6 +37,23 @@ fn extract_format(argv: Vec<String>) -> (Vec<String>, OutputFormat) {
     (kept, fmt)
 }
 
+fn extract_stdin_request(argv: Vec<String>) -> (Vec<String>, bool) {
+    let mut kept = Vec::with_capacity(argv.len());
+    let mut requested = false;
+    let mut options = true;
+    for arg in argv {
+        if options && arg == "--" {
+            options = false;
+            kept.push(arg);
+        } else if options && arg == "--stdin" {
+            requested = true;
+        } else {
+            kept.push(arg);
+        }
+    }
+    (kept, requested)
+}
+
 /// Render a primitive's response string in the chosen format. If the
 /// string parses as JSON we re-serialize it; if it doesn't (some
 /// commands return plain text), we pass it through unchanged.
@@ -45,6 +62,7 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
         (OutputFormat::Pretty, Ok(v)) => {
             serde_json::to_string_pretty(&v).unwrap_or_else(|_| payload.to_string())
         }
+
         (OutputFormat::Compact, Ok(v)) => {
             serde_json::to_string(&v).unwrap_or_else(|_| payload.to_string())
         }
@@ -54,6 +72,7 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
 
 fn main() {
     let raw_args: Vec<String> = env::args().skip(1).collect();
+    let (raw_args, stdin_requested) = extract_stdin_request(raw_args);
     let (args, fmt) = extract_format(raw_args);
 
     // Bootstrap a CLI session if the caller didn't already gate us
@@ -62,7 +81,15 @@ fn main() {
     // guard cleans up its registry row on Drop.
     let _session_guard = caps::bootstrap_user_cli_session(&args);
 
-    let result = router::dispatch(&args);
+    let mut stdin_data = Vec::new();
+    let result = if stdin_requested {
+        match std::io::stdin().read_to_end(&mut stdin_data) {
+            Ok(_) => router::dispatch_with_stdin(&args, Some(&stdin_data)),
+            Err(error) => Err(format!("read requested stdin: {error}")),
+        }
+    } else {
+        router::dispatch(&args)
+    };
 
     match result {
         Ok(Some(output)) => {

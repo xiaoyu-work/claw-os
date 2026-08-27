@@ -238,7 +238,10 @@ def test_canonical_inline_flag_and_delimited_text_reach_handler(monkeypatch, doc
     monkeypatch.setattr(
         doc_app.sys,
         "stdin",
-        types.SimpleNamespace(isatty=lambda: True),
+        types.SimpleNamespace(
+            isatty=lambda: False,
+            read=lambda: "piped input must not replace positional text",
+        ),
     )
     monkeypatch.setattr(doc_app, "_ai_call", lambda **kwargs: kwargs)
 

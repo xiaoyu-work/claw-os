@@ -53,7 +53,9 @@
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open a network connection to the URL you asked to fetch."
@@ -80,15 +82,16 @@
             "transform": "url-path-basename",
             "prefix": "~/",
             "fallback": "download"
-          },
-          "binding": "flag"
+          }
         }
       ],
       "needs": [
         {
           "verb": "net.dial",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "url",
+            "transform": "url-host"
           },
           "why": {
             "en": "Open a network connection to the URL you asked to download from."

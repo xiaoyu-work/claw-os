@@ -155,7 +155,7 @@ export interface Arg {
   choices?: unknown[];
   default?: unknown;
   default_from?: Argdefaultbinding;
-  trusted_resolver?: "email-provider" | "calendar-provider";
+  trusted_resolver?: "email-provider" | "email-host" | "calendar-provider";
   label?: Localizedtext;
 }
 
@@ -198,6 +198,7 @@ export interface Needcondition {
 export interface Scopebinding {
   kind: "from-arg" | "from-arg-map" | "from-arg-or-wild" | "fixed" | "wild";
   arg?: string;
+  transform?: "identity" | "parent" | "url-host";
   values?: Record<string, unknown>;
   wild_when?: string;
   scope?: Scope;
