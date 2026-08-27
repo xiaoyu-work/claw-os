@@ -46,6 +46,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
+| Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
@@ -515,6 +516,29 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   is no permissive dual-stack listener.
 - Memory and audit stores are append/transaction oriented; schema and recovery
   behavior require regression tests.
+- The session event journal is evidence, never authority: replaying any of its
+  events creates no grant and no approval. Only root `clawd` appends, under a
+  single writer lease and a monotonic epoch; a worker may request tool and turn
+  lifecycle events only, and the event-type ACL is structural.
+- Every `Kind::Mutation` broker route appends and fsyncs a `MutationStarted`
+  record before any side effect. A start that cannot be recorded refuses the
+  request; a completion that cannot be recorded is answered as `indeterminate`
+  rather than as success or ordinary failure.
+- A mutation whose outcome is unknown keeps refusing its own replay across
+  restarts. Durable operation identity is owner uid plus canonical route plus
+  the caller's operation key — never pid or process start time — and only the
+  root-only `journal.mutation.resolve` route retires it.
+- Journal read routes derive session ownership from the root-owned session
+  record and require it to equal the authenticated caller uid before opening a
+  partition. Request fields select a lookup, never an owner, and a foreign,
+  missing or malformed session id returns one indistinguishable refusal with no
+  read, alarm or quarantine side effect.
+- Journal capacity is classed by event kind, not by writer: only records that
+  retire, flag or recover a mutation may use the reserve, and that reserve is
+  computed from the number of open brackets.
+- Journal anti-rollback covers a local unprivileged attacker. Root or physical
+  restoration of a consistent key + chain + anchor snapshot is out of scope
+  until a TPM or remote anchor exists.
 - Rootfs/image builds require Linux filesystem semantics and root privileges.
 - Windows case-insensitive checkouts cannot faithfully represent every
   case-colliding desktop symlink.

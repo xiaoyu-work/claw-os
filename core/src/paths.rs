@@ -541,6 +541,16 @@ pub fn context_events_log_path() -> PathBuf {
     data_dir().join("clawd").join("context-events.jsonl")
 }
 
+/// Root of the authoritative session event journal.
+///
+/// Root-owned and never written by an unprivileged process: the MAC
+/// keys, the writer lease and every partition chain live here, and
+/// `clawd` is the only writer. See [`crate::session::journal`] for the
+/// layout and the integrity rules.
+pub fn session_journal_dir() -> PathBuf {
+    data_dir().join("journal")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

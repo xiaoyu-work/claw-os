@@ -176,7 +176,50 @@ pub fn create(purpose: impl Into<String>) -> Result<SessionId> {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    if let Ok(sid) = &created {
+        journal_session_started(sid);
+    }
+
     created
+}
+
+/// Open the session's chain with the fact that it exists.
+///
+/// Only the broker journals; see [`journal_turn`] for why.
+fn journal_session_started(sid: &SessionId) {
+    use super::journal::{self, JournalEvent, Origin};
+
+    if !crate::agentd::guard::is_broker_process() {
+        return;
+    }
+    let Ok(meta) = get_meta(sid) else {
+        return;
+    };
+    journal::record_best_effort(
+        &journal::Partition::Session(sid.clone()),
+        meta.owner_uid
+            .unwrap_or_else(|| current_process_uid().unwrap_or(0)),
+        journal::EventSource::Kernel,
+        JournalEvent::SessionStarted {
+            owner_uid: meta.owner_uid.unwrap_or(0),
+            origin: Origin::System,
+            delegation: meta
+                .origin
+                .map(|origin| journal::Label::new(session_origin_label(origin))),
+            parent: meta
+                .parent_session
+                .as_ref()
+                .map(|parent| journal::Reference::new(parent.as_str())),
+        },
+    );
+}
+
+fn session_origin_label(origin: super::meta::SessionOrigin) -> &'static str {
+    match origin {
+        super::meta::SessionOrigin::SystemAgentTask => "system-agent-task",
+        super::meta::SessionOrigin::CronDelegation => "cron-delegation",
+        super::meta::SessionOrigin::TriggerDelegation => "trigger-delegation",
+    }
 }
 
 #[cfg(unix)]
@@ -233,12 +276,47 @@ pub fn end(sid: &SessionId, status: super::meta::Status) -> Result<()> {
         !status.is_active(),
         "session::end requires a terminal status (Done | Failed)"
     );
-    update_meta(sid, |m| {
+    let outcome = update_meta(sid, |m| {
         if m.status.is_active() {
             m.status = status;
             m.ended_at = Some(super::meta::now_rfc3339());
         }
-    })
+    });
+    if outcome.is_ok() {
+        journal_session_ended(sid, status);
+    }
+    outcome
+}
+
+/// Close the session's chain with its terminal outcome and the counts a
+/// reader needs to tell a complete session from a truncated one.
+fn journal_session_ended(sid: &SessionId, status: super::meta::Status) {
+    use super::journal::{self, JournalEvent, SessionOutcome};
+
+    if !crate::agentd::guard::is_broker_process() {
+        return;
+    }
+    let Ok(meta) = get_meta(sid) else {
+        return;
+    };
+    let turns = iter_turns(sid).map(|turns| turns.len() as u32).unwrap_or(0);
+    let mutations = iter_mutations(sid)
+        .map(|records| records.len() as u32)
+        .unwrap_or(0);
+    journal::record_best_effort(
+        &journal::Partition::Session(sid.clone()),
+        meta.owner_uid
+            .unwrap_or_else(|| current_process_uid().unwrap_or(0)),
+        journal::EventSource::Kernel,
+        JournalEvent::SessionCompleted {
+            outcome: match status {
+                super::meta::Status::Failed => SessionOutcome::Failed,
+                _ => SessionOutcome::Completed,
+            },
+            turns,
+            mutations,
+        },
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -275,6 +353,32 @@ pub fn record_is_root_owned(sid: &SessionId) -> bool {
     {
         let _ = sid;
         false
+    }
+}
+
+/// The uid that owns this session's metadata record *on disk*.
+///
+/// This is the filesystem's answer, not the record's own claim, so it
+/// is the second half of "may I believe `SessionMeta::owner_uid`?": a
+/// field written by root is trustworthy because only root could have
+/// written it, and a field written by the very account it names is
+/// trustworthy because that account cannot escalate by naming itself.
+/// Any other combination means some third party authored the claim.
+///
+/// `None` when the record is missing, is not a regular file, or the
+/// platform has no file ownership — every one of which the caller must
+/// treat as "unknown owner" and refuse.
+pub fn record_owner_uid(sid: &SessionId) -> Option<u32> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let meta = std::fs::symlink_metadata(meta_path(sid)).ok()?;
+        meta.is_file().then(|| meta.uid())
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = sid;
+        None
     }
 }
 
@@ -401,11 +505,98 @@ pub fn append_turn(sid: &SessionId, mut turn: Turn) -> Result<u64> {
     if !session_dir(sid).exists() {
         return Err(SessionError::NotFound(sid.to_string()));
     }
-    append_jsonl_with_seq(&turns_path(sid), |seq| {
+    let role = turn.role;
+    let content_bytes = turn.content.as_bytes().to_vec();
+    let tool_calls = turn.tool_calls.len() as u32;
+    let runtime = turn.runtime.clone();
+    let seq = append_jsonl_with_seq(&turns_path(sid), |seq| {
         turn.seq = seq;
         turn.stamp_default_time();
         serde_json::to_string(&turn)
-    })
+    })?;
+    journal_turn(
+        sid,
+        seq,
+        role,
+        &content_bytes,
+        tool_calls,
+        runtime.as_deref(),
+    );
+    Ok(seq)
+}
+
+/// Record the turn's *reference* in the authoritative journal.
+///
+/// `turns.jsonl` stays the owner-private conversation store; what the
+/// root-owned chain gets is the content address of the bytes just
+/// written, the role that produced them, and — for a segment the model
+/// will see again — whether that producer is trusted. No conversation
+/// text crosses this boundary.
+///
+/// Only the broker journals. A `claw-agentd` worker runs as the owner
+/// and holds no descriptor on the root chain, so it appends through the
+/// private channel the supervisor validates instead.
+fn journal_turn(
+    sid: &SessionId,
+    seq: u64,
+    role: super::turn::TurnRole,
+    content: &[u8],
+    tool_calls: u32,
+    runtime: Option<&str>,
+) {
+    use super::journal::{
+        self, ContentRef, ContentStore, JournalEvent, Origin, SegmentKind, Trust,
+    };
+    use super::turn::TurnRole;
+
+    if !crate::agentd::guard::is_broker_process() {
+        return;
+    }
+    let Ok(meta) = get_meta(sid) else {
+        return;
+    };
+    let owner_uid = meta
+        .owner_uid
+        .unwrap_or_else(|| current_process_uid().unwrap_or(0));
+    let turn_index = u32::try_from(seq).unwrap_or(u32::MAX);
+    let reference = ContentRef::of(ContentStore::SessionTurns, content);
+    let event = match role {
+        TurnRole::User => JournalEvent::UserRequestRecorded {
+            turn: turn_index,
+            content: reference,
+            origin: Origin::User,
+            trust: Trust::Trusted,
+        },
+        TurnRole::Assistant => JournalEvent::ModelResponseRecorded {
+            turn: turn_index,
+            content: reference,
+            origin: Origin::Model,
+            runtime: runtime.map(journal::Label::new),
+            tool_calls,
+        },
+        TurnRole::System => JournalEvent::PromptSegmentInjected {
+            turn: turn_index,
+            segment: reference,
+            segment_kind: SegmentKind::SystemPrompt,
+            origin: Origin::System,
+            trust: Trust::Trusted,
+        },
+        // Tool output is the classic injection carrier: it re-enters
+        // the model's context but nobody local authored it.
+        TurnRole::Tool => JournalEvent::PromptSegmentInjected {
+            turn: turn_index,
+            segment: reference,
+            segment_kind: SegmentKind::ToolResult,
+            origin: Origin::Tool,
+            trust: Trust::Untrusted,
+        },
+    };
+    journal::record_best_effort(
+        &journal::Partition::Session(sid.clone()),
+        owner_uid,
+        journal::EventSource::Kernel,
+        event,
+    );
 }
 
 /// Iterate every turn in order. Tolerates a trailing partial line.
@@ -604,7 +795,7 @@ fn read_jsonl<T: DeserializeOwned>(path: &PathBuf, dir: PathBuf) -> Result<Vec<T
             serde_json::from_slice::<T>(&record).map_err(|error| SessionError::Corrupt {
                 path: path.clone(),
                 detail: format!("record schema mismatch: {error}"),
-        })?;
+            })?;
         out.push(value);
     }
     Ok(out)

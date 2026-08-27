@@ -452,6 +452,7 @@ async fn pump(
     if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
         return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
     }
+    journal_prompt_snapshot(&lease, job);
 
     let mut hello_seen = false;
     let mut cancel_sent = false;
@@ -780,6 +781,86 @@ fn audit_approval(
         scope,
         action,
     );
+    journal_approval(lease, verb, scope, action);
+}
+
+/// Record the consent decision the broker mediated on the worker's
+/// behalf.
+///
+/// Only the keyed references survive: which verb, which canonical
+/// scope, and which generation was in force. The grant itself stays in
+/// the approvals store, so replaying this record grants nothing.
+fn journal_approval(
+    lease: &Lease,
+    verb: crate::caps::Verb,
+    scope: &crate::caps::Scope,
+    action: &'static str,
+) {
+    use crate::session::journal::{self, JournalEvent, Label, Reference};
+
+    let Some(session_id) = lease.session_id.as_deref() else {
+        return;
+    };
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let generation =
+        crate::approvals::generations::current(Some(lease.owner_uid), session_id).unwrap_or(0);
+    let event = match action {
+        "consumed" => JournalEvent::ApprovalConsumed {
+            approval: None,
+            verb: Label::new(verb.as_str()),
+            scope: Reference::new(&scope.to_string()),
+            generation,
+        },
+        _ => JournalEvent::ApprovalRequested {
+            approval: Reference::new(action),
+            verb: Label::new(verb.as_str()),
+            scope: Reference::new(&scope.to_string()),
+        },
+    };
+    crate::clawd::journal::record_approval(
+        &journal::Partition::Session(sid),
+        lease.owner_uid,
+        event,
+    );
+}
+
+/// Pin exactly what prompt the broker handed the worker.
+///
+/// The prompt is the model's whole instruction surface, so what the
+/// chain records is its content address and how many segments it was
+/// assembled from — never the text, which is user- and context-derived.
+fn journal_prompt_snapshot(lease: &Lease, job: &Job) {
+    use crate::session::journal::{self, ContentRef, ContentStore, JournalEvent};
+
+    let Some(session_id) = lease.session_id.as_deref() else {
+        return;
+    };
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let mut assembled = Vec::new();
+    let mut segments = 1u32;
+    assembled.extend_from_slice(job.prompt.as_bytes());
+    for extra in [job.context.as_deref(), job.branch_context.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        assembled.push(0);
+        assembled.extend_from_slice(extra.as_bytes());
+        segments += 1;
+    }
+    journal::record_best_effort(
+        &journal::Partition::Session(sid),
+        lease.owner_uid,
+        journal::EventSource::Kernel,
+        JournalEvent::PromptSnapshotRecorded {
+            turn: 0,
+            snapshot: ContentRef::of(ContentStore::PromptSnapshot, &assembled),
+            segments,
+        },
+    );
 }
 
 fn check_hello(hello: &WorkerHello, lease: &Lease) -> Result<(), String> {
@@ -846,6 +927,93 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
         return;
     }
     crate::clawd::audit::record_worker_runtime(&lease.task_id, lease.owner_uid, record);
+    journal_worker_audit(lease, session_id, record);
+}
+
+/// Ask the journal to record the model/tool lifecycle the worker
+/// reported.
+///
+/// Session, owner and task all come from the verified lease, never from
+/// the frame, and the source is [`EventSource::Worker`] — so the
+/// journal's own ACL refuses anything outside the tool and turn subset
+/// even if this function were handed a different event. Tool facts are
+/// re-projected through [`crate::audit_policy`] first, so the worker's
+/// own projection is not trusted either.
+fn journal_worker_audit(lease: &Lease, session_id: &str, record: &RuntimeAuditRecord) {
+    use crate::session::journal::{self, JournalEvent, Label};
+
+    let Ok(sid) = session_id.parse::<crate::session::SessionId>() else {
+        return;
+    };
+    let partition = journal::Partition::Session(sid);
+    let event = match record {
+        RuntimeAuditRecord::ToolStarted {
+            turn_index,
+            tool,
+            tool_use_id,
+            ..
+        } => {
+            let facts = crate::audit_policy::reproject_tool_facts(tool);
+            JournalEvent::ToolStarted {
+                turn: *turn_index,
+                tool: Label::new(&facts.tool),
+                tool_use_id: Label::new(tool_use_id),
+                known: facts.known,
+            }
+        }
+        RuntimeAuditRecord::ToolFinished {
+            turn_index,
+            tool,
+            tool_use_id,
+            success,
+            latency_ms,
+            bytes_returned,
+            error,
+            ..
+        } => {
+            let facts = crate::audit_policy::reproject_tool_facts(tool);
+            JournalEvent::ToolFinished {
+                turn: *turn_index,
+                tool: Label::new(&facts.tool),
+                tool_use_id: Label::new(tool_use_id),
+                known: facts.known,
+                success: *success,
+                latency_ms: *latency_ms,
+                bytes_returned: *bytes_returned as u64,
+                error: error.clone(),
+            }
+        }
+        RuntimeAuditRecord::TurnFinished {
+            turn_index,
+            provider,
+            model,
+            success,
+            latency_ms,
+            input_tokens,
+            output_tokens,
+            tool_calls_made,
+            stop_reason,
+            error,
+            ..
+        } => JournalEvent::ModelTurnCompleted {
+            turn: *turn_index,
+            provider: Label::new(provider),
+            model: Label::new(model),
+            success: *success,
+            latency_ms: *latency_ms,
+            input_tokens: *input_tokens,
+            output_tokens: *output_tokens,
+            tool_calls: *tool_calls_made,
+            stop_reason: Label::new(stop_reason),
+            error: error.clone(),
+        },
+    };
+    journal::record_best_effort(
+        &partition,
+        lease.owner_uid,
+        journal::EventSource::Worker,
+        event,
+    );
 }
 
 fn broker_session_info(session_id: &str) -> Result<Option<crate::proc::SessionInfo>, String> {

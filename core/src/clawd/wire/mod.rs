@@ -237,6 +237,9 @@ pub enum Fault {
     NotAuthorized,
     /// The route did not finish inside its declared budget.
     RouteTimeout,
+    /// The session journal could not record the start of a durable
+    /// mutation, so the route was refused before it could run.
+    JournalUnavailable,
 }
 
 impl Fault {
@@ -265,6 +268,7 @@ impl Fault {
             Fault::DuplicateRequest => "duplicate_request",
             Fault::NotAuthorized => "command_not_authorized",
             Fault::RouteTimeout => "route_timeout",
+            Fault::JournalUnavailable => "journal_unavailable",
         }
     }
 
@@ -280,6 +284,7 @@ impl Fault {
             | Fault::TooManyRequests
             | Fault::RouteBusy
             | Fault::RouteTimeout => "unavailable",
+            Fault::JournalUnavailable => "unavailable",
             _ => "protocol_error",
         }
     }
@@ -314,6 +319,9 @@ impl Fault {
             Fault::DuplicateRequest => "this request id was already served",
             Fault::NotAuthorized => "clawd command requires root",
             Fault::RouteTimeout => "clawd command exceeded its time budget",
+            Fault::JournalUnavailable => {
+                "clawd could not record this mutation in the session journal and refused to run it"
+            }
         }
     }
 

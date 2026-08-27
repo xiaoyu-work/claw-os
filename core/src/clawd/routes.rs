@@ -39,9 +39,9 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
-    firewall, hardware, location, memory, network, packages, permissions, power, printer,
-    scheduler, security, snapshots, storage, system_journal, systemd, tasks, transactions,
-    usb_guard, users,
+    firewall, hardware, journal as journal_ops, location, memory, network, packages, permissions,
+    power, printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
+    transactions, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -601,12 +601,39 @@ routes! {
         audit: &[("source", FieldRule::Token)],
         run: |c| context::update(c.state, c.params).map_err(BrokerError::from),
     }
+
+    // -----------------------------------------------------------------
+    // Session journal
+    // -----------------------------------------------------------------
+    JournalStatus {
+        name: "journal.status",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Daemon),
+        body: body::JournalStatus,
+        audit: &[("session_id", FieldRule::Token)],
+        run: |c| journal_ops::status(&c.params, c.client).map_err(BrokerError::from),
+    }
+    JournalResolveMutation {
+        name: "journal.mutation.resolve",
+        access: Access::Root,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Daemon),
+        body: body::JournalResolveMutation,
+        audit: &[
+            ("partition", FieldRule::Identifier),
+            ("operation", FieldRule::Token),
+            ("outcome", FieldRule::Enum(&["abandoned", "committed", "rolled-back"])),
+        ],
+        run: |c| journal_ops::resolve(&c.params, c.client).map_err(BrokerError::from),
+    }
     ContextEventAppend {
         name: "context.event.append",
         access: Access::User,
         kind: Kind::Mutation,
-        budget: Budget::mutation(),
-        authority: peer(Audience::Context),
+        budget: Budget::mutation(),        authority: peer(Audience::Context),
         body: body::ContextEventAppend,
         audit: &[
             ("source", FieldRule::Token),

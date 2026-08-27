@@ -48,7 +48,7 @@ use super::wire::{
     legacy_upgrade_notice, Fault, InboundRequest, RequestId, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES,
     PROTOCOL_VERSION,
 };
-use super::{audit, context, event_center, firewall, system_journal, usb_guard};
+use super::{audit, context, event_center, firewall, journal, system_journal, usb_guard};
 
 #[derive(Debug, Clone)]
 pub struct ServerOptions {
@@ -80,6 +80,10 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     );
 
     audit::install_runtime_hook();
+    // Verify every chain and close the books on the previous lifetime
+    // before the first request is served, so a mutation a crash left
+    // open is marked orphaned rather than silently replayed.
+    recover_journal();
     context::refresh_builtin_sources(&state);
     spawn_authority_sweep();
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
@@ -116,6 +120,43 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
         Ok::<(), String>(())
     };
     serve.await
+}
+
+/// Verify every journal partition and mark mutations a previous daemon
+/// left open.
+///
+/// Journalling failing is not a reason to refuse every read, so a
+/// failure here raises an alarm and lets the daemon serve queries;
+/// [`journal::begin`] is what makes durable mutations fail closed while
+/// the chain is unusable.
+fn recover_journal() {
+    use crate::session::journal;
+
+    match journal::startup_recovery(journal::RecoverySource::DaemonStart) {
+        Ok(report) => {
+            if !report.orphans.is_empty() || !report.quarantined.is_empty() {
+                tracing::error!(
+                    partitions = report.partitions,
+                    orphans = report.orphans.len(),
+                    quarantined = report.quarantined.len(),
+                    "session journal recovery needs an operator"
+                );
+            } else {
+                tracing::info!(
+                    partitions = report.partitions,
+                    verified = report.verified,
+                    "session journal verified"
+                );
+            }
+        }
+        Err(error) => {
+            journal::alarm::raise(
+                journal::alarm::Class::IntegrityFailed,
+                "startup",
+                &format!("session journal recovery did not run: {error}"),
+            );
+        }
+    }
 }
 
 /// Retire capability grants whose process, deadline or use budget is
@@ -221,22 +262,48 @@ async fn serve_connection(stream: UnixStream, state: DaemonState, admission: Arc
                 admitted.route.audit_fields,
                 &admitted.params,
             );
-            let response = dispatch(
-                admitted.route,
-                admitted.id,
-                admitted.params,
-                admitted.decision.as_ref(),
-                &state,
-                &client,
-            )
-            .await;
-            let outcome = response.audit_facts();
-            let elapsed = started.elapsed();
-            if let Err(err) = audit::record_request(&facts, &outcome, elapsed, &client) {
-                tracing::error!(error = %err, "failed to write clawd audit record");
+            let id = admitted.id.clone();
+            // The bracket is opened after authorization and before
+            // dispatch. A mutation the journal cannot record is refused
+            // here, so no privileged effect runs unrecorded.
+            match journal::begin(admitted.route, &id, admitted.decision.as_ref(), &client) {
+                Ok(guard) => {
+                    let mut response = dispatch(
+                        admitted.route,
+                        admitted.id,
+                        admitted.params,
+                        admitted.decision.as_ref(),
+                        &state,
+                        &client,
+                    )
+                    .await;
+                    // Closed only once the effect's durable result is
+                    // known. If the closing record cannot be written,
+                    // the answer becomes an explicit indeterminate.
+                    if let Some(guard) = guard {
+                        if let Some(replacement) = journal::finish(guard, &id, &response) {
+                            response = replacement;
+                        }
+                    }
+                    let outcome = response.audit_facts();
+                    let elapsed = started.elapsed();
+                    if let Err(err) = audit::record_request(&facts, &outcome, elapsed, &client) {
+                        tracing::error!(error = %err, "failed to write clawd audit record");
+                    }
+                    system_journal::record_clawd_request(&facts, &outcome, elapsed, &client);
+                    response
+                }
+                Err(fault) => {
+                    record_protocol_failure(
+                        fault,
+                        bytes,
+                        Some(admitted.route.name),
+                        started,
+                        &client,
+                    );
+                    Response::fault(id, fault)
+                }
             }
-            system_journal::record_clawd_request(&facts, &outcome, elapsed, &client);
-            response
         }
         Err(refusal) => {
             record_protocol_failure(refusal.fault, bytes, refusal.command, started, &client);

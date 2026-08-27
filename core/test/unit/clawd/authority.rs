@@ -79,7 +79,7 @@ fn every_route_declares_an_authorization_descriptor() {
 fn route_audiences_match_their_families() {
     for route in ROUTES {
         let expected = match route.name {
-            name if name.starts_with("daemon.") => Audience::Daemon,
+            name if name.starts_with("daemon.") || name.starts_with("journal.") => Audience::Daemon,
             name if name.starts_with("task.") => Audience::Task,
             name if name.starts_with("memory.")
                 || name.starts_with("context.")
@@ -155,13 +155,22 @@ fn the_root_only_access_class_is_unchanged() {
     // `permission.revoke` is the one addition: retiring somebody's
     // standing authority is an administrative act, and `owner_uid`
     // names whose, so a non-root peer must not reach it in either
-    // direction.
+    // direction. `journal.mutation.resolve` is the second: it states
+    // what happened to a privileged mutation the machine could not
+    // resolve, and that statement is what lifts the replay refusal.
     let root: Vec<&str> = ROUTES
         .iter()
         .filter(|route| route.access == Access::Root)
         .map(|route| route.name)
         .collect();
-    assert_eq!(root, vec!["context.update", "permission.revoke"]);
+    assert_eq!(
+        root,
+        vec![
+            "context.update",
+            "journal.mutation.resolve",
+            "permission.revoke"
+        ]
+    );
 }
 
 #[test]

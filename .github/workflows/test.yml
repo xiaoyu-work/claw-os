@@ -44,6 +44,9 @@ jobs:
       - name: Test agent worker packaging contract
         run: bash packaging/deb/tests/test-agentd-packaging.sh
 
+      - name: Test session journal packaging contract
+        run: bash packaging/deb/tests/test-session-journal-packaging.sh
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:

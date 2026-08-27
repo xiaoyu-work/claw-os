@@ -190,6 +190,56 @@ pub fn record_power_intent(
     }))
 }
 
+/// Surface a session-journal alarm on the user-visible timeline.
+///
+/// This is one of the three independent legs of
+/// [`crate::session::journal::alarm`]: it deliberately does not go
+/// through the journal, so "the journal cannot record" is still
+/// something an operator sees. `class` and `detail` are produced by the
+/// journal from stable strings and counters, never from a caller.
+pub fn record_journal_alarm(class: &str, partition: &str, detail: &str) {
+    let _ = append(json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "session.journal",
+        "operation": class,
+        "ok": false,
+        "partition": audit_policy::safe_reference(partition),
+        "detail": detail,
+    }));
+}
+
+/// Journal the broker's own view of a durable mutation, as a reference
+/// into the chain rather than a second copy of it.
+///
+/// The journal owns the ordering and the outcome. What lands here is
+/// the pointer an operator follows — partition, sequence and operation
+/// — so the two records cannot drift apart the way two independent
+/// writes would.
+pub fn record_journal_mutation(
+    command: &'static str,
+    partition: &str,
+    operation: &str,
+    start_seq: u64,
+    status: &'static str,
+    owner_uid: u32,
+) {
+    let _ = append(json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "session.journal.mutation",
+        "operation": command,
+        "ok": status == "committed",
+        "journal": {
+            "partition": audit_policy::safe_reference(partition),
+            "operation": audit_policy::safe_identity(operation),
+            "start_seq": start_seq,
+            "status": status,
+        },
+        "owner_uid": owner_uid,
+    }));
+}
+
 pub fn query(params: Value) -> Result<Value, String> {
     query_with_owner(params, None)
 }

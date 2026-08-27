@@ -50,6 +50,7 @@
 mod gc;
 mod id;
 mod inverse;
+pub mod journal;
 mod lease;
 mod meta;
 mod mutation;
@@ -70,6 +71,7 @@ mod tests {
 pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};
 pub use inverse::{blob_path, delete_blob, inverse_root, new_blob_id, read_blob, write_blob};
+pub use journal::{JournalError, JournalEvent, Partition as JournalPartition};
 pub use lease::{current as current_lease, try_acquire, AcquireError, LeaseGuard};
 pub use meta::{Budget, Lease, SessionMeta, SessionOrigin, Status};
 pub use mutation::{Mutation, MutationRecord};
@@ -80,7 +82,7 @@ pub use runtime::{
 };
 pub use store::{
     append_turn, create, end, get_caps, get_meta, iter_mutations, iter_turns, list, read_state,
-    record_mutation, record_is_root_owned, session_dir, sessions_root, set_caps, update_meta,
-    write_state, SessionError,
+    record_is_root_owned, record_mutation, record_owner_uid, session_dir, sessions_root, set_caps,
+    update_meta, write_state, SessionError,
 };
 pub use turn::{Turn, TurnRole};

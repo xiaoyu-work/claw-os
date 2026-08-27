@@ -53,6 +53,10 @@ pub fn harden_clawd_state() -> io::Result<()> {
         data.join("sessions"),
         data.join("proc"),
         data.join("clawd"),
+        // The session event journal: chains, head anchors, the writer
+        // lease and the MAC keys. Nothing below this is ever readable
+        // or writable by a worker, an App or an MCP server.
+        data.join("journal"),
     ] {
         if root.exists() {
             harden_private_tree(&root)?;

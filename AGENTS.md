@@ -39,6 +39,7 @@ editing additional surfaces.
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |
+| Session journal or mutation bracketing | `core/src/session/journal/`, `core/src/clawd/journal.rs` | `core/src/clawd/server.rs` dispatch, `core/src/agentd/supervisor.rs`, authority audit, packaging modes |
 | `clawd` RPC or privileged operation | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` | client RPC, caps, audit, the owning `clawd` module |
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |

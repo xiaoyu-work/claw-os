@@ -68,12 +68,23 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "transaction.list",
     "transaction.commit",
     "transaction.rollback",
+    // Read-only view of the caller's own session-journal partitions:
+    // health, head sequence and the mutations whose outcome is still
+    // unknown. It resolves no grant and reads nobody else's chain.
+    "journal.status",
 ];
 
 /// Root-only routes. `permission.revoke` joins `context.update`: it
 /// retires standing authority and its `owner_uid` names whose, so a
 /// non-root peer must not reach it in either direction.
-const HISTORICAL_ROOT_COMMANDS: &[&str] = &["context.update", "permission.revoke"];
+/// `journal.mutation.resolve` joins them because recording what
+/// happened to an unresolved privileged mutation is an administrative
+/// statement, and it is what ends that operation's replay refusal.
+const HISTORICAL_ROOT_COMMANDS: &[&str] = &[
+    "context.update",
+    "journal.mutation.resolve",
+    "permission.revoke",
+];
 
 #[test]
 fn the_table_and_the_command_enum_cannot_drift() {

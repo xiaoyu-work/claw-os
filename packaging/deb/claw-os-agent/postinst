@@ -16,6 +16,13 @@ enable_if_previously_enabled() {
 case "$1" in
     configure)
         install -d -m 0700 /var/lib/cos /var/log/cos
+        # Session event journal: the ordered, signed record of session
+        # lifecycle and privileged mutations, plus the MAC keys that
+        # sign it. Created root-owned and 0700 here so the first daemon
+        # start never has to widen anything, and re-asserted on upgrade
+        # without touching an existing chain, anchor or key.
+        install -d -m 0700 -o root -g root /var/lib/cos/journal
+        install -d -m 0700 -o root -g root /var/lib/cos/journal/keys
         rmdir /var/log/aos 2>/dev/null || true
 
         if [ -f /etc/bash.bashrc ] && \

@@ -756,3 +756,35 @@ mod tests {
         "/test/unit/clawd/wire/requests.rs"
     ));
 }
+
+// ---------------------------------------------------------------------------
+// Session journal
+// ---------------------------------------------------------------------------
+
+/// Ask what the session journal has to say about the caller's own work.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalStatus {
+    /// Restrict the answer to one durable session. Omitted means the
+    /// caller's own owner partition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token>,
+}
+
+/// Record what an operator concluded about a mutation the machine could
+/// not resolve on its own.
+///
+/// Root-only, and bound to an exact partition and operation: the route
+/// resolves nothing it was not told to, re-runs nothing, and grants
+/// nothing. `outcome` is an enumerated statement, not an action.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JournalResolveMutation {
+    /// Partition key exactly as the journal renders it, e.g.
+    /// `owner/1000` or `session/ses_…`.
+    pub partition: Name,
+    /// The operation id the journal minted when the bracket opened.
+    pub operation: Token,
+    /// `abandoned`, `committed` or `rolled-back`.
+    pub outcome: Token,
+}
