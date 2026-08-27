@@ -24,7 +24,6 @@ const MAX_OUTPUT_SAMPLES: usize = TARGET_RATE as usize * MAX_RECORDING_SECS as u
 pub struct RecordingMetrics {
     pub elapsed: Duration,
     pub peak: f32,
-    pub samples: usize,
 }
 
 #[derive(Debug)]
@@ -112,7 +111,6 @@ impl Recorder {
                     .peak_bits
                     .swap(0.0f32.to_bits(), Ordering::Relaxed),
             ),
-            samples: self.metrics.samples.load(Ordering::Relaxed),
         }
     }
 
