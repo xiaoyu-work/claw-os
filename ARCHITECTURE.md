@@ -252,12 +252,15 @@ Memory recovery treats `messages` as authoritative and FTS, titles, and
 session prompt links as validated projections. `cos agent doctor` and
 `cos agent sessions health` diagnose SQLite, WAL, schema, FTS, prompt
 references, prompt hashes, titles, and repair lifecycle state without rewriting
-the database. `cos agent sessions repair` takes an exclusive lifecycle lock
-shared by every normal `MemoryDb` handle, brackets mutation in a private
-metadata-only repair log, and rebuilds FTS transactionally. Damage that cannot
-be repaired without trusting suspect prompt or SQLite bytes is renamed to a
-restrictive same-filesystem quarantine before a replacement is installed;
-readable authoritative rows are copied only when SQLite and WAL health permit.
+the database: it inspects a private snapshot of the database/WAL/SHM family.
+`cos agent sessions repair` takes an exclusive lifecycle lock shared by every
+normal `MemoryDb` handle, brackets mutation in a private metadata-only repair
+log, and rebuilds FTS transactionally. Damage that cannot be repaired without
+trusting suspect prompt or SQLite bytes is renamed to a restrictive
+same-filesystem quarantine before an attempt-bound staged replacement is
+installed. A malformed WAL is never replayed during salvage; repair validates a
+separate copy of the quarantined main database and retains its checkpointed
+authoritative rows when possible.
 See [`docs/memory-recovery.md`](docs/memory-recovery.md).
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the

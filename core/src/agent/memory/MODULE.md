@@ -21,7 +21,7 @@ results, and curates durable notes from completed work.
 | Path | Role |
 | --- | --- |
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence |
-| `recovery.rs` | Read-only health checks, FTS rebuild, repair logging, quarantine, and safe replacement |
+| `recovery.rs` | Snapshot health checks, full WAL validation, FTS rebuild, repair logging, quarantine, and attempt-bound replacement |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable note storage |

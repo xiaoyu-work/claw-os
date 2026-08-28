@@ -13,6 +13,27 @@ fn create_message_database(path: &Path, content: &str) {
         .expect("record message");
 }
 
+fn family_bytes(path: &Path) -> [Option<Vec<u8>>; 3] {
+    [path.to_path_buf(), wal_path(path), shm_path(path)].map(|member| fs::read(member).ok())
+}
+
+fn create_live_wal(path: &Path) -> Connection {
+    ensure_private_database_file(path).expect("private database file");
+    let conn = Connection::open(path).expect("raw sqlite");
+    initialize_connection(&conn).expect("initialize schema");
+    conn.execute_batch("PRAGMA wal_autocheckpoint = 0;")
+        .expect("disable autocheckpoint");
+    conn.execute(
+        "INSERT INTO messages(session_id, role, content, ts_ms)
+         VALUES('wal-session', 'user', 'live wal row', 1)",
+        [],
+    )
+    .expect("insert wal row");
+    assert!(wal_path(path).metadata().expect("wal metadata").len() > 32);
+    assert!(shm_path(path).exists());
+    conn
+}
+
 #[test]
 fn clean_database_reports_separate_health_checks() {
     let (_directory, path) = database_path();
@@ -89,6 +110,30 @@ fn corrupt_fts_is_detected_dry_run_is_read_only_and_rebuild_restores_search() {
     let repaired = MemoryDb::open(&path).expect("open repaired");
     assert_eq!(repaired.search("pineapple", 10).expect("search").len(), 1);
     assert!(repaired.search("incorrect", 10).expect("search").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn dry_run_does_not_change_live_database_wal_or_shm_bytes() {
+    let (_directory, path) = database_path();
+    let connection = create_live_wal(&path);
+    fs::remove_file(shm_path(&path)).expect("remove live shm before diagnosis");
+    let before = family_bytes(&path);
+    assert!(before[1].is_some(), "fixture must retain a WAL");
+    assert!(before[2].is_none(), "fixture must start without SHM");
+
+    let preview = repair(
+        &path,
+        RepairOptions {
+            dry_run: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("dry-run");
+
+    assert_eq!(preview.dry_run, true);
+    assert_eq!(family_bytes(&path), before);
+    drop(connection);
 }
 
 #[test]
@@ -239,14 +284,27 @@ fn wrong_prompt_hash_is_quarantined_while_recoverable_messages_survive() {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        assert_eq!(
-            fs::metadata(&quarantine)
-                .expect("metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o600
-        );
+        let probe = quarantine.with_extension("permission-probe");
+        fs::write(&probe, b"probe").expect("write permission probe");
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o600))
+            .expect("set probe permissions");
+        let mode_is_enforced = fs::metadata(&probe)
+            .expect("probe metadata")
+            .permissions()
+            .mode()
+            & 0o777
+            == 0o600;
+        fs::remove_file(probe).expect("remove permission probe");
+        if mode_is_enforced {
+            assert_eq!(
+                fs::metadata(&quarantine)
+                    .expect("metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
     }
 
     let replacement = MemoryDb::open(&path).expect("replacement");
@@ -282,7 +340,85 @@ fn malformed_wal_is_quarantined_without_trusting_its_contents() {
         .iter()
         .any(|value| value.ends_with("-wal")));
     let replacement = MemoryDb::open(&path).expect("replacement");
-    assert_eq!(replacement.count_total().expect("count"), 0);
+    assert_eq!(replacement.count_total().expect("count"), 1);
+    assert_eq!(replacement.search("base", 10).expect("search").len(), 1);
+}
+
+#[test]
+fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
+    let (_directory, path) = database_path();
+    let connection = create_live_wal(&path);
+    let original = fs::read(wal_path(&path)).expect("read wal");
+    let validation = inspect_wal(&wal_path(&path), &path)
+        .expect("validate wal")
+        .expect("wal");
+    assert!(validation.frames > 0);
+    assert!(validation.commits > 0);
+    let frame_size = validation.page_size as usize + 24;
+    let single_frame = original[..32 + frame_size].to_vec();
+    let directory = path.parent().expect("parent");
+
+    let mut bad_version = single_frame.clone();
+    bad_version[4..8].copy_from_slice(&(WAL_FORMAT_VERSION + 1).to_be_bytes());
+    let candidate = directory.join("bad-version.wal");
+    fs::write(&candidate, bad_version).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("format version"));
+
+    let mut bad_header_checksum = single_frame.clone();
+    bad_header_checksum[24] ^= 1;
+    let candidate = directory.join("bad-header-checksum.wal");
+    fs::write(&candidate, bad_header_checksum).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("header checksum"));
+
+    let mut bad_salt = single_frame.clone();
+    bad_salt[40] ^= 1;
+    let candidate = directory.join("bad-salt.wal");
+    fs::write(&candidate, bad_salt).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("salts"));
+
+    let mut bad_page = single_frame.clone();
+    bad_page[32..36].copy_from_slice(&0_u32.to_be_bytes());
+    rewrite_first_frame_checksum(&mut bad_page);
+    let candidate = directory.join("bad-page.wal");
+    fs::write(&candidate, bad_page).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("page number"));
+
+    let mut bad_commit = single_frame.clone();
+    bad_commit[36..40].copy_from_slice(&u32::MAX.to_be_bytes());
+    rewrite_first_frame_checksum(&mut bad_commit);
+    let candidate = directory.join("bad-commit.wal");
+    fs::write(&candidate, bad_commit).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("commit size"));
+
+    let mut bad_frame_checksum = single_frame;
+    bad_frame_checksum[48] ^= 1;
+    let candidate = directory.join("bad-frame-checksum.wal");
+    fs::write(&candidate, bad_frame_checksum).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("rolling checksum"));
+    drop(connection);
+}
+
+fn rewrite_first_frame_checksum(wal: &mut [u8]) {
+    let magic = u32::from_be_bytes(wal[0..4].try_into().unwrap());
+    let big_endian = magic & 1 != 0;
+    let page_size = u32::from_be_bytes(wal[8..12].try_into().unwrap()) as usize;
+    let seed = wal_checksum(&wal[..24], big_endian, [0, 0]);
+    let checksum = wal_checksum(&wal[32..40], big_endian, seed);
+    let checksum = wal_checksum(&wal[56..56 + page_size], big_endian, checksum);
+    wal[48..52].copy_from_slice(&checksum[0].to_be_bytes());
+    wal[52..56].copy_from_slice(&checksum[1].to_be_bytes());
 }
 
 #[test]
@@ -302,6 +438,10 @@ fn unreadable_sqlite_file_is_preserved_and_replaced() {
         },
     )
     .expect("replace corrupt database");
+    assert!(repaired
+        .recovery_warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("standalone main-database recovery failed")));
     let quarantine = PathBuf::from(repaired.quarantine_path.expect("quarantine"));
     assert_eq!(
         fs::read(&quarantine).expect("read quarantine"),
@@ -328,8 +468,9 @@ fn interrupted_repair_is_detected_and_resumed() {
         mode: RepairMode::InPlace,
         planned_actions: vec!["checkpoint_wal".to_string()],
         quarantine_path: None,
-        salvage_source: true,
+        checkpoint_source: true,
         recovered: RecoveredRecords::default(),
+        recovery_warning: None,
         error: None,
     };
     append_repair_event(&path, &attempt).expect("record interrupted start");
@@ -351,6 +492,97 @@ fn interrupted_repair_is_detected_and_resumed() {
 }
 
 #[test]
+fn interrupted_quarantine_blocks_open_and_rejects_unbound_live_database() {
+    let (_directory, path) = database_path();
+    create_message_database(&path, "preserve this checkpointed row");
+    let attempt_id = "quarantine-interrupted";
+    let quarantine = quarantine_base(&path, attempt_id);
+    let attempt = RepairEvent {
+        version: REPAIR_LOG_VERSION,
+        attempt_id: attempt_id.to_string(),
+        ts_ms: current_ts_ms(),
+        phase: RepairPhase::Started,
+        mode: RepairMode::Quarantine,
+        planned_actions: vec!["quarantine_and_initialize_replacement".to_string()],
+        quarantine_path: Some(quarantine.display().to_string()),
+        checkpoint_source: true,
+        recovered: RecoveredRecords::default(),
+        recovery_warning: None,
+        error: None,
+    };
+    {
+        let _lock = acquire_exclusive_lifecycle_lock(&path).expect("lifecycle lock");
+        append_repair_event(&path, &attempt).expect("repair start");
+        let mut moved = Vec::new();
+        move_family(&path, &quarantine, &mut moved).expect("move to quarantine");
+    }
+
+    let open_error = MemoryDb::open(&path).expect_err("open must not replace interrupted repair");
+    assert!(open_error.is_integrity_failure());
+    assert!(!path.exists());
+
+    // Simulate an older binary recreating an unrelated empty database. The
+    // retry must preserve it and rebuild a replacement bound to this attempt.
+    ensure_private_database_file(&path).expect("create unbound database");
+    let connection = Connection::open(&path).expect("open unbound database");
+    initialize_connection(&connection).expect("initialize unbound database");
+    drop(connection);
+
+    let staged = staged_replacement_path(&path, attempt_id);
+    ensure_private_database_file(&staged).expect("create wrong staged database");
+    let staged_connection = Connection::open(&staged).expect("open wrong staged database");
+    initialize_connection(&staged_connection).expect("initialize wrong staged database");
+    write_replacement_marker(
+        &staged_connection,
+        &ReplacementMarker {
+            attempt_id: "different-attempt".to_string(),
+            quarantine_path: quarantine.display().to_string(),
+            source_main_sha256: file_sha256_optional(&quarantine).unwrap(),
+            complete: true,
+            salvage_succeeded: false,
+            recovered: RecoveredRecords::default(),
+            recovery_warning: None,
+        },
+    )
+    .expect("write wrong marker");
+    checkpoint_wal(&staged_connection).expect("checkpoint staged database");
+    drop(staged_connection);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("resume quarantine");
+    assert!(report.resumed_interrupted_repair);
+    assert_eq!(report.recovered.messages, 1);
+    assert!(report
+        .quarantined_files
+        .iter()
+        .any(|value| value.contains("unbound-live")));
+    assert!(report
+        .quarantined_files
+        .iter()
+        .any(|value| value.contains("unbound-staged")));
+
+    let marker = read_replacement_marker(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(marker.attempt_id, attempt_id);
+    assert!(marker.complete);
+    let replacement = MemoryDb::open(&path).expect("open replacement");
+    assert_eq!(
+        replacement
+            .search("checkpointed", 10)
+            .expect("search")
+            .len(),
+        1
+    );
+}
+
+#[test]
 fn failed_repair_result_remains_visible_until_a_successful_retry() {
     let (_directory, path) = database_path();
     create_message_database(&path, "stable row");
@@ -362,8 +594,9 @@ fn failed_repair_result_remains_visible_until_a_successful_retry() {
         mode: RepairMode::InPlace,
         planned_actions: vec!["checkpoint_wal".to_string()],
         quarantine_path: None,
-        salvage_source: true,
+        checkpoint_source: true,
         recovered: RecoveredRecords::default(),
+        recovery_warning: None,
         error: Some("simulated repair failure".to_string()),
     };
     append_repair_event(&path, &failed).expect("record failed repair");

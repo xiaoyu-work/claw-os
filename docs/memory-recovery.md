@@ -18,9 +18,14 @@ report these dimensions separately:
 - session-title ownership; and
 - interrupted or failed repair lifecycle records.
 
-Diagnosis opens `memory.db` read-only. The FTS check builds a temporary
-in-memory index from authoritative `messages` rows and compares token
-instances; it does not rewrite the persisted index.
+Diagnosis takes the lifecycle lock long enough to copy the complete
+database/WAL/SHM family into a private snapshot, then opens only that snapshot.
+The live files remain byte-for-byte unchanged, including when SQLite would
+otherwise create or rewrite `-shm`. WAL validation covers the format version,
+header checksum, page size, every frame's page/commit fields, salts, and rolling
+checksum. Diagnosis may therefore wait for an active Claw memory handle to
+close. The FTS check builds a temporary in-memory index from authoritative
+`messages` rows and compares token instances.
 
 Runtime classification is explicit:
 
@@ -68,18 +73,26 @@ to a unique `memory.db.quarantine-<id>` family. They are never deleted
 automatically and are restricted to the owning account. When SQLite integrity
 and WAL health permit safe reads, authoritative messages, valid titles, and
 hash-verified prompts are copied into the replacement; damaged prompt blobs
-are not trusted.
+are not trusted. If the WAL is malformed, repair first quarantines the complete
+family, then validates and salvages a separate main-database-only copy so
+already-checkpointed rows are retained without interpreting the suspect WAL.
 
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains
 actions, counts, paths, and errors, but no message or prompt bodies. Normal
 memory handles keep a shared lifecycle lock, while repair requires the
-exclusive lock, so replacement cannot race an active Claw writer.
+exclusive lock, so replacement cannot race an active Claw writer. An
+incomplete quarantine attempt blocks normal database startup. Replacement
+files use an attempt-specific staging name and carry an internal completion
+marker bound to the attempt and quarantined source; a retry never accepts an
+unrelated empty database as the replacement.
 
 ## Recovery Limit
 
-Claw does not attempt page-level or byte-level salvage when SQLite cannot read
-the database or when a WAL is malformed. In that case it preserves the entire
-file family in quarantine and creates an empty, healthy replacement. Operators
-can retain or inspect the quarantined evidence with external forensic tooling;
-Claw never deletes it automatically.
+Claw does not attempt page-level or byte-level salvage. For a malformed WAL it
+recovers only rows already present in a separately validated copy of the main
+database; it does not replay suspect WAL frames. If that standalone main copy
+also fails SQLite integrity/schema validation, repair creates an empty, healthy
+replacement and reports the recovery warning. Operators can retain or inspect
+the quarantined evidence with external forensic tooling; Claw never deletes it
+automatically.

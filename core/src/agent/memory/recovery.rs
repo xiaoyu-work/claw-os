@@ -1,6 +1,7 @@
 //! Health, repair, and quarantine lifecycle for `memory.db`.
 //!
-//! Diagnosis opens the database read-only and treats FTS as a projection over
+//! Diagnosis copies the database/WAL/SHM family under the lifecycle lock and
+//! opens only that private snapshot, treating FTS as a projection over
 //! `messages`. Mutating repair is bracketed in a private append-only log and
 //! takes an exclusive sibling-file lock; normal
 //! [`MemoryDb`](super::sqlite_fts::MemoryDb) handles retain a shared lock for
@@ -15,6 +16,7 @@ use std::time::Duration;
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::sqlite_fts::{
     initialize_connection, system_prompt_hash, MemoryError, BASE_SCHEMA, CONNECTION_PRAGMAS,
@@ -23,6 +25,9 @@ use super::sqlite_fts::{
 
 const REPAIR_LOG_VERSION: u32 = 1;
 const MAX_REPAIR_LOG_BYTES: u64 = 8 * 1024 * 1024;
+const WAL_FORMAT_VERSION: u32 = 3_007_000;
+const SQLITE_MAX_PAGE_NUMBER: u32 = 0xffff_fffe;
+const REPLACEMENT_MARKER_TABLE: &str = "memory_repair_install";
 const EXPECTED_TABLES: &[(&str, &[&str])] = &[
     (
         "messages",
@@ -155,6 +160,7 @@ pub struct MemoryRepairReport {
     pub quarantine_path: Option<String>,
     pub quarantined_files: Vec<String>,
     pub recovered: RecoveredRecords,
+    pub recovery_warning: Option<String>,
     pub repair_log_path: String,
 }
 
@@ -184,10 +190,12 @@ struct RepairEvent {
     planned_actions: Vec<String>,
     #[serde(default)]
     quarantine_path: Option<String>,
-    #[serde(default)]
-    salvage_source: bool,
+    #[serde(default, alias = "salvage_source")]
+    checkpoint_source: bool,
     #[serde(default)]
     recovered: RecoveredRecords,
+    #[serde(default)]
+    recovery_warning: Option<String>,
     #[serde(default)]
     error: Option<String>,
 }
@@ -217,6 +225,51 @@ struct QuarantineResult {
     base: Option<PathBuf>,
     files: Vec<PathBuf>,
     recovered: RecoveredRecords,
+    recovery_warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct ReplacementMarker {
+    // Kept in the installed database so a retry after rename can prove that
+    // the live file was produced by this exact repair attempt.
+    attempt_id: String,
+    quarantine_path: String,
+    source_main_sha256: Option<String>,
+    complete: bool,
+    salvage_succeeded: bool,
+    recovered: RecoveredRecords,
+    recovery_warning: Option<String>,
+}
+
+struct DiagnosticSnapshot {
+    directory: PathBuf,
+    database: PathBuf,
+}
+
+impl Drop for DiagnosticSnapshot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.directory);
+    }
+}
+
+struct StandaloneMainCopy {
+    path: PathBuf,
+}
+
+impl Drop for StandaloneMainCopy {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+        let _ = fs::remove_file(wal_path(&self.path));
+        let _ = fs::remove_file(shm_path(&self.path));
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WalValidation {
+    bytes: u64,
+    frames: u64,
+    commits: u64,
+    page_size: u64,
 }
 
 pub fn diagnose_default() -> Result<MemoryHealthReport, MemoryError> {
@@ -224,7 +277,10 @@ pub fn diagnose_default() -> Result<MemoryHealthReport, MemoryError> {
 }
 
 pub fn diagnose(path: &Path) -> Result<MemoryHealthReport, MemoryError> {
-    let _lock = acquire_shared_lifecycle_lock(path, false)?;
+    if !database_family_exists(path) && !repair_log_path(path).exists() {
+        return diagnose_locked(path, true);
+    }
+    let _lock = acquire_lifecycle_lock(path, true, true)?;
     diagnose_locked(path, true)
 }
 
@@ -260,6 +316,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
             quarantine_path: None,
             quarantined_files: Vec::new(),
             recovered: RecoveredRecords::default(),
+            recovery_warning: None,
             repair_log_path: repair_log_path(path).display().to_string(),
         });
     }
@@ -293,6 +350,11 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
     add_forced_fts_action(&mut actions, options.rebuild_fts);
 
     let interrupted = log_snapshot.incomplete.last().cloned();
+    let failed_quarantine = log_snapshot
+        .last_applied
+        .as_ref()
+        .filter(|event| event.phase == RepairPhase::Failed && event.mode == RepairMode::Quarantine)
+        .cloned();
     let resumed_interrupted_repair = interrupted.is_some();
     if resumed_interrupted_repair
         && !actions
@@ -310,6 +372,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
     let mode = interrupted
         .as_ref()
         .map(|event| event.mode)
+        .or_else(|| failed_quarantine.as_ref().map(|_| RepairMode::Quarantine))
         .unwrap_or(required_mode);
     if mode == RepairMode::Quarantine
         && !actions
@@ -344,26 +407,40 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
         ));
     }
 
-    let salvage_source = if before.sqlite.status == "ok" && before.wal.status != "fail" {
-        schema_supports_message_recovery(path)?
-    } else {
-        false
-    };
+    let checkpoint_source =
+        before.sqlite.status == "ok" && before.wal.status == "ok" && path.exists();
     let attempt = if let Some(event) = interrupted {
         event
     } else {
-        let quarantine = (mode == RepairMode::Quarantine)
-            .then(|| quarantine_base(path, &uuid::Uuid::new_v4().simple().to_string()));
+        let attempt_id = failed_quarantine
+            .as_ref()
+            .map(|event| event.attempt_id.clone())
+            .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        let quarantine = if mode == RepairMode::Quarantine {
+            Some(
+                failed_quarantine
+                    .as_ref()
+                    .and_then(|event| event.quarantine_path.as_deref())
+                    .map(PathBuf::from)
+                    .unwrap_or_else(|| quarantine_base(path, &attempt_id)),
+            )
+        } else {
+            None
+        };
         let event = RepairEvent {
             version: REPAIR_LOG_VERSION,
-            attempt_id: uuid::Uuid::new_v4().simple().to_string(),
+            attempt_id,
             ts_ms: current_ts_ms(),
             phase: RepairPhase::Started,
             mode,
             planned_actions: actions.clone(),
             quarantine_path: quarantine.map(|value| value.display().to_string()),
-            salvage_source,
+            checkpoint_source: failed_quarantine
+                .as_ref()
+                .is_some_and(|event| event.checkpoint_source)
+                || checkpoint_source,
             recovered: RecoveredRecords::default(),
+            recovery_warning: None,
             error: None,
         };
         append_repair_event(path, &event)?;
@@ -400,8 +477,9 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
             mode: active_mode,
             planned_actions: actions.clone(),
             quarantine_path: Some(quarantine.display().to_string()),
-            salvage_source,
+            checkpoint_source,
             recovered: RecoveredRecords::default(),
+            recovery_warning: None,
             error: None,
         };
         append_repair_event(path, &active_attempt)?;
@@ -442,6 +520,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
                 ts_ms: current_ts_ms(),
                 error: Some(error.to_string()),
                 recovered: quarantine.recovered.clone(),
+                recovery_warning: quarantine.recovery_warning.clone(),
                 ..active_attempt.clone()
             },
         )?;
@@ -454,6 +533,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
             phase: RepairPhase::Completed,
             ts_ms: current_ts_ms(),
             recovered: quarantine.recovered.clone(),
+            recovery_warning: quarantine.recovery_warning.clone(),
             error: None,
             ..active_attempt.clone()
         },
@@ -478,6 +558,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
             .map(|value| value.display().to_string())
             .collect(),
         recovered: quarantine.recovered,
+        recovery_warning: quarantine.recovery_warning,
         repair_log_path: repair_log_path(path).display().to_string(),
     })
 }
@@ -487,6 +568,42 @@ pub(super) fn acquire_shared_lifecycle_lock(
     create: bool,
 ) -> Result<Option<MemoryLifecycleLock>, MemoryError> {
     acquire_lifecycle_lock(path, create, false)
+}
+
+pub(super) fn ensure_runtime_open_allowed(path: &Path) -> Result<(), MemoryError> {
+    let snapshot = read_repair_log(path)?;
+    if snapshot.malformed_lines > 0 {
+        return Err(MemoryError::Integrity(format!(
+            "repair lifecycle log {} is malformed; run `cos agent sessions health`",
+            repair_log_path(path).display()
+        )));
+    }
+    if let Some(event) = snapshot.incomplete.last() {
+        let mode = match event.mode {
+            RepairMode::InPlace => "in-place",
+            RepairMode::Quarantine => "quarantine",
+        };
+        return Err(MemoryError::Integrity(format!(
+            "memory database has an interrupted {mode} repair ({}) and cannot be opened until \
+             `cos agent sessions repair --yes{}` completes it",
+            event.attempt_id,
+            if event.mode == RepairMode::Quarantine {
+                " --quarantine"
+            } else {
+                ""
+            }
+        )));
+    }
+    if snapshot.last_applied.as_ref().is_some_and(|event| {
+        event.phase == RepairPhase::Failed && event.mode == RepairMode::Quarantine
+    }) {
+        return Err(MemoryError::Integrity(
+            "the last quarantine repair failed; run `cos agent sessions health` and retry \
+             `cos agent sessions repair --quarantine --yes` before opening memory"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn ensure_private_database_file(path: &Path) -> Result<(), MemoryError> {
@@ -605,6 +722,79 @@ pub(super) fn runtime_schema_issues(conn: &Connection) -> Result<Vec<String>, Me
     Ok(issues)
 }
 
+fn database_family_exists(path: &Path) -> bool {
+    [path.to_path_buf(), wal_path(path), shm_path(path)]
+        .iter()
+        .any(|candidate| fs::symlink_metadata(candidate).is_ok())
+}
+
+fn create_diagnostic_snapshot(path: &Path) -> Result<Option<DiagnosticSnapshot>, MemoryError> {
+    if !database_family_exists(path) {
+        return Ok(None);
+    }
+    let parent = path.parent().ok_or_else(|| {
+        MemoryError::Repair(format!("memory database has no parent: {}", path.display()))
+    })?;
+    let file_name = path.file_name().ok_or_else(|| {
+        MemoryError::Repair(format!(
+            "memory database has no filename: {}",
+            path.display()
+        ))
+    })?;
+    let directory = parent.join(format!(
+        ".{}.diagnose-{}",
+        file_name.to_string_lossy(),
+        uuid::Uuid::new_v4().simple()
+    ));
+    fs::create_dir(&directory)?;
+    crate::storage::ensure_private_dir(&directory)?;
+    let database = directory.join(file_name);
+
+    let result = (|| -> Result<(), MemoryError> {
+        copy_snapshot_file(path, &database)?;
+        copy_snapshot_file(&wal_path(path), &wal_path(&database))?;
+        copy_snapshot_file(&shm_path(path), &shm_path(&database))?;
+        Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&directory);
+        return Err(error);
+    }
+    Ok(Some(DiagnosticSnapshot {
+        directory,
+        database,
+    }))
+}
+
+fn copy_snapshot_file(source: &Path, destination: &Path) -> Result<(), MemoryError> {
+    match fs::symlink_metadata(source) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            return Err(MemoryError::Repair(format!(
+                "refusing non-regular SQLite family member: {}",
+                source.display()
+            )));
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(MemoryError::Io(error)),
+    }
+
+    let mut input = File::open(source)?;
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut output = options.open(destination)?;
+    std::io::copy(&mut input, &mut output)?;
+    output.sync_all()?;
+    crate::storage::set_private_file(destination)?;
+    Ok(())
+}
+
 fn diagnose_locked(
     path: &Path,
     inspect_repair_log: bool,
@@ -616,14 +806,47 @@ fn diagnose_locked(
     };
     let repair_lifecycle = repair_lifecycle_check(path, &repair_snapshot);
 
-    let wal_inspection = inspect_wal_files(path);
-    let metadata = match fs::symlink_metadata(path) {
+    let original_metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => Some(metadata),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
         Err(error) => {
             return Ok(blocked_health_report(
                 path,
+                false,
                 format!("cannot inspect database path: {error}"),
+                inspect_wal_files(path, path),
+                repair_lifecycle,
+            ));
+        }
+    };
+
+    if original_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+    {
+        return Ok(blocked_health_report(
+            path,
+            true,
+            "memory database path is not a regular file".to_string(),
+            inspect_wal_files(path, path),
+            repair_lifecycle,
+        ));
+    }
+
+    let snapshot = create_diagnostic_snapshot(path)?;
+    let inspection_path = snapshot
+        .as_ref()
+        .map(|snapshot| snapshot.database.as_path())
+        .unwrap_or(path);
+    let wal_inspection = inspect_wal_files(inspection_path, path);
+    let metadata = match fs::symlink_metadata(inspection_path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Ok(blocked_health_report(
+                path,
+                original_metadata.is_some(),
+                format!("cannot inspect database snapshot: {error}"),
                 wal_inspection,
                 repair_lifecycle,
             ));
@@ -634,6 +857,7 @@ fn diagnose_locked(
         if wal_inspection.status == "fail" {
             return Ok(blocked_health_report(
                 path,
+                original_metadata.is_some(),
                 "memory.db is missing while SQLite sidecars remain".to_string(),
                 wal_inspection,
                 repair_lifecycle,
@@ -656,21 +880,13 @@ fn diagnose_locked(
         return Ok(report);
     }
 
-    let metadata = metadata.expect("checked above");
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Ok(blocked_health_report(
-            path,
-            "memory database path is not a regular file".to_string(),
-            wal_inspection,
-            repair_lifecycle,
-        ));
-    }
-
-    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+    let conn = match Connection::open_with_flags(inspection_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+    {
         Ok(conn) => conn,
         Err(error) => {
             return Ok(blocked_health_report(
                 path,
+                original_metadata.is_some(),
                 format!("SQLite open failed: {error}"),
                 wal_inspection,
                 repair_lifecycle,
@@ -680,6 +896,7 @@ fn diagnose_locked(
     if let Err(error) = conn.busy_timeout(Duration::from_secs(5)) {
         return Ok(blocked_health_report(
             path,
+            original_metadata.is_some(),
             format!("SQLite setup failed: {error}"),
             wal_inspection,
             repair_lifecycle,
@@ -689,6 +906,7 @@ fn diagnose_locked(
     {
         return Ok(blocked_health_report(
             path,
+            original_metadata.is_some(),
             format!("SQLite setup failed: {error}"),
             wal_inspection,
             repair_lifecycle,
@@ -791,6 +1009,7 @@ fn absent_health_report(
 
 fn blocked_health_report(
     path: &Path,
+    initialized: bool,
     error: String,
     wal: MemoryHealthCheck,
     repair_lifecycle: MemoryHealthCheck,
@@ -804,7 +1023,7 @@ fn blocked_health_report(
     let mut report = MemoryHealthReport {
         status: "fail".to_string(),
         path: path.display().to_string(),
-        initialized: path.exists(),
+        initialized,
         sqlite: MemoryHealthCheck::fail("SQLite database is unavailable", vec![error.clone()]),
         wal,
         schema: blocked(),
@@ -907,7 +1126,6 @@ fn run_repair_operation(
     attempt: &RepairEvent,
 ) -> Result<QuarantineResult, MemoryError> {
     match attempt.mode {
-        RepairMode::InPlace if actions.is_empty() => Ok(QuarantineResult::default()),
         RepairMode::InPlace => perform_in_place_repair(path, actions),
         RepairMode::Quarantine => {
             let base = attempt
@@ -919,7 +1137,7 @@ fn run_repair_operation(
                         "interrupted quarantine repair has no recorded destination".to_string(),
                     )
                 })?;
-            quarantine_and_replace(path, &base, attempt.salvage_source)
+            quarantine_and_replace(path, &base, &attempt.attempt_id, attempt.checkpoint_source)
         }
     }
 }
@@ -1364,26 +1582,50 @@ fn read_health_stats(
     })
 }
 
-fn inspect_wal_files(path: &Path) -> MemoryHealthCheck {
+fn inspect_wal_files(path: &Path, display_path: &Path) -> MemoryHealthCheck {
     let wal = wal_path(path);
     let shm = shm_path(path);
-    let mut check = MemoryHealthCheck::ok("WAL sidecars are absent or structurally valid");
+    let display_wal = wal_path(display_path);
+    let display_shm = shm_path(display_path);
+    let mut check =
+        MemoryHealthCheck::ok("WAL sidecars are absent or pass format and checksum validation");
     let mut issues = Vec::new();
 
-    match inspect_wal_header(&wal) {
-        Ok(Some((bytes, frames))) => {
-            check.metrics.insert("wal_bytes".to_string(), bytes);
-            check.metrics.insert("wal_frames".to_string(), frames);
+    match inspect_wal(&wal, path) {
+        Ok(Some(validation)) => {
+            check
+                .metrics
+                .insert("wal_bytes".to_string(), validation.bytes);
+            check
+                .metrics
+                .insert("wal_frames".to_string(), validation.frames);
+            check
+                .metrics
+                .insert("wal_commits".to_string(), validation.commits);
+            check
+                .metrics
+                .insert("wal_page_size".to_string(), validation.page_size);
         }
         Ok(None) => {
             check.metrics.insert("wal_bytes".to_string(), 0);
             check.metrics.insert("wal_frames".to_string(), 0);
+            check.metrics.insert("wal_commits".to_string(), 0);
         }
-        Err(error) => issues.push(error),
+        Err(error) => issues.push(
+            error
+                .replace(
+                    &wal.display().to_string(),
+                    &display_wal.display().to_string(),
+                )
+                .replace(
+                    &path.display().to_string(),
+                    &display_path.display().to_string(),
+                ),
+        ),
     }
     match fs::symlink_metadata(&shm) {
         Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            issues.push(format!("{} is not a regular file", shm.display()));
+            issues.push(format!("{} is not a regular file", display_shm.display()));
         }
         Ok(metadata) => {
             check
@@ -1393,7 +1635,7 @@ fn inspect_wal_files(path: &Path) -> MemoryHealthCheck {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             check.metrics.insert("shm_bytes".to_string(), 0);
         }
-        Err(error) => issues.push(format!("cannot inspect {}: {error}", shm.display())),
+        Err(error) => issues.push(format!("cannot inspect {}: {error}", display_shm.display())),
     }
     if !path.exists() && (wal.exists() || shm.exists()) {
         issues.push("SQLite sidecar exists without memory.db".to_string());
@@ -1410,7 +1652,7 @@ fn inspect_wal_files(path: &Path) -> MemoryHealthCheck {
     }
 }
 
-fn inspect_wal_header(path: &Path) -> Result<Option<(u64, u64)>, String> {
+fn inspect_wal(path: &Path, database_path: &Path) -> Result<Option<WalValidation>, String> {
     let metadata = match fs::symlink_metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -1421,18 +1663,30 @@ fn inspect_wal_header(path: &Path) -> Result<Option<(u64, u64)>, String> {
     }
     let size = metadata.len();
     if size == 0 {
-        return Ok(Some((0, 0)));
+        return Ok(Some(WalValidation {
+            bytes: 0,
+            frames: 0,
+            commits: 0,
+            page_size: 0,
+        }));
     }
     if size < 32 {
         return Err(format!("{} is shorter than a WAL header", path.display()));
     }
+    let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let mut header = [0_u8; 32];
-    File::open(path)
-        .and_then(|mut file| file.read_exact(&mut header))
+    file.read_exact(&mut header)
         .map_err(|error| format!("read {}: {error}", path.display()))?;
     let magic = u32::from_be_bytes(header[0..4].try_into().expect("four bytes"));
     if !matches!(magic, 0x377f_0682 | 0x377f_0683) {
         return Err(format!("{} has an invalid WAL magic", path.display()));
+    }
+    let version = u32::from_be_bytes(header[4..8].try_into().expect("four bytes"));
+    if version != WAL_FORMAT_VERSION {
+        return Err(format!(
+            "{} has unsupported WAL format version {version}",
+            path.display()
+        ));
     }
     let encoded_page_size =
         u32::from_be_bytes(header[8..12].try_into().expect("four bytes")) as u64;
@@ -1444,12 +1698,134 @@ fn inspect_wal_header(path: &Path) -> Result<Option<(u64, u64)>, String> {
     if !(512..=65_536).contains(&page_size) || !page_size.is_power_of_two() {
         return Err(format!("{} has an invalid WAL page size", path.display()));
     }
+    if let Some(database_page_size) = read_database_page_size(database_path)? {
+        if database_page_size != page_size {
+            return Err(format!(
+                "{} page size {page_size} does not match database page size {database_page_size}",
+                path.display()
+            ));
+        }
+    }
+
+    // The low magic bit selects the byte order used for checksum words.
+    // Stored checksum fields themselves are always big-endian.
+    let checksum_big_endian = magic & 1 != 0;
+    let header_checksum = wal_checksum(&header[..24], checksum_big_endian, [0, 0]);
+    let stored_header_checksum = [
+        u32::from_be_bytes(header[24..28].try_into().expect("four bytes")),
+        u32::from_be_bytes(header[28..32].try_into().expect("four bytes")),
+    ];
+    if header_checksum != stored_header_checksum {
+        return Err(format!(
+            "{} has an invalid WAL header checksum",
+            path.display()
+        ));
+    }
+
     let frame_size = page_size + 24;
     let payload = size - 32;
     if payload % frame_size != 0 {
         return Err(format!("{} ends in a partial WAL frame", path.display()));
     }
-    Ok(Some((size, payload / frame_size)))
+    let frames = payload / frame_size;
+    let salt = &header[16..24];
+    let mut rolling_checksum = header_checksum;
+    let mut frame = vec![0_u8; frame_size as usize];
+    let mut commits = 0_u64;
+    for frame_index in 0..frames {
+        file.read_exact(&mut frame).map_err(|error| {
+            format!("read {} frame {}: {error}", path.display(), frame_index + 1)
+        })?;
+        let page_number = u32::from_be_bytes(frame[0..4].try_into().expect("four bytes"));
+        if page_number == 0 || page_number > SQLITE_MAX_PAGE_NUMBER {
+            return Err(format!(
+                "{} frame {} has invalid page number {page_number}",
+                path.display(),
+                frame_index + 1
+            ));
+        }
+        let commit_size = u32::from_be_bytes(frame[4..8].try_into().expect("four bytes"));
+        if commit_size > SQLITE_MAX_PAGE_NUMBER {
+            return Err(format!(
+                "{} frame {} has invalid commit size {commit_size}",
+                path.display(),
+                frame_index + 1
+            ));
+        }
+        if &frame[8..16] != salt {
+            return Err(format!(
+                "{} frame {} has salts that do not match the WAL header",
+                path.display(),
+                frame_index + 1
+            ));
+        }
+        // SQLite chains each frame over its page/commit words and page bytes;
+        // the salt and stored checksum fields are deliberately excluded.
+        rolling_checksum = wal_checksum(&frame[..8], checksum_big_endian, rolling_checksum);
+        rolling_checksum = wal_checksum(&frame[24..], checksum_big_endian, rolling_checksum);
+        let stored_frame_checksum = [
+            u32::from_be_bytes(frame[16..20].try_into().expect("four bytes")),
+            u32::from_be_bytes(frame[20..24].try_into().expect("four bytes")),
+        ];
+        if rolling_checksum != stored_frame_checksum {
+            return Err(format!(
+                "{} frame {} has an invalid rolling checksum",
+                path.display(),
+                frame_index + 1
+            ));
+        }
+        if commit_size != 0 {
+            commits += 1;
+        }
+    }
+    Ok(Some(WalValidation {
+        bytes: size,
+        frames,
+        commits,
+        page_size,
+    }))
+}
+
+fn wal_checksum(bytes: &[u8], big_endian_words: bool, seed: [u32; 2]) -> [u32; 2] {
+    let (word_pairs, remainder) = bytes.as_chunks::<8>();
+    debug_assert!(remainder.is_empty());
+    let mut first = seed[0];
+    let mut second = seed[1];
+    for words in word_pairs {
+        let left = if big_endian_words {
+            u32::from_be_bytes(words[0..4].try_into().expect("four bytes"))
+        } else {
+            u32::from_le_bytes(words[0..4].try_into().expect("four bytes"))
+        };
+        let right = if big_endian_words {
+            u32::from_be_bytes(words[4..8].try_into().expect("four bytes"))
+        } else {
+            u32::from_le_bytes(words[4..8].try_into().expect("four bytes"))
+        };
+        first = first.wrapping_add(left).wrapping_add(second);
+        second = second.wrapping_add(right).wrapping_add(first);
+    }
+    [first, second]
+}
+
+fn read_database_page_size(path: &Path) -> Result<Option<u64>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+    };
+    if metadata.len() < 100 {
+        return Ok(None);
+    }
+    let mut header = [0_u8; 100];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    if &header[..16] != b"SQLite format 3\0" {
+        return Ok(None);
+    }
+    let encoded = u16::from_be_bytes(header[16..18].try_into().expect("two bytes")) as u64;
+    Ok(Some(if encoded == 1 { 65_536 } else { encoded }))
 }
 
 fn repair_lifecycle_check(path: &Path, snapshot: &RepairLogSnapshot) -> MemoryHealthCheck {
@@ -1494,6 +1870,8 @@ fn perform_in_place_repair(
     path: &Path,
     actions: &[String],
 ) -> Result<QuarantineResult, MemoryError> {
+    inspect_wal(&wal_path(path), path)
+        .map_err(|error| MemoryError::Integrity(format!("refusing WAL checkpoint: {error}")))?;
     ensure_private_database_file(path)?;
     let conn = Connection::open_with_flags(
         path,
@@ -1593,65 +1971,397 @@ fn validate_prompt_integrity(conn: &Connection) -> Result<(), MemoryError> {
 fn quarantine_and_replace(
     path: &Path,
     quarantine: &Path,
-    salvage_source: bool,
+    attempt_id: &str,
+    checkpoint_source: bool,
 ) -> Result<QuarantineResult, MemoryError> {
+    let mut files = existing_quarantine_files(quarantine);
+    let mut warnings = Vec::new();
+
     if path.exists() && quarantine.exists() {
-        let replacement_health = diagnose_locked(path, false)?;
-        if replacement_health.status == "ok" {
-            return Ok(QuarantineResult {
-                base: Some(quarantine.to_path_buf()),
-                files: existing_quarantine_files(quarantine),
-                recovered: RecoveredRecords::default(),
-            });
+        let source_hash = file_sha256_optional(quarantine)?;
+        let live_marker = match read_replacement_marker(path) {
+            Ok(marker) => marker,
+            Err(error) => {
+                warnings.push(format!(
+                    "live database could not be validated as this attempt's replacement: {error}"
+                ));
+                None
+            }
+        };
+        if let Some(marker) = live_marker {
+            if replacement_marker_matches(&marker, attempt_id, quarantine, source_hash.as_deref())
+                && diagnose_locked(path, false)?.status == "ok"
+            {
+                return Ok(QuarantineResult {
+                    base: Some(quarantine.to_path_buf()),
+                    files,
+                    recovered: marker.recovered,
+                    recovery_warning: marker.recovery_warning,
+                });
+            }
         }
-        let failed = suffix_path(
+        let unbound = suffix_path(
             quarantine,
-            &format!(".replacement-failed-{}", uuid::Uuid::new_v4().simple()),
+            &format!(".unbound-live-{}", uuid::Uuid::new_v4().simple()),
         );
-        fs::rename(path, &failed)?;
-        crate::storage::set_private_file(&failed)?;
+        move_family(path, &unbound, &mut files)?;
+        warnings.push(format!(
+            "preserved unbound database found at the live path as {}",
+            unbound.display()
+        ));
     }
 
-    if path.exists() && !quarantine.exists() && salvage_source {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-        conn.busy_timeout(Duration::from_secs(5))?;
-        checkpoint_wal(&conn)?;
-        drop(conn);
+    if path.exists() && !quarantine.exists() && checkpoint_source {
+        match inspect_wal(&wal_path(path), path) {
+            Ok(_) => match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE) {
+                Ok(conn) => {
+                    conn.busy_timeout(Duration::from_secs(5))?;
+                    if let Err(error) = checkpoint_wal(&conn) {
+                        warnings.push(format!(
+                            "WAL checkpoint failed before quarantine; preserving the complete \
+                             family and attempting standalone-main recovery: {error}"
+                        ));
+                    }
+                }
+                Err(error) => warnings.push(format!(
+                    "SQLite could not open for checkpoint before quarantine; preserving the \
+                     complete family and attempting standalone-main recovery: {error}"
+                )),
+            },
+            Err(error) => warnings.push(format!(
+                "WAL validation changed before quarantine; preserving the complete family and \
+                 attempting standalone-main recovery: {error}"
+            )),
+        }
     }
 
-    let mut files = Vec::new();
     move_if_present(path, quarantine, &mut files)?;
     move_if_present(&wal_path(path), &wal_path(quarantine), &mut files)?;
     move_if_present(&shm_path(path), &shm_path(quarantine), &mut files)?;
     sync_parent(path)?;
 
-    let replacement = suffix_path(
-        path,
-        &format!(".replacement-{}", uuid::Uuid::new_v4().simple()),
-    );
-    remove_replacement_scratch(&replacement)?;
-    ensure_private_database_file(&replacement)?;
-    let mut target = Connection::open_with_flags(&replacement, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
-    initialize_connection(&target)?;
-    let recovered = if salvage_source && quarantine.exists() {
-        recover_authoritative_rows(quarantine, &mut target)?
+    let source_hash = file_sha256_optional(quarantine)?;
+    let replacement = staged_replacement_path(path, attempt_id);
+    if replacement.exists() {
+        let staged_marker = match read_replacement_marker(&replacement) {
+            Ok(marker) => marker,
+            Err(error) => {
+                warnings.push(format!(
+                    "staged database could not be validated as this attempt's replacement: {error}"
+                ));
+                None
+            }
+        };
+        let staged_matches = staged_marker.as_ref().is_some_and(|marker| {
+            replacement_marker_matches(marker, attempt_id, quarantine, source_hash.as_deref())
+        });
+        if !staged_matches {
+            let invalid = suffix_path(
+                quarantine,
+                &format!(".unbound-staged-{}", uuid::Uuid::new_v4().simple()),
+            );
+            move_family(&replacement, &invalid, &mut files)?;
+            warnings.push(format!(
+                "preserved staged replacement not bound to repair attempt as {}",
+                invalid.display()
+            ));
+        }
+    }
+
+    let marker = if replacement.exists() {
+        read_replacement_marker(&replacement)?.ok_or_else(|| {
+            MemoryError::Integrity(format!(
+                "staged replacement {} has no repair marker",
+                replacement.display()
+            ))
+        })?
     } else {
-        RecoveredRecords::default()
+        build_staged_replacement(quarantine, &replacement, attempt_id, source_hash.clone())?
     };
-    checkpoint_wal(&target)?;
-    drop(target);
-    crate::storage::set_private_file(&replacement)?;
+    if !replacement_marker_matches(&marker, attempt_id, quarantine, source_hash.as_deref()) {
+        return Err(MemoryError::Integrity(format!(
+            "staged replacement {} is not bound to repair attempt {attempt_id}",
+            replacement.display()
+        )));
+    }
+
+    remove_if_present(&wal_path(&replacement))?;
+    remove_if_present(&shm_path(&replacement))?;
     fs::rename(&replacement, path)?;
     crate::storage::set_private_file(path)?;
-    remove_replacement_scratch(&replacement)?;
     harden_sqlite_files(path)?;
     sync_parent(path)?;
 
+    let installed = read_replacement_marker(path)?.ok_or_else(|| {
+        MemoryError::Integrity(format!(
+            "installed replacement {} lost its repair marker",
+            path.display()
+        ))
+    })?;
+    if !replacement_marker_matches(&installed, attempt_id, quarantine, source_hash.as_deref()) {
+        return Err(MemoryError::Integrity(format!(
+            "installed replacement {} is not bound to repair attempt {attempt_id}",
+            path.display()
+        )));
+    }
+    if let Some(warning) = installed.recovery_warning.clone() {
+        warnings.push(warning);
+    }
+
+    files = existing_quarantine_files(quarantine)
+        .into_iter()
+        .chain(files)
+        .collect();
+    files.sort();
+    files.dedup();
     Ok(QuarantineResult {
         base: Some(quarantine.to_path_buf()),
         files,
-        recovered,
+        recovered: installed.recovered,
+        recovery_warning: (!warnings.is_empty()).then(|| warnings.join("; ")),
     })
+}
+
+fn build_staged_replacement(
+    quarantine: &Path,
+    replacement: &Path,
+    attempt_id: &str,
+    source_hash: Option<String>,
+) -> Result<ReplacementMarker, MemoryError> {
+    remove_replacement_scratch(replacement)?;
+    ensure_private_database_file(replacement)?;
+    let mut target = Connection::open_with_flags(replacement, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    initialize_connection(&target)?;
+
+    let mut marker = ReplacementMarker {
+        attempt_id: attempt_id.to_string(),
+        quarantine_path: quarantine.display().to_string(),
+        source_main_sha256: source_hash,
+        complete: false,
+        salvage_succeeded: false,
+        recovered: RecoveredRecords::default(),
+        recovery_warning: None,
+    };
+    write_replacement_marker(&target, &marker)?;
+
+    if quarantine.exists() {
+        match recover_from_standalone_main(quarantine, attempt_id, &mut target) {
+            Ok(recovered) => {
+                marker.salvage_succeeded = true;
+                marker.recovered = recovered;
+            }
+            Err(error) => {
+                marker.recovery_warning = Some(format!(
+                    "standalone main-database recovery failed; replacement is empty: {error}"
+                ));
+            }
+        }
+    } else {
+        marker.recovery_warning =
+            Some("quarantine contains no main database; replacement is empty".to_string());
+    }
+    marker.complete = true;
+    write_replacement_marker(&target, &marker)?;
+    checkpoint_wal(&target)?;
+    drop(target);
+    harden_sqlite_files(replacement)?;
+    Ok(marker)
+}
+
+fn recover_from_standalone_main(
+    quarantine: &Path,
+    attempt_id: &str,
+    target: &mut Connection,
+) -> Result<RecoveredRecords, MemoryError> {
+    let standalone_path = suffix_path(quarantine, &format!(".main-only-{attempt_id}"));
+    remove_replacement_scratch(&standalone_path)?;
+    copy_snapshot_file(quarantine, &standalone_path)?;
+    let standalone = StandaloneMainCopy {
+        path: standalone_path,
+    };
+
+    let source = Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    source.busy_timeout(Duration::from_secs(5))?;
+    let integrity = check_sqlite_integrity(&source);
+    if integrity.status != "ok" {
+        return Err(MemoryError::Integrity(format!(
+            "standalone main database failed integrity_check: {}",
+            integrity.issues.join("; ")
+        )));
+    }
+    let schema = inspect_schema(&source)?;
+    if !schema.messages_compatible {
+        return Err(MemoryError::Integrity(
+            "standalone main database has no compatible messages table".to_string(),
+        ));
+    }
+    drop(source);
+    recover_authoritative_rows(&standalone.path, target)
+}
+
+fn write_replacement_marker(
+    conn: &Connection,
+    marker: &ReplacementMarker,
+) -> Result<(), MemoryError> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS memory_repair_install (
+             singleton                 INTEGER PRIMARY KEY CHECK(singleton = 1),
+             attempt_id                TEXT NOT NULL,
+             quarantine_path           TEXT NOT NULL,
+             source_main_sha256         TEXT,
+             complete                  INTEGER NOT NULL,
+             salvage_succeeded         INTEGER NOT NULL,
+             recovered_messages        INTEGER NOT NULL,
+             recovered_titles          INTEGER NOT NULL,
+             recovered_prompt_refs     INTEGER NOT NULL,
+             skipped_prompt_refs       INTEGER NOT NULL,
+             recovery_warning          TEXT
+         );",
+    )?;
+    conn.execute(
+        "INSERT INTO memory_repair_install(
+             singleton, attempt_id, quarantine_path, source_main_sha256,
+             complete, salvage_succeeded, recovered_messages, recovered_titles,
+             recovered_prompt_refs, skipped_prompt_refs, recovery_warning
+         ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(singleton) DO UPDATE SET
+             attempt_id = excluded.attempt_id,
+             quarantine_path = excluded.quarantine_path,
+             source_main_sha256 = excluded.source_main_sha256,
+             complete = excluded.complete,
+             salvage_succeeded = excluded.salvage_succeeded,
+             recovered_messages = excluded.recovered_messages,
+             recovered_titles = excluded.recovered_titles,
+             recovered_prompt_refs = excluded.recovered_prompt_refs,
+             skipped_prompt_refs = excluded.skipped_prompt_refs,
+             recovery_warning = excluded.recovery_warning",
+        params![
+            &marker.attempt_id,
+            &marker.quarantine_path,
+            marker.source_main_sha256.as_deref(),
+            marker.complete,
+            marker.salvage_succeeded,
+            marker.recovered.messages as i64,
+            marker.recovered.titles as i64,
+            marker.recovered.prompt_references as i64,
+            marker.recovered.skipped_prompt_references as i64,
+            marker.recovery_warning.as_deref(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, MemoryError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let snapshot = create_diagnostic_snapshot(path)?.ok_or_else(|| {
+        MemoryError::Repair(format!("cannot snapshot replacement {}", path.display()))
+    })?;
+    let conn = Connection::open_with_flags(&snapshot.database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    if schema_object_type(&conn, REPLACEMENT_MARKER_TABLE)?.is_none() {
+        return Ok(None);
+    }
+    let marker = conn
+        .query_row(
+            "SELECT attempt_id, quarantine_path, source_main_sha256, complete,
+                salvage_succeeded, recovered_messages, recovered_titles,
+                recovered_prompt_refs, skipped_prompt_refs, recovery_warning
+         FROM memory_repair_install
+         WHERE singleton = 1",
+            [],
+            |row| {
+                Ok(ReplacementMarker {
+                    attempt_id: row.get(0)?,
+                    quarantine_path: row.get(1)?,
+                    source_main_sha256: row.get(2)?,
+                    complete: row.get(3)?,
+                    salvage_succeeded: row.get(4)?,
+                    recovered: RecoveredRecords {
+                        messages: row.get::<_, i64>(5)? as u64,
+                        titles: row.get::<_, i64>(6)? as u64,
+                        prompt_references: row.get::<_, i64>(7)? as u64,
+                        skipped_prompt_references: row.get::<_, i64>(8)? as u64,
+                    },
+                    recovery_warning: row.get(9)?,
+                })
+            },
+        )
+        .optional()?;
+    if let Some(marker) = marker.as_ref() {
+        let messages = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| {
+            row.get::<_, i64>(0)
+        })? as u64;
+        let titles = conn.query_row("SELECT COUNT(*) FROM session_titles", [], |row| {
+            row.get::<_, i64>(0)
+        })? as u64;
+        let prompt_references =
+            conn.query_row("SELECT COUNT(*) FROM session_system_prompts", [], |row| {
+                row.get::<_, i64>(0)
+            })? as u64;
+        if messages < marker.recovered.messages
+            || titles < marker.recovered.titles
+            || prompt_references < marker.recovered.prompt_references
+        {
+            return Err(MemoryError::Integrity(format!(
+                "replacement {} does not contain the rows recorded by its repair marker",
+                path.display()
+            )));
+        }
+    }
+    Ok(marker)
+}
+
+fn replacement_marker_matches(
+    marker: &ReplacementMarker,
+    attempt_id: &str,
+    quarantine: &Path,
+    source_hash: Option<&str>,
+) -> bool {
+    marker.complete
+        && marker.attempt_id == attempt_id
+        && marker.quarantine_path == quarantine.display().to_string()
+        && marker.source_main_sha256.as_deref() == source_hash
+}
+
+fn move_family(
+    source: &Path,
+    destination: &Path,
+    moved: &mut Vec<PathBuf>,
+) -> Result<(), MemoryError> {
+    move_if_present(source, destination, moved)?;
+    move_if_present(&wal_path(source), &wal_path(destination), moved)?;
+    move_if_present(&shm_path(source), &shm_path(destination), moved)?;
+    Ok(())
+}
+
+fn file_sha256_optional(path: &Path) -> Result<Option<String>, MemoryError> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(Some(hex::encode(hasher.finalize())))
+}
+
+fn staged_replacement_path(path: &Path, attempt_id: &str) -> PathBuf {
+    suffix_path(path, &format!(".replacement-{attempt_id}"))
+}
+
+fn remove_if_present(path: &Path) -> Result<(), MemoryError> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(MemoryError::Io(error)),
+    }
 }
 
 fn recover_authoritative_rows(
@@ -1766,14 +2476,6 @@ fn checkpoint_wal(conn: &Connection) -> Result<(), MemoryError> {
     Ok(())
 }
 
-fn schema_supports_message_recovery(path: &Path) -> Result<bool, MemoryError> {
-    if !path.exists() {
-        return Ok(false);
-    }
-    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    Ok(inspect_schema(&conn)?.messages_compatible)
-}
-
 fn read_repair_log(path: &Path) -> Result<RepairLogSnapshot, MemoryError> {
     let log_path = repair_log_path(path);
     let metadata = match fs::symlink_metadata(&log_path) {
@@ -1806,7 +2508,11 @@ fn read_repair_log(path: &Path) -> Result<RepairLogSnapshot, MemoryError> {
             continue;
         }
         let event: RepairEvent = match serde_json::from_str::<RepairEvent>(&line) {
-            Ok(event) if event.version == REPAIR_LOG_VERSION => event,
+            Ok(event)
+                if event.version == REPAIR_LOG_VERSION && valid_repair_event(path, &event) =>
+            {
+                event
+            }
             Ok(_) | Err(_) => {
                 malformed_lines += 1;
                 continue;
@@ -1829,6 +2535,39 @@ fn read_repair_log(path: &Path) -> Result<RepairLogSnapshot, MemoryError> {
         last_applied,
         malformed_lines,
     })
+}
+
+fn valid_repair_event(database: &Path, event: &RepairEvent) -> bool {
+    let valid_id = !event.attempt_id.is_empty()
+        && event.attempt_id.len() <= 64
+        && event
+            .attempt_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'));
+    if !valid_id {
+        return false;
+    }
+    match event.mode {
+        RepairMode::InPlace => event.quarantine_path.is_none(),
+        RepairMode::Quarantine => event
+            .quarantine_path
+            .as_deref()
+            .map(Path::new)
+            .is_some_and(|path| is_quarantine_sibling(database, path)),
+    }
+}
+
+fn is_quarantine_sibling(database: &Path, quarantine: &Path) -> bool {
+    if database.parent() != quarantine.parent() {
+        return false;
+    }
+    let Some(database_name) = database.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let Some(quarantine_name) = quarantine.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    quarantine_name.starts_with(&format!("{database_name}.quarantine-"))
 }
 
 fn append_repair_event(path: &Path, event: &RepairEvent) -> Result<(), MemoryError> {

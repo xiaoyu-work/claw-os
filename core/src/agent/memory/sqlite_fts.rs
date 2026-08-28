@@ -235,6 +235,7 @@ impl MemoryDb {
             crate::storage::ensure_private_dir(parent)?;
         }
         let lifecycle_lock = recovery::acquire_shared_lifecycle_lock(path, true)?;
+        recovery::ensure_runtime_open_allowed(path)?;
         let initialize = !path.exists()
             || std::fs::metadata(path)
                 .map(|metadata| metadata.len() == 0)

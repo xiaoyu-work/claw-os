@@ -2,8 +2,9 @@
 //!
 //! Aggregates many small checks into one pass/warn/fail summary so
 //! operators can answer "is my agent stack healthy?" in one
-//! command. Checks stay local by default; memory diagnosis may scan SQLite and
-//! rebuild a temporary in-memory FTS projection, while no network calls run.
+//! command. Checks stay local by default; memory diagnosis may snapshot and
+//! scan SQLite and rebuild a temporary in-memory FTS projection, while no
+//! network calls run.
 //! Pass `--probe-network` to also issue a one-shot live ping to
 //! the active provider.
 //!
