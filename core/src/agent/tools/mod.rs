@@ -22,6 +22,15 @@ pub mod todo;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+pub(crate) const SYSTEM_AGENT_MEMORY_SCOPE: &str = "agent";
+
+pub(crate) fn require_agent_memory(verb: crate::caps::Verb) -> Result<(), crate::caps::Denial> {
+    crate::caps::require(
+        verb,
+        crate::caps::Scope::self_ref(SYSTEM_AGENT_MEMORY_SCOPE),
+    )
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     /// Result content shown back to the model. Plain text recommended; may

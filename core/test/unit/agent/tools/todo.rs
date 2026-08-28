@@ -6,6 +6,42 @@ fn tmp_store() -> (TodoStore, tempfile::TempDir) {
     (store, dir)
 }
 
+async fn with_memory_caps<F, T>(verbs: &[crate::caps::Verb], future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    let caps = crate::caps::CapSet::from_caps(verbs.iter().map(|verb| {
+        crate::caps::Cap::new(
+            *verb,
+            crate::caps::Scope::self_ref(crate::agent::tools::SYSTEM_AGENT_MEMORY_SCOPE),
+        )
+    }));
+    let session = crate::proc::SessionInfo {
+        session_id: format!("todo-tool-{}", uuid::Uuid::new_v4()),
+        pid: std::process::id(),
+        command: vec!["test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(caps),
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::default(),
+    };
+    crate::proc::with_trusted_session_override(session, future).await
+}
+
 #[test]
 fn read_missing_session_returns_empty() {
     let (store, _g) = tmp_store();
@@ -274,44 +310,53 @@ fn render_list_empty_message() {
 async fn tool_exec_read_then_write_then_read_via_json() {
     let (store, _g) = tmp_store();
     let tool = Todo::new(store);
-    let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
-    assert!(!r.is_error);
-    assert!(r.content.contains("(no todos)"));
+    with_memory_caps(
+        &[crate::caps::Verb::MEMORY_READ, crate::caps::Verb::MEMORY_WRITE],
+        async {
+            let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
+            assert!(!r.is_error);
+            assert!(r.content.contains("(no todos)"));
 
-    let r = tool
-        .exec(json!({
-            "command":"write",
-            "session_id":"s1",
-            "items":[{"id":"a","title":"plan","status":"in_progress"}]
-        }))
-        .await;
-    assert!(!r.is_error);
-    assert!(r.content.contains("wrote 1"));
+            let r = tool
+                .exec(json!({
+                    "command":"write",
+                    "session_id":"s1",
+                    "items":[{"id":"a","title":"plan","status":"in_progress"}]
+                }))
+                .await;
+            assert!(!r.is_error);
+            assert!(r.content.contains("wrote 1"));
 
-    let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
-    assert!(r.content.contains("[~] a plan"));
+            let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
+            assert!(r.content.contains("[~] a plan"));
+        },
+    )
+    .await;
 }
 
 #[tokio::test]
 async fn tool_exec_set_status_via_json() {
     let (store, _g) = tmp_store();
     let tool = Todo::new(store);
-    tool.exec(json!({
-        "command":"write",
-        "session_id":"s1",
-        "items":[{"id":"a","title":"task","status":"pending"}]
-    }))
-    .await;
-    let r = tool
-        .exec(json!({
-            "command":"set_status",
+    with_memory_caps(&[crate::caps::Verb::MEMORY_WRITE], async {
+        tool.exec(json!({
+            "command":"write",
             "session_id":"s1",
-            "id":"a",
-            "status":"completed"
+            "items":[{"id":"a","title":"task","status":"pending"}]
         }))
         .await;
-    assert!(!r.is_error);
-    assert!(r.content.contains("[x] a task"));
+        let r = tool
+            .exec(json!({
+                "command":"set_status",
+                "session_id":"s1",
+                "id":"a",
+                "status":"completed"
+            }))
+            .await;
+        assert!(!r.is_error);
+        assert!(r.content.contains("[x] a task"));
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -336,17 +381,69 @@ async fn tool_exec_set_status_missing_args() {
 async fn tool_exec_clear_via_json() {
     let (store, _g) = tmp_store();
     let tool = Todo::new(store);
-    tool.exec(json!({
-        "command":"write","session_id":"s1",
-        "items":[{"id":"a","title":"task"}]
-    }))
+    with_memory_caps(
+        &[crate::caps::Verb::MEMORY_READ, crate::caps::Verb::MEMORY_WRITE],
+        async {
+            tool.exec(json!({
+                "command":"write","session_id":"s1",
+                "items":[{"id":"a","title":"task"}]
+            }))
+            .await;
+            let r = tool
+                .exec(json!({"command":"clear","session_id":"s1"}))
+                .await;
+            assert!(!r.is_error);
+            let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
+            assert!(r.content.contains("(no todos)"));
+        },
+    )
     .await;
-    let r = tool
-        .exec(json!({"command":"clear","session_id":"s1"}))
-        .await;
-    assert!(!r.is_error);
-    let r = tool.exec(json!({"command":"read","session_id":"s1"})).await;
-    assert!(r.content.contains("(no todos)"));
+}
+
+#[tokio::test]
+async fn read_only_and_write_only_sessions_enforce_each_command() {
+    let _lock = crate::test_env::lock_env();
+    let (store, _g) = tmp_store();
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", _g.path());
+    store
+        .write(
+            "s1",
+            &TodoList {
+                items: vec![TodoItem {
+                    id: "a".to_string(),
+                    title: "existing".to_string(),
+                    status: TodoStatus::Pending,
+                    note: None,
+                }],
+            },
+        )
+        .unwrap();
+    let tool = Todo::new(store);
+
+    with_memory_caps(&[crate::caps::Verb::MEMORY_READ], async {
+        let read = tool.exec(json!({"command":"read","session_id":"s1"})).await;
+        assert!(!read.is_error, "{}", read.content);
+        let clear = tool.exec(json!({"command":"clear","session_id":"s1"})).await;
+        assert!(clear.is_error);
+        assert!(clear.content.contains("memory.write"));
+    })
+    .await;
+
+    with_memory_caps(&[crate::caps::Verb::MEMORY_WRITE], async {
+        let write = tool
+            .exec(json!({
+                "command":"write",
+                "session_id":"s1",
+                "items":[{"id":"b","title":"replacement"}]
+            }))
+            .await;
+        assert!(!write.is_error, "{}", write.content);
+        let read = tool.exec(json!({"command":"read","session_id":"s1"})).await;
+        assert!(read.is_error);
+        assert!(read.content.contains("memory.read"));
+    })
+    .await;
 }
 
 #[test]
