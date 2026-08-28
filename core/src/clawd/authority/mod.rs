@@ -439,9 +439,10 @@ fn string_field(params: &Value, key: &str) -> Option<String> {
 /// current. This function supplies the live execution bindings the
 /// record cannot know in advance: owner, task, worker pid/start time,
 /// session and a deadline no later than either the worker lease or the
-/// durable approval. The one-use grant is consumed before success is
-/// returned, immediately before the worker resumes the guarded
-/// operation.
+/// durable approval. An operation-bound approval must also match the
+/// validated invocation digest carried by the gate. The one-use grant is
+/// consumed before success is returned, immediately before the worker
+/// resumes the guarded operation.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn authorize_worker_approval(
     owner_uid: u32,
@@ -451,6 +452,7 @@ pub(crate) fn authorize_worker_approval(
     worker_start_time_ticks: Option<u64>,
     lease_nonce: &str,
     lease_remaining: std::time::Duration,
+    operation_digest: Option<&str>,
     approval: &crate::approvals::ConsumedGrant,
 ) -> Result<GrantView, String> {
     if approval.authorization.owner_uid != Some(owner_uid)
@@ -460,6 +462,9 @@ pub(crate) fn authorize_worker_approval(
         return Err(
             "approval does not match the worker owner, session, and attended context".to_string(),
         );
+    }
+    if approval.authorization.operation_digest.as_deref() != operation_digest {
+        return Err("approval does not match the validated operation".to_string());
     }
     let execution = approval
         .authorization
@@ -505,8 +510,7 @@ pub(crate) fn authorize_worker_approval(
         )
         .map_err(|error| error.to_string())?;
     audit::record_issued(&view, None);
-    let current_generation =
-        crate::approvals::generations::current(Some(owner_uid), session_id)?;
+    let current_generation = crate::approvals::generations::current(Some(owner_uid), session_id)?;
     if current_generation != approval.generation {
         let retired = authority().revoke(view.id);
         audit::record_revoked("approval-generation", Some(session_id), retired);

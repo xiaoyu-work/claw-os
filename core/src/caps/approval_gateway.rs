@@ -9,10 +9,11 @@
 //! exact verb and scope?" and "file or reuse a pending request for it".
 //!
 //! The gateway never carries a session, an owner, a task, a decision or
-//! a capability set. The broker derives all of those from the verified
+//! a capability set. It may carry a digest of validated operation inputs,
+//! never the raw arguments. The broker derives identity from the verified
 //! job grant, so a worker cannot request against another session, spend
-//! another owner's grant, or hand itself authority. A gateway that
-//! cannot answer leaves the gate closed.
+//! another owner's grant, or hand itself authority. A gateway that cannot
+//! answer leaves the gate closed.
 
 use std::sync::{Arc, RwLock};
 
@@ -37,10 +38,20 @@ pub trait ApprovalGateway: Send + Sync + std::fmt::Debug {
 
     /// Spend an exactly-matching approved grant, if one exists. `true`
     /// means the gate may proceed this once.
-    fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String>;
+    fn consume(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<bool, String>;
 
     /// File or reuse a pending request for this exact verb and scope.
-    fn request(&self, verb: Verb, scope: &Scope) -> Result<PendingApproval, String>;
+    fn request(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<PendingApproval, String>;
 }
 
 static GATEWAY: RwLock<Option<Arc<dyn ApprovalGateway>>> = RwLock::new(None);

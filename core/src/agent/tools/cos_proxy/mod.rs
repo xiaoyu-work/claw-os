@@ -476,7 +476,7 @@ pub fn register_all(registry: &mut ToolRegistry) {
         // Only proxies whose complete command surface has an exact
         // validated capability mapping may bypass the legacy
         // `dangerous_tools` prompt.
-        if matches!(spec.name, "cos_proc" | "cos_credential") {
+        if spec.name == "cos_credential" {
             tool = tool.with_capability_approval();
         }
         registry.register(Arc::new(tool));

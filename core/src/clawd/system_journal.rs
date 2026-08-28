@@ -117,6 +117,7 @@ fn approval_request_record(request: &ApprovalRequest) -> Value {
         "scope": &request.scope,
         "risk": request.risk,
         "consent_context": request.context,
+        "operation_digest": &request.operation_digest,
         "task_id": request.execution.as_ref()
             .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
         "worker_pid": request.execution.as_ref()
@@ -157,6 +158,7 @@ fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
         "decided_by": &resolved.decision.decided_by,
         "risk": resolved.request.risk,
         "consent_context": resolved.request.context,
+        "operation_digest": &resolved.request.operation_digest,
         "task_id": resolved.request.execution.as_ref()
             .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
         "worker_pid": resolved.request.execution.as_ref()
@@ -209,11 +211,7 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
     })
 }
 
-pub fn record_power_intent(
-    action: &str,
-    owner_uid: u32,
-    session_id: &str,
-) -> Result<(), String> {
+pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Result<(), String> {
     append(json!({
         "ts": Utc::now(),
         "event": "system.operation",
@@ -230,10 +228,7 @@ pub fn query(params: Value) -> Result<Value, String> {
     query_with_owner(params, None)
 }
 
-pub fn query_for_client(
-    params: Value,
-    client: &ClientIdentity,
-) -> Result<Value, String> {
+pub fn query_for_client(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let uid = client.require_uid()?;
     query_with_owner(params, (uid != 0).then_some(uid))
 }

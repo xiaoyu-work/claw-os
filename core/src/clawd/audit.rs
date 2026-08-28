@@ -275,6 +275,8 @@ struct WorkerApprovalAudit<'a> {
     scope: String,
     risk: &'static str,
     context: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operation_digest: Option<String>,
     action: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     approval_grant: Option<&'a str>,
@@ -301,6 +303,7 @@ pub fn record_worker_approval(
     scope: &crate::caps::Scope,
     risk: crate::caps::Risk,
     context: crate::caps::ConsentContext,
+    operation_digest: Option<&str>,
     action: &'static str,
     approval_grant: Option<&str>,
     approval_generation: Option<u32>,
@@ -320,6 +323,7 @@ pub fn record_worker_approval(
         scope: audit_policy::safe_reference(&scope.to_string()),
         risk: risk.as_str(),
         context: context.as_str(),
+        operation_digest: operation_digest.map(str::to_string),
         action,
         approval_grant,
         approval_generation,

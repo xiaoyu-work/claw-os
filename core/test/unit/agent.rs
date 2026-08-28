@@ -1873,9 +1873,12 @@ fn approval_cmd_check_safe_tool_returns_approved() {
 }
 
 #[test]
-fn approval_cmd_reports_capability_authority_for_core_proxy() {
+fn approval_cmd_keeps_proc_on_legacy_authority_until_mapping_is_complete() {
     let v = approval_cmd(&["check".into(), "cos_proc".into()]).expect("approval check ok");
-    assert_eq!(v.get("authority").and_then(|v| v.as_str()), Some("capability"));
+    assert_eq!(
+        v.get("authority").and_then(|v| v.as_str()),
+        Some("legacy_tool_name")
+    );
 }
 
 #[test]

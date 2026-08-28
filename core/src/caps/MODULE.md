@@ -40,9 +40,11 @@ disk, in a request body, or in a session row is a description to be re-derived
 and clamped — never promoted.
 
 For Agent consent, `caps::require` receives the exact verb and canonical scope
-only after the owning operation validates its arguments. Attended denials may
-create a bounded approval request; unattended denials never prompt. A worker
-approval is redeemed through `clawd::authority` at the final gate.
+only after the owning operation validates its arguments. A primitive may also
+bind consent to a validated operation digest when executable arguments carry
+authority beyond the capability scope. Attended denials may create a bounded
+approval request; unattended denials never prompt. A worker approval is
+redeemed through `clawd::authority` at the final gate.
 
 ## Tests
 

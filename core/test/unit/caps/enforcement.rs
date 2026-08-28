@@ -550,7 +550,14 @@ fn delegated_scheduler_session_gates_only_its_approved_authority() {
 #[test]
 fn audit_record_allow_carries_decision_verb_and_target() {
     let scope = Scope::path("/home/jay/notes.md");
-    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Strict, Some("s1"), &Ok(()));
+    let rec = build_cap_audit_record(
+        Verb::FS_READ,
+        &scope,
+        Mode::Strict,
+        Some("s1"),
+        &Ok(()),
+        None,
+    );
     assert_eq!(rec["decision"], "allow");
     assert_eq!(rec["verb"], "fs.read");
     assert_eq!(rec["session_id"], "s1");
@@ -569,7 +576,14 @@ fn audit_record_deny_emits_reason_and_hint() {
     let scope = Scope::path("/etc/passwd");
     let denial = super::super::denial::Denial::verb_not_granted(Verb::FS_DELETE, scope.clone())
         .with_hint("ask the user");
-    let rec = build_cap_audit_record(Verb::FS_DELETE, &scope, Mode::Strict, None, &Err(denial));
+    let rec = build_cap_audit_record(
+        Verb::FS_DELETE,
+        &scope,
+        Mode::Strict,
+        None,
+        &Err(denial),
+        None,
+    );
     assert_eq!(rec["decision"], "deny");
     assert_eq!(rec["reason"], "verb-not-granted");
     assert_eq!(rec["hint"], "ask the user");
@@ -581,7 +595,7 @@ fn audit_record_deny_emits_reason_and_hint() {
 #[test]
 fn audit_record_wild_scope_renders_as_star() {
     let scope = Scope::wild();
-    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Permissive, None, &Ok(()));
+    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Permissive, None, &Ok(()), None);
     assert_eq!(rec["target_resource"], "*");
     assert_eq!(rec["scope"]["kind"], "wild");
     assert_eq!(rec["mode"], "permissive");
@@ -627,7 +641,7 @@ fn require_writes_to_caps_jsonl() {
 struct FakeGateway {
     consume: std::sync::Mutex<Result<bool, String>>,
     request: std::sync::Mutex<Result<crate::caps::PendingApproval, String>>,
-    asked: std::sync::Mutex<Vec<(String, String)>>,
+    asked: std::sync::Mutex<Vec<(String, String, Option<String>)>>,
     context: crate::caps::ConsentContext,
 }
 
@@ -656,9 +670,13 @@ impl FakeGateway {
         })
     }
 
-    fn record(&self, verb: Verb, scope: &Scope) {
+    fn record(&self, verb: Verb, scope: &Scope, operation_digest: Option<&str>) {
         if let Ok(mut asked) = self.asked.lock() {
-            asked.push((verb.as_str().to_string(), scope.to_string()));
+            asked.push((
+                verb.as_str().to_string(),
+                scope.to_string(),
+                operation_digest.map(str::to_string),
+            ));
         }
     }
 }
@@ -668,13 +686,23 @@ impl crate::caps::ApprovalGateway for FakeGateway {
         self.context
     }
 
-    fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
-        self.record(verb, scope);
+    fn consume(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<bool, String> {
+        self.record(verb, scope, operation_digest);
         self.consume.lock().unwrap().clone()
     }
 
-    fn request(&self, verb: Verb, scope: &Scope) -> Result<crate::caps::PendingApproval, String> {
-        self.record(verb, scope);
+    fn request(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<crate::caps::PendingApproval, String> {
+        self.record(verb, scope, operation_digest);
         self.request.lock().unwrap().clone()
     }
 }
@@ -712,9 +740,38 @@ fn a_worker_gate_reaches_consent_through_its_gateway_not_the_store() {
     let asked = gateway.asked.lock().unwrap().clone();
     assert!(asked.contains(&(
         "fs.delete".to_string(),
-        Scope::path("/home/jay/x").to_string()
+        Scope::path("/home/jay/x").to_string(),
+        None,
     )));
     assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[test]
+fn a_worker_gate_preserves_the_validated_operation_digest() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-gw-digest", caps);
+    let _g = EnvGuard::new(&reg, Some("s-gw-digest"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Ok(false),
+        Ok(crate::caps::PendingApproval {
+            request_id: Some("ap-test".to_string()),
+        }),
+    );
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+    let digest = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+
+    require_for_operation(
+        Verb::PROC_SPAWN,
+        Scope::self_ref("children"),
+        &digest,
+    )
+    .expect_err("the capability is not granted");
+
+    assert!(gateway.asked.lock().unwrap().iter().all(
+        |(_, _, operation_digest)| operation_digest.as_deref() == Some(digest.as_str())
+    ));
 }
 
 #[test]

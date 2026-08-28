@@ -162,6 +162,7 @@ fn approval_reasons_are_journalled_as_metadata() {
             expires_at: 10,
             generation: 0,
         }),
+        operation_digest: Some(crate::crypto::sha256_hex(b"validated invocation")),
         requester: Some("uid:1000".to_string()),
     };
     let record = approval_request_record(&request);
@@ -176,6 +177,10 @@ fn approval_reasons_are_journalled_as_metadata() {
     assert_eq!(record["worker_pid"], json!(42));
     assert_eq!(record["request_expires_at"], json!(10));
     assert_eq!(record["request_generation"], json!(0));
+    assert_eq!(
+        record["operation_digest"],
+        json!(request.operation_digest)
+    );
     assert_eq!(record["reason"]["bytes"], json!(request.reason.len()));
 }
 

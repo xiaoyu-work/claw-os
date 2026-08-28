@@ -205,38 +205,29 @@ fn validate_process_identity(
                 ));
             }
             AncestryResult::Unsupported if strict => {
-                return Err(
-                    "pid-ancestry checking is not implemented on this platform"
-                        .to_string(),
-                );
+                return Err("pid-ancestry checking is not implemented on this platform".to_string());
             }
             AncestryResult::Unsupported => {}
         }
     }
 
     match nearest_app_session(registry, caller_pid) {
-        Ok(Some(nearest)) if nearest.session_id != session.session_id => {
-            Err(format!(
-                "process {caller_pid} is bound to nearer App session `{}` ({}) \
+        Ok(Some(nearest)) if nearest.session_id != session.session_id => Err(format!(
+            "process {caller_pid} is bound to nearer App session `{}` ({}) \
                  and cannot select ancestor session `{}`",
-                nearest.session_id,
-                nearest.app_id.as_deref().unwrap_or("unknown"),
-                session.session_id
-            ))
-        }
+            nearest.session_id,
+            nearest.app_id.as_deref().unwrap_or("unknown"),
+            session.session_id
+        )),
         Ok(_) => Ok(()),
-        Err(()) if strict => Err(
-            "could not determine the nearest App identity in the process tree"
-                .to_string(),
-        ),
+        Err(()) if strict => {
+            Err("could not determine the nearest App identity in the process tree".to_string())
+        }
         Err(()) => Ok(()),
     }
 }
 
-fn nearest_app_session(
-    registry: &Registry,
-    caller_pid: u32,
-) -> Result<Option<&SessionRow>, ()> {
+fn nearest_app_session(registry: &Registry, caller_pid: u32) -> Result<Option<&SessionRow>, ()> {
     if !registry
         .sessions
         .iter()
@@ -295,6 +286,24 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 /// and covers allows and denials alike; the process being checked has
 /// no switch that suppresses either class.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
+    require_with_operation(verb, scope, None)
+}
+
+/// Check one capability while binding any resulting consent to the exact
+/// validated operation represented by `operation_digest`.
+pub(crate) fn require_for_operation(
+    verb: Verb,
+    scope: Scope,
+    operation_digest: &str,
+) -> Result<(), Denial> {
+    require_with_operation(verb, scope, Some(operation_digest))
+}
+
+fn require_with_operation(
+    verb: Verb,
+    scope: Scope,
+    operation_digest: Option<&str>,
+) -> Result<(), Denial> {
     let scope = scope.canonicalized();
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
@@ -305,9 +314,16 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
         mode,
         session_id.as_deref(),
         consent_context,
+        operation_digest,
     );
     if let Err(denial) = &mut result {
-        attach_approval_request(denial, mode, session_id.as_deref(), consent_context);
+        attach_approval_request(
+            denial,
+            mode,
+            session_id.as_deref(),
+            consent_context,
+            operation_digest,
+        );
     }
     crate::audit::log_cap_decision(build_cap_audit_record(
         verb,
@@ -315,6 +331,7 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
         mode,
         session_id.as_deref(),
         &result,
+        operation_digest,
     ));
     result
 }
@@ -341,6 +358,7 @@ fn attach_approval_request(
     mode: Mode,
     session_id: Option<&str>,
     context: ConsentContext,
+    operation_digest: Option<&str>,
 ) {
     if mode != Mode::Strict
         || matches!(
@@ -391,9 +409,10 @@ fn attach_approval_request(
     // An `agentd` worker cannot open the root-owned consent store and
     // has no broker route, so it files through its job channel instead.
     // The broker supplies session and owner from the verified grant;
-    // nothing about the request travels except the exact verb and scope.
+    // only the exact verb, scope, and optional validated operation
+    // digest travel from the worker.
     if let Some(gateway) = super::approval_gateway::installed() {
-        match gateway.request(denial.verb, &denial.requested_scope) {
+        match gateway.request(denial.verb, &denial.requested_scope, operation_digest) {
             Ok(pending) => {
                 denial.approval = Some(Box::new(ApprovalInfo {
                     status: ApprovalStatus::Pending,
@@ -423,10 +442,16 @@ fn attach_approval_request(
     }
 
     let cap = denial.requested_cap();
-    let existing = crate::approvals::find_pending_exact(session_id, &cap, owner_uid, Some(context));
+    let existing = crate::approvals::find_pending_exact_for_operation(
+        session_id,
+        &cap,
+        owner_uid,
+        Some(context),
+        operation_digest,
+    );
     let request_id = match existing {
         Some(request) => Ok(request.id),
-        None => crate::approvals::submit_owned_with_context(
+        None => crate::approvals::submit_owned_with_context_for_operation(
             denial.verb,
             denial.requested_scope.clone(),
             session_id,
@@ -434,6 +459,7 @@ fn attach_approval_request(
             Some("system-agent".to_string()),
             owner_uid,
             Some(context),
+            operation_digest,
         ),
     };
     match request_id {
@@ -504,6 +530,7 @@ fn require_impl(
     mode: Mode,
     session_id: Option<&str>,
     consent_context: ConsentContext,
+    operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
     let session_id = match session_id {
         Some(s) if !s.is_empty() => s,
@@ -518,9 +545,8 @@ fn require_impl(
 
     if let Some(session) = crate::proc::current_trusted_session_for_caps() {
         if session.session_id != session_id {
-            return Err(Denial::no_session(verb, scope).with_hint(
-                "trusted task session does not match the selected session id",
-            ));
+            return Err(Denial::no_session(verb, scope)
+                .with_hint("trusted task session does not match the selected session id"));
         }
         return authorize_session_caps(
             session_id,
@@ -531,6 +557,7 @@ fn require_impl(
             session.transient_caps.as_ref(),
             session.app_id.is_some(),
             consent_context,
+            operation_digest,
         );
     }
 
@@ -552,15 +579,11 @@ fn require_impl(
     };
 
     let caller_pid = std::process::id();
-    if let Err(error) = validate_process_identity(
-        &registry,
-        session,
-        caller_pid,
-        matches!(mode, Mode::Strict),
-    ) {
+    if let Err(error) =
+        validate_process_identity(&registry, session, caller_pid, matches!(mode, Mode::Strict))
+    {
         return Err(
-            Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid)
-                .with_hint(error),
+            Denial::pid_ancestry_mismatch(verb, scope, caller_pid, session.pid).with_hint(error),
         );
     }
 
@@ -573,6 +596,7 @@ fn require_impl(
         session.transient_caps.as_ref(),
         session.app_id.is_some(),
         consent_context,
+        operation_digest,
     )
 }
 
@@ -585,6 +609,7 @@ fn authorize_session_caps(
     transient_caps: Option<&CapSet>,
     is_app: bool,
     consent_context: ConsentContext,
+    operation_digest: Option<&str>,
 ) -> Result<(), Denial> {
     let requested = Cap::new(verb, scope.clone());
     let mut caps = match caps {
@@ -604,7 +629,8 @@ fn authorize_session_caps(
     }
 
     if caps.covers(&requested)
-        || (!is_app && approved_grant_covers(session_id, verb, &scope, consent_context))
+        || (!is_app
+            && approved_grant_covers(session_id, verb, &scope, consent_context, operation_digest))
     {
         Ok(())
     } else if caps.verbs().contains(&verb) {
@@ -620,6 +646,7 @@ fn approved_grant_covers(
     verb: Verb,
     scope: &Scope,
     context: ConsentContext,
+    operation_digest: Option<&str>,
 ) -> bool {
     // Same one-shot semantics either way: the grant is spent at the
     // gate, never written back into a session's capability set. A
@@ -627,7 +654,7 @@ fn approved_grant_covers(
     // root-owned; the broker still matches on its own view of the
     // session and owner, taken from the job grant.
     if let Some(gateway) = super::approval_gateway::installed() {
-        return match gateway.consume(verb, scope) {
+        return match gateway.consume(verb, scope, operation_digest) {
             Ok(granted) => granted,
             Err(error) => {
                 tracing::warn!(
@@ -640,12 +667,13 @@ fn approved_grant_covers(
             }
         };
     }
-    match crate::approvals::redeem_matching_grant_for_owner(
+    match crate::approvals::redeem_matching_grant_for_owner_operation(
         session_id,
         verb,
         scope,
         crate::paths::current_owner_uid_override().or_else(current_euid),
         Some(context),
+        operation_digest,
     ) {
         Ok(Some(_grant)) => true,
         Ok(None) => false,
@@ -671,6 +699,7 @@ fn build_cap_audit_record(
     mode: Mode,
     session_id: Option<&str>,
     result: &Result<(), Denial>,
+    operation_digest: Option<&str>,
 ) -> serde_json::Value {
     let agent = std::env::var("COS_AGENT_LABEL")
         .ok()
@@ -713,6 +742,7 @@ fn build_cap_audit_record(
         "approval":        approval,
         "mode":            mode.as_str(),
         "owner_uid":       crate::paths::current_owner_uid_override(),
+        "operation_digest": operation_digest,
     })
 }
 
@@ -723,6 +753,14 @@ fn build_cap_audit_record(
 /// downstream churn.
 pub fn require_or_json(verb: Verb, scope: Scope) -> Result<(), serde_json::Value> {
     require(verb, scope).map_err(|d| d.to_json())
+}
+
+pub(crate) fn require_or_json_for_operation(
+    verb: Verb,
+    scope: Scope,
+    operation_digest: &str,
+) -> Result<(), serde_json::Value> {
+    require_for_operation(verb, scope, operation_digest).map_err(|d| d.to_json())
 }
 
 // ---------------------------------------------------------------------------

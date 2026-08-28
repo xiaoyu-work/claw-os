@@ -164,36 +164,42 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         .enable_all()
         .build()
         .unwrap();
-    let read = runtime.block_on(dispatch_tool(
-        &registry,
-        &ToolCall {
-            id: "read".to_string(),
-            name: "cos_mixed".to_string(),
-            input: serde_json::json!({"command": "read", "args": [read_path.clone()]}),
-        },
-        Some("mixed-session"),
-    ));
-    assert!(!read.is_error, "read command should use its held cap: {read:?}");
+    let invocation =
+        crate::approvals::LocalApprovalInvocation::new("test:mixed-proxy:turn:1").unwrap();
+    runtime.block_on(invocation.scope(async {
+        let read = dispatch_tool(
+            &registry,
+            &ToolCall {
+                id: "read".to_string(),
+                name: "cos_mixed".to_string(),
+                input: serde_json::json!({"command": "read", "args": [read_path.clone()]}),
+            },
+            Some("mixed-session"),
+        )
+        .await;
+        assert!(!read.is_error, "read command should use its held cap: {read:?}");
 
-    let write = runtime.block_on(dispatch_tool(
-        &registry,
-        &ToolCall {
-            id: "write".to_string(),
-            name: "cos_mixed".to_string(),
-            input: serde_json::json!({"command": "write", "args": [write_path.clone()]}),
-        },
-        Some("mixed-session"),
-    ));
-    assert!(write.is_error);
-    assert!(
-        write.content.contains("\"verb\":\"fs.delete\""),
-        "write must reach the exact capability gate, not the coarse tool-name prompt: {}",
-        write.content
-    );
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].scope, crate::caps::Scope::path(write_path));
-    assert_eq!(pending[0].risk, Some(crate::caps::Risk::High));
+        let write = dispatch_tool(
+            &registry,
+            &ToolCall {
+                id: "write".to_string(),
+                name: "cos_mixed".to_string(),
+                input: serde_json::json!({"command": "write", "args": [write_path.clone()]}),
+            },
+            Some("mixed-session"),
+        )
+        .await;
+        assert!(write.is_error);
+        assert!(
+            write.content.contains("\"verb\":\"fs.delete\""),
+            "write must reach the exact capability gate, not the coarse tool-name prompt: {}",
+            write.content
+        );
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].scope, crate::caps::Scope::path(write_path));
+        assert_eq!(pending[0].risk, Some(crate::caps::Risk::High));
+    }));
 }
 
 /// pre_tool returning Deny short-circuits the dispatch and feeds

@@ -133,7 +133,7 @@ fn proxy_approval_boundary_tracks_real_capability_enforcement() {
     register_all(&mut r);
     assert_eq!(
         r.get("cos_proc").unwrap().approval_boundary(),
-        crate::agent::runtime::approval::ApprovalBoundary::Capability
+        crate::agent::runtime::approval::ApprovalBoundary::ToolName
     );
     assert_eq!(
         r.get("cos_credential").unwrap().approval_boundary(),

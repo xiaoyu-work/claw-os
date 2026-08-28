@@ -48,8 +48,9 @@ Agent approval redemption uses the same store without exposing another broker
 route. After a durable exact consent record is spent, `clawd` issues an
 `AgentWorker`-audience grant with `Issuer::Approval`, bound to the verified
 owner, session, task, worker pid/start time, capability, remaining approval
-expiry, one use, and the approval's revocation generation. The broker exercises
-that grant before telling the worker its final `caps::require` check succeeded.
+expiry, one use, the approval's revocation generation, and any validated
+operation digest. The broker exercises that grant before telling the worker its
+final `caps::require` check succeeded.
 
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,

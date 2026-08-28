@@ -78,11 +78,13 @@ fn scope() -> Scope {
 }
 
 #[test]
-fn an_ask_names_only_the_denied_verb_and_scope() {
+fn an_ask_names_only_the_denied_capability_and_operation_digest() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
+    let digest = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+    let digest_for_worker = digest.clone();
     std::thread::spawn(move || {
-        let _ = gateway.request(Verb::FS_READ, &scope());
+        let _ = gateway.request(Verb::FS_READ, &scope(), Some(&digest_for_worker));
     });
     let frame = loop {
         if let Ok(frame) = rx.try_recv() {
@@ -101,6 +103,7 @@ fn an_ask_names_only_the_denied_verb_and_scope() {
     assert_eq!(task_id, "task-a");
     assert_eq!(ask.verb(), Verb::FS_READ.as_str());
     assert_eq!(ask.scope(), &scope());
+    assert_eq!(ask.operation_digest(), Some(digest.as_str()));
     // Nothing about identity travels: the frame has no session, owner,
     // worker or capability field at all.
     let encoded = serde_json::to_string(&ask).expect("encode");
@@ -117,7 +120,7 @@ fn an_ask_names_only_the_denied_verb_and_scope() {
 fn a_refusal_keeps_the_gate_closed_rather_than_opening_it() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
-    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope()));
+    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope(), None));
     let correlation_id = loop {
         if let Ok(WorkerFrame::Approval { correlation_id, .. }) = rx.try_recv() {
             break correlation_id;
@@ -141,7 +144,7 @@ fn a_refusal_keeps_the_gate_closed_rather_than_opening_it() {
 fn a_pending_request_does_not_grant_anything() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
-    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope()));
+    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope(), None));
     let correlation_id = loop {
         if let Ok(WorkerFrame::Approval { correlation_id, .. }) = rx.try_recv() {
             break correlation_id;
@@ -160,7 +163,7 @@ fn mediation_is_bounded_per_task() {
         .asks_used
         .store(protocol::MAX_APPROVAL_ASKS, Ordering::SeqCst);
     let error = gateway
-        .consume(Verb::FS_READ, &scope())
+        .consume(Verb::FS_READ, &scope(), None)
         .expect_err("the budget must be enforced");
     assert!(error.contains("budget"), "{error}");
 }
@@ -170,7 +173,7 @@ fn cancellation_stops_mediation_immediately() {
     let (gateway, _rx) = gateway();
     gateway.state.cancelled.store(true, Ordering::SeqCst);
     let error = gateway
-        .request(Verb::FS_READ, &scope())
+        .request(Verb::FS_READ, &scope(), None)
         .expect_err("a cancelled task must not keep asking");
     assert!(error.contains("cancelled"), "{error}");
 }
@@ -179,7 +182,7 @@ fn cancellation_stops_mediation_immediately() {
 fn losing_the_channel_refuses_every_waiter() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
-    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope()));
+    let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope(), None));
     loop {
         if rx.try_recv().is_ok() {
             break;

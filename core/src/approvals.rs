@@ -86,6 +86,10 @@ pub struct Request {
     /// Required whenever `context` is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ApprovalExecutionBinding>,
+    /// SHA-256 of the validated operation inputs when the capability alone is
+    /// not specific enough to identify what will execute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_digest: Option<String>,
     /// Process that asked. Helps the user distinguish "the file
     /// manager I just opened" from "some background cron job."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -151,7 +155,8 @@ pub struct GrantBinding {
     pub authorization: Option<ApprovalAuthorization>,
 }
 
-/// Exact capability and session context an approved record may redeem.
+/// Exact capability, operation, and session context an approved record may
+/// redeem.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ApprovalAuthorization {
     pub owner_uid: Option<u32>,
@@ -162,6 +167,8 @@ pub struct ApprovalAuthorization {
     pub context: Option<ConsentContext>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ApprovalExecutionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_digest: Option<String>,
 }
 
 /// Stable identity of one running Agent execution.
@@ -236,7 +243,12 @@ tokio::task_local! {
 #[derive(Clone)]
 struct LocalExecutionContext {
     identity: ApprovalExecutionIdentity,
-    touched: Arc<AtomicBool>,
+    state: Arc<LocalExecutionState>,
+}
+
+struct LocalExecutionState {
+    touched: AtomicBool,
+    ended: AtomicBool,
 }
 
 /// One in-process Agent invocation.
@@ -268,7 +280,10 @@ impl LocalApprovalInvocation {
                     worker_start_time_ticks,
                     lease_nonce: uuid::Uuid::new_v4().to_string(),
                 },
-                touched: Arc::new(AtomicBool::new(false)),
+                state: Arc::new(LocalExecutionState {
+                    touched: AtomicBool::new(false),
+                    ended: AtomicBool::new(false),
+                }),
             },
         })
     }
@@ -306,7 +321,8 @@ impl LocalApprovalInvocation {
 
 impl Drop for LocalApprovalInvocation {
     fn drop(&mut self) {
-        if !self.context.touched.swap(false, Ordering::SeqCst) {
+        self.context.state.ended.store(true, Ordering::SeqCst);
+        if !self.context.state.touched.load(Ordering::SeqCst) {
             return;
         }
         if let Err(error) =
@@ -421,14 +437,23 @@ impl ApprovalExecutionBinding {
 }
 
 fn local_execution_identity() -> Result<ApprovalExecutionIdentity, String> {
-    LOCAL_EXECUTION
-        .try_with(|context| {
-            context.touched.store(true, Ordering::SeqCst);
-            context.identity.clone()
-        })
-        .map_err(|_| {
-            "Agent approval requires an active per-invocation execution identity".to_string()
-        })
+    match LOCAL_EXECUTION.try_with(|context| {
+        if context.state.ended.load(Ordering::SeqCst) {
+            return Err("Agent approval invocation has ended".to_string());
+        }
+        context.state.touched.store(true, Ordering::SeqCst);
+        if context.state.ended.load(Ordering::SeqCst) {
+            let _ =
+                invalidate_local_execution(&context.identity, "local Agent invocation ended");
+            return Err("Agent approval invocation has ended".to_string());
+        }
+        Ok(context.identity.clone())
+    }) {
+        Ok(identity) => identity,
+        Err(_) => {
+            Err("Agent approval requires an active per-invocation execution identity".to_string())
+        }
+    }
 }
 
 fn local_execution_binding(
@@ -491,6 +516,7 @@ impl GrantBinding {
             || authorization.capability != expected.capability
             || authorization.risk != expected.risk
             || authorization.context != expected.context
+            || authorization.operation_digest != expected.operation_digest
         {
             return false;
         }
@@ -817,6 +843,21 @@ pub fn capability_risk(verb: Verb, scope: &Scope) -> Result<Risk, String> {
     canonical_capability(verb, scope.clone()).map(|(_, risk)| risk)
 }
 
+fn canonical_operation_digest(digest: Option<&str>) -> Result<Option<String>, String> {
+    match digest {
+        None => Ok(None),
+        Some(value)
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            Ok(Some(value.to_string()))
+        }
+        Some(_) => Err("approval operation digest must be lowercase SHA-256".to_string()),
+    }
+}
+
 fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization, String> {
     let verb = Verb::parse(&request.verb)
         .ok_or_else(|| format!("unknown capability verb: {}", request.verb))?;
@@ -858,6 +899,7 @@ fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization,
         risk,
         context: request.context,
         execution: request.execution.clone(),
+        operation_digest: canonical_operation_digest(request.operation_digest.as_deref())?,
     })
 }
 
@@ -919,6 +961,22 @@ pub fn submit_owned_with_context(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
 ) -> Result<String, String> {
+    submit_owned_with_context_for_operation(
+        verb, scope, session, reason, requester, owner_uid, context, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_owned_with_context_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<String, String> {
     let session = session.into();
     if context == Some(ConsentContext::Unattended) {
         return Err("unattended execution cannot create an approval request".to_string());
@@ -927,8 +985,16 @@ pub fn submit_owned_with_context(
         Some(_) => Some(local_execution_binding(owner_uid, &session)?),
         None => None,
     };
-    submit_owned_with_execution(
-        verb, scope, session, reason, requester, owner_uid, context, execution,
+    submit_owned_with_execution_for_operation(
+        verb,
+        scope,
+        session,
+        reason,
+        requester,
+        owner_uid,
+        context,
+        execution,
+        operation_digest,
     )
 }
 
@@ -946,6 +1012,37 @@ pub fn submit_worker_request(
     lease_nonce: impl Into<String>,
     expires_at: u64,
 ) -> Result<String, String> {
+    submit_worker_request_for_operation(
+        verb,
+        scope,
+        session,
+        reason,
+        requester,
+        owner_uid,
+        task_id,
+        worker_pid,
+        worker_start_time_ticks,
+        lease_nonce,
+        expires_at,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_worker_request_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: u32,
+    task_id: impl Into<String>,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_nonce: impl Into<String>,
+    expires_at: u64,
+    operation_digest: Option<&str>,
+) -> Result<String, String> {
     let session = session.into();
     let execution = ApprovalExecutionBinding::for_worker(
         task_id,
@@ -956,7 +1053,7 @@ pub fn submit_worker_request(
         Some(owner_uid),
         &session,
     )?;
-    submit_owned_with_execution(
+    submit_owned_with_execution_for_operation(
         verb,
         scope,
         session,
@@ -965,6 +1062,7 @@ pub fn submit_worker_request(
         Some(owner_uid),
         Some(ConsentContext::Attended),
         Some(execution),
+        operation_digest,
     )
 }
 
@@ -978,6 +1076,23 @@ pub fn submit_owned_with_execution(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
     execution: Option<ApprovalExecutionBinding>,
+) -> Result<String, String> {
+    submit_owned_with_execution_for_operation(
+        verb, scope, session, reason, requester, owner_uid, context, execution, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_owned_with_execution_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<ApprovalExecutionBinding>,
+    operation_digest: Option<&str>,
 ) -> Result<String, String> {
     let session = session.into();
     if context == Some(ConsentContext::Unattended) {
@@ -994,6 +1109,7 @@ pub fn submit_owned_with_execution(
         }
     }
     let (capability, risk) = canonical_capability(verb, scope)?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let req = Request {
         id: format!("ap-{}", short_id()),
@@ -1006,6 +1122,7 @@ pub fn submit_owned_with_execution(
         risk: Some(risk),
         context,
         execution,
+        operation_digest,
         requester,
     };
     let path = pending_dir().join(format!("{}.json", req.id));
@@ -1448,17 +1565,36 @@ pub fn redeem_matching_grant_for_owner(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
 ) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_owner_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        context,
+        None,
+    )
+}
+
+pub(crate) fn redeem_matching_grant_for_owner_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
     let execution = match context {
         Some(_) => Some(local_execution_identity()?),
         None => None,
     };
-    redeem_matching_grant_for_execution(
+    redeem_matching_grant_for_execution_operation(
         session,
         verb,
         requested_scope,
         owner_uid,
         context,
         execution.as_ref(),
+        operation_digest,
     )
 }
 
@@ -1470,7 +1606,29 @@ pub fn redeem_matching_grant_for_execution(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
 ) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_execution_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redeem_matching_grant_for_execution_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
     let (capability, risk) = canonical_capability(verb, requested_scope.clone())?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     let expected = ApprovalAuthorization {
         owner_uid,
         session: session.to_string(),
@@ -1478,6 +1636,7 @@ pub fn redeem_matching_grant_for_execution(
         risk,
         context,
         execution: None,
+        operation_digest,
     };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     // The scan, the budget decrement and the retirement all happen
@@ -1503,13 +1662,32 @@ pub fn redeem_matching_worker_grant_for_owner(
     owner_uid: u32,
     execution: &ApprovalExecutionIdentity,
 ) -> Result<Option<ConsumedGrant>, String> {
-    redeem_matching_grant_for_execution(
+    redeem_matching_worker_grant_for_owner_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        execution,
+        None,
+    )
+}
+
+pub(crate) fn redeem_matching_worker_grant_for_owner_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_execution_operation(
         session,
         verb,
         requested_scope,
         Some(owner_uid),
         Some(ConsentContext::Attended),
         Some(execution),
+        operation_digest,
     )
 }
 
@@ -1566,11 +1744,28 @@ pub fn has_approved_grant_for_context(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
 ) -> Result<bool, String> {
+    has_approved_grant_for_context_operation(session, cap, owner_uid, context, None)
+}
+
+pub(crate) fn has_approved_grant_for_context_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<bool, String> {
     let execution = match context {
         Some(_) => Some(local_execution_identity()?),
         None => None,
     };
-    has_approved_grant_for_execution(session, cap, owner_uid, context, execution.as_ref())
+    has_approved_grant_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution.as_ref(),
+        operation_digest,
+    )
 }
 
 pub fn has_approved_grant_for_execution(
@@ -1580,7 +1775,27 @@ pub fn has_approved_grant_for_execution(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
 ) -> Result<bool, String> {
+    has_approved_grant_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn has_approved_grant_for_execution_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Result<bool, String> {
     let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     let expected = ApprovalAuthorization {
         owner_uid,
         session: session.to_string(),
@@ -1588,6 +1803,7 @@ pub fn has_approved_grant_for_execution(
         risk,
         context,
         execution: None,
+        operation_digest,
     };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     Ok(list_dir(&approved_dir())
@@ -1605,11 +1821,28 @@ pub fn find_pending_exact(
     owner_uid: Option<u32>,
     context: Option<ConsentContext>,
 ) -> Option<Request> {
+    find_pending_exact_for_operation(session, cap, owner_uid, context, None)
+}
+
+pub(crate) fn find_pending_exact_for_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
     let execution = match context {
         Some(_) => Some(local_execution_identity().ok()?),
         None => None,
     };
-    find_pending_exact_for_execution(session, cap, owner_uid, context, execution.as_ref())
+    find_pending_exact_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution.as_ref(),
+        operation_digest,
+    )
 }
 
 pub fn find_pending_exact_for_execution(
@@ -1619,7 +1852,27 @@ pub fn find_pending_exact_for_execution(
     context: Option<ConsentContext>,
     execution: Option<&ApprovalExecutionIdentity>,
 ) -> Option<Request> {
+    find_pending_exact_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_pending_exact_for_execution_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
     let (cap, risk) = canonical_capability(cap.verb, cap.scope.clone()).ok()?;
+    let operation_digest = canonical_operation_digest(operation_digest).ok()?;
     list_pending_for_owner(owner_uid)
         .into_iter()
         .find(|request| {
@@ -1629,6 +1882,7 @@ pub fn find_pending_exact_for_execution(
                 && request.scope == cap.scope
                 && request.context == context
                 && request.risk == Some(risk)
+                && request.operation_digest == operation_digest
                 && execution_matches(request.execution.as_ref(), execution, owner_uid, session)
         })
 }
@@ -1639,12 +1893,23 @@ pub fn find_pending_worker_request(
     owner_uid: u32,
     execution: &ApprovalExecutionIdentity,
 ) -> Option<Request> {
-    find_pending_exact_for_execution(
+    find_pending_worker_request_for_operation(session, cap, owner_uid, execution, None)
+}
+
+pub(crate) fn find_pending_worker_request_for_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
+    find_pending_exact_for_execution_operation(
         session,
         cap,
         Some(owner_uid),
         Some(ConsentContext::Attended),
         Some(execution),
+        operation_digest,
     )
 }
 
@@ -1754,6 +2019,7 @@ pub fn consume_grant_set_once_for_owner(
                 risk,
                 context: None,
                 execution: None,
+                operation_digest: None,
             };
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
                 !claimed.contains(path) && load_matching_grant(path, &expected, None).is_some()
@@ -1836,8 +2102,14 @@ fn load_matching_grant(
     if resolved.request.risk != Some(expected.risk) {
         return None;
     }
+    if resolved.request.operation_digest != expected.operation_digest {
+        return None;
+    }
     let grant = resolved.decision.grant.as_ref()?;
-    if grant.authorization.as_ref()?.execution != resolved.request.execution {
+    let authorization = grant.authorization.as_ref()?;
+    if authorization.execution != resolved.request.execution
+        || authorization.operation_digest != resolved.request.operation_digest
+    {
         return None;
     }
     if !grant.is_live(now_secs(), expected, expected_execution) {

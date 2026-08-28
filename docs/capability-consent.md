@@ -8,6 +8,8 @@ may run.
 
 1. The tool validates its structured arguments.
 2. The owning primitive derives the exact capability verb and canonical scope.
+   Operations whose arguments carry additional authority also derive a
+   SHA-256 invocation digest after validation and canonicalization.
 3. `caps::require` checks the session's existing capability set.
 4. If the capability is missing:
    - an **attended** system-Agent session may file one request for that exact
@@ -35,7 +37,13 @@ nonce. There is no process-wide fallback identity.
 For example, `cos_proc status <session>` derives low-risk
 `proc.observe:self:<session>`, while `cos_proc kill <session>` derives
 high-risk `proc.signal:self:<session>`. They share one proxy tool name but not
-one consent decision.
+one consent decision. `cos_proc spawn` remains on the legacy tool-name gate
+until its whole command surface is mapped. Independently of that compatibility
+gate, spawn resolves the executable to a canonical path, requires both
+`proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds both
+approval records to a digest of the validated executable, argv, working
+directory, and child-security options. Changing `/usr/bin/printf` to `/bin/sh`
+or changing any argument cannot redeem the prior approval.
 
 Model output cannot approve a request. The worker channel has no decision
 route, and a request id is metadata rather than authority.
@@ -44,6 +52,9 @@ route, and a request id is metadata rather than authority.
 
 - Capability and scope matching is exact; scope containment is not used to
   substitute a broader approval for the validated operation.
+- When an operation digest is present, request deduplication, decision,
+  redemption, broker audit, and final authority minting all require the same
+  digest.
 - A decision or redemption fails if the originating process is gone, the task
   or lease identity differs, the request deadline passed, or the revocation
   generation changed. A replacement worker is never silently rebound.
@@ -77,8 +88,10 @@ tool name is too coarse and no longer intercepts execution.
 - Remove capability-aware core proxy names from `dangerous_tools`; exact
   capability risk and scope now drive their consent requests.
 - Keep mixed or incomplete proxies on `dangerous_tools` until every sensitive
-  branch has an exact mapping. `cos_sysinfo` remains legacy-filtered, and its
-  `env --include-secrets` branch separately requires
+  branch has an exact mapping. `cos_proc` remains legacy-filtered while spawn
+  additionally enforces exact executable and invocation-bound capabilities.
+  `cos_sysinfo` also remains legacy-filtered, and its `env --include-secrets`
+  branch separately requires
   `secret.read:name:environment`; a low-risk `sys.observe` grant is
   insufficient.
 

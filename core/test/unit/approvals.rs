@@ -119,6 +119,56 @@ fn approved_scope_cannot_be_substituted_with_a_covered_child() {
 }
 
 #[test]
+fn operation_bound_approval_rejects_executable_and_argument_substitution() {
+    let _tmp = isolated_env();
+    LocalApprovalInvocation::new("web:proc-binding:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            let harmless = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+            let changed_args = crate::crypto::sha256_hex(b"/usr/bin/printf\0%s\0secret");
+            let changed_executable = crate::crypto::sha256_hex(b"/bin/sh\0-c\0id");
+            let id = submit_owned_with_context_for_operation(
+                Verb::PROC_SPAWN,
+                Scope::self_ref("children"),
+                "proc-binding-session",
+                "spawn",
+                None,
+                Some(1000),
+                Some(crate::caps::ConsentContext::Attended),
+                Some(&harmless),
+            )
+            .unwrap();
+            approve_for_owner(&id, GrantDuration::Session, None, None, Some(1000)).unwrap();
+
+            for substituted in [&changed_args, &changed_executable] {
+                assert!(
+                    redeem_matching_grant_for_owner_operation(
+                        "proc-binding-session",
+                        Verb::PROC_SPAWN,
+                        &Scope::self_ref("children"),
+                        Some(1000),
+                        Some(crate::caps::ConsentContext::Attended),
+                        Some(substituted),
+                    )
+                    .unwrap()
+                    .is_none(),
+                    "a different executable or argv must not redeem the approval"
+                );
+            }
+            assert!(redeem_matching_grant_for_owner_operation(
+                "proc-binding-session",
+                Verb::PROC_SPAWN,
+                &Scope::self_ref("children"),
+                Some(1000),
+                Some(crate::caps::ConsentContext::Attended),
+                Some(&harmless),
+            )
+            .unwrap()
+            .is_some());
+        });
+}
+
+#[test]
 fn approval_persists_and_matches_the_canonical_scope() {
     let _tmp = isolated_env();
     let id = submit(
@@ -638,6 +688,28 @@ fn attended_agent_request_without_invocation_identity_fails_closed() {
     )
     .unwrap_err();
     assert!(error.contains("per-invocation"), "{error}");
+    assert!(list_pending().is_empty());
+}
+
+#[test]
+fn work_continuing_after_invocation_end_cannot_file_an_approval() {
+    let _tmp = isolated_env();
+    let invocation = LocalApprovalInvocation::new("web:disconnected:turn:late").unwrap();
+    let captured = invocation.sync_scope(|| capture_local_execution()).unwrap();
+
+    let error = with_captured_local_execution(Some(captured), || {
+        submit_owned_with_context(
+            Verb::FS_DELETE,
+            Scope::path("/tmp/late-worker"),
+            "late-worker-session",
+            "delete",
+            None,
+            Some(1000),
+            Some(crate::caps::ConsentContext::Attended),
+        )
+    })
+    .unwrap_err();
+    assert!(error.contains("ended"), "{error}");
     assert!(list_pending().is_empty());
 }
 

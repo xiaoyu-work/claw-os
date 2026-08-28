@@ -57,6 +57,7 @@ fn permission_mediation_is_the_only_consent_surface_and_carries_no_identity() {
     let ask = ApprovalAsk::Request {
         verb: "fs.read".to_string(),
         scope: crate::caps::Scope::path("/home/user/notes.txt"),
+        operation_digest: None,
     };
     let encoded = serde_json::to_string(&ask).expect("encode");
     for forbidden in ["session", "owner", "uid", "caps", "role", "duration"] {

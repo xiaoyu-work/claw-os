@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -54,8 +54,8 @@ pub const ROUTE_HEARTBEAT: &str = "heartbeat";
 pub const ROUTE_RESULT: &str = "result";
 /// Permission mediation. The only way a worker can reach the consent
 /// system: it may name the exact verb and canonical scope it was denied
-/// and nothing else — never a session, an owner, a decision, or a
-/// capability set.
+/// plus an optional digest of validated operation inputs — never a
+/// session, an owner, a decision, raw arguments, or a capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
 
 /// The complete route surface a worker grant may carry. Nothing else
@@ -108,18 +108,28 @@ pub enum BrokerFrame {
     },
 }
 
-/// What a worker may say when a capability check fails: the exact verb
-/// it was denied and the canonical scope it asked for. Session, owner,
-/// task and worker identity are never sent — the broker takes all four
-/// from the verified grant.
+/// What a worker may say when a capability check fails: the exact verb,
+/// canonical scope, and optional digest of already-validated operation
+/// inputs. Session, owner, task and worker identity are never sent — the
+/// broker takes all four from the verified grant.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum ApprovalAsk {
     /// Spend an already-approved, exactly-matching grant. One-shot: the
     /// broker consumes it, so a replay finds nothing.
-    Consume { verb: String, scope: Scope },
+    Consume {
+        verb: String,
+        scope: Scope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_digest: Option<String>,
+    },
     /// File (or reuse) a pending request for this exact verb and scope.
-    Request { verb: String, scope: Scope },
+    Request {
+        verb: String,
+        scope: Scope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_digest: Option<String>,
+    },
 }
 
 impl ApprovalAsk {
@@ -132,6 +142,17 @@ impl ApprovalAsk {
     pub fn scope(&self) -> &Scope {
         match self {
             ApprovalAsk::Consume { scope, .. } | ApprovalAsk::Request { scope, .. } => scope,
+        }
+    }
+
+    pub fn operation_digest(&self) -> Option<&str> {
+        match self {
+            ApprovalAsk::Consume {
+                operation_digest, ..
+            }
+            | ApprovalAsk::Request {
+                operation_digest, ..
+            } => operation_digest.as_deref(),
         }
     }
 }

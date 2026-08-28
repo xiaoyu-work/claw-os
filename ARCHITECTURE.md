@@ -300,9 +300,13 @@ obtain a reusable capability. See
 Tool-name policy is not authority. `auto_deny_tools` remains a hard
 pre-dispatch block, while `dangerous_tools` is retained for tools whose
 complete command surface has not yet been mapped to exact capabilities.
-`cos_sysinfo`, for example, stays on that compatibility path and additionally
-requires `secret.read:name:environment` before honoring `env
---include-secrets`.
+`cos_proc` and `cos_sysinfo`, for example, stay on that compatibility path.
+Process spawn also canonicalizes its executable before consent, requires both
+`proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds approval
+matching across the worker protocol and authority redemption to a digest of
+the validated executable, argv, working directory, and child-security
+options. `cos_sysinfo` additionally requires
+`secret.read:name:environment` before honoring `env --include-secrets`.
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one

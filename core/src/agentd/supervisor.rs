@@ -732,12 +732,13 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
 
     match ask {
         ApprovalAsk::Consume { .. } => {
-            match crate::approvals::redeem_matching_worker_grant_for_owner(
+            match crate::approvals::redeem_matching_worker_grant_for_owner_operation(
                 session_id,
                 verb,
                 scope,
                 lease.owner_uid,
                 &execution,
+                ask.operation_digest(),
             ) {
                 Ok(Some(grant)) => {
                     let lease_remaining = lease.deadline.saturating_duration_since(Instant::now());
@@ -749,6 +750,7 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                         lease.worker_start_time_ticks,
                         &lease.approval_nonce,
                         lease_remaining,
+                        ask.operation_digest(),
                         &grant,
                     ) {
                         Ok(authority_grant) => {
@@ -758,6 +760,7 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                                 verb,
                                 scope,
                                 risk,
+                                ask.operation_digest(),
                                 "granted",
                                 Some(&grant),
                                 Some(&authority_ref),
@@ -796,11 +799,12 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                     "unattended tasks cannot request interactive consent; delegate the exact capability when scheduling the task",
                 );
             }
-            let existing = crate::approvals::find_pending_worker_request(
+            let existing = crate::approvals::find_pending_worker_request_for_operation(
                 session_id,
                 &cap,
                 lease.owner_uid,
                 &execution,
+                ask.operation_digest(),
             );
             if let Some(request) = existing {
                 return ApprovalReply::Pending {
@@ -812,7 +816,7 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 .unwrap_or_else(|| verb.as_str().to_string());
             // Reason text is composed here from the catalog and the
             // canonical scope; no worker-authored string is persisted.
-            match crate::approvals::submit_worker_request(
+            match crate::approvals::submit_worker_request_for_operation(
                 verb,
                 scope.clone(),
                 session_id,
@@ -824,9 +828,19 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 lease.worker_start_time_ticks,
                 lease.approval_nonce.clone(),
                 lease.approval_expires_at,
+                ask.operation_digest(),
             ) {
                 Ok(id) => {
-                    audit_approval(lease, verb, scope, risk, "requested", None, None);
+                    audit_approval(
+                        lease,
+                        verb,
+                        scope,
+                        risk,
+                        ask.operation_digest(),
+                        "requested",
+                        None,
+                        None,
+                    );
                     ApprovalReply::Pending {
                         request_id: Some(id),
                     }
@@ -843,7 +857,16 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
 fn refuse(lease: &Lease, ask: &ApprovalAsk, message: &str) -> ApprovalReply {
     if let Some(verb) = crate::caps::Verb::parse(ask.verb()) {
         if let Ok(risk) = crate::approvals::capability_risk(verb, ask.scope()) {
-            audit_approval(lease, verb, ask.scope(), risk, "refused", None, None);
+            audit_approval(
+                lease,
+                verb,
+                ask.scope(),
+                risk,
+                ask.operation_digest(),
+                "refused",
+                None,
+                None,
+            );
         }
     }
     tracing::warn!(
@@ -862,6 +885,7 @@ fn audit_approval(
     verb: crate::caps::Verb,
     scope: &crate::caps::Scope,
     risk: crate::caps::Risk,
+    operation_digest: Option<&str>,
     action: &'static str,
     grant: Option<&crate::approvals::ConsumedGrant>,
     authority_grant: Option<&crate::clawd::authority::GrantRef>,
@@ -877,6 +901,7 @@ fn audit_approval(
         scope,
         risk,
         lease.consent_context,
+        operation_digest,
         action,
         grant.map(|grant| grant.reference.as_str()),
         grant.map(|grant| grant.generation),

@@ -592,6 +592,18 @@ async fn ask_inner(
     compressor: Option<Arc<dyn Compressor>>,
     initial_messages: Vec<Message>,
 ) -> Result<AskResult, AgentError> {
+    if crate::caps::approval_gateway::installed().is_some() {
+        return ask_inner_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            tools,
+            recorder,
+            compressor,
+            initial_messages,
+        )
+        .await;
+    }
     let task_id = local_approval_task_id(recorder.map(|(_, session)| session), None);
     let invocation =
         crate::approvals::LocalApprovalInvocation::new(task_id).map_err(AgentError::Internal)?;
@@ -983,6 +995,22 @@ async fn ask_inner_streaming(
     initial_messages: Vec<Message>,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
+    if crate::caps::approval_gateway::installed().is_some() {
+        return ask_inner_streaming_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            transient_context,
+            tools,
+            recorder,
+            compressor,
+            sink,
+            progress,
+            initial_messages,
+            interrupt_scope,
+        )
+        .await;
+    }
     let task_id = local_approval_task_id(recorder.map(|(_, session)| session), interrupt_scope);
     let invocation =
         crate::approvals::LocalApprovalInvocation::new(task_id).map_err(AgentError::Internal)?;

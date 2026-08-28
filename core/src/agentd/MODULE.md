@@ -72,9 +72,10 @@ filesystem. `caps::approval_gateway` is the seam: `caps::require` uses it in
 place of the local store whenever one is installed, and only `claw-agentd`
 installs one.
 
-- The worker sends the **exact denied verb and canonical scope**, and nothing
-  else. There is no session, owner, task, requester, reason, duration or
-  capability set on the request wire.
+- The worker sends the **exact denied verb and canonical scope**, plus an
+  optional validated operation digest when the capability does not fully
+  identify the invocation. There is no session, owner, task, requester,
+  reason, duration or capability set on the request wire.
 - `clawd` takes owner, session, task, worker pid/start time, and
   attended/unattended context from trusted lease/session state. It re-parses
   the verb and scope against the catalog and composes the reason itself.
@@ -84,7 +85,8 @@ installs one.
   fail closed with a scheduling/delegation hint.
 - `Consume` atomically spends an exactly matching, live decision, then mints
   and exercises a one-use `clawd::authority` grant bound to this task and
-  worker. A replay finds nothing.
+  worker. Operation-bound decisions must carry the same digest through this
+  final redemption. A replay finds nothing.
 - There is no decide route. A worker can never approve anything, name another
   session or owner, or receive a reusable capability.
 - Mediation is bounded on both sides (`protocol::MAX_APPROVAL_ASKS`), refused

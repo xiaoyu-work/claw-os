@@ -304,11 +304,7 @@ impl Drop for ConsentStore {
     }
 }
 
-fn approve_once(
-    lease: &Lease,
-    verb: crate::caps::Verb,
-    scope: &crate::caps::Scope,
-) {
+fn approve_once(lease: &Lease, verb: crate::caps::Verb, scope: &crate::caps::Scope) {
     let session = lease.session_id.as_deref().expect("session");
     let execution = crate::approvals::ApprovalExecutionBinding::for_worker(
         lease.task_id.clone(),
@@ -341,10 +337,43 @@ fn approve_once(
     .expect("approve");
 }
 
+fn approve_once_for_operation(
+    lease: &Lease,
+    verb: crate::caps::Verb,
+    scope: &crate::caps::Scope,
+    operation_digest: &str,
+) {
+    let session = lease.session_id.as_deref().expect("session");
+    let id = crate::approvals::submit_worker_request_for_operation(
+        verb,
+        scope.clone(),
+        session,
+        "test".to_string(),
+        Some("test".to_string()),
+        lease.owner_uid,
+        lease.task_id.clone(),
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
+        lease.approval_nonce.clone(),
+        lease.approval_expires_at,
+        Some(operation_digest),
+    )
+    .expect("submit");
+    crate::approvals::approve_for_owner(
+        &id,
+        crate::approvals::GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(lease.owner_uid),
+    )
+    .expect("approve");
+}
+
 fn consume_ask(scope: &crate::caps::Scope) -> ApprovalAsk {
     ApprovalAsk::Consume {
         verb: crate::caps::Verb::FS_READ.as_str().to_string(),
         scope: scope.clone(),
+        operation_digest: None,
     }
 }
 
@@ -365,6 +394,77 @@ fn an_approved_grant_is_spent_once_for_the_leased_session_and_owner() {
         mediate_approval(&mut used, &lease, &consume_ask(&scope)),
         ApprovalReply::Pending { request_id: None }
     );
+}
+
+#[test]
+fn worker_approval_cannot_substitute_a_different_operation_digest() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::self_ref("children");
+    let lease = new_lease();
+    let harmless = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+    let substituted = crate::crypto::sha256_hex(b"/bin/sh\0-c\0id");
+    approve_once_for_operation(&lease, crate::caps::Verb::PROC_SPAWN, &scope, &harmless);
+    let mut used = 0;
+
+    let wrong = ApprovalAsk::Consume {
+        verb: crate::caps::Verb::PROC_SPAWN.as_str().to_string(),
+        scope: scope.clone(),
+        operation_digest: Some(substituted),
+    };
+    assert_eq!(
+        mediate_approval(&mut used, &lease, &wrong),
+        ApprovalReply::Pending { request_id: None }
+    );
+
+    let exact = ApprovalAsk::Consume {
+        verb: crate::caps::Verb::PROC_SPAWN.as_str().to_string(),
+        scope,
+        operation_digest: Some(harmless),
+    };
+    assert_eq!(
+        mediate_approval(&mut used, &lease, &exact),
+        ApprovalReply::Granted
+    );
+}
+
+#[test]
+fn worker_authority_rechecks_operation_digest_after_durable_spend() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::self_ref("children");
+    let lease = new_lease();
+    let session = lease.session_id.clone().expect("session");
+    let approved = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+    let substituted = crate::crypto::sha256_hex(b"/bin/sh\0-c\0id");
+    approve_once_for_operation(
+        &lease,
+        crate::caps::Verb::PROC_SPAWN,
+        &scope,
+        &approved,
+    );
+    let consumed = crate::approvals::redeem_matching_worker_grant_for_owner_operation(
+        &session,
+        crate::caps::Verb::PROC_SPAWN,
+        &scope,
+        lease.owner_uid,
+        &lease.approval_identity(),
+        Some(&approved),
+    )
+    .unwrap()
+    .expect("approved consent");
+
+    let error = crate::clawd::authority::authorize_worker_approval(
+        lease.owner_uid,
+        &lease.task_id,
+        &session,
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
+        &lease.approval_nonce,
+        lease.deadline.saturating_duration_since(Instant::now()),
+        Some(&substituted),
+        &consumed,
+    )
+    .unwrap_err();
+    assert!(error.contains("validated operation"), "{error}");
 }
 
 #[test]
@@ -391,6 +491,7 @@ fn approval_redemption_mints_an_exact_worker_bound_authority_grant() {
         lease.worker_start_time_ticks,
         &lease.approval_nonce,
         lease.deadline.saturating_duration_since(Instant::now()),
+        None,
         &consumed,
     )
     .expect("worker-bound authority");
@@ -406,10 +507,7 @@ fn approval_redemption_mints_an_exact_worker_bound_authority_grant() {
     assert_eq!(view.generation, u64::from(consumed.generation));
     assert_eq!(
         view.caps.iter().cloned().collect::<Vec<_>>(),
-        vec![crate::caps::Cap::new(
-            crate::caps::Verb::FS_READ,
-            scope
-        )]
+        vec![crate::caps::Cap::new(crate::caps::Verb::FS_READ, scope)]
     );
     assert!(view.expires_in <= Duration::from_secs(30));
     assert!(view.expires_in <= consumed.expires_in());
@@ -446,6 +544,7 @@ fn revocation_between_durable_spend_and_worker_grant_fails_closed() {
         lease.worker_start_time_ticks,
         &lease.approval_nonce,
         lease.deadline.saturating_duration_since(Instant::now()),
+        None,
         &consumed,
     )
     .unwrap_err();
@@ -566,6 +665,7 @@ fn task_teardown_invalidates_an_undecided_request() {
     let ask = ApprovalAsk::Request {
         verb: crate::caps::Verb::FS_READ.as_str().to_string(),
         scope,
+        operation_digest: None,
     };
     let mut used = 0;
     let ApprovalReply::Pending {
@@ -609,6 +709,7 @@ fn a_grant_for_a_different_verb_or_scope_is_not_spent() {
     let other_verb = ApprovalAsk::Consume {
         verb: crate::caps::Verb::FS_WRITE.as_str().to_string(),
         scope: approved.clone(),
+        operation_digest: None,
     };
     assert_eq!(
         mediate_approval(&mut used, &lease, &other_verb),
@@ -624,6 +725,7 @@ fn an_unknown_verb_or_unusable_scope_is_refused() {
     let unknown = ApprovalAsk::Request {
         verb: "fs.read; rm -rf /".to_string(),
         scope: crate::caps::Scope::path("/tmp/x"),
+        operation_digest: None,
     };
     assert!(matches!(
         mediate_approval(&mut used, &lease, &unknown),
@@ -633,9 +735,20 @@ fn an_unknown_verb_or_unusable_scope_is_refused() {
     let injected = ApprovalAsk::Request {
         verb: crate::caps::Verb::FS_READ.as_str().to_string(),
         scope: crate::caps::Scope::path("/tmp/x\nfs.write /etc"),
+        operation_digest: None,
     };
     assert!(matches!(
         mediate_approval(&mut used, &lease, &injected),
+        ApprovalReply::Refused { .. }
+    ));
+
+    let invalid_digest = ApprovalAsk::Request {
+        verb: crate::caps::Verb::PROC_SPAWN.as_str().to_string(),
+        scope: crate::caps::Scope::self_ref("children"),
+        operation_digest: Some("not-a-sha256".to_string()),
+    };
+    assert!(matches!(
+        mediate_approval(&mut used, &lease, &invalid_digest),
         ApprovalReply::Refused { .. }
     ));
     assert!(crate::approvals::list_pending().is_empty());
@@ -665,6 +778,7 @@ fn an_unattended_task_cannot_file_an_interactive_request() {
     let ask = ApprovalAsk::Request {
         verb: crate::caps::Verb::FS_DELETE.as_str().to_string(),
         scope: crate::caps::Scope::path("/home/user/notes.txt"),
+        operation_digest: None,
     };
     let mut used = 0;
     let reply = mediate_approval(&mut used, &lease, &ask);
@@ -686,6 +800,7 @@ fn filing_a_request_dedupes_and_records_only_broker_composed_text() {
     let ask = ApprovalAsk::Request {
         verb: crate::caps::Verb::FS_READ.as_str().to_string(),
         scope: scope.clone(),
+        operation_digest: None,
     };
     let mut used = 0;
     let ApprovalReply::Pending {
@@ -710,10 +825,7 @@ fn filing_a_request_dedupes_and_records_only_broker_composed_text() {
     assert_eq!(request.owner_uid, Some(lease.owner_uid));
     assert_eq!(request.requester.as_deref(), Some("agentd-worker"));
     assert_eq!(request.risk, Some(crate::caps::Risk::Low));
-    assert_eq!(
-        request.context,
-        Some(crate::caps::ConsentContext::Attended)
-    );
+    assert_eq!(request.context, Some(crate::caps::ConsentContext::Attended));
     let execution = request.execution.as_ref().expect("worker binding");
     assert_eq!(execution.identity.task_id, lease.task_id);
     assert_eq!(execution.identity.worker_pid, lease.worker_pid);

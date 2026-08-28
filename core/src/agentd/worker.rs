@@ -591,10 +591,16 @@ impl ApprovalGateway for ChannelApprovalGateway {
         self.consent_context
     }
 
-    fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
+    fn consume(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<bool, String> {
         match self.ask(ApprovalAsk::Consume {
             verb: verb.as_str().to_string(),
             scope: scope.clone(),
+            operation_digest: operation_digest.map(str::to_string),
         })? {
             ApprovalReply::Granted => Ok(true),
             ApprovalReply::Pending { .. } => Ok(false),
@@ -602,10 +608,16 @@ impl ApprovalGateway for ChannelApprovalGateway {
         }
     }
 
-    fn request(&self, verb: Verb, scope: &Scope) -> Result<PendingApproval, String> {
+    fn request(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<PendingApproval, String> {
         match self.ask(ApprovalAsk::Request {
             verb: verb.as_str().to_string(),
             scope: scope.clone(),
+            operation_digest: operation_digest.map(str::to_string),
         })? {
             // A grant approved between the check and the ask is reported
             // as a pending request with no id; the retry spends it

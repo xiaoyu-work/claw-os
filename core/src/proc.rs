@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -36,11 +36,7 @@ pub fn current_session_id() -> Option<String> {
     TRUSTED_SESSION_OVERRIDE
         .try_with(|session| session.session_id.clone())
         .ok()
-        .or_else(|| {
-            SESSION_OVERRIDE
-                .try_with(|value| value.clone())
-                .ok()
-        })
+        .or_else(|| SESSION_OVERRIDE.try_with(|value| value.clone()).ok())
         .or_else(|| {
             std::env::var("COS_SESSION")
                 .ok()
@@ -161,14 +157,11 @@ fn bound_app_registry_path() -> Option<PathBuf> {
                 && session.pid != 0
                 && session
                     .start_time_ticks
-                    .is_some_and(|expected| {
-                        read_start_time_ticks(session.pid) == Some(expected)
-                    })
+                    .is_some_and(|expected| read_start_time_ticks(session.pid) == Some(expected))
                 && process_descends_from(caller, session.pid)
         }) {
             return Some(path);
         }
-
     }
     None
 }
@@ -360,13 +353,13 @@ where
         path,
         |existing| {
             let reg: Registry = match existing {
-                Some(s) => serde_json::from_str(&s)
-                    .map_err(|e| format!("parse proc registry: {e}"))?,
+                Some(s) => {
+                    serde_json::from_str(&s).map_err(|e| format!("parse proc registry: {e}"))?
+                }
                 None => Registry::default(),
             };
             let next = transform(reg);
-            serde_json::to_string_pretty(&next)
-                .map_err(|e| format!("serialize: {e}"))
+            serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
         },
         |tmp| match owner_uid {
             Some(uid) => crate::storage::set_group_readable_file(tmp, uid),
@@ -438,10 +431,7 @@ pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
 /// and carries the expected group label. This lets a detached child clean
 /// up its own row without turning an inherited environment variable into
 /// an arbitrary session-deletion primitive.
-pub fn deregister_current_process_session(
-    session_id: &str,
-    expected_group: &str,
-) {
+pub fn deregister_current_process_session(session_id: &str, expected_group: &str) {
     let pid = std::process::id();
     let current_start = read_start_time_ticks(pid);
     let _ = update_registry(|mut registry| {
@@ -454,8 +444,7 @@ pub fn deregister_current_process_session(
             }
             #[cfg(target_os = "linux")]
             {
-                session.start_time_ticks != current_start
-                    || current_start.is_none()
+                session.start_time_ticks != current_start || current_start.is_none()
             }
             #[cfg(not(target_os = "linux"))]
             {
@@ -466,11 +455,7 @@ pub fn deregister_current_process_session(
     });
 }
 
-pub fn bind_session_process_for_owner(
-    session_id: &str,
-    pid: u32,
-    uid: u32,
-) -> Result<(), String> {
+pub fn bind_session_process_for_owner(session_id: &str, pid: u32, uid: u32) -> Result<(), String> {
     if pid == 0 {
         return Err("cannot bind a session to pid 0".to_string());
     }
@@ -500,7 +485,9 @@ pub fn bind_session_process_for_owner(
     if found {
         Ok(())
     } else {
-        Err(format!("session not found while binding process: {session_id}"))
+        Err(format!(
+            "session not found while binding process: {session_id}"
+        ))
     }
 }
 
@@ -534,7 +521,9 @@ pub fn bind_session_process(session_id: &str, pid: u32) -> Result<(), String> {
     if found {
         Ok(())
     } else {
-        Err(format!("session not found while binding process: {session_id}"))
+        Err(format!(
+            "session not found while binding process: {session_id}"
+        ))
     }
 }
 
@@ -562,9 +551,11 @@ pub fn swap_app_session_transient_caps(
     let mut found = false;
     let mut previous: Option<crate::caps::CapSet> = None;
     update_registry(|mut registry| {
-        if let Some(session) = registry.sessions.iter_mut().find(|session| {
-            session.session_id == session_id && session.app_id.is_some()
-        }) {
+        if let Some(session) = registry
+            .sessions
+            .iter_mut()
+            .find(|session| session.session_id == session_id && session.app_id.is_some())
+        {
             previous = session.transient_caps.take();
             session.transient_caps = caps;
             found = true;
@@ -682,8 +673,7 @@ fn pending_bind_is_fresh(info: &SessionInfo) -> bool {
     {
         return false;
     }
-    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&info.started_at)
-    else {
+    let Ok(started) = chrono::DateTime::parse_from_rfc3339(&info.started_at) else {
         return false;
     };
     let age = chrono::Utc::now().signed_duration_since(started);
@@ -929,8 +919,7 @@ fn validate_session_identifier(session_id: &str) -> Result<(), String> {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
         return Err(
-            "session id must contain only alphanumerics, '-' or '_' (max 128 bytes)"
-                .to_string(),
+            "session id must contain only alphanumerics, '-' or '_' (max 128 bytes)".to_string(),
         );
     }
     Ok(())
@@ -961,6 +950,103 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "renice" => cmd_renice(args),
         _ => Err(format!("unknown proc command: {command}")),
     }
+}
+
+fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
+    let canonical = candidate.canonicalize().ok()?;
+    let metadata = canonical.metadata().ok()?;
+    if !metadata.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o111 == 0 {
+            return None;
+        }
+    }
+    Some(canonical)
+}
+
+fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<PathBuf, String> {
+    if program.is_empty() || program.contains('\0') {
+        return Err("process executable is invalid".to_string());
+    }
+    let requested = Path::new(program);
+    if requested.is_absolute() || requested.components().count() > 1 {
+        let candidate = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            execution_workdir.join(requested)
+        };
+        return canonical_executable(&candidate).ok_or_else(|| {
+            format!(
+                "process executable `{}` is missing or not executable",
+                candidate.display()
+            )
+        });
+    }
+
+    let path = std::env::var_os("PATH")
+        .ok_or_else(|| format!("process executable `{program}` cannot be resolved without PATH"))?;
+    for directory in std::env::split_paths(&path) {
+        let directory = if directory.is_absolute() {
+            directory
+        } else {
+            execution_workdir.join(directory)
+        };
+        let candidate = directory.join(requested);
+        if let Some(canonical) = canonical_executable(&candidate) {
+            return Ok(canonical);
+        }
+        #[cfg(windows)]
+        if requested.extension().is_none() {
+            let extensions =
+                std::env::var_os("PATHEXT").unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+            for extension in extensions.to_string_lossy().split(';') {
+                let candidate = directory.join(format!("{program}{extension}"));
+                if let Some(canonical) = canonical_executable(&candidate) {
+                    return Ok(canonical);
+                }
+            }
+        }
+    }
+    Err(format!(
+        "process executable `{program}` was not found as an executable file on PATH"
+    ))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_operation_digest(
+    executable: &Path,
+    argv: &[String],
+    requested_session: Option<&str>,
+    group: Option<&str>,
+    parent: &str,
+    workdir: &str,
+    tier: Option<u8>,
+    scope: Option<&str>,
+    priority: Option<&str>,
+    role: Option<&str>,
+    caps: Option<&crate::caps::CapSet>,
+    isolated_workspace: bool,
+) -> Result<String, String> {
+    let canonical = serde_json::to_vec(&json!({
+        "executable": executable.to_string_lossy(),
+        "argv": argv,
+        "requested_session": requested_session,
+        "group": group,
+        "parent": parent,
+        "workdir": workdir,
+        "tier": tier,
+        "scope": scope,
+        "priority": priority,
+        "role": role,
+        "caps": caps,
+        "isolated_workspace": isolated_workspace,
+    }))
+    .map_err(|error| format!("serialize process invocation: {error}"))?;
+    Ok(crate::crypto::sha256_hex(&canonical))
 }
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
@@ -1151,7 +1237,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         }
         (Some(parent_tier), None) => tier = Some(parent_tier),
         (None, Some(_)) => {
-            return Err("cannot assign a child credential tier when the parent has none".to_string());
+            return Err(
+                "cannot assign a child credential tier when the parent has none".to_string(),
+            );
         }
         _ => {}
     }
@@ -1183,19 +1271,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         role_name = parent_info.role.clone();
     }
 
-    // Guardrails: check for rapid respawn and destructive commands
-    let reg_check = load_registry();
-    let rapid_warning = check_rapid_respawn(&reg_check, command_args);
-    let destructive_warning = check_destructive(command_args);
-    drop(reg_check);
-
+    let requested_session = session_id.clone();
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
     validate_session_identifier(&sid)?;
-    require_or_json(Verb::PROC_SPAWN, Scope::self_ref("children"))
-        .map_err(|v| v.to_string())?;
-    let dir = proc_dir();
-    fs::create_dir_all(&dir)
-        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
 
     #[cfg(unix)]
     let routed_identity = match crate::paths::current_owner_uid_override() {
@@ -1231,15 +1309,82 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         _ => None,
     };
 
-    // Handle isolated workspace
-    if isolated_workspace {
-        let ws_dir = crate::paths::data_dir()
+    if !isolated_workspace {
+        if let Some(path) = workdir.as_deref() {
+            let canonical = PathBuf::from(path)
+                .canonicalize()
+                .map_err(|error| format!("canonicalize proc workdir: {error}"))?;
+            if !canonical.is_dir() {
+                return Err(format!(
+                    "proc workdir {} is not a directory",
+                    canonical.display()
+                ));
+            }
+            workdir = Some(canonical.to_string_lossy().into_owned());
+        }
+    }
+
+    let execution_workdir = if isolated_workspace {
+        crate::paths::data_dir()
             .join("sessions")
             .join(&sid)
-            .join("workspace");
-        fs::create_dir_all(&ws_dir)
+            .join("workspace")
+    } else if let Some(path) = workdir.as_deref() {
+        PathBuf::from(path)
+    } else {
+        std::env::current_dir()
+            .and_then(|path| path.canonicalize())
+            .map_err(|error| format!("resolve process working directory: {error}"))?
+    };
+    let executable = resolve_spawn_executable(&command_args[0], &execution_workdir)?;
+    let workdir_binding = if isolated_workspace {
+        "isolated".to_string()
+    } else {
+        execution_workdir.to_string_lossy().into_owned()
+    };
+    let operation_digest = spawn_operation_digest(
+        &executable,
+        &command_args[1..],
+        requested_session.as_deref(),
+        group.as_deref(),
+        &parent_info.session_id,
+        &workdir_binding,
+        tier,
+        scope.as_deref(),
+        priority.as_deref(),
+        role_name.as_deref(),
+        cap_set.as_ref(),
+        isolated_workspace,
+    )?;
+
+    // Guardrails: check for rapid respawn and destructive commands
+    let reg_check = load_registry();
+    let rapid_warning = check_rapid_respawn(&reg_check, command_args);
+    let destructive_warning = check_destructive(command_args);
+    drop(reg_check);
+
+    crate::caps::enforcement::require_or_json_for_operation(
+        Verb::PROC_SPAWN,
+        Scope::self_ref("children"),
+        &operation_digest,
+    )
+    .map_err(|v| v.to_string())?;
+    crate::caps::enforcement::require_or_json_for_operation(
+        Verb::FS_EXEC,
+        Scope::path(executable.to_string_lossy()),
+        &operation_digest,
+    )
+    .map_err(|v| v.to_string())?;
+
+    let dir = proc_dir();
+    fs::create_dir_all(&dir)
+        .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
+
+    // Handle isolated workspace
+    if isolated_workspace {
+        fs::create_dir_all(&execution_workdir)
             .map_err(|e| format!("failed to create isolated workspace: {e}"))?;
-        workdir = Some(ws_dir.to_string_lossy().to_string());
+        workdir = Some(execution_workdir.to_string_lossy().to_string());
     }
 
     let stdout_path = dir.join(format!("{sid}.stdout"));
@@ -1256,28 +1401,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         }
     };
 
-    // Apply process priority via nice (Unix only)
-    #[cfg(unix)]
-    let (actual_cmd, actual_args) = if let Some(ref prio) = priority {
-        let nice_val = match prio.as_str() {
-            "low" => "10",
-            "normal" => "0",
-            "high" => "-5",
-            "realtime" => "-10",
-            _ => "0",
-        };
-        let mut nice_args = vec!["-n".to_string(), nice_val.to_string()];
-        nice_args.extend_from_slice(command_args);
-        ("nice".to_string(), nice_args)
-    } else {
-        (command_args[0].clone(), command_args[1..].to_vec())
-    };
-
-    #[cfg(not(unix))]
-    let (actual_cmd, actual_args) = (command_args[0].clone(), command_args[1..].to_vec());
-
-    let mut cmd = Command::new(&actual_cmd);
-    cmd.args(&actual_args)
+    let mut cmd = Command::new(&executable);
+    cmd.args(&command_args[1..])
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -1291,9 +1416,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         .env("NPM_CONFIG_YES", "true")
         .env("PYTHONDONTWRITEBYTECODE", "1");
 
-    if let Some(ref wd) = workdir {
-        cmd.current_dir(wd);
-    }
+    cmd.current_dir(&execution_workdir);
     #[cfg(unix)]
     if let Some((_, _, home)) = routed_identity.as_ref() {
         cmd.env("HOME", home).env("COS_HOME", home);
@@ -1306,9 +1429,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     #[cfg(unix)]
     unsafe {
         use std::os::unix::process::CommandExt;
-        let identity = routed_identity
-            .as_ref()
-            .map(|(uid, gid, _)| (*uid, *gid));
+        let identity = routed_identity.as_ref().map(|(uid, gid, _)| (*uid, *gid));
+        let nice_adjustment = priority.as_deref().map(|priority| match priority {
+            "low" => 10,
+            "normal" => 0,
+            "high" => -5,
+            "realtime" => -10,
+            _ => 0,
+        });
         let euid = libc::geteuid() as u32;
         cmd.pre_exec(move || {
             if libc::setsid() < 0 {
@@ -1323,8 +1451,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                     return Err(std::io::Error::last_os_error());
                 }
             }
-            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0
-            {
+            if let Some(adjustment) = nice_adjustment {
+                let current = libc::getpriority(libc::PRIO_PROCESS, 0);
+                let target = current.saturating_add(adjustment).clamp(-20, 19);
+                if libc::setpriority(libc::PRIO_PROCESS, 0, target) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())
@@ -1458,8 +1592,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
                 .iter_mut()
                 .find(|info| info.session_id == sid)
             {
-                if info.ended_at.is_none() && !registry_session_is_active(info)
-                {
+                if info.ended_at.is_none() && !registry_session_is_active(info) {
                     info.ended_at = Some(now_for_registry);
                 }
             }
@@ -1619,20 +1752,18 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         let mut skipped = Vec::new();
         for info in &group_sessions {
             match validate_signal_target(info, true) {
-                Ok(()) => {
-                    match kill_process(info.pid) {
-                        Ok(()) => killed.push(json!({
-                            "session_id": info.session_id,
-                            "pid": info.pid,
-                        })),
-                        Err(error) => skipped.push(json!({
-                            "session_id": info.session_id,
-                            "pid": info.pid,
-                            "reason": "signal_failed",
-                            "error": error,
-                        })),
-                    }
-                }
+                Ok(()) => match kill_process(info.pid) {
+                    Ok(()) => killed.push(json!({
+                        "session_id": info.session_id,
+                        "pid": info.pid,
+                    })),
+                    Err(error) => skipped.push(json!({
+                        "session_id": info.session_id,
+                        "pid": info.pid,
+                        "reason": "signal_failed",
+                        "error": error,
+                    })),
+                },
                 Err(error) => {
                     skipped.push(json!({
                         "session_id": info.session_id,
@@ -1774,7 +1905,10 @@ fn kill_process(pid: u32) -> Result<(), String> {
         if status.success() {
             Ok(())
         } else {
-            Err(format!("taskkill exited with {}", status.code().unwrap_or(-1)))
+            Err(format!(
+                "taskkill exited with {}",
+                status.code().unwrap_or(-1)
+            ))
         }
     }
 }
@@ -1853,12 +1987,8 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
                 .collect::<Vec<_>>();
             update_registry(|mut latest| {
                 for sid in &target_ids {
-                    if let Some(info) =
-                        latest.sessions.iter_mut().find(|s| &s.session_id == sid)
-                    {
-                        if info.ended_at.is_none()
-                            && !registry_session_is_active(info)
-                        {
+                    if let Some(info) = latest.sessions.iter_mut().find(|s| &s.session_id == sid) {
+                        if info.ended_at.is_none() && !registry_session_is_active(info) {
                             info.ended_at = Some(now.clone());
                         }
                     }
@@ -2015,8 +2145,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
                 .iter_mut()
                 .find(|info| info.session_id == sid)
             {
-                if info.ended_at.is_none() && !registry_session_is_active(info)
-                {
+                if info.ended_at.is_none() && !registry_session_is_active(info) {
                     info.ended_at = Some(now_for_registry);
                 }
             }
@@ -2249,9 +2378,11 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
         let sid_for_registry = sid.to_string();
         let prio_for_registry = prio.clone();
         update_registry(|mut latest| {
-            if let Some(info) = latest.sessions.iter_mut().find(|info| {
-                info.session_id == sid_for_registry && info.pid == pid
-            }) {
+            if let Some(info) = latest
+                .sessions
+                .iter_mut()
+                .find(|info| info.session_id == sid_for_registry && info.pid == pid)
+            {
                 info.priority = Some(prio_for_registry);
             }
             latest
@@ -2379,8 +2510,5 @@ fn short_id() -> String {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/proc.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/proc.rs"));
 }

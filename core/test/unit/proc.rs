@@ -105,7 +105,10 @@ fn pgrp_uid_scope_check_flags_wrong_uid() {
     // own pgrp — caller's uid + 12345.
     let bogus_uid = me.saturating_add(12345);
     let res = pgrp_uid_scope_check(my_pid, bogus_uid);
-    assert!(res.is_err(), "pgrp seen as exclusively {bogus_uid}, but our uid is {me}");
+    assert!(
+        res.is_err(),
+        "pgrp seen as exclusively {bogus_uid}, but our uid is {me}"
+    );
     let foreign = res.unwrap_err();
     assert!(!foreign.is_empty(), "Err returned with no foreign pids");
     // Every entry has the caller's real uid, not the bogus one.
@@ -122,3 +125,182 @@ fn pgrp_uid_scope_check_flags_wrong_uid() {
 // own pgrp), so the audit-required behaviour is verified by
 // the two helper tests above plus the source-level check at
 // cmd_kill's --group branch.
+
+#[cfg(target_os = "linux")]
+fn register_spawn_test_parent(caps: crate::caps::CapSet) -> String {
+    let session_id = format!("proc-parent-{}", uuid::Uuid::new_v4().simple());
+    register_session(SessionInfo {
+        session_id: session_id.clone(),
+        pid: std::process::id(),
+        command: vec!["cargo-test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: std::env::current_dir()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned()),
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(caps),
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: read_start_time_ticks(std::process::id()),
+    })
+    .unwrap();
+    std::env::set_var("COS_SESSION", &session_id);
+    session_id
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let parent = register_spawn_test_parent(crate::caps::CapSet::new());
+    let invocation =
+        crate::approvals::LocalApprovalInvocation::new("web:proc-security:turn:1").unwrap();
+
+    invocation.sync_scope(|| {
+        let harmless = vec![
+            "--session".to_string(),
+            "safe-child".to_string(),
+            "--".to_string(),
+            "/bin/echo".to_string(),
+            "hello".to_string(),
+        ];
+        cmd_spawn(&harmless).expect_err("proc.spawn must require approval");
+        let spawn_request = crate::approvals::list_pending()
+            .into_iter()
+            .find(|request| request.verb == crate::caps::Verb::PROC_SPAWN.as_str())
+            .expect("proc.spawn request");
+        let harmless_digest = spawn_request
+            .operation_digest
+            .clone()
+            .expect("spawn request must bind the invocation");
+        crate::approvals::approve(
+            &spawn_request.id,
+            crate::approvals::GrantDuration::Session,
+            None,
+            None,
+        )
+        .unwrap();
+
+        cmd_spawn(&harmless).expect_err("fs.exec must require separate approval");
+        let exec_request = crate::approvals::list_pending()
+            .into_iter()
+            .find(|request| request.verb == crate::caps::Verb::FS_EXEC.as_str())
+            .expect("fs.exec request");
+        assert_eq!(
+            exec_request.operation_digest.as_deref(),
+            Some(harmless_digest.as_str())
+        );
+        assert_eq!(
+            exec_request.scope,
+            Scope::path(
+                resolve_spawn_executable("/bin/echo", &std::env::current_dir().unwrap())
+                    .unwrap()
+                    .to_string_lossy()
+            )
+            .canonicalized()
+        );
+        let audit = std::fs::read_to_string(crate::paths::caps_audit_log_path()).unwrap();
+        let exec_audit: serde_json::Value = audit
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .find(|record: &serde_json::Value| record["verb"] == Verb::FS_EXEC.as_str())
+            .expect("fs.exec audit record");
+        assert_eq!(exec_audit["scope"], serde_json::json!(exec_request.scope));
+        assert_eq!(
+            exec_audit["operation_digest"],
+            serde_json::json!(harmless_digest)
+        );
+        assert!(
+            exec_audit.get("argv").is_none(),
+            "raw process arguments must not be persisted in capability audit"
+        );
+        crate::approvals::approve(
+            &exec_request.id,
+            crate::approvals::GrantDuration::Session,
+            None,
+            None,
+        )
+        .unwrap();
+
+        let changed_args = vec![
+            "--session".to_string(),
+            "safe-child".to_string(),
+            "--".to_string(),
+            "/bin/echo".to_string(),
+            "different".to_string(),
+        ];
+        cmd_spawn(&changed_args).expect_err("changed argv must need a fresh approval");
+        assert!(crate::approvals::list_pending().iter().any(|request| {
+            request.verb == crate::caps::Verb::PROC_SPAWN.as_str()
+                && request.operation_digest.as_deref() != Some(harmless_digest.as_str())
+        }));
+
+        let marker = temp.path().join("shell-substitution");
+        let shell = vec![
+            "--session".to_string(),
+            "safe-child".to_string(),
+            "--".to_string(),
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            format!("touch {}", marker.display()),
+        ];
+        cmd_spawn(&shell).expect_err("shell substitution must need a fresh approval");
+        assert!(!marker.exists(), "the substituted shell must never execute");
+
+        let result = cmd_spawn(&harmless).expect("the exact approved invocation may execute");
+        assert_eq!(result["parent"], parent);
+    });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_spawn_child_capabilities_cannot_exceed_the_parent() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let executable =
+        resolve_spawn_executable("/bin/echo", &std::env::current_dir().unwrap()).unwrap();
+    let parent_caps = crate::caps::CapSet::from_caps([
+        crate::caps::Cap::new(Verb::PROC_SPAWN, Scope::self_ref("children")),
+        crate::caps::Cap::new(Verb::FS_EXEC, Scope::path(executable.to_string_lossy())),
+    ]);
+    register_spawn_test_parent(parent_caps);
+
+    let args = vec![
+        "--session".to_string(),
+        "overprivileged-child".to_string(),
+        "--caps".to_string(),
+        Verb::FS_WRITE.as_str().to_string(),
+        "--scope-path".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        "/bin/echo".to_string(),
+        "hello".to_string(),
+    ];
+    let error = cmd_spawn(&args).unwrap_err();
+    assert!(error.contains("cannot widen caps"), "{error}");
+    assert!(
+        session_info_by_id("overprivileged-child").is_none(),
+        "a rejected child must not enter the process registry"
+    );
+}
