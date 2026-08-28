@@ -49,9 +49,17 @@ impl HttpTransport {
     /// Infallible compatibility boundary for legacy constructors whose return
     /// types cannot surface HTTP-client construction errors.
     pub fn legacy_default() -> Self {
-        Self {
-            client: build_http_client().unwrap_or_else(|_| reqwest::Client::new()),
-        }
+        let client = build_http_client().unwrap_or_else(|error| {
+            tracing::error!(
+                error = %error,
+                "legacy provider constructor could not initialize the configured HTTP transport"
+            );
+            // The legacy API cannot return an error. `Client::new` uses
+            // reqwest's compiled default TLS backend; failure to initialize
+            // that static backend is the one unrecoverable local invariant.
+            reqwest::Client::new()
+        });
+        Self { client }
     }
 
     pub fn post(
