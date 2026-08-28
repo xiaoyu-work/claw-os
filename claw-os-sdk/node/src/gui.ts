@@ -25,6 +25,7 @@
 
 import { spawn } from "node:child_process";
 import { lstatSync } from "node:fs";
+import { createConnection } from "node:net";
 
 import * as ai from "./ai";
 import * as tools from "./tools";
@@ -33,6 +34,8 @@ import * as tools from "./tools";
  * when an app is launched as a GUI. */
 export const GUI_COMMAND = "--gui";
 const ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher";
+const ASK_CLAW_PROTOCOL = 1;
+const ASK_CLAW_REQUEST_LIMIT = 32 * 1024;
 
 /**
  * Return `true` when the current invocation is a desktop GUI launch.
@@ -63,49 +66,122 @@ export class GuiContext {
 
   /**
    * Summon the system "Ask Claw" agent overlay through the fixed packaged
-   * launcher's versioned READY/stdin protocol. Pass
+   * launcher's authenticated Unix-socket protocol. Pass
    * `hint` to ground the agent's first response in the app's current
    * state without polluting the visible chat transcript.
    *
    * The overlay is detached: it outlives this call and is not tied to
-   * the app's stdio or event loop. Resolves once the child has been
-   * spawned; rejects if the overlay binary is missing (e.g. a headless
+   * the app's stdio or event loop. Resolves once the helper has
+   * authenticated and accepted the request; rejects if the
+   * overlay binary is missing (e.g. a headless
    * box with no desktop shell).
    */
-  openAgentOverlay(hint?: string): Promise<void> {
+  async openAgentOverlay(hint?: string): Promise<void> {
     validateAskClawLauncher();
-    return new Promise<void>((resolve, reject) => {
-      const child = spawn(ASK_CLAW_LAUNCHER, ["--protocol", "1"], {
-        stdio: ["pipe", "pipe", "ignore"],
-      });
-      const timer = setTimeout(() => {
-        child.kill();
-        reject(new Error("Ask Claw launcher readiness timed out"));
-      }, 5000);
-      let ready = "";
-      child.once("error", (err) => {
-        clearTimeout(timer);
-        reject(err);
-      });
-      child.stdout.on("data", (chunk: Buffer) => {
-        ready += chunk.toString("utf8");
-        if (!ready.includes("\n")) return;
-        clearTimeout(timer);
-        if (ready !== "READY 1\n") {
-          child.kill();
-          reject(new Error("unexpected Ask Claw launcher handshake"));
-          return;
-        }
-        child.stdin.end(JSON.stringify({
-          protocol: 1,
-          app: this.appId,
-          hint: hint ?? null,
-        }));
-        child.stdout.destroy();
-        child.unref();
-        resolve();
-      });
+    const child = spawn(ASK_CLAW_LAUNCHER, ["--protocol", String(ASK_CLAW_PROTOCOL)], {
+      stdio: ["ignore", "pipe", "ignore"],
     });
+    try {
+      const announcement = await new Promise<string>((resolve, reject) => {
+        let settled = false;
+        const timer = setTimeout(() => {
+          settled = true;
+          reject(new Error("Ask Claw launcher announcement timed out"));
+        }, 5000);
+        let line = "";
+        child.once("error", (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        });
+        child.stdout.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          line += chunk.toString("utf8");
+          if (line.length > 256) {
+            settled = true;
+            clearTimeout(timer);
+            reject(new Error("Ask Claw socket announcement is too long"));
+            return;
+          }
+          const newline = line.indexOf("\n");
+          if (newline < 0) return;
+          settled = true;
+          clearTimeout(timer);
+          child.stdout.destroy();
+          resolve(line.slice(0, newline + 1));
+        });
+      });
+      const match = announcement.match(/^SOCKET 1 @([^\n]+)\n$/);
+      if (!match) throw new Error("invalid Ask Claw socket announcement");
+
+      const payload = Buffer.from(JSON.stringify({
+        protocol: ASK_CLAW_PROTOCOL,
+        app: this.appId,
+        hint: hint ?? null,
+      }), "utf8");
+      if (payload.length > ASK_CLAW_REQUEST_LIMIT) {
+        throw new Error("Ask Claw request exceeds the protocol limit");
+      }
+      await new Promise<void>((resolve, reject) => {
+        const socket = createConnection({ path: `\0${match[1]}` });
+        let settled = false;
+        const timer = setTimeout(() => {
+          settled = true;
+          socket.destroy();
+          reject(new Error("Ask Claw launcher readiness timed out"));
+        }, 5000);
+        let phase: "ready" | "accepted" = "ready";
+        let input = Buffer.alloc(0);
+        socket.once("error", (err) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(err);
+        });
+        socket.on("data", (chunk: Buffer) => {
+          if (settled) return;
+          input = Buffer.concat([input, chunk]);
+          if (phase === "ready" && input.length >= 8) {
+            if (!input.subarray(0, 8).equals(Buffer.from("READY 1\n"))) {
+              settled = true;
+              clearTimeout(timer);
+              socket.destroy();
+              reject(new Error("unexpected Ask Claw launcher handshake"));
+              return;
+            }
+            input = input.subarray(8);
+            phase = "accepted";
+            const header = Buffer.allocUnsafe(4);
+            header.writeUInt32BE(payload.length);
+            socket.write(Buffer.concat([header, payload]));
+          }
+          if (phase === "accepted" && input.length >= 11) {
+            if (!input.subarray(0, 11).equals(Buffer.from("ACCEPTED 1\n"))) {
+              settled = true;
+              clearTimeout(timer);
+              socket.destroy();
+              reject(new Error("unexpected Ask Claw acceptance response"));
+              return;
+            }
+            settled = true;
+            clearTimeout(timer);
+            socket.end();
+            resolve();
+          }
+        });
+        socket.once("close", () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(new Error("Ask Claw launcher closed the socket"));
+        });
+      });
+      child.unref();
+    } catch (error) {
+      child.kill();
+      throw error;
+    }
   }
 }
 

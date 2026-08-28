@@ -806,7 +806,7 @@ fn parse_arguments() -> cos_runtime::ask_claw::UiArguments {
 }
 
 fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
-    let activation = match parsed.activation_from_process_stdin() {
+    let activation = match parsed.activation_from_process_socket() {
         Ok(activation) => activation,
         Err(error) => {
             eprintln!("failed to read Ask Claw activation: {error}");
@@ -845,7 +845,7 @@ impl UiLaunchMode {
     fn from_arguments(arguments: &cos_runtime::ask_claw::UiArguments) -> Self {
         if !arguments.overlay {
             Self::Window
-        } else if arguments.context_stdin
+        } else if arguments.context_socket
             || arguments.context.is_some()
             || arguments.query.is_some()
         {

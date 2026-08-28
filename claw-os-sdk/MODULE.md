@@ -49,7 +49,7 @@ Unrestricted payloads use `serde_json::Value` (Rust), `Decimal`/`WireDecimal` pl
 
 All GUI bindings preserve their existing `open_agent_overlay` signatures but
 delegate to the fixed `/usr/local/bin/cos-ask-claw-launcher`. The helper uses a
-versioned READY/stdin protocol and exclusively owns the secure Agent UI
+versioned, peer-credential-authenticated AF_UNIX protocol and exclusively owns the secure Agent UI
 handoff; bindings do not invoke `cos-agent-ui`, consult `PATH`, or put hints in
 argv/environment/files.
 

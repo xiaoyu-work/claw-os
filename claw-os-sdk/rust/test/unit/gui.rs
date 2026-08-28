@@ -26,6 +26,7 @@ fn context_defaults_when_env_absent() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn overlay_ignores_executable_environment_override() {
     std::env::set_var("COS_AGENT_UI_BIN", "/nonexistent/attacker");
     let context = Context {

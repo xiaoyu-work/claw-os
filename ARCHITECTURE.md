@@ -523,10 +523,12 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - Desktop Ask Claw launchers and the Agent UI share the
   `cos_runtime::ask_claw` activation contract; host reducers never name the
   Agent UI executable or hand-build context JSON. The runtime directly spawns
-  a transient UI with anonymous stdin and withholds the bounded payload until
+  a transient UI with an inherited AF_UNIX socketpair and withholds the bounded payload until
   the child signals that Yama isolation, non-dumpable state, and private
   overlay mode are ready. The exact child is killed/reaped on startup failure
-  and reaped after successful use.
+  and reaped after successful use. Public SDKs enter the same implementation
+  through a packaged helper that authenticates its direct parent with
+  `SO_PEERCRED` on an abstract Unix socket.
 - Production resolves no executable input: the validated package target is
   fixed at `/usr/local/bin/cos-agent-ui`, and tests inject binaries only through
   a private compile-time test seam.

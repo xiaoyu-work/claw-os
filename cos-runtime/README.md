@@ -40,7 +40,7 @@ Bundled desktop apps implement `cos_runtime::ask_claw::Context` on a narrow
 app-local `Serialize` type, then call `ask_claw::launch`. The runtime inserts
 the app identity, serializes with `serde_json`, rejects non-object/reserved or
 larger-than-32-KiB contexts, wraps it in a typed activation, and sends it over
-an anonymous pipe directly to a transient Agent UI. The call runs on a
+an inherited AF_UNIX socketpair directly to a transient Agent UI. The call runs on a
 dedicated launcher/reaper thread. A readiness channel prevents the parent from
 writing any payload until the child has configured private-overlay mode,
 verified process isolation, and become non-dumpable. Startup and writes share
@@ -48,22 +48,28 @@ a five-second deadline; failures kill and reap the exact child. No context
 content enters argv, D-Bus, audit records, a process registry, the environment,
 or the filesystem.
 
+Launcher-style surfaces that already own a user query call
+`ask_claw::launch_query`; the same typed activation, bounds, background worker,
+and private socket handoff apply. Reducers never construct an Agent command.
+
 Production launches use only the packaged absolute
 `/usr/local/bin/cos-agent-ui`. The runtime rejects missing, symlinked,
 non-regular, non-executable, non-root-owned, or group/other-writable targets.
 There is no environment or `PATH` override and no shell evaluation.
 
 The Agent UI imports the same activation type and CLI parser from this module.
-It reads stdin only when `--context-stdin` is explicitly present, enforces the
+It reads the inherited socket only when `--context-socket --activation-fd` is explicitly present, enforces the
 activation and context bounds, validates the typed activation and embedded
-context, and closes stdin. Context-bearing overlays deliberately run as
+context, and closes the socket. Context-bearing overlays deliberately run as
 independent transient instances rather than forwarding plaintext through the
 unauthenticated well-known D-Bus name; context-free global shortcut activation
 continues to use the single instance. Payload-bearing `--context` and `--query`
-arguments are rejected; `--context-stdin` is the only supported private input
+arguments are rejected; the inherited socket is the only supported private input
 path, and combining context sources rejects the entire activation.
 
-Anonymous handoff fails closed unless Linux Yama
+Public SDKs use the packaged `/usr/local/bin/cos-ask-claw-launcher`, which
+publishes an abstract Unix endpoint and accepts only the captured direct parent
+PID and UID verified with `SO_PEERCRED`. Anonymous handoff fails closed unless Linux Yama
 `kernel.yama.ptrace_scope >= 2`. The host and Agent UI are marked non-dumpable;
 the parent withholds bytes until the child confirms that hardening is complete.
 

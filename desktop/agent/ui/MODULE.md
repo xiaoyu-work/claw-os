@@ -34,12 +34,13 @@ belongs to `src/effects.rs` and lifecycle owners.
 Initial CLI arguments and subsequent single-instance D-Bus activation use
 `cos_runtime::ask_claw::{UiArguments, Activation}`. Keep executable names,
 overlay flags, and context serialization out of the UI and host apps. Shared
-launches carry a bounded serialized activation over stdin only when
-`--context-stdin` is explicit; the new process reads and validates it before
-starting a dedicated transient overlay. Context-bearing activation never uses
+launches carry one bounded length-prefixed activation over an inherited Unix
+socket only when `--context-socket --activation-fd` is explicit; the new
+process becomes non-dumpable, signals readiness, then reads and validates it
+before starting a dedicated transient overlay. Context-bearing activation never uses
 the unauthenticated well-known D-Bus name; only context-free overlays retain
 single-instance forwarding. Payload-bearing `--context` and `--query` are
-rejected; `--context-stdin` plus the inherited readiness descriptor is the only
+rejected; the inherited socket descriptor is the only
 private activation path.
 
 The install target and runtime launch target are both fixed at

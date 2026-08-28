@@ -11,7 +11,7 @@ fn overlay_flags_publish_the_activation_payload() {
 }
 
 #[test]
-fn stdin_context_becomes_private_transient_activation() {
+fn socket_context_becomes_private_transient_activation() {
     let expected = OverlayActivation {
         context: Some(r#"{"app":"cosmic-files"}"#.into()),
         ..OverlayActivation::default()
@@ -19,8 +19,8 @@ fn stdin_context_becomes_private_transient_activation() {
     let input = serde_json::to_vec(&expected).unwrap();
     let parsed = cos_runtime::ask_claw::parse_ui_arguments([
         "--overlay",
-        "--context-stdin",
-        "--ready-fd",
+        "--context-socket",
+        "--activation-fd",
         "3",
     ]);
     let launch_mode = UiLaunchMode::from_arguments(&parsed);
@@ -47,12 +47,12 @@ fn stdin_context_becomes_private_transient_activation() {
 fn conflicting_context_sources_do_not_produce_activation() {
     let parsed = cos_runtime::ask_claw::parse_ui_arguments([
         "--overlay",
-        "--context-stdin",
+        "--context-socket",
         "--context",
         r#"{"app":"legacy"}"#,
     ]);
     let input = serde_json::to_vec(&OverlayActivation {
-        context: Some(r#"{"app":"stdin"}"#.into()),
+        context: Some(r#"{"app":"socket"}"#.into()),
         ..OverlayActivation::default()
     })
     .unwrap();
@@ -64,8 +64,8 @@ fn conflicting_context_sources_do_not_produce_activation() {
 }
 
 #[test]
-fn malformed_and_oversize_stdin_do_not_produce_activation() {
-    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay", "--context-stdin"]);
+fn malformed_and_oversize_socket_data_do_not_produce_activation() {
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay", "--context-socket"]);
     assert!(matches!(
         parsed.activation(std::io::Cursor::new(b"{not-json")),
         Err(cos_runtime::ask_claw::ActivationInputError::Malformed(_))

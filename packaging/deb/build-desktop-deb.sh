@@ -26,7 +26,7 @@ if [ ! -d "$STAGE_ROOT" ]; then
     echo "error: desktop package root not found: $STAGE_ROOT" >&2
     exit 1
 fi
-for binary in cos-agent-ui cos-agent-bridge; do
+for binary in cos-agent-ui cos-agent-bridge cos-ask-claw-launcher; do
     if [ ! -x "$STAGE_ROOT/usr/local/bin/$binary" ]; then
         echo "error: required desktop Agent binary missing: $binary" >&2
         exit 1

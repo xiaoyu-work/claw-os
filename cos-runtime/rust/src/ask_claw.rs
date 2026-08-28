@@ -2,7 +2,7 @@
 //!
 //! Bundled desktop apps own small, app-specific context structs and implement
 //! [`Context`] for them. This module owns the stable envelope, JSON encoding,
-//! bounds, anonymous stdin handoff, Agent UI discovery, activation arguments,
+//! bounds, anonymous socket handoff, Agent UI discovery, activation arguments,
 //! and bounded transient process launch.
 
 use std::fmt::{self, Display, Formatter};
@@ -12,15 +12,18 @@ use std::io::{self, Read, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(target_os = "linux")]
-use std::os::unix::net::UnixStream;
+use std::os::unix::net::{UnixListener, UnixStream};
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
-use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::path::Path;
+use std::path::PathBuf;
 #[cfg(target_os = "linux")]
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
 #[cfg(target_os = "linux")]
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "linux")]
 use std::thread;
 use std::time::Duration;
 #[cfg(target_os = "linux")]
@@ -31,22 +34,26 @@ use serde::{Deserialize, Serialize};
 /// Maximum serialized host context accepted by the Agent UI.
 pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 
-/// Maximum serialized activation accepted from the Agent UI's stdin.
+/// Maximum serialized activation accepted from the Agent UI's private socket.
 pub const MAX_ACTIVATION_BYTES: usize = MAX_CONTEXT_BYTES * 2 + 1024;
 pub const SDK_LAUNCHER_PROTOCOL: u32 = 1;
 pub const PACKAGED_SDK_LAUNCHER: &str = "/usr/local/bin/cos-ask-claw-launcher";
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
-const READY_FD: i32 = 3;
+const ACTIVATION_FD: i32 = 3;
 const EXECUTABLE_FD: i32 = 10;
 const READY_MESSAGE: &[u8] = b"READY\n";
+const SDK_READY_MESSAGE: &[u8] = b"READY 1\n";
+const SDK_ACCEPTED_MESSAGE: &[u8] = b"ACCEPTED 1\n";
 const PACKAGED_AGENT_UI: &str = "/usr/local/bin/cos-agent-ui";
 const OVERLAY_FLAG: &str = "--overlay";
 const VOICE_FLAG: &str = "--voice";
 const QUERY_FLAG: &str = "--query";
 const CONTEXT_FLAG: &str = "--context";
-const CONTEXT_STDIN_FLAG: &str = "--context-stdin";
-const READY_FD_FLAG: &str = "--ready-fd";
+const CONTEXT_SOCKET_FLAG: &str = "--context-socket";
+const ACTIVATION_FD_FLAG: &str = "--activation-fd";
+#[cfg(target_os = "linux")]
+static SDK_ENDPOINT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// A host-owned, typed description of the context for an Ask Claw request.
 ///
@@ -79,16 +86,16 @@ pub enum ContextError {
     NoRoomForText,
 }
 
-/// Errors while reading and validating an explicit stdin activation.
+/// Errors while reading and validating an explicit socket activation.
 #[derive(Debug, thiserror::Error)]
 pub enum ActivationInputError {
-    #[error("Ask Claw activation cannot contain both inline and stdin context")]
+    #[error("Ask Claw activation cannot contain both inline and socket context")]
     ConflictingContext,
 
     #[error("Ask Claw activation is {actual} bytes; the limit is {limit} bytes")]
     TooLarge { actual: usize, limit: usize },
 
-    #[error("failed to read Ask Claw activation stdin: {0}")]
+    #[error("failed to read Ask Claw activation socket: {0}")]
     Io(#[from] io::Error),
 
     #[error("Ask Claw activation is malformed: {0}")]
@@ -100,10 +107,10 @@ pub enum ActivationInputError {
     #[error("Ask Claw does not accept payload-bearing {0} arguments")]
     ProhibitedArgument(&'static str),
 
-    #[error("Ask Claw stdin activation requires a valid readiness descriptor")]
+    #[error("Ask Claw socket activation requires a valid inherited descriptor")]
     MissingReadyChannel,
 
-    #[error("failed to signal Ask Claw readiness: {0}")]
+    #[error("failed to use Ask Claw activation socket: {0}")]
     ReadyIo(#[source] io::Error),
 
     #[error(transparent)]
@@ -178,7 +185,7 @@ pub enum LaunchError {
 /// Single-instance activation sent to the Agent UI.
 ///
 /// Shared launchers serialize this value to a transient child process's
-/// anonymous stdin. Context-free launches may also serialize it through
+/// anonymous socket. Context-free launches may also serialize it through
 /// libcosmic's existing single-instance D-Bus activation mechanism.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -219,8 +226,8 @@ pub struct UiArguments {
     pub voice: bool,
     pub query: Option<String>,
     pub context: Option<String>,
-    pub context_stdin: bool,
-    pub ready_fd: Option<i32>,
+    pub context_socket: bool,
+    pub activation_fd: Option<i32>,
     pub help: bool,
     pub unknown: Vec<String>,
 }
@@ -228,14 +235,14 @@ pub struct UiArguments {
 impl UiArguments {
     /// Resolve this invocation into the activation sent to the UI instance.
     ///
-    /// Stdin is read only when the explicit `--context-stdin` flag is present,
-    /// so ordinary `exec.start` callers cannot block waiting for input.
+    /// The reader is consumed only for an explicit private activation,
+    /// so ordinary UI launches cannot block waiting for input.
     pub fn activation<R: Read>(
         &self,
-        stdin: R,
+        input: R,
     ) -> Result<Option<Activation>, ActivationInputError> {
         if self.context.is_some() {
-            if self.context_stdin {
+            if self.context_socket {
                 return Err(ActivationInputError::ConflictingContext);
             }
             return Err(ActivationInputError::ProhibitedArgument("--context"));
@@ -243,8 +250,8 @@ impl UiArguments {
         if self.query.is_some() {
             return Err(ActivationInputError::ProhibitedArgument("--query"));
         }
-        if self.context_stdin {
-            let activation = read_activation(stdin)?;
+        if self.context_socket {
+            let activation = read_activation(input)?;
             return Ok(self.overlay.then_some(activation));
         }
         Ok(self.overlay.then(|| Activation {
@@ -254,12 +261,12 @@ impl UiArguments {
         }))
     }
 
-    /// Resolve activation from process stdin and close that descriptor.
-    pub fn activation_from_process_stdin(
+    /// Resolve activation from the inherited Unix socket and close it.
+    pub fn activation_from_process_socket(
         &self,
     ) -> Result<Option<Activation>, ActivationInputError> {
-        if !self.context_stdin {
-            if self.ready_fd.is_some() {
+        if !self.context_socket {
+            if self.activation_fd.is_some() {
                 return Err(ActivationInputError::MissingReadyChannel);
             }
             return self.activation(io::empty());
@@ -270,26 +277,47 @@ impl UiArguments {
         if self.query.is_some() {
             return Err(ActivationInputError::ProhibitedArgument("--query"));
         }
-        let ready_fd = self
-            .ready_fd
+        let activation_fd = self
+            .activation_fd
             .ok_or(ActivationInputError::MissingReadyChannel)?;
         require_process_handoff_isolation()?;
-        signal_ready(ready_fd)?;
-        #[cfg(unix)]
+        #[cfg(target_os = "linux")]
         {
-            use std::fs::File;
             use std::os::fd::FromRawFd;
+            use std::os::unix::net::UnixStream;
 
-            // SAFETY: this is called once during process argument parsing,
-            // before any other UI code borrows stdin. File takes ownership so
-            // fd 0 is closed immediately after the bounded read (or conflict).
-            let stdin = unsafe { File::from_raw_fd(0) };
-            self.activation(stdin)
+            // SAFETY: the direct parent transfers this descriptor once during
+            // process startup; UnixStream owns and closes it on every path.
+            let socket = unsafe { UnixStream::from_raw_fd(activation_fd) };
+            self.activation_from_socket(socket)
         }
-        #[cfg(not(unix))]
+        #[cfg(not(target_os = "linux"))]
         {
-            self.activation(std::io::stdin().lock())
+            Err(ActivationInputError::Isolation(
+                IsolationError::UnsupportedPlatform,
+            ))
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn activation_from_socket(
+        &self,
+        mut socket: UnixStream,
+    ) -> Result<Option<Activation>, ActivationInputError> {
+        socket
+            .write_all(READY_MESSAGE)
+            .and_then(|_| socket.flush())
+            .map_err(ActivationInputError::ReadyIo)?;
+        let payload =
+            read_frame(&mut socket, MAX_ACTIVATION_BYTES).map_err(|error| match error {
+                FrameError::Io(error) => ActivationInputError::Io(error),
+                FrameError::TooLarge(actual) => ActivationInputError::TooLarge {
+                    actual,
+                    limit: MAX_ACTIVATION_BYTES,
+                },
+            })?;
+        let activation = read_activation(payload.as_slice())?;
+        Ok(self.overlay.then_some(activation))
     }
 }
 
@@ -307,9 +335,9 @@ where
             VOICE_FLAG => parsed.voice = true,
             QUERY_FLAG => parsed.query = arguments.next(),
             CONTEXT_FLAG => parsed.context = arguments.next(),
-            CONTEXT_STDIN_FLAG => parsed.context_stdin = true,
-            READY_FD_FLAG => {
-                parsed.ready_fd = arguments
+            CONTEXT_SOCKET_FLAG => parsed.context_socket = true,
+            ACTIVATION_FD_FLAG => {
+                parsed.activation_fd = arguments
                     .next()
                     .and_then(|value| value.parse::<i32>().ok())
                     .filter(|fd| *fd >= 3);
@@ -322,7 +350,8 @@ where
 }
 
 /// Usage text for the shared Agent UI activation contract.
-pub const UI_USAGE: &str = "cos-agent-ui [--overlay] [--voice] [--context-stdin --ready-fd FD]";
+pub const UI_USAGE: &str =
+    "cos-agent-ui [--overlay] [--voice] [--context-socket --activation-fd FD]";
 
 fn encode_context<C: Context>(context: &C) -> Result<String, ContextError> {
     if C::APP_ID.trim().is_empty() {
@@ -426,6 +455,32 @@ fn read_activation<R: Read>(reader: R) -> Result<Activation, ActivationInputErro
     Ok(activation)
 }
 
+#[derive(Debug)]
+enum FrameError {
+    Io(io::Error),
+    TooLarge(usize),
+}
+
+fn read_frame<R: Read>(reader: &mut R, limit: usize) -> Result<Vec<u8>, FrameError> {
+    let mut header = [0_u8; 4];
+    reader.read_exact(&mut header).map_err(FrameError::Io)?;
+    let length = u32::from_be_bytes(header) as usize;
+    if length > limit {
+        return Err(FrameError::TooLarge(length));
+    }
+    let mut payload = vec![0_u8; length];
+    reader.read_exact(&mut payload).map_err(FrameError::Io)?;
+    Ok(payload)
+}
+
+fn write_frame<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
+    let length = u32::try_from(payload.len())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "frame is too large"))?;
+    writer.write_all(&length.to_be_bytes())?;
+    writer.write_all(payload)?;
+    writer.flush()
+}
+
 fn validate_activation_context(context: &str) -> Result<(), ActivationInputError> {
     if context.len() > MAX_CONTEXT_BYTES {
         return Err(ActivationInputError::TooLarge {
@@ -484,26 +539,6 @@ fn set_current_process_non_dumpable() -> Result<(), IsolationError> {
 }
 
 #[cfg(target_os = "linux")]
-fn signal_ready(fd: i32) -> Result<(), ActivationInputError> {
-    use std::fs::File;
-
-    // SAFETY: the descriptor is supplied by the direct parent specifically
-    // for this one-shot handshake and ownership is transferred to File.
-    let mut ready = unsafe { File::from_raw_fd(fd) };
-    ready
-        .write_all(READY_MESSAGE)
-        .and_then(|_| ready.flush())
-        .map_err(ActivationInputError::ReadyIo)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn signal_ready(_fd: i32) -> Result<(), ActivationInputError> {
-    Err(ActivationInputError::Isolation(
-        IsolationError::UnsupportedPlatform,
-    ))
-}
-
-#[cfg(target_os = "linux")]
 struct TrustedExecutable {
     file: File,
 }
@@ -531,7 +566,11 @@ fn open_executable(
         return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
     }
     if require_packaged_owner {
-        for parent in [Path::new("/usr/local"), Path::new("/usr/local/bin")] {
+        for parent in [
+            Path::new("/usr"),
+            Path::new("/usr/local"),
+            Path::new("/usr/local/bin"),
+        ] {
             let metadata =
                 std::fs::symlink_metadata(parent).map_err(LaunchError::ExecutableUnavailable)?;
             use std::os::unix::fs::MetadataExt;
@@ -567,16 +606,19 @@ fn launch_argv() -> Vec<String> {
     vec![
         format!("/proc/self/fd/{EXECUTABLE_FD}"),
         OVERLAY_FLAG.to_string(),
-        CONTEXT_STDIN_FLAG.to_string(),
-        READY_FD_FLAG.to_string(),
-        READY_FD.to_string(),
+        CONTEXT_SOCKET_FLAG.to_string(),
+        ACTIVATION_FD_FLAG.to_string(),
+        ACTIVATION_FD.to_string(),
     ]
 }
 
 fn prepare_launch<C: Context>(context: &C) -> Result<Vec<u8>, LaunchError> {
     let context = serialize_context(context)?;
-    let activation = Activation::overlay_with_context(context);
-    let payload = serde_json::to_vec(&activation).map_err(LaunchError::ActivationSerialization)?;
+    serialize_activation(&Activation::overlay_with_context(context))
+}
+
+fn serialize_activation(activation: &Activation) -> Result<Vec<u8>, LaunchError> {
+    let payload = serde_json::to_vec(activation).map_err(LaunchError::ActivationSerialization)?;
     if payload.len() > MAX_ACTIVATION_BYTES {
         return Err(LaunchError::ActivationTooLarge {
             actual: payload.len(),
@@ -593,13 +635,14 @@ fn launch_prepared_with_program(
     program: TrustedExecutable,
 ) -> Result<(), LaunchError> {
     let argv = launch_argv();
-    let (mut ready_parent, ready_child) = UnixStream::pair().map_err(LaunchError::ReadyChannel)?;
-    let ready_child_fd = ready_child.as_raw_fd();
+    let (mut activation_parent, activation_child) =
+        UnixStream::pair().map_err(LaunchError::ReadyChannel)?;
+    let activation_child_fd = activation_child.as_raw_fd();
     let executable_fd = program.file.as_raw_fd();
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
-        .stdin(Stdio::piped())
+        .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     // SAFETY: pre_exec performs only async-signal-safe libc calls.
@@ -612,19 +655,20 @@ fn launch_prepared_with_program(
             if executable_tmp < 0 {
                 return Err(io::Error::last_os_error());
             }
-            let ready_tmp = libc::fcntl(ready_child_fd, libc::F_DUPFD_CLOEXEC, 20);
-            if ready_tmp < 0 {
+            let activation_tmp = libc::fcntl(activation_child_fd, libc::F_DUPFD_CLOEXEC, 20);
+            if activation_tmp < 0 {
                 libc::close(executable_tmp);
                 return Err(io::Error::last_os_error());
             }
-            if libc::dup2(executable_tmp, EXECUTABLE_FD) < 0 || libc::dup2(ready_tmp, READY_FD) < 0
+            if libc::dup2(executable_tmp, EXECUTABLE_FD) < 0
+                || libc::dup2(activation_tmp, ACTIVATION_FD) < 0
             {
                 libc::close(executable_tmp);
-                libc::close(ready_tmp);
+                libc::close(activation_tmp);
                 return Err(io::Error::last_os_error());
             }
             libc::close(executable_tmp);
-            libc::close(ready_tmp);
+            libc::close(activation_tmp);
             Ok(())
         });
     }
@@ -632,7 +676,7 @@ fn launch_prepared_with_program(
     let started = Instant::now();
     let mut child = command.spawn().map_err(LaunchError::Spawn)?;
     drop(program);
-    drop(ready_child);
+    drop(activation_child);
     let remaining = timeout
         .checked_sub(started.elapsed())
         .ok_or(LaunchError::Timeout(timeout));
@@ -640,11 +684,11 @@ fn launch_prepared_with_program(
         Ok(remaining) => remaining,
         Err(error) => return terminate_child(child, error),
     };
-    if let Err(error) = ready_parent.set_read_timeout(Some(remaining)) {
+    if let Err(error) = activation_parent.set_read_timeout(Some(remaining)) {
         return terminate_child(child, LaunchError::Ready(error));
     }
     let mut ready = [0_u8; READY_MESSAGE.len()];
-    if let Err(error) = ready_parent.read_exact(&mut ready) {
+    if let Err(error) = activation_parent.read_exact(&mut ready) {
         let failure = if matches!(
             error.kind(),
             io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
@@ -676,60 +720,29 @@ fn launch_prepared_with_program(
         );
     }
 
-    let Some(mut stdin) = child.stdin.take() else {
-        return terminate_child(
-            child,
-            LaunchError::Write(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Ask Claw stdin is unavailable",
-            )),
-        );
-    };
-    let payload = payload.to_vec();
-    let (sender, receiver) = mpsc::sync_channel(1);
-    let writer = match thread::Builder::new()
-        .name("ask-claw-stdin".to_string())
-        .spawn(move || {
-            let result = stdin.write_all(&payload).and_then(|_| stdin.flush());
-            drop(stdin);
-            let _ = sender.send(result);
-        }) {
-        Ok(writer) => writer,
-        Err(error) => return terminate_child(child, LaunchError::ThreadSpawn(error)),
-    };
     let remaining = timeout
         .checked_sub(started.elapsed())
         .ok_or(LaunchError::Timeout(timeout));
-    let write_result = match remaining {
-        Ok(remaining) => receiver.recv_timeout(remaining),
-        Err(error) => {
-            let result = terminate_child(child, error);
-            let _ = writer.join();
-            return result;
-        }
+    let remaining = match remaining {
+        Ok(remaining) => remaining,
+        Err(error) => return terminate_child(child, error),
     };
-    match write_result {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            let result = terminate_child(child, LaunchError::Write(error));
-            let _ = writer.join();
-            return result;
-        }
-        Err(mpsc::RecvTimeoutError::Timeout) => {
-            let result = terminate_child(child, LaunchError::Timeout(timeout));
-            let _ = writer.join();
-            return result;
-        }
-        Err(mpsc::RecvTimeoutError::Disconnected) => {
-            let result = terminate_child(
-                child,
-                LaunchError::Write(io::Error::other("Ask Claw stdin writer disconnected")),
-            );
-            let _ = writer.join();
-            return result;
-        }
+    if let Err(error) = activation_parent.set_write_timeout(Some(remaining)) {
+        return terminate_child(child, LaunchError::Write(error));
     }
-    let _ = writer.join();
+    if let Err(error) = write_frame(&mut activation_parent, payload) {
+        let failure = if matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ) {
+            LaunchError::Timeout(timeout)
+        } else {
+            LaunchError::Write(error)
+        };
+        return terminate_child(child, failure);
+    }
+    let _ = activation_parent.shutdown(std::net::Shutdown::Write);
+    drop(activation_parent);
 
     child.wait().map_err(LaunchError::Wait)?;
     Ok(())
@@ -765,68 +778,249 @@ impl Context for SdkContext<'_> {
 
 #[doc(hidden)]
 pub fn run_sdk_launcher() -> Result<(), LaunchError> {
-    require_process_handoff_isolation()?;
-    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
-    let protocol = arguments
-        .windows(2)
-        .find(|pair| pair[0] == "--protocol")
-        .and_then(|pair| pair[1].parse::<u32>().ok())
-        .ok_or_else(|| {
-            LaunchError::Ready(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "missing SDK launcher protocol",
-            ))
-        })?;
-    if protocol != SDK_LAUNCHER_PROTOCOL {
-        return Err(LaunchError::Ready(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "unsupported SDK launcher protocol",
-        )));
-    }
-    io::stdout()
-        .write_all(b"READY 1\n")
-        .and_then(|_| io::stdout().flush())
-        .map_err(LaunchError::Ready)?;
-    let mut input = Vec::new();
-    io::stdin()
-        .take(MAX_CONTEXT_BYTES as u64 + 1)
-        .read_to_end(&mut input)
-        .map_err(LaunchError::Write)?;
-    if input.len() > MAX_CONTEXT_BYTES {
-        return Err(LaunchError::ActivationTooLarge {
-            actual: input.len(),
-            limit: MAX_CONTEXT_BYTES,
-        });
-    }
-    let request: SdkLaunchRequest =
-        serde_json::from_slice(&input).map_err(LaunchError::ActivationSerialization)?;
-    if request.protocol != SDK_LAUNCHER_PROTOCOL || request.app.trim().is_empty() {
-        return Err(LaunchError::Ready(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid SDK launcher request",
-        )));
-    }
-    let mut value = serde_json::to_value(SdkContext {
-        hint: request.hint.as_deref(),
-    })
-    .map_err(ContextError::Serialization)?;
-    value
-        .as_object_mut()
-        .unwrap()
-        .insert("app".to_string(), serde_json::Value::String(request.app));
-    let context = serde_json::to_string(&value).map_err(ContextError::Serialization)?;
-    let activation = Activation::overlay_with_context(context);
-    let payload =     serde_json::to_vec(&activation).map_err(LaunchError::ActivationSerialization)?;
     #[cfg(target_os = "linux")]
-    {
-    let program = packaged_agent_ui()?;
-    launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, program)
-    }
+    let expected_parent = unsafe { libc::getppid() };
+    #[cfg(target_os = "linux")]
+    let expected_uid = unsafe { libc::geteuid() };
+    require_process_handoff_isolation()?;
     #[cfg(not(target_os = "linux"))]
     {
-    let _ = payload;
-    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
+        return Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform));
     }
+    #[cfg(target_os = "linux")]
+    {
+        let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+        let protocol = arguments
+            .windows(2)
+            .find(|pair| pair[0] == "--protocol")
+            .and_then(|pair| pair[1].parse::<u32>().ok())
+            .ok_or_else(|| {
+                LaunchError::Ready(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "missing SDK launcher protocol",
+                ))
+            })?;
+        if protocol != SDK_LAUNCHER_PROTOCOL {
+            return Err(LaunchError::Ready(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unsupported SDK launcher protocol",
+            )));
+        }
+        if expected_parent <= 1 {
+            return Err(LaunchError::Ready(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "SDK launcher has no live direct parent",
+            )));
+        }
+        let (listener, endpoint) = bind_sdk_listener().map_err(LaunchError::Ready)?;
+        io::stdout()
+            .write_all(format!("SOCKET {SDK_LAUNCHER_PROTOCOL} @{endpoint}\n").as_bytes())
+            .and_then(|_| io::stdout().flush())
+            .map_err(LaunchError::Ready)?;
+        let deadline = Instant::now() + HANDSHAKE_TIMEOUT;
+        let mut client = accept_sdk_parent(&listener, expected_parent, expected_uid, deadline)?;
+        drop(listener);
+        client
+            .set_write_timeout(Some(sdk_deadline_remaining(deadline)?))
+            .map_err(LaunchError::Ready)?;
+        client
+            .write_all(SDK_READY_MESSAGE)
+            .and_then(|_| client.flush())
+            .map_err(LaunchError::Ready)?;
+        let input = read_frame(&mut client, MAX_CONTEXT_BYTES).map_err(|error| match error {
+            FrameError::Io(error) => LaunchError::Write(error),
+            FrameError::TooLarge(actual) => LaunchError::ActivationTooLarge {
+                actual,
+                limit: MAX_CONTEXT_BYTES,
+            },
+        })?;
+        if unsafe { libc::getppid() } != expected_parent {
+            return Err(LaunchError::Ready(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "SDK launcher parent exited during handoff",
+            )));
+        }
+        let request: SdkLaunchRequest =
+            serde_json::from_slice(&input).map_err(LaunchError::ActivationSerialization)?;
+        if request.protocol != SDK_LAUNCHER_PROTOCOL || request.app.trim().is_empty() {
+            return Err(LaunchError::Ready(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid SDK launcher request",
+            )));
+        }
+        let mut value = serde_json::to_value(SdkContext {
+            hint: request.hint.as_deref(),
+        })
+        .map_err(ContextError::Serialization)?;
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("app".to_string(), serde_json::Value::String(request.app));
+        let context = serde_json::to_string(&value).map_err(ContextError::Serialization)?;
+        if context.len() > MAX_CONTEXT_BYTES {
+            return Err(ContextError::TooLarge {
+                actual: context.len(),
+                limit: MAX_CONTEXT_BYTES,
+            }
+            .into());
+        }
+        let activation = Activation::overlay_with_context(context);
+        let payload = serialize_activation(&activation)?;
+        let program = packaged_agent_ui()?;
+        client
+            .set_write_timeout(Some(sdk_deadline_remaining(deadline)?))
+            .map_err(LaunchError::Ready)?;
+        client
+            .write_all(SDK_ACCEPTED_MESSAGE)
+            .and_then(|_| client.flush())
+            .map_err(LaunchError::Ready)?;
+        drop(client);
+        launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, program)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn bind_sdk_listener() -> io::Result<(UnixListener, String)> {
+    let sequence = SDK_ENDPOINT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let endpoint = format!(
+        "claw-ask-v{SDK_LAUNCHER_PROTOCOL}-{}-{sequence}",
+        std::process::id()
+    );
+    if endpoint.len() + 1 > 108 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "Ask Claw socket endpoint is too long",
+        ));
+    }
+    // SAFETY: every syscall receives initialized values and checked lengths;
+    // ownership of the successfully-bound descriptor transfers to UnixListener.
+    unsafe {
+        let fd = libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0);
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut address: libc::sockaddr_un = std::mem::zeroed();
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        for (target, source) in address.sun_path[1..].iter_mut().zip(endpoint.as_bytes()) {
+            *target = *source as libc::c_char;
+        }
+        let length = std::mem::offset_of!(libc::sockaddr_un, sun_path) + 1 + endpoint.len();
+        if libc::bind(
+            fd,
+            std::ptr::addr_of!(address).cast::<libc::sockaddr>(),
+            length as libc::socklen_t,
+        ) != 0
+            || libc::listen(fd, 8) != 0
+        {
+            let error = io::Error::last_os_error();
+            libc::close(fd);
+            return Err(error);
+        }
+        Ok((UnixListener::from_raw_fd(fd), endpoint))
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn accept_sdk_parent(
+    listener: &UnixListener,
+    expected_parent: libc::pid_t,
+    expected_uid: libc::uid_t,
+    deadline: Instant,
+) -> Result<UnixStream, LaunchError> {
+    accept_sdk_peer(
+        listener,
+        expected_parent,
+        expected_uid,
+        expected_parent,
+        deadline,
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn accept_sdk_peer(
+    listener: &UnixListener,
+    expected_peer: libc::pid_t,
+    expected_uid: libc::uid_t,
+    parent_to_monitor: libc::pid_t,
+    deadline: Instant,
+) -> Result<UnixStream, LaunchError> {
+    listener.set_nonblocking(true).map_err(LaunchError::Ready)?;
+    loop {
+        if unsafe { libc::getppid() } != parent_to_monitor {
+            return Err(LaunchError::Ready(io::Error::new(
+                io::ErrorKind::ConnectionAborted,
+                "SDK launcher parent exited before handoff",
+            )));
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if sdk_peer_is_expected(
+                    sdk_peer_credentials(&stream).map_err(LaunchError::Ready)?,
+                    expected_peer,
+                    expected_uid,
+                ) {
+                    let remaining = sdk_deadline_remaining(deadline)?;
+                    stream
+                        .set_read_timeout(Some(remaining))
+                        .map_err(LaunchError::Ready)?;
+                    stream
+                        .set_write_timeout(Some(remaining))
+                        .map_err(LaunchError::Ready)?;
+                    return Ok(stream);
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                if Instant::now() >= deadline {
+                    return Err(LaunchError::Timeout(HANDSHAKE_TIMEOUT));
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => return Err(LaunchError::Ready(error)),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn sdk_deadline_remaining(deadline: Instant) -> Result<Duration, LaunchError> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .ok_or(LaunchError::Timeout(HANDSHAKE_TIMEOUT))
+}
+
+#[cfg(target_os = "linux")]
+fn sdk_peer_is_expected(
+    actual: (libc::pid_t, libc::uid_t),
+    expected_parent: libc::pid_t,
+    expected_uid: libc::uid_t,
+) -> bool {
+    actual == (expected_parent, expected_uid)
+}
+
+#[cfg(target_os = "linux")]
+fn sdk_peer_credentials(stream: &UnixStream) -> io::Result<(libc::pid_t, libc::uid_t)> {
+    let mut credentials: libc::ucred = unsafe { std::mem::zeroed() };
+    let mut length = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+    // SAFETY: credentials and its exact initialized length are writable output
+    // storage for SO_PEERCRED on this connected AF_UNIX socket.
+    if unsafe {
+        libc::getsockopt(
+            stream.as_raw_fd(),
+            libc::SOL_SOCKET,
+            libc::SO_PEERCRED,
+            std::ptr::addr_of_mut!(credentials).cast(),
+            &mut length,
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    if length as usize != std::mem::size_of::<libc::ucred>() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid SDK peer credentials",
+        ));
+    }
+    Ok((credentials.pid, credentials.uid))
 }
 
 /// Schedule Ask Claw without blocking the caller's UI thread.
@@ -837,6 +1031,23 @@ pub fn launch<C: Context>(context: &C) -> Result<(), LaunchError> {
     require_process_handoff_isolation()?;
     let program = packaged_agent_ui()?;
     let payload = prepare_launch(context)?;
+    spawn_prepared(payload, program).map(|_| ())
+}
+
+/// Schedule a transient Ask Claw overlay with a bounded auto-submit query.
+pub fn launch_query(query: &str) -> Result<(), LaunchError> {
+    require_process_handoff_isolation()?;
+    if query.len() > MAX_CONTEXT_BYTES {
+        return Err(LaunchError::ActivationTooLarge {
+            actual: query.len(),
+            limit: MAX_CONTEXT_BYTES,
+        });
+    }
+    let program = packaged_agent_ui()?;
+    let payload = serialize_activation(&Activation {
+        query: Some(query.to_string()),
+        ..Activation::default()
+    })?;
     spawn_prepared(payload, program).map(|_| ())
 }
 

@@ -96,11 +96,53 @@ fn descriptor_launcher_argv_is_fixed_and_contains_no_payload() {
         [
             "/proc/self/fd/10",
             "--overlay",
-            "--context-stdin",
-            "--ready-fd",
+            "--context-socket",
+            "--activation-fd",
             "3",
         ]
     );
+}
+
+#[test]
+fn frames_round_trip_and_reject_declared_oversize_payloads() {
+    let mut encoded = Vec::new();
+    write_frame(&mut encoded, b"private context").unwrap();
+    assert_eq!(
+        read_frame(&mut Cursor::new(encoded), MAX_ACTIVATION_BYTES).unwrap(),
+        b"private context"
+    );
+
+    let oversized = ((MAX_ACTIVATION_BYTES + 1) as u32).to_be_bytes();
+    assert!(matches!(
+        read_frame(&mut Cursor::new(oversized), MAX_ACTIVATION_BYTES),
+        Err(FrameError::TooLarge(actual)) if actual == MAX_ACTIVATION_BYTES + 1
+    ));
+
+    let mut partial = 8_u32.to_be_bytes().to_vec();
+    partial.extend_from_slice(b"short");
+    assert!(matches!(
+        read_frame(&mut Cursor::new(partial), MAX_ACTIVATION_BYTES),
+        Err(FrameError::Io(error)) if error.kind() == io::ErrorKind::UnexpectedEof
+    ));
+}
+
+#[test]
+fn query_activation_is_bounded_and_contains_no_argv_payload() {
+    let payload = serialize_activation(&Activation {
+        query: Some("private query".into()),
+        ..Activation::default()
+    })
+    .unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Activation>(&payload)
+            .unwrap()
+            .query
+            .as_deref(),
+        Some("private query")
+    );
+    assert!(!launch_argv()
+        .iter()
+        .any(|argument| argument.contains("private query")));
 }
 
 #[test]
@@ -122,11 +164,93 @@ fn retained_executable_descriptor_survives_path_substitution() {
     let replacement = std::fs::metadata(&executable).unwrap();
     let retained = trusted.file.metadata().unwrap();
 
-    assert_eq!((retained.dev(), retained.ino()), (original.dev(), original.ino()));
+    assert_eq!(
+        (retained.dev(), retained.ino()),
+        (original.dev(), original.ino())
+    );
     assert_ne!(
         (retained.dev(), retained.ino()),
         (replacement.dev(), replacement.ino())
     );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sdk_listener_is_abstract_and_peer_credentials_are_exact() {
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::SocketAddr;
+
+    let (listener, endpoint) = bind_sdk_listener().unwrap();
+    assert!(listener.local_addr().unwrap().as_pathname().is_none());
+    let address = SocketAddr::from_abstract_name(endpoint.as_bytes()).unwrap();
+    let client = UnixStream::connect_addr(&address).unwrap();
+    let (server, _) = listener.accept().unwrap();
+    let actual = sdk_peer_credentials(&server).unwrap();
+    let pid = std::process::id() as libc::pid_t;
+    let uid = unsafe { libc::geteuid() };
+    assert!(sdk_peer_is_expected(actual, pid, uid));
+    assert!(!sdk_peer_is_expected(actual, pid + 1, uid));
+    assert!(!sdk_peer_is_expected(actual, pid, uid.wrapping_add(1)));
+    drop(client);
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sdk_listener_rejects_an_attacker_then_accepts_the_direct_peer() {
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::SocketAddr;
+    use std::process::Stdio;
+
+    let (listener, endpoint) = bind_sdk_listener().unwrap();
+    let expected_peer = std::process::id() as libc::pid_t;
+    let expected_uid = unsafe { libc::geteuid() };
+    let parent = unsafe { libc::getppid() };
+    let acceptor = std::thread::spawn(move || {
+        accept_sdk_peer(
+            &listener,
+            expected_peer,
+            expected_uid,
+            parent,
+            Instant::now() + Duration::from_secs(2),
+        )
+    });
+    let script = concat!(
+        "import socket,sys,time\n",
+        "s=socket.socket(socket.AF_UNIX,socket.SOCK_STREAM)\n",
+        "s.connect('\\0'+sys.argv[1])\n",
+        "time.sleep(.2)\n",
+    );
+    let mut attacker = std::process::Command::new("python3")
+        .args(["-c", script, &endpoint])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(100));
+    let address = SocketAddr::from_abstract_name(endpoint.as_bytes()).unwrap();
+    let direct_peer = UnixStream::connect_addr(&address).unwrap();
+    let accepted = acceptor.join().unwrap().unwrap();
+    assert_eq!(
+        sdk_peer_credentials(&accepted).unwrap(),
+        (expected_peer, expected_uid)
+    );
+    drop(direct_peer);
+    attacker.wait().unwrap();
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn sdk_listener_fails_closed_when_the_captured_parent_changes() {
+    let (listener, _) = bind_sdk_listener().unwrap();
+    let result = accept_sdk_peer(
+        &listener,
+        std::process::id() as libc::pid_t,
+        unsafe { libc::geteuid() },
+        -1,
+        Instant::now() + Duration::from_secs(1),
+    );
+    assert!(matches!(result, Err(LaunchError::Ready(_))));
 }
 
 #[test]
@@ -158,7 +282,7 @@ fn executable_validation_rejects_missing_and_non_regular_targets() {
 }
 
 #[test]
-fn ui_stdin_activation_decodes_without_an_argv_payload() {
+fn ui_socket_activation_decodes_without_an_argv_payload() {
     let expected = Activation::overlay_with_context(
         serialize_context(&TestContext {
             mode: "inspect",
@@ -167,7 +291,7 @@ fn ui_stdin_activation_decodes_without_an_argv_payload() {
         .unwrap(),
     );
     let payload = serde_json::to_vec(&expected).unwrap();
-    let parsed = parse_ui_arguments(["--overlay", "--context-stdin", "--future"]);
+    let parsed = parse_ui_arguments(["--overlay", "--context-socket", "--future"]);
     assert_eq!(parsed.unknown, ["--future"]);
 
     let activation = parsed.activation(Cursor::new(payload)).unwrap().unwrap();
@@ -175,27 +299,43 @@ fn ui_stdin_activation_decodes_without_an_argv_payload() {
 }
 
 #[test]
-fn ui_stdin_rejects_conflicting_context_without_inline_fallback() {
+#[cfg(target_os = "linux")]
+fn ui_socket_signals_ready_before_reading_a_bounded_frame() {
+    let expected = Activation::overlay_with_context(r#"{"app":"socket-test"}"#.into());
+    let payload = serde_json::to_vec(&expected).unwrap();
+    let parsed = parse_ui_arguments(["--overlay", "--context-socket"]);
+    let (mut parent, child) = UnixStream::pair().unwrap();
+    let reader = std::thread::spawn(move || parsed.activation_from_socket(child));
+
+    let mut ready = [0_u8; READY_MESSAGE.len()];
+    parent.read_exact(&mut ready).unwrap();
+    assert_eq!(&ready, READY_MESSAGE);
+    write_frame(&mut parent, &payload).unwrap();
+    assert_eq!(reader.join().unwrap().unwrap(), Some(expected));
+}
+
+#[test]
+fn ui_socket_rejects_conflicting_context_without_inline_fallback() {
     let parsed = parse_ui_arguments([
         "--overlay",
-        "--context-stdin",
+        "--context-socket",
         "--context",
         r#"{"app":"legacy"}"#,
     ]);
-    let stdin = serde_json::to_vec(&Activation::overlay_with_context(
-        r#"{"app":"stdin"}"#.to_string(),
+    let socket_payload = serde_json::to_vec(&Activation::overlay_with_context(
+        r#"{"app":"socket"}"#.to_string(),
     ))
     .unwrap();
 
     assert!(matches!(
-        parsed.activation(Cursor::new(stdin)),
+        parsed.activation(Cursor::new(socket_payload)),
         Err(ActivationInputError::ConflictingContext)
     ));
 }
 
 #[test]
-fn ui_stdin_rejects_oversize_malformed_and_invalid_context() {
-    let parsed = parse_ui_arguments(["--overlay", "--context-stdin"]);
+fn ui_socket_rejects_oversize_malformed_and_invalid_context() {
+    let parsed = parse_ui_arguments(["--overlay", "--context-socket"]);
     assert!(matches!(
         parsed.activation(Cursor::new(vec![b'x'; MAX_ACTIVATION_BYTES + 1])),
         Err(ActivationInputError::TooLarge { .. })
@@ -216,12 +356,12 @@ fn ui_stdin_rejects_oversize_malformed_and_invalid_context() {
 }
 
 #[test]
-fn payload_bearing_argv_is_rejected_without_reading_stdin() {
+fn payload_bearing_argv_is_rejected_without_reading_the_private_channel() {
     struct PanicReader;
 
     impl Read for PanicReader {
         fn read(&mut self, _buffer: &mut [u8]) -> io::Result<usize> {
-            panic!("legacy activation must not read stdin");
+            panic!("legacy activation must not read the private channel");
         }
     }
 
@@ -345,16 +485,21 @@ fn parent_waits_for_ready_before_writing_private_context() {
         &fake_ui,
         concat!(
             "#!/usr/bin/python3\n",
-            "import ctypes, json, os, select, sys\n",
+            "import ctypes, json, os, select, socket, struct, sys\n",
             "base = os.environ['ASK_CLAW_TEST_CAPTURE']\n",
             "libc = ctypes.CDLL(None)\n",
             "libc.prctl(4, 0, 0, 0, 0)\n",
             "open(base + '.dumpable', 'w').write(str(libc.prctl(3, 0, 0, 0, 0)))\n",
-            "readable = bool(select.select([sys.stdin], [], [], 0)[0])\n",
+            "open(base + '.stdin', 'wb').write(os.read(0, 1))\n",
+            "channel = socket.socket(fileno=3)\n",
+            "readable = bool(select.select([channel], [], [], 0)[0])\n",
             "open(base + '.before', 'w').write(str(readable))\n",
-            "os.write(3, b'READY\\n')\n",
-            "payload = sys.stdin.buffer.read()\n",
-            "open(base + '.stdin', 'wb').write(payload)\n",
+            "channel.sendall(b'READY\\n')\n",
+            "length = struct.unpack('>I', channel.recv(4))[0]\n",
+            "payload = b''\n",
+            "while len(payload) < length:\n",
+            "    payload += channel.recv(length - len(payload))\n",
+            "open(base + '.socket', 'wb').write(payload)\n",
             "open(base + '.argv', 'w').write(json.dumps(sys.argv[1:]))\n",
             "open(base + '.env', 'w').write(json.dumps(dict(os.environ)))\n",
         ),
@@ -379,16 +524,19 @@ fn parent_waits_for_ready_before_writing_private_context() {
         std::fs::read_to_string(capture_base.with_extension("dumpable")).unwrap(),
         "0"
     );
+    assert!(std::fs::read(capture_base.with_extension("stdin"))
+        .unwrap()
+        .is_empty());
     let argv = std::fs::read_to_string(capture_base.with_extension("argv")).unwrap();
     let child_environment = std::fs::read_to_string(capture_base.with_extension("env")).unwrap();
     assert!(!argv.contains(secret));
     assert!(!argv.contains("/private/input"));
     assert!(!child_environment.contains(secret));
     assert!(!child_environment.contains("/private/input"));
-    assert!(argv.contains("--context-stdin"));
-    assert!(argv.contains("--ready-fd"));
+    assert!(argv.contains("--context-socket"));
+    assert!(argv.contains("--activation-fd"));
 
-    let received = std::fs::read(capture_base.with_extension("stdin")).unwrap();
+    let received = std::fs::read(capture_base.with_extension("socket")).unwrap();
     assert_eq!(received, payload);
     let activation = read_activation(Cursor::new(received)).unwrap();
     let context = activation.context.unwrap();
@@ -410,7 +558,7 @@ fn launcher_worker_does_not_block_the_calling_thread() {
         concat!(
             "#!/bin/sh\n",
             "printf 'READY\\n' >&3\n",
-            "cat >/dev/null\n",
+            "cat <&3 >/dev/null\n",
             "sleep 1\n",
         ),
     )
@@ -438,7 +586,7 @@ fn partial_context_write_kills_and_reaps_child() {
     std::fs::write(
         &fake_ui,
         format!(
-            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec 0<&-\nprintf 'READY\\n' >&3\nsleep 1\n",
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nprintf 'READY\\n' >&3\nexec 3>&-\nsleep 1\n",
             pid_file.display()
         ),
     )
