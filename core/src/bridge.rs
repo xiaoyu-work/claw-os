@@ -1574,6 +1574,7 @@ pub fn run_python_app_with_stdin(
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
 
+    let operation = command;
     let mut command = app_command(python);
     reset_app_environment(&mut command, false);
     command
@@ -1606,6 +1607,7 @@ pub fn run_python_app_with_stdin(
     }
 
     apply_routed_identity(&mut command)?;
+    harden_sensitive_stdin_child(&mut command, &app_id, operation, stdin_data.as_deref())?;
     let mut child = command
         .spawn()
         .map_err(|e| format!("failed to spawn python3: {e}"))?;
@@ -1675,6 +1677,38 @@ fn validated_operation_stdin(
         ));
     }
     Ok(stdin_data)
+}
+
+fn harden_sensitive_stdin_child(
+    child: &mut std::process::Command,
+    app_id: &str,
+    operation: &str,
+    stdin_data: Option<&[u8]>,
+) -> Result<(), String> {
+    if app_id != "exec" || operation != "start" || stdin_data.is_none() {
+        return Ok(());
+    }
+    child.env("COS_SENSITIVE_STDIN", "1");
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+
+        // SAFETY: pre_exec runs after fork and before exec. prctl is
+        // async-signal-safe and uses no borrowed parent state.
+        unsafe {
+            child.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        Ok(())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err("exec.start private stdin requires Linux".to_string())
+    }
 }
 
 fn write_child_stdin(
@@ -1850,6 +1884,7 @@ pub fn run_app_with_stdin(
         cmd.env("HOME", &home).env("COS_HOME", home);
     }
     apply_routed_identity(&mut cmd)?;
+    harden_sensitive_stdin_child(&mut cmd, &app_id, command, stdin_data.as_deref())?;
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to spawn {runtime:?} app: {e}"))?;

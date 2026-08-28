@@ -46,6 +46,11 @@ Unrestricted payloads use `serde_json::Value` (Rust), `Decimal`/`WireDecimal` pl
 `encode_wire_json` (Python), `WireDecimal`/`bigint` plus `stringifyWireJson`
 (Node), and `json.Number` with `encoding/json` (Go).
 
+The Rust transport also exposes an internal deadline-bound sensitive-stdin
+call used by `cos-runtime` for Ask Claw activation. It marks the `cos` child
+non-dumpable before exec, writes stdin on a separate worker, and kills and
+reaps the child when the deadline expires.
+
 ## Tests
 
 Rust SDK unit tests mirror `rust/src/` under `rust/test/unit/`; production files

@@ -1,8 +1,10 @@
 """exec — Sandboxed code and command execution."""
 
 import fcntl
+import ctypes
 import json
 import os
+import pathlib
 import shutil
 import signal
 import subprocess
@@ -24,6 +26,9 @@ MAX_OUTPUT_BYTES = 1_000_000  # 1 MB output limit for stdout/stderr
 # marker can be inserted without further loss.
 HARD_OUTPUT_CAP = 8 * 1024 * 1024  # 8 MiB per stream
 MAX_START_STDIN_BYTES = 128 * 1024
+MAX_PID = 2_147_483_647
+PR_SET_DUMPABLE = 4
+LIBC = ctypes.CDLL(None, use_errno=True)
 WHICH_TIMEOUT = 10
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 PROC_DIR = os.path.join(DATA_DIR, "proc")
@@ -401,6 +406,57 @@ def _anonymous_stdin(data):
         raise
 
 
+def _require_proc_isolation():
+    """Require Yama to block same-UID sibling ptrace/proc-fd access."""
+    try:
+        with open("/proc/sys/kernel/yama/ptrace_scope", "r", encoding="ascii") as handle:
+            level = int(handle.read().strip())
+    except (OSError, ValueError) as error:
+        raise OSError(f"cannot verify kernel.yama.ptrace_scope: {error}") from error
+    if level < 2:
+        raise PermissionError(
+            "private exec stdin requires kernel.yama.ptrace_scope=2 or stronger"
+        )
+
+
+def _set_non_dumpable():
+    """Mark the current process non-dumpable before it can hold private input."""
+    if LIBC.prctl(PR_SET_DUMPABLE, 0, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
+def _process_start_time(pid):
+    """Return Linux /proc start-time ticks for PID-reuse-safe identity."""
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or pid > MAX_PID:
+        return None
+    try:
+        stat = pathlib.Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
+    except (OSError, UnicodeError):
+        return None
+    _, separator, suffix = stat.rpartition(")")
+    if not separator:
+        return None
+    fields = suffix.strip().split()
+    if len(fields) <= 19:
+        return None
+    try:
+        return int(fields[19])
+    except ValueError:
+        return None
+
+
+def _cleanup_process_artifacts(pid):
+    for path in (
+        os.path.join(PROC_DIR, f"stdout.{pid}"),
+        os.path.join(PROC_DIR, f"stderr.{pid}"),
+    ):
+        try:
+            os.unlink(path)
+        except FileNotFoundError:
+            pass
+
+
 def cmd_start(args):
     """Run a command in the background."""
     from canonical_argv import parse_canonical_argv
@@ -411,12 +467,47 @@ def cmd_start(args):
     if not args:
         return {"error": "no command specified"}
 
-    try:
-        stdin_data = _read_start_stdin()
-    except (OSError, ValueError) as error:
-        return {"error": f"failed to read start stdin: {error}"}
+    sensitive_stdin = os.environ.get("COS_SENSITIVE_STDIN") == "1"
+    if sensitive_stdin:
+        try:
+            _require_proc_isolation()
+            _set_non_dumpable()
+            stdin_data = _read_start_stdin()
+        except (OSError, PermissionError) as error:
+            return {"error": f"unsafe start stdin handoff: {error}"}
+        except ValueError as error:
+            return {"error": str(error)}
+        if not stdin_data:
+            return {"error": "private start stdin must not be empty"}
+    else:
+        stdin_data = b""
 
     policy.require("proc.spawn", name=args[0])
+    env = scrub_env()
+    env.pop("COS_SENSITIVE_STDIN", None)
+
+    if stdin_data:
+        stdin_fd = None
+        try:
+            stdin_fd = _anonymous_stdin(stdin_data)
+            proc = subprocess.Popen(
+                args,
+                stdin=stdin_fd,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=env,
+                close_fds=True,
+                start_new_session=True,
+                preexec_fn=_set_non_dumpable,
+            )
+        except FileNotFoundError:
+            return {"error": f"command not found: {args[0]}"}
+        except Exception as error:
+            return {"error": str(error)}
+        finally:
+            if stdin_fd is not None:
+                os.close(stdin_fd)
+        return {"pid": proc.pid, "command": args, "transient": True}
 
     os.makedirs(PROC_DIR, exist_ok=True)
 
@@ -432,23 +523,16 @@ def cmd_start(args):
     scratch = uuid.uuid4().hex[:12]
     stdout_tmp = os.path.join(PROC_DIR, f".stdout.{scratch}")
     stderr_tmp = os.path.join(PROC_DIR, f".stderr.{scratch}")
-    stdin_fd = None
-
     try:
         # `with open(...)` closes the parent-side file handles
         # after Popen has dup'd them into the child. The child
         # retains its own fds; the parent doesn't need them open.
         # Scrub the environment so the background process can't
         # exfiltrate credentials the agent owns.
-        env = scrub_env()
-        child_stdin = subprocess.DEVNULL
-        if stdin_data:
-            stdin_fd = _anonymous_stdin(stdin_data)
-            child_stdin = stdin_fd
         with open(stdout_tmp, "w") as stdout_f, open(stderr_tmp, "w") as stderr_f:
             proc = subprocess.Popen(
                 args,
-                stdin=child_stdin,
+                stdin=subprocess.DEVNULL,
                 stdout=stdout_f,
                 stderr=stderr_f,
                 env=env,
@@ -468,18 +552,33 @@ def cmd_start(args):
             except OSError:
                 pass
         return {"error": str(e)}
-    finally:
-        if stdin_fd is not None:
-            os.close(stdin_fd)
-
     pid = proc.pid
+    start_time_ticks = _process_start_time(pid)
+    if start_time_ticks is None:
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+        for path in (stdout_tmp, stderr_tmp):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return {"error": "could not verify started process identity"}
     stdout_path = os.path.join(PROC_DIR, f"stdout.{pid}")
     stderr_path = os.path.join(PROC_DIR, f"stderr.{pid}")
     os.rename(stdout_tmp, stdout_path)
     os.rename(stderr_tmp, stderr_path)
 
     entry = {
+        "launch_id": uuid.uuid4().hex,
         "pid": pid,
+        "start_time_ticks": start_time_ticks,
         "command": args,
         "started": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
@@ -491,15 +590,20 @@ def cmd_start(args):
 
     _with_registry_lock(do_add)
 
-    return {"pid": pid, "command": args}
+    return {
+        "launch_id": entry["launch_id"],
+        "pid": pid,
+        "start_time_ticks": start_time_ticks,
+        "command": args,
+    }
 
 
 def cmd_stop(args):
-    """Stop a background process by PID.
+    """Stop a registered process by launch id or legacy PID.
 
-    SECURITY: scope is ``proc.signal name=pid:<n>`` rather than
-    ``wild=True`` so a grant for stopping one PID doesn't authorise
-    signalling arbitrary processes the kernel can see.
+    The registry's opaque id and Linux start-time ticks are checked before any
+    signal is sent, so PID 0, unregistered PIDs, and PID reuse cannot target an
+    unrelated process.
     """
     from canonical_argv import parse_canonical_argv
     try:
@@ -507,35 +611,86 @@ def cmd_stop(args):
     except ValueError as error:
         return {"error": str(error)}
     if not args:
-        return {"error": "no PID specified"}
-    try:
-        pid = int(args[0])
-    except ValueError:
-        return {"error": f"invalid PID: {args[0]}"}
+        return {"error": "no launch id or PID specified"}
+    identifier = args[0]
+    numeric_pid = None
+    if identifier.lstrip("+-").isdigit():
+        try:
+            numeric_pid = int(identifier)
+        except ValueError:
+            return {"error": f"invalid PID: {identifier}"}
+        if numeric_pid <= 0 or numeric_pid > MAX_PID:
+            return {"error": f"invalid PID: {identifier}"}
 
-    policy.require("proc.signal", name=f"pid:{pid}")
-
-    try:
-        os.kill(pid, signal.SIGTERM)
-    except ProcessLookupError:
-        def do_cleanup():
-            registry = _load_registry()
-            registry = [e for e in registry if e.get("pid") != pid]
-            _save_registry(registry)
-
-        _with_registry_lock(do_cleanup)
-        return {"error": f"process {pid} not found"}
-    except PermissionError:
-        return {"error": f"permission denied for PID {pid}"}
-
-    def do_remove():
+    def stop_target():
         registry = _load_registry()
-        registry = [e for e in registry if e.get("pid") != pid]
-        _save_registry(registry)
+        entry = None
+        for entry in registry:
+            if entry.get("launch_id") == identifier or (
+                numeric_pid is not None and entry.get("pid") == numeric_pid
+            ):
+                break
+        else:
+            return {"error": f"unregistered process: {identifier}"}
 
-    _with_registry_lock(do_remove)
+        launch_id = entry.get("launch_id")
+        pid = entry.get("pid")
+        start_time_ticks = entry.get("start_time_ticks")
+        if (
+            not isinstance(launch_id, str)
+            or not launch_id
+            or not isinstance(pid, int)
+            or isinstance(pid, bool)
+            or pid <= 0
+            or pid > MAX_PID
+            or not isinstance(start_time_ticks, int)
+            or isinstance(start_time_ticks, bool)
+            or start_time_ticks <= 0
+        ):
+            _save_registry([item for item in registry if item is not entry])
+            if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+                _cleanup_process_artifacts(pid)
+            return {"error": f"invalid registry identity: {identifier}"}
 
-    return {"pid": pid, "status": "stopped"}
+        policy.require("proc.signal", name=identifier)
+        if not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+            return {"error": "safe process signaling requires Linux pidfd support"}
+        try:
+            pidfd = os.pidfd_open(pid, 0)
+        except ProcessLookupError:
+            pidfd = None
+        except PermissionError:
+            return {"error": f"permission denied for PID {pid}"}
+
+        if pidfd is None or _process_start_time(pid) != start_time_ticks:
+            if pidfd is not None:
+                os.close(pidfd)
+            _save_registry(
+                [item for item in registry if item.get("launch_id") != launch_id]
+            )
+            _cleanup_process_artifacts(pid)
+            return {"error": f"process identity is stale: {identifier}"}
+
+        try:
+            signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        except ProcessLookupError:
+            _save_registry(
+                [item for item in registry if item.get("launch_id") != launch_id]
+            )
+            _cleanup_process_artifacts(pid)
+            return {"error": f"process {pid} not found"}
+        except PermissionError:
+            return {"error": f"permission denied for PID {pid}"}
+        finally:
+            os.close(pidfd)
+
+        _save_registry(
+            [item for item in registry if item.get("launch_id") != launch_id]
+        )
+        _cleanup_process_artifacts(pid)
+        return {"launch_id": launch_id, "pid": pid, "status": "stopped"}
+
+    return _with_registry_lock(stop_target)
 
 
 def cmd_ps(args):
@@ -547,11 +702,17 @@ def cmd_ps(args):
         alive = []
         for entry in registry:
             pid = entry.get("pid")
-            try:
-                os.kill(pid, 0)
+            start_time_ticks = entry.get("start_time_ticks")
+            if (
+                isinstance(pid, int)
+                and not isinstance(pid, bool)
+                and isinstance(start_time_ticks, int)
+                and not isinstance(start_time_ticks, bool)
+                and _process_start_time(pid) == start_time_ticks
+            ):
                 alive.append(entry)
-            except (ProcessLookupError, PermissionError, TypeError):
-                pass
+            elif isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+                _cleanup_process_artifacts(pid)
         _save_registry(alive)
         return alive
 

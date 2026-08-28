@@ -90,10 +90,12 @@ remain owned by the core agent.
 Bundled desktop apps launch Ask Claw through `cos_runtime::ask_claw`. Their
 thin `claw_glue` adapters define only typed, app-specific context fields; the
 runtime owns bounded JSON serialization, anonymous process-bound stdin
-handoff, executable selection, overlay activation arguments, supervised launch
-errors, and the activation contract consumed by the Agent UI. Context payloads
-never enter process argv, audit entries, the exec registry, environment, or
-filesystem.
+handoff, executable selection, overlay activation arguments, bounded launch
+deadlines, and the activation contract consumed by the Agent UI. Context
+payloads never enter process argv, D-Bus, audit entries, the exec registry,
+environment, or filesystem. Context-bearing requests use isolated transient
+overlay processes; only context-free activation uses the well-known D-Bus
+single-instance path.
 
 ### Persistence and observability
 
@@ -522,7 +524,13 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   `cos_runtime::ask_claw` activation contract; host reducers never name the
   Agent UI executable or hand-build context JSON. The runtime uses the
   manifest-gated app stdin route and `apps/exec` forwards the bounded payload
-  through a sealed anonymous memfd for one UI read.
+  through a sealed anonymous memfd for one UI read. This path requires Yama
+  ptrace isolation, marks every holder non-dumpable, and leaves no registry or
+  stdout/stderr artifacts.
+- Registered `apps/exec` launches use opaque launch ids plus Linux process
+  start-time ticks. Stop resolves either that id or a compatibility PID through
+  the registry and signals the verified process through pidfd; raw PIDs are
+  never signaled directly.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.

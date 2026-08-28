@@ -110,8 +110,8 @@ pub fn fs_rm(path: &Path) -> Result<(), BridgeError> {
     bridge_fs::rm(path.to_string_lossy().as_ref()).map(|_| ())
 }
 
-/// Spawn `argv` via `cos app exec start`. The returned PID and command
-/// identify the child tracked in the kernel's process registry.
+/// Spawn `argv` via `cos app exec start`. The returned opaque launch id,
+/// PID, start time, and command identify the child tracked in the registry.
 pub fn exec_start(argv: &[&str]) -> Result<exec::LaunchHandle, BridgeError> {
     exec::start(argv)
 }
@@ -148,7 +148,6 @@ pub fn ask_claw_home() -> Result<(), ask_claw::LaunchError> {
         app_id: None,
         name: None,
     })
-    .map(|_| ())
 }
 
 pub fn ask_claw_explore(page: &str) -> Result<(), ask_claw::LaunchError> {
@@ -158,7 +157,6 @@ pub fn ask_claw_explore(page: &str) -> Result<(), ask_claw::LaunchError> {
         app_id: None,
         name: None,
     })
-    .map(|_| ())
 }
 
 pub fn ask_claw_app(app_id: &str, name: &str) -> Result<(), ask_claw::LaunchError> {
@@ -168,7 +166,6 @@ pub fn ask_claw_app(app_id: &str, name: &str) -> Result<(), ask_claw::LaunchErro
         app_id: Some(app_id),
         name: Some(name),
     })
-    .map(|_| ())
 }
 
 pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
@@ -176,5 +173,4 @@ pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
         mode: "search",
         query,
     })
-    .map(|_| ())
 }

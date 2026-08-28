@@ -99,7 +99,7 @@ impl ask_claw::Context for SettingsSearchContext<'_> {
 }
 
 pub fn ask_claw_page(page: &str, title: &str) -> Result<(), ask_claw::LaunchError> {
-    ask_claw::launch(&SettingsPageContext { page, title }).map(|_| ())
+    ask_claw::launch(&SettingsPageContext { page, title })
 }
 
 pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
@@ -107,7 +107,6 @@ pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
         mode: "search",
         query,
     })
-    .map(|_| ())
 }
 
 /// Run `argv` synchronously and return stdout on a clean exit.

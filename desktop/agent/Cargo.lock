@@ -852,6 +852,7 @@ name = "claw-os-sdk"
 version = "0.1.0"
 dependencies = [
  "base64",
+ "libc",
  "num-bigint",
  "num-traits",
  "serde",
@@ -1130,6 +1131,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "claw-os-sdk",
+ "libc",
  "serde",
  "serde_json",
  "thiserror 2.0.18",

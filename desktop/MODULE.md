@@ -40,6 +40,8 @@ owns serialization bounds, executable discovery, activation arguments,
 anonymous bounded stdin forwarding, supervised process errors, and the
 activation type consumed by the Agent UI. Process argv, audit records,
 registry entries, environment, and files contain no context payload.
+Context-bearing launches use transient overlay instances rather than the
+unauthenticated single-instance D-Bus activation path.
 
 The Agent UI and bridge share `agent/protocol/`; endpoint and stream DTOs must
 not be duplicated in either binary. Core/clawd models terminate at the bridge's

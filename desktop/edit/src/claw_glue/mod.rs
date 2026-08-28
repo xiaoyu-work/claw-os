@@ -82,5 +82,5 @@ impl ask_claw::Context for EditContext<'_> {
 /// Open Ask Claw with the optional active document path.
 pub fn ask_claw_overlay(file: Option<&Path>) -> Result<(), ask_claw::LaunchError> {
     let file = file.and_then(Path::to_str);
-    ask_claw::launch(&EditContext { file }).map(|_| ())
+    ask_claw::launch(&EditContext { file })
 }

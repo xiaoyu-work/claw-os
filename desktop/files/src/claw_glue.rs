@@ -135,5 +135,5 @@ impl ask_claw::Context for FilesContext<'_> {
 
 /// Open Ask Claw with the current directory and optional selected path.
 pub fn ask_claw(cwd: Option<&str>, selection: Option<&str>) -> Result<(), ask_claw::LaunchError> {
-    ask_claw::launch(&FilesContext { cwd, selection }).map(|_| ())
+    ask_claw::launch(&FilesContext { cwd, selection })
 }

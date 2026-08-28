@@ -107,7 +107,7 @@ fn launcher_uses_path_lookup_by_default() {
 }
 
 #[test]
-fn ui_stdin_activation_survives_single_instance_round_trip() {
+fn ui_stdin_activation_decodes_without_an_argv_payload() {
     let expected = Activation::overlay_with_context(
         serialize_context(&TestContext {
             mode: "inspect",
@@ -120,8 +120,7 @@ fn ui_stdin_activation_survives_single_instance_round_trip() {
     assert_eq!(parsed.unknown, ["--future"]);
 
     let activation = parsed.activation(Cursor::new(payload)).unwrap().unwrap();
-    let dbus_payload = activation.to_string();
-    assert_eq!(Activation::from_str(&dbus_payload).unwrap(), expected);
+    assert_eq!(activation, expected);
 }
 
 #[test]
@@ -204,11 +203,12 @@ fn process_spawn_failures_are_preserved() {
         "CLAW_COS_BIN",
         "/nonexistent/definitely-not-a-real-cos-binary-issue-47",
     );
-    let error = launch(&TestContext {
+    let payload = prepare_launch(&TestContext {
         mode: "inspect",
         path: None,
     })
-    .unwrap_err();
+    .unwrap();
+    let error = launch_prepared(&payload).unwrap_err();
 
     assert!(matches!(
         error,
@@ -233,10 +233,10 @@ fn reported_launch_timeout_is_preserved() {
     std::env::set_var("CLAW_COS_BIN", &fake_cos);
 
     assert!(matches!(
-        launch(&TestContext {
+        launch_prepared(&prepare_launch(&TestContext {
             mode: "inspect",
             path: None,
-        }),
+        }).unwrap()),
         Err(LaunchError::Process(exec::StartError::Bridge(
             BridgeError::AppError { code, .. }
         ))) if code.as_deref() == Some("timeout")
@@ -258,7 +258,7 @@ fn successful_exec_response_captures_stdin_without_payload_in_request() {
             "cat > \"${ASK_CLAW_TEST_CAPTURE}.stdin\"\n",
             "printf '%s\\n' \"$@\" > \"${ASK_CLAW_TEST_CAPTURE}.argv\"\n",
             "printf '%s\\n' '{\"pid\":4242,\"command\":[\"cos-agent-ui\",",
-            "\"--overlay\",\"--context-stdin\"]}'\n",
+            "\"--overlay\",\"--context-stdin\"],\"transient\":true}'\n",
         ),
     )
     .unwrap();
@@ -268,11 +268,12 @@ fn successful_exec_response_captures_stdin_without_payload_in_request() {
     std::env::set_var("ASK_CLAW_TEST_CAPTURE", &capture_base);
 
     let secret = "nested-secret-value";
-    let handle = launch(&TestContext {
+    let payload = prepare_launch(&TestContext {
         mode: secret,
         path: Some("/private/input"),
     })
     .unwrap();
+    let handle = launch_prepared(&payload).unwrap();
     assert_eq!(handle.pid, 4242);
     assert_eq!(
         handle.command,
@@ -282,6 +283,8 @@ fn successful_exec_response_captures_stdin_without_payload_in_request() {
     let request = std::fs::read_to_string(capture_base.with_extension("argv")).unwrap();
     assert!(!request.contains(secret));
     assert!(!request.contains("/private/input"));
+    assert!(request.contains("--stdin"));
+    assert!(request.contains("--\n"));
     assert!(request.contains("--context-stdin"));
     assert!(!request.contains("--context\n"));
 
@@ -290,4 +293,70 @@ fn successful_exec_response_captures_stdin_without_payload_in_request() {
     let context = activation.context.unwrap();
     assert!(context.contains(secret));
     assert!(context.contains("/private/input"));
+}
+
+#[test]
+#[cfg(unix)]
+fn launcher_worker_does_not_block_the_calling_thread() {
+    use std::os::unix::fs::PermissionsExt;
+    use std::time::{Duration, Instant};
+
+    let environment = TestEnvironment::new();
+    let fake_cos = environment.directory.path().join("slow-success-cos");
+    std::fs::write(
+        &fake_cos,
+        concat!(
+            "#!/bin/sh\n",
+            "cat >/dev/null\n",
+            "sleep 1\n",
+            "printf '%s\\n' '{\"pid\":4242,\"command\":[\"cos-agent-ui\",",
+            "\"--overlay\",\"--context-stdin\"],\"transient\":true}'\n",
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var("CLAW_COS_BIN", &fake_cos);
+
+    let payload = prepare_launch(&TestContext {
+        mode: "inspect",
+        path: None,
+    })
+    .unwrap();
+    let started = Instant::now();
+    let worker = spawn_prepared(payload).unwrap();
+    assert!(started.elapsed() < Duration::from_millis(500));
+    worker.join().unwrap();
+}
+
+#[test]
+fn ptrace_policy_fails_closed_below_level_two() {
+    assert!(matches!(
+        validate_ptrace_scope("0"),
+        Err(IsolationError::InsufficientPtraceScope)
+    ));
+    assert!(matches!(
+        validate_ptrace_scope("1\n"),
+        Err(IsolationError::InsufficientPtraceScope)
+    ));
+    validate_ptrace_scope("2").unwrap();
+    validate_ptrace_scope("3").unwrap();
+    assert!(matches!(
+        validate_ptrace_scope("unknown"),
+        Err(IsolationError::InvalidPtraceScope(_))
+    ));
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn process_can_be_marked_non_dumpable_before_handoff() {
+    // SAFETY: PR_GET_DUMPABLE and PR_SET_DUMPABLE have no pointer arguments.
+    let original = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
+    assert!(original >= 0);
+    set_current_process_non_dumpable().unwrap();
+    let current = unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) };
+    assert_eq!(current, 0);
+    if original != 0 {
+        let restored = unsafe { libc::prctl(libc::PR_SET_DUMPABLE, original, 0, 0, 0) };
+        assert_eq!(restored, 0);
+    }
 }

@@ -3,11 +3,12 @@
 //! Bundled desktop apps own small, app-specific context structs and implement
 //! [`Context`] for them. This module owns the stable envelope, JSON encoding,
 //! bounds, anonymous stdin handoff, Agent UI discovery, activation arguments,
-//! and supervised process launch.
+//! and bounded transient process launch.
 
 use std::fmt::{self, Display, Formatter};
 use std::io::{self, Read};
 use std::str::FromStr;
+use std::thread;
 
 use serde::{Deserialize, Serialize};
 
@@ -75,6 +76,28 @@ pub enum ActivationInputError {
 
     #[error("Ask Claw activation context is invalid: {0}")]
     InvalidContext(&'static str),
+
+    #[error(transparent)]
+    Isolation(#[from] IsolationError),
+}
+
+/// Errors when the OS cannot protect anonymous handoff data from peer processes.
+#[derive(Debug, thiserror::Error)]
+pub enum IsolationError {
+    #[error("Ask Claw private context handoff requires Linux")]
+    UnsupportedPlatform,
+
+    #[error("failed to read kernel.yama.ptrace_scope: {0}")]
+    PtraceScopeIo(#[source] io::Error),
+
+    #[error("invalid kernel.yama.ptrace_scope value: {0}")]
+    InvalidPtraceScope(String),
+
+    #[error("Ask Claw private context requires kernel.yama.ptrace_scope=2 or stronger")]
+    InsufficientPtraceScope,
+
+    #[error("failed to mark the current process non-dumpable: {0}")]
+    NonDumpable(#[source] io::Error),
 }
 
 /// Errors from context preparation or the supervised process launch.
@@ -89,15 +112,21 @@ pub enum LaunchError {
     #[error("Ask Claw activation is {actual} bytes; the limit is {limit} bytes")]
     ActivationTooLarge { actual: usize, limit: usize },
 
+    #[error(transparent)]
+    Isolation(#[from] IsolationError),
+
+    #[error("failed to start Ask Claw launcher worker: {0}")]
+    ThreadSpawn(#[source] io::Error),
+
     #[error("failed to launch Ask Claw: {0}")]
     Process(#[from] exec::StartError),
 }
 
 /// Single-instance activation sent to the Agent UI.
 ///
-/// Shared launchers serialize this value to the child process's anonymous
-/// stdin. The new UI process reads it before libcosmic forwards the same value
-/// through its existing single-instance D-Bus activation mechanism.
+/// Shared launchers serialize this value to a transient child process's
+/// anonymous stdin. Context-free launches may also serialize it through
+/// libcosmic's existing single-instance D-Bus activation mechanism.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Activation {
@@ -172,6 +201,7 @@ impl UiArguments {
         if !self.context_stdin {
             return self.activation(io::empty());
         }
+        require_process_handoff_isolation()?;
         #[cfg(unix)]
         {
             use std::fs::File;
@@ -339,6 +369,42 @@ fn validate_activation_context(context: &str) -> Result<(), ActivationInputError
     Ok(())
 }
 
+/// Fail closed unless the current process can protect anonymous handoff data
+/// from hostile same-UID peers, then make the process non-dumpable.
+pub fn require_process_handoff_isolation() -> Result<(), IsolationError> {
+    #[cfg(target_os = "linux")]
+    {
+        let value = std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
+            .map_err(IsolationError::PtraceScopeIo)?;
+        validate_ptrace_scope(&value)?;
+        set_current_process_non_dumpable()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        Err(IsolationError::UnsupportedPlatform)
+    }
+}
+
+fn validate_ptrace_scope(value: &str) -> Result<(), IsolationError> {
+    let level = value
+        .trim()
+        .parse::<u32>()
+        .map_err(|_| IsolationError::InvalidPtraceScope(value.trim().to_string()))?;
+    if level < 2 {
+        return Err(IsolationError::InsufficientPtraceScope);
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn set_current_process_non_dumpable() -> Result<(), IsolationError> {
+    // SAFETY: prctl with PR_SET_DUMPABLE has no pointer arguments.
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(IsolationError::NonDumpable(io::Error::last_os_error()));
+    }
+    Ok(())
+}
+
 fn agent_ui_executable() -> String {
     std::env::var(AGENT_UI_ENV).unwrap_or_else(|_| DEFAULT_AGENT_UI.to_string())
 }
@@ -351,8 +417,7 @@ fn launch_argv() -> Vec<String> {
     ]
 }
 
-/// Launch Ask Claw through the runtime's supervised process boundary.
-pub fn launch<C: Context>(context: &C) -> Result<exec::LaunchHandle, LaunchError> {
+fn prepare_launch<C: Context>(context: &C) -> Result<Vec<u8>, LaunchError> {
     let context = serialize_context(context)?;
     let activation = Activation::overlay_with_context(context);
     let payload = serde_json::to_vec(&activation).map_err(LaunchError::ActivationSerialization)?;
@@ -362,9 +427,34 @@ pub fn launch<C: Context>(context: &C) -> Result<exec::LaunchHandle, LaunchError
             limit: MAX_ACTIVATION_BYTES,
         });
     }
+    Ok(payload)
+}
+
+fn launch_prepared(payload: &[u8]) -> Result<exec::TransientLaunch, LaunchError> {
     let argv = launch_argv();
     let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
-    exec::start_with_stdin(&argv, &payload).map_err(LaunchError::Process)
+    exec::start_transient_with_stdin(&argv, payload).map_err(LaunchError::Process)
+}
+
+/// Schedule Ask Claw without blocking the caller's UI thread.
+///
+/// Serialization and process-isolation checks complete before returning.
+/// Process launch failures are logged by the worker with their typed error.
+pub fn launch<C: Context>(context: &C) -> Result<(), LaunchError> {
+    require_process_handoff_isolation()?;
+    let payload = prepare_launch(context)?;
+    spawn_prepared(payload).map(|_| ())
+}
+
+fn spawn_prepared(payload: Vec<u8>) -> Result<thread::JoinHandle<()>, LaunchError> {
+    thread::Builder::new()
+        .name("ask-claw-launch".to_string())
+        .spawn(move || {
+            if let Err(error) = launch_prepared(&payload) {
+                eprintln!("Ask Claw launch failed: {error}");
+            }
+        })
+        .map_err(LaunchError::ThreadSpawn)
 }
 
 #[cfg(test)]

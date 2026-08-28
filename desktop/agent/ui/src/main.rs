@@ -53,6 +53,8 @@ pub struct Flags {
     pub context: Option<String>,
     #[serde(skip)]
     activation: Option<OverlayActivation>,
+    #[serde(skip)]
+    private_activation: bool,
 }
 
 impl CosmicFlags for Flags {
@@ -821,13 +823,19 @@ fn parse_flags() -> Flags {
         .as_ref()
         .and_then(|activation| activation.context.clone())
         .or(parsed.context);
+    let private_activation = parsed.context_stdin || context.is_some() || query.is_some();
     Flags {
         overlay: parsed.overlay,
         voice,
         query,
         context,
         activation,
+        private_activation,
     }
+}
+
+fn uses_single_instance(flags: &Flags) -> bool {
+    flags.overlay && !flags.private_activation
 }
 
 fn main() -> cosmic::iced::Result {
@@ -840,7 +848,7 @@ fn main() -> cosmic::iced::Result {
         .try_init();
     localize::localize();
     let flags = parse_flags();
-    if flags.overlay {
+    if uses_single_instance(&flags) {
         cosmic::app::run_single_instance::<App>(
             Settings::default()
                 .no_main_window(true)

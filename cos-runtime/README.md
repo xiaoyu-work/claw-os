@@ -40,18 +40,29 @@ Bundled desktop apps implement `cos_runtime::ask_claw::Context` on a narrow
 app-local `Serialize` type, then call `ask_claw::launch`. The runtime inserts
 the app identity, serializes with `serde_json`, rejects non-object/reserved or
 larger-than-32-KiB contexts, wraps it in a typed activation, and sends it over
-the explicit bounded `exec.start` stdin channel. The exec app forwards that
-payload once through a sealed anonymous memfd connected to the Agent UI's
-stdin. No context content enters argv, audit records, the process registry,
-the environment, or the filesystem.
+the explicit bounded `exec.start` stdin channel. The call runs on a dedicated
+launcher thread and the intermediary `cos` process has a five-second deadline
+with kill/reap on timeout. The exec app forwards the payload once through a
+sealed anonymous memfd connected to a transient Agent UI's stdin, without
+creating process-registry rows or stdout/stderr artifacts. No context content
+enters argv, audit records, the process registry, the environment, or the
+filesystem.
 
 The Agent UI imports the same activation type and CLI parser from this module.
 It reads stdin only when `--context-stdin` is explicitly present, enforces the
 activation and context bounds, validates the typed activation and embedded
-context, closes stdin, and then uses the existing single-instance activation
-mechanism. Legacy external `--context` input remains accepted, but the shared
-launcher only emits `--context-stdin`. Supplying both sources rejects the
-entire activation.
+context, and closes stdin. Context-bearing overlays deliberately run as
+independent transient instances rather than forwarding plaintext through the
+unauthenticated well-known D-Bus name; context-free global shortcut activation
+continues to use the single instance. Legacy external `--context` input remains
+accepted in the same transient mode, but the shared launcher only emits
+`--context-stdin`. Supplying both sources rejects the entire activation.
+
+Anonymous handoff fails closed unless Linux Yama
+`kernel.yama.ptrace_scope >= 2`. The host, `cos`, exec app, and Agent UI are
+marked non-dumpable before they read or forward the payload. This is required
+because memfd seals prevent mutation, not reads by an otherwise ptrace-capable
+same-UID peer.
 
 Keep these typed adapters in each app's `claw_glue` module. Reducers should
 only select the user intent and pass the already-visible page, query, path, or
@@ -59,6 +70,13 @@ terminal output fields; they must not build JSON or know the Agent UI command.
 The Terminal adapter uses the runtime's encoded-size predicate to drop oldest
 lines first and then truncate at a UTF-8 boundary, retaining `app`, `mode`,
 `cwd`, and `truncated` metadata while still opening the overlay.
+
+Normal `cos_runtime::exec::start` remains registry-backed and returns an opaque
+launch id plus PID/start-time metadata. Stops resolve that identity, verify the
+live process start time, and signal through pidfd; numeric PID arguments remain
+a compatibility input but are subject to the same registry and identity checks.
+Both normal and stdin-bearing start APIs insert `--` before child argv so child
+flags cannot be consumed by the `cos` or exec option parsers.
 
 ## Relationship to `claw-os-sdk`
 

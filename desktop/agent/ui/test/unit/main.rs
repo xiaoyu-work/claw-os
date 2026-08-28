@@ -11,7 +11,7 @@ fn overlay_flags_publish_the_activation_payload() {
 }
 
 #[test]
-fn stdin_context_becomes_single_instance_activation() {
+fn stdin_context_becomes_private_transient_activation() {
     let expected = OverlayActivation {
         context: Some(r#"{"app":"cosmic-files"}"#.into()),
         ..OverlayActivation::default()
@@ -26,6 +26,7 @@ fn stdin_context_becomes_single_instance_activation() {
         overlay: true,
         context: activation.context.clone(),
         activation: Some(activation),
+        private_activation: true,
         ..Flags::default()
     };
 
@@ -33,6 +34,7 @@ fn stdin_context_becomes_single_instance_activation() {
         flags.action().and_then(|value| value.context.as_deref()),
         Some(r#"{"app":"cosmic-files"}"#)
     );
+    assert!(!uses_single_instance(&flags));
 }
 
 #[test]
@@ -70,4 +72,14 @@ fn malformed_and_oversize_stdin_do_not_produce_activation() {
         ])),
         Err(cos_runtime::ask_claw::ActivationInputError::TooLarge { .. })
     ));
+}
+
+#[test]
+fn context_free_overlay_keeps_single_instance_behavior() {
+    let flags = Flags {
+        overlay: true,
+        activation: Some(OverlayActivation::default()),
+        ..Flags::default()
+    };
+    assert!(uses_single_instance(&flags));
 }

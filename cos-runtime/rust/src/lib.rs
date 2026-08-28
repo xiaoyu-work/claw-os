@@ -32,10 +32,12 @@
 //!
 //! Transport (`call`, `call_typed`, `cos_call_json`) lives in
 //! `claw-os-sdk` and is re-exported here so the modules' internal
-//! `super::*` continues to resolve. cos-runtime adds no new transport
-//! semantics on top of the public SDK.
+//! `super::*` continues to resolve. The Ask Claw adapter additionally uses the
+//! SDK's deadline-bound sensitive-stdin transport.
 
-pub use claw_os_sdk::{call, call_typed, cos_call_json, BridgeError, Error};
+pub use claw_os_sdk::{
+    BridgeError, Error, call, call_typed, call_typed_sensitive_with_timeout, cos_call_json,
+};
 
 pub mod ask_claw;
 pub mod exec;

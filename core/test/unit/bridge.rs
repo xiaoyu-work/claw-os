@@ -538,6 +538,38 @@ fn canonical_argv_matches_bound_boolean_and_delimiter_values() {
 }
 
 #[test]
+fn exec_start_delimiter_preserves_child_flags() {
+    let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap();
+    let manifest = Manifest::from_json(
+        &std::fs::read_to_string(repository.join("apps/exec/app.json")).unwrap(),
+    )
+    .unwrap();
+    let operation = &manifest.operations["start"];
+    let bound = bind_operation_args(
+        operation,
+        &[
+            "--".into(),
+            "cos-agent-ui".into(),
+            "--overlay".into(),
+            "--context-stdin".into(),
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(
+        bound.argv,
+        ["--", "cos-agent-ui", "--overlay", "--context-stdin"]
+    );
+    assert_eq!(bound.values["command"], "cos-agent-ui");
+    assert_eq!(
+        bound.values["arguments"],
+        serde_json::json!(["--overlay", "--context-stdin"])
+    );
+}
+
+#[test]
 fn repeatable_flags_round_trip_through_canonical_argv() {
     let manifest = Manifest::from_json(
         r#"{

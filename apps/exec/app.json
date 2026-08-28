@@ -162,12 +162,12 @@
     },
     "stop": {
       "label": {
-        "en": "Stop a background process by PID"
+        "en": "Stop a registered background process"
       },
       "args": [
         {
-          "name": "pid",
-          "kind": "integer",
+          "name": "launch",
+          "kind": "name",
           "required": true
         }
       ],
@@ -175,7 +175,8 @@
         {
           "verb": "proc.signal",
           "scope": {
-            "kind": "wild"
+            "kind": "from-arg",
+            "arg": "launch"
           },
           "why": {
             "en": "Send a termination signal to the process you asked to stop."

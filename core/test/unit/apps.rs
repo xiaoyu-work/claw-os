@@ -142,7 +142,11 @@ fn known_first_party_schema_drift_is_resolved_in_manifests() {
         ["code", "lang", "file", "timeout"]
     );
     assert_eq!(exec.operations["which"].args[0].name, "name");
-    assert_eq!(exec.operations["stop"].args[0].name, "pid");
+    assert_eq!(exec.operations["stop"].args[0].name, "launch");
+    assert_eq!(
+        exec.operations["stop"].args[0].kind,
+        crate::caps::manifest::ArgKind::Name
+    );
     let timeout = &exec.operations["run"].args[2];
     assert_eq!(timeout.kind, crate::caps::manifest::ArgKind::Integer);
     assert_eq!(

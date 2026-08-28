@@ -33,12 +33,12 @@ fn is_false(value: &bool) -> bool {
 }
 
 pub fn ask_claw(cwd: Option<&str>) -> Result<(), ask_claw::LaunchError> {
-    ask_claw::launch(&TerminalContext { cwd }).map(|_| ())
+    ask_claw::launch(&TerminalContext { cwd })
 }
 
 pub fn explain_output(output: &str, cwd: Option<&str>) -> Result<(), ask_claw::LaunchError> {
     let context = bounded_explain_context(output, cwd)?;
-    ask_claw::launch(&context).map(|_| ())
+    ask_claw::launch(&context)
 }
 
 fn bounded_explain_context<'output, 'cwd>(

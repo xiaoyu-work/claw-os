@@ -96,6 +96,8 @@ The overlay is a single-instance Wayland layer-shell surface:
 - `Super+A` opens the compact multiline summon composer.
 - `Super+Shift+A` opens the live voice orb and begins recording.
 - Re-invoking either shortcut reuses the existing overlay process.
+- App-provided private context opens a separate transient overlay so its
+  activation is never forwarded through the well-known D-Bus name.
 - Escape stops/cancels active work before closing the surface.
 
 Chat streams expose task identity, live text, tool lifecycle, warnings,
@@ -105,10 +107,13 @@ client stream also triggers bridge-side cancellation.
 Voice uploads are staged as private runtime files and transcribed via
 the configured `cos model transcribe` provider. App/window context is
 handed to the UI through explicit bounded stdin backed by a sealed anonymous
-memfd rather than argv, environment, or a pathname. The new process validates
-the typed activation before single-instance forwarding and sends the context
-through a transient, untrusted-data system boundary. It is not stored as the
-visible user prompt.
+memfd rather than argv, environment, or a pathname. The host and each
+intermediary fail closed without strong Yama ptrace isolation and become
+non-dumpable before handling the payload. The new process validates the typed
+activation and runs a dedicated transient overlay, avoiding plaintext context
+on the unauthenticated single-instance D-Bus path. It then sends context
+through an untrusted-data system boundary without storing it as the visible
+user prompt.
 
 ## Endpoint discovery
 
