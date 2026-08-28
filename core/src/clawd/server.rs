@@ -129,12 +129,19 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
 }
 
 /// Retire capability grants whose process, deadline or use budget is
-/// gone.
+/// gone, and stop extension instances whose package was revoked.
 ///
 /// The store already sweeps on every entry point, but a daemon that
 /// goes quiet after a burst of launches would otherwise hold rows for
 /// processes that exited. This is what makes "cleaned up on process
 /// exit" true without waiting for the next request.
+///
+/// The provenance pass rides the same tick rather than starting a loop
+/// of its own. It is the *bounded* half of the revocation guarantee:
+/// an instance that makes any authority call is denied and marked
+/// immediately by `provenance::runtime::assert_live`, but one sitting
+/// idle would never reach that check, so this pass finds it, kills its
+/// process group and drops its grants.
 fn spawn_authority_sweep() {
     tokio::spawn(async {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -142,8 +149,76 @@ fn spawn_authority_sweep() {
         loop {
             ticker.tick().await;
             super::authority::sweep();
+            sweep_revoked_instances().await;
         }
     });
+}
+
+/// Run one provenance lifecycle pass for every owner the daemon routes.
+///
+/// Each owner's running-instance record lives in their own root-owned
+/// partition of `/run/cos/caps`, so the pass is run once per owner
+/// under that owner's path view. Signalling and the bounded wait happen
+/// on a blocking thread; the async tick is never held.
+async fn sweep_revoked_instances() {
+    for uid in routed_owner_uids() {
+        // Addressed by the owner uid the daemon itself enumerated, not
+        // by an ambient path view: the same file the owner's own CLI
+        // and `agentd` would read.
+        let report = tokio::task::spawn_blocking(move || {
+            let trust = crate::provenance::trust_store();
+            crate::provenance::runtime::lifecycle_tick(
+                uid,
+                &trust,
+                crate::provenance::runtime::SHUTDOWN_GRACE,
+            )
+        })
+        .await
+        .unwrap_or_default();
+        if report.is_empty() {
+            continue;
+        }
+        // Authority outlives the process unless it is withdrawn too: a
+        // terminated instance must not leave a live session grant a
+        // relaying launcher could still present.
+        for session in report.finished() {
+            super::authority::authority().revoke_session(session);
+            super::authority::audit::record_revoked(
+                "app-session-revoked-package",
+                Some(session),
+                1,
+            );
+        }
+        tracing::warn!(
+            target: "provenance",
+            owner = uid,
+            marked = report.marked.len(),
+            terminated = report.terminated.len(),
+            released = report.released.len(),
+            "stopped extension instances whose package is no longer trusted"
+        );
+    }
+}
+
+/// Owners the daemon currently routes capability state for.
+///
+/// `/run/cos/caps` holds one directory per owner, created by the
+/// daemon itself and mode `0711`, so listing it is a root-only
+/// operation and the names are uids the daemon wrote — not anything a
+/// caller supplied. A name that is not a plain uid is skipped rather
+/// than guessed at.
+fn routed_owner_uids() -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/run/cos/caps") else {
+        return Vec::new();
+    };
+    let mut owners: Vec<u32> = entries
+        .flatten()
+        .filter(|entry| entry.file_type().map(|kind| kind.is_dir()).unwrap_or(false))
+        .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+        .collect();
+    owners.sort_unstable();
+    owners.dedup();
+    owners
 }
 
 /// Spawn the system-vitals heartbeat — the cheap, always-on reflex loop

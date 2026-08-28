@@ -667,14 +667,45 @@ packages or entered through model chat.
   -> normal tool trajectory, session logging, and Skill usage record
 ```
 
-Built-in Skills from the package-owned default root do not require third-party
-provenance approval. A `COS_SYSTEM_SKILLS_DIR` override is treated as local
-content rather than promoted to built-in trust. User-installed Skills continue
-through the existing non-vendor disclosure guard; signature policy remains
-enforced when bundles are installed. Metadata pages, instruction bodies, and
-child resources are size-bounded. Child resource reads accept only visible,
-regular UTF-8 files beneath the selected Skill directory; absolute paths,
-parent traversal, symlinks, hidden files, and oversized resources are rejected.
+Every Skill package is authenticated by `core/src/provenance/` before it is
+loaded. Skills under the root-owned package root inherit vendor trust with a
+pinned content digest; a `COS_SYSTEM_SKILLS_DIR` override is treated as local
+content rather than promoted to built-in trust. User-installed Skills require a
+valid signature from a trusted, non-revoked publisher key — there is no
+environment variable that relaxes this — and layered shadowing compares the
+verified publisher key id rather than directory precedence. User-installed
+Skills still pass the non-vendor disclosure guard. Metadata pages, instruction
+bodies, and child resources are size-bounded and read from the verified
+snapshot: a file changed after the catalogue was built fails disclosure instead
+of injecting new model text. Child resource reads accept only visible, regular
+UTF-8 files beneath the selected Skill directory; absolute paths, parent
+traversal, symlinks, hidden files, and oversized resources are rejected.
+
+### Extension provenance
+
+```text
+publisher key -> claw.provenance/v1 envelope (kind, id, version, manifest
+                 schema/path, entrypoints, resources, complete file tree,
+                 content digest)
+  -> trust roots: /usr/lib/cos/trust/publishers.d, /etc/cos/trust/publishers.d,
+     ~/.config/cos/trust/publishers.d, ~/.config/cos/trust/developer.d
+     (root/owner-owned, non-symlink, not group/world-writable; never
+     environment-derived)
+  -> install: bounded untrusted staging -> hostile-shape rejection -> signature
+     and digest verification -> content-addressed artifact retention ->
+     atomic activation
+  -> use: verified snapshot bound to an open directory descriptor; manifest,
+     executable, skill body/resources and MCP command all re-checked against
+     their signed digests before launch or disclosure
+```
+
+Apps, Skills and MCP/adapter packages share one envelope format, one trust
+store and one installer. An unverified manifest can never influence capability
+grants or package identity: discovery quarantines the package with an
+actionable diagnostic and every authority-bearing caller refuses it. Revoking a
+key or an artifact digest moves the trust store's generation, which invalidates
+cached verifications so later launches, disclosures and attachments stop
+immediately. See [`docs/extension-provenance.md`](docs/extension-provenance.md).
 
 ### App invocation
 

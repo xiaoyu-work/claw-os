@@ -263,14 +263,44 @@ AGENT_STAGE="$STAGE_DIR/claw-os-agent"
 mkdir -p \
     "$AGENT_STAGE/DEBIAN" \
     "$AGENT_STAGE/etc/cos" \
+    "$AGENT_STAGE/etc/cos/trust/publishers.d" \
     "$AGENT_STAGE/usr/lib/cos/apps" \
     "$AGENT_STAGE/usr/lib/cos/python" \
     "$AGENT_STAGE/usr/lib/cos/skills" \
+    "$AGENT_STAGE/usr/lib/cos/trust/publishers.d" \
     "$AGENT_STAGE/usr/lib/systemd/system" \
     "$AGENT_STAGE/usr/lib/systemd/user" \
     "$AGENT_STAGE/usr/local/bin" \
     "$AGENT_STAGE/usr/share/polkit-1/actions"
 chmod 0755 "$AGENT_STAGE/DEBIAN"
+
+# Extension-provenance trust roots.
+#
+#   /usr/lib/cos/trust/publishers.d — vendor keys shipped by this package
+#   /etc/cos/trust/publishers.d     — operator-managed keys (never shipped)
+#
+# Both must be root-owned and free of group/world write bits; the loader
+# refuses a root that fails those checks and reports it as a diagnostic
+# rather than silently widening trust. Ownership is asserted by dpkg
+# (packages install as root); the modes are set explicitly here.
+chmod 0755 \
+    "$AGENT_STAGE/usr/lib/cos/trust" \
+    "$AGENT_STAGE/usr/lib/cos/trust/publishers.d" \
+    "$AGENT_STAGE/etc/cos/trust" \
+    "$AGENT_STAGE/etc/cos/trust/publishers.d"
+VENDOR_TRUST_SRC="$SCRIPT_DIR/claw-os-agent/trust/publishers.d"
+if [ -d "$VENDOR_TRUST_SRC" ]; then
+    for trust_file in "$VENDOR_TRUST_SRC"/*.json; do
+        [ -e "$trust_file" ] || continue
+        # Refuse to ship anything that looks like private key material.
+        if grep -q '"private_key"' "$trust_file"; then
+            echo "error: vendor trust file carries private key material: $trust_file" >&2
+            exit 1
+        fi
+        install -m 0644 "$trust_file" \
+            "$AGENT_STAGE/usr/lib/cos/trust/publishers.d/$(basename "$trust_file")"
+    done
+fi
 
 render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"

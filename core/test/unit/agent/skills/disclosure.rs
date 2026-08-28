@@ -10,6 +10,25 @@ fn write_skill(root: &Path, id: &str, description: &str, body: &str) {
         format!("---\nname: {id}\ndescription: {description}\n---\n{body}\n"),
     )
     .unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, id);
+}
+
+/// Add a child resource to an already-written skill and re-sign it.
+fn reseal(root: &Path, id: &str) {
+    let dir = root.join(id);
+    fs::remove_file(dir.join(crate::provenance::envelope::ENVELOPE_FILE)).ok();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, id);
+}
+
+fn add_resource(root: &Path, id: &str, name: &str, body: &str) {
+    let dir = root.join(id);
+    let target = dir.join(name);
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(target, body).unwrap();
+    fs::remove_file(dir.join(crate::provenance::envelope::ENVELOPE_FILE)).ok();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, id);
 }
 
 fn layered<'a>(system: &'a Path, user: &'a Path) -> super::super::loader::LoadResult {
@@ -48,11 +67,7 @@ fn instruction_disclosure_returns_body_and_resource_names_only() {
         "Operate the Claw system layer",
         "Use the matching playbook.",
     );
-    fs::write(
-        system.path().join("claw-os").join("diagnostics.md"),
-        "PRIVATE_RESOURCE_CONTENT",
-    )
-    .unwrap();
+    add_resource(system.path(), "claw-os", "diagnostics.md", "PRIVATE_RESOURCE_CONTENT");
     let load = layered(system.path(), user.path());
 
     let value = disclose_instructions(&load.skills["claw-os"]).expect("instructions");
@@ -70,16 +85,12 @@ fn resource_disclosure_reads_one_requested_file() {
     let system = tempdir().unwrap();
     let user = tempdir().unwrap();
     write_skill(system.path(), "claw-os", "Claw", "Read details as needed.");
-    fs::create_dir_all(system.path().join("claw-os").join("playbooks")).unwrap();
-    fs::write(
-        system
-            .path()
-            .join("claw-os")
-            .join("playbooks")
-            .join("network.md"),
+    add_resource(
+        system.path(),
+        "claw-os",
+        "playbooks/network.md",
         "NETWORK_PLAYBOOK",
-    )
-    .unwrap();
+    );
     let load = layered(system.path(), user.path());
 
     let value =
@@ -121,9 +132,12 @@ fn resource_disclosure_rejects_symlinks() {
     .unwrap();
     let load = layered(system.path(), user.path());
 
-    let error =
-        disclose_resource(&load.skills["claw-os"], "linked.md").expect_err("symlink rejected");
-    assert!(error.contains("symlink"));
+    // A symlink dropped into a sealed package is not something the
+    // disclosure layer has to reason about: the package no longer
+    // verifies at all, so the skill is quarantined before any resource
+    // can be requested.
+    assert!(!load.skills.contains_key("claw-os"));
+    assert!(load.errors["claw-os"].contains("symlink"));
 }
 
 #[test]
@@ -135,6 +149,7 @@ fn builtin_skill_skips_third_party_guard() {
         .unwrap()
         .set_len(6 * 1024 * 1024)
         .unwrap();
+    reseal(system.path(), "claw-os");
     let load = layered(system.path(), user.path());
 
     assert!(disclose_instructions(&load.skills["claw-os"]).is_ok());
@@ -149,6 +164,7 @@ fn user_skill_still_uses_third_party_guard() {
         .unwrap()
         .set_len(6 * 1024 * 1024)
         .unwrap();
+    reseal(user.path(), "community");
     let load = layered(system.path(), user.path());
 
     let error = disclose_instructions(&load.skills["community"]).expect_err("guard should block");

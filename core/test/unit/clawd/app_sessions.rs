@@ -100,7 +100,11 @@ const EMAIL_MCP_MANIFEST: &str = r#"{
 fn app_from(manifest: &str) -> App {
     let manifest = Manifest::from_json(manifest).expect("test manifest");
     let dir = std::path::PathBuf::from("/usr/lib/cos/apps").join(&manifest.id);
-    App { manifest, dir }
+    App {
+        manifest,
+        dir,
+        provenance: Err("test fixture is not an installed package".to_string()),
+    }
 }
 
 fn test_app() -> App {
@@ -160,6 +164,8 @@ fn daemon_plan_skips_inactive_calendar_provider_needs() {
         &operation.needs,
         &resolved,
         &delegation(CapSet::from_iter([local.clone(), google.clone()])),
+        &publisher_ceiling(),
+        "calendar",
     )
     .unwrap();
 
@@ -176,13 +182,13 @@ fn operation_caps(
     args: &[String],
     delegation: &Delegation,
 ) -> Result<CapSet, BrokerError> {
-    let plan = operation_plan(app, operation, args, delegation)?;
-    authorize_plan(delegation, plan)
+    let plan = operation_plan(app, operation, args, delegation, &publisher_ceiling())?;
+    authorize_plan(delegation, plan, &publisher_ceiling(), &app.manifest.id)
 }
 
 fn gui_caps(app: &App, exec: &str, delegation: &Delegation) -> Result<CapSet, BrokerError> {
-    let plan = gui_plan(app, exec, delegation)?;
-    authorize_plan(delegation, plan)
+    let plan = gui_plan(app, exec, delegation, &publisher_ceiling())?;
+    authorize_plan(delegation, plan, &publisher_ceiling(), &app.manifest.id)
 }
 
 fn with_invoke_cap(
@@ -196,7 +202,14 @@ fn with_invoke_cap(
         Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)),
         delegation,
     );
-    authorize_plan(delegation, plan)
+    authorize_plan(delegation, plan, &publisher_ceiling(), app_id)
+}
+
+/// The ceiling a normally signed package runs under: unrestricted, so
+/// these tests exercise the delegation rules rather than the tier. The
+/// developer tier has its own dedicated coverage below.
+fn publisher_ceiling() -> Ceiling {
+    Ceiling::for_tier(crate::provenance::TrustTier::User)
 }
 
 #[test]
@@ -1413,6 +1426,7 @@ fn a_launch_grant_is_bound_to_its_session_and_launcher() {
         this_uid(),
         &launcher,
         &caps,
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1453,6 +1467,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         &launcher,
         &caps,
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1463,6 +1478,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         std::process::id(),
         &caps,
+        None,
     )
     .expect("bind derives the session grant");
 
@@ -1473,6 +1489,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         std::process::id(),
         &caps,
+        None,
     )
     .expect_err("bind is one-shot");
     assert!(error.contains("ceiling"), "unexpected: {error}");
@@ -1489,6 +1506,7 @@ fn a_session_grant_cannot_widen_the_launch_grant() {
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1501,6 +1519,7 @@ fn a_session_grant_cannot_widen_the_launch_grant() {
         this_uid(),
         std::process::id(),
         &wider,
+        None,
     )
     .expect_err("a bind cannot mint authority the launcher never had");
     assert!(error.contains("widen"), "unexpected: {error}");
@@ -1521,6 +1540,7 @@ fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
+        None,
     )
     .expect_err("an unverifiable launcher gets no grant");
     authority::authority().clear_for_test();
@@ -1734,8 +1754,15 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         priority: None,
         role: None,
     };
-    let handle = issue_launch_grant(session_id, Some("fs"), E2E_UID, &launcher, &e2e_app_caps())
-        .expect("launch grant");
+    let handle = issue_launch_grant(
+        session_id,
+        Some("fs"),
+        E2E_UID,
+        &launcher,
+        &e2e_app_caps(),
+        None,
+    )
+    .expect("launch grant");
     // Present only when the App process can be identified; the rollback
     // test deliberately uses a pid that cannot.
     let _ = issue_session_grant(
@@ -1745,6 +1772,7 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         E2E_UID,
         child_pid,
         &e2e_app_caps(),
+        None,
     );
     handle
 }

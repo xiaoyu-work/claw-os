@@ -22,6 +22,7 @@ fn write_two_demo_apps() -> tempfile::TempDir {
         .to_string(),
     )
     .unwrap();
+    crate::test_env::sign_test_package(&fs_dir, crate::provenance::PackageKind::App, "fs");
     let notify_dir = root.path().join("notify");
     std::fs::create_dir_all(&notify_dir).unwrap();
     std::fs::write(
@@ -38,6 +39,7 @@ fn write_two_demo_apps() -> tempfile::TempDir {
         .to_string(),
     )
     .unwrap();
+    crate::test_env::sign_test_package(&notify_dir, crate::provenance::PackageKind::App, "notify");
     root
 }
 
@@ -113,6 +115,13 @@ fn rebuilt_registry_uses_fresh_owned_manifest_metadata() {
             "needs": []
         });
         std::fs::write(&manifest_path, manifest.to_string()).unwrap();
+        // Editing an installed manifest invalidates the signature, so a
+        // real update re-publishes a signed package. Re-seal to model
+        // that; the "edited in place is refused" case is covered in
+        // test/unit/provenance/verify.rs.
+        let app_dir = tmp.path().join("fs");
+        let _ = std::fs::remove_file(app_dir.join(crate::provenance::envelope::ENVELOPE_FILE));
+        crate::test_env::sign_test_package(&app_dir, crate::provenance::PackageKind::App, "fs");
 
         let mut reloaded = ToolRegistry::new();
         register_all(&mut reloaded);
@@ -335,6 +344,7 @@ fn write_demo_apps_dir() -> tempfile::TempDir {
         }
     });
     std::fs::write(demo_dir.join("app.json"), manifest.to_string()).unwrap();
+    crate::test_env::sign_test_package(&demo_dir, crate::provenance::PackageKind::App, "demo");
     root
 }
 

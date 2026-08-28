@@ -80,6 +80,15 @@ pub struct McpServerSpec {
     /// authenticated remote server. Kept as a var name (not the token)
     /// so secrets never sit in a manifest on disk.
     pub bearer_env: Option<String>,
+    /// Verified package this spec came from.
+    ///
+    /// `Some` for discovered agent-API packages: the manifest, the
+    /// command, the scripts it points at and every other file in the
+    /// package authenticated before the spec was built, and the same
+    /// snapshot is re-checked immediately before spawn. `None` only for
+    /// specs written directly into `config.json` by the machine owner,
+    /// which are operator configuration rather than installed packages.
+    pub provenance: Option<Arc<crate::provenance::VerifiedPackage>>,
 }
 
 impl McpServerSpec {
@@ -89,6 +98,117 @@ impl McpServerSpec {
         } else {
             Duration::from_secs(self.timeout_secs)
         }
+    }
+}
+
+/// The revocable identity of one attached MCP server.
+///
+/// Shared by every [`McpRemoteTool`] registered from that server and by
+/// the [`McpServerHandle`] that owns the child, so a revocation noticed
+/// during a tool call can close the transport and stop the process
+/// rather than only refusing that one call. A server whose package has
+/// been revoked is hostile code with a live stdio channel to the agent;
+/// leaving it running and merely declining to talk to it would keep it
+/// holding its sandbox, its cgroup and whatever it has already opened.
+pub(crate) struct McpInstance {
+    /// The session id the runtime record is keyed by. Synthetic
+    /// (`mcp:<name>`) when the server runs without a proc session.
+    session_id: String,
+    name: String,
+    class: crate::provenance::runtime::InstanceClass,
+    /// `None` for operator-configured servers, which have no package
+    /// and therefore nothing a revocation can name.
+    package: Option<crate::provenance::runtime::PackageRef>,
+    /// The owner this server's record belongs to, captured when it was
+    /// attached rather than re-derived per call.
+    owner: u32,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl McpInstance {
+    fn new(
+        session_id: String,
+        name: String,
+        package: Option<crate::provenance::runtime::PackageRef>,
+    ) -> Self {
+        let class = match package {
+            Some(_) => crate::provenance::runtime::InstanceClass::McpPackage,
+            None => crate::provenance::runtime::InstanceClass::McpOperatorConfig,
+        };
+        Self {
+            session_id,
+            name,
+            class,
+            package,
+            owner: crate::provenance::runtime::current_owner(),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Is this server still allowed to be talked to?
+    ///
+    /// Checked before every request, against a freshly resolved trust
+    /// store — the resolver re-stats the durable generation and rebuilds
+    /// when another process moved it, so a revocation lands here with no
+    /// notification and no restart.
+    fn assert_live(&self) -> Result<(), String> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(format!(
+                "MCP server `{}` was shut down after its package was revoked",
+                self.name
+            ));
+        }
+        let trust = crate::provenance::trust_store();
+        if let Some(package) = &self.package {
+            package.is_live(&trust).inspect_err(|reason| {
+                crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+            })?;
+            // Package-backed: a missing record is a denial.
+            return crate::provenance::runtime::assert_live_instance(
+                self.owner,
+                &self.session_id,
+                &trust,
+            );
+        }
+        crate::provenance::runtime::assert_live(self.owner, &self.session_id, &trust)
+    }
+
+    /// Close this server for good: mark it, kill its process group and
+    /// clear its runtime record.
+    ///
+    /// Idempotent, and safe to call from an async context — the bounded
+    /// wait for the group to exit runs on a blocking thread.
+    async fn shut_down(&self, reason: &str) {
+        if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+        crate::provenance::audit(
+            "provenance.revoked_instance_denied",
+            json!({
+                "session": self.session_id,
+                "surface": "mcp-tool-call",
+                "class": self.class.as_str(),
+                "server": self.name,
+                "package_id": self.package.as_ref().map(|p| p.id.clone()),
+                "content_digest": self.package.as_ref().map(|p| p.content_digest.clone()),
+                "reason": reason,
+            }),
+        );
+        let session = self.session_id.clone();
+        let owner = self.owner;
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::provenance::runtime::terminate(
+                owner,
+                &session,
+                crate::provenance::runtime::SHUTDOWN_GRACE,
+            )
+        })
+        .await;
     }
 }
 
@@ -950,12 +1070,18 @@ async fn attach_server_local_with_attachment(
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
+    let Some(child_pid) = child.id() else {
+        crate::provenance::runtime::deregister(owner, &instance_session);
+        kill_and_reap(child);
+        return Err("spawned MCP server has no pid".to_string());
+    };
+    // Recorded while the child is still unreaped, so the identity read
+    // here belongs to this process and cannot already have been
+    // recycled onto something else.
+    crate::provenance::runtime::bind_process(owner, &instance_session, child_pid);
     if let Some(session) = proc_session.as_ref() {
-        let Some(pid) = child.id() else {
-            kill_and_reap(child);
-            return Err("spawned MCP server has no pid".to_string());
-        };
-        if let Err(error) = session.bind_process(pid) {
+        if let Err(error) = session.bind_process(child_pid) {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("bind MCP child session: {error}"));
         }
@@ -1003,10 +1129,12 @@ async fn attach_server_local_with_attachment(
     let init = match timeout(timeout_dur, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("initialize: {}", render_client_err(e)));
         }
         Err(_) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!(
                 "initialize timed out after {}s",
@@ -1034,10 +1162,12 @@ async fn attach_server_local_with_attachment(
     let tools = match timeout(timeout_dur, list_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("tools/list: {}", render_client_err(e)));
         }
         Err(_) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!(
                 "tools/list timed out after {}s",

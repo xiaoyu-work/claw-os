@@ -3,6 +3,20 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
+fn copy_tree(src: &Path, dst: &Path) {
+    fs::create_dir_all(dst).unwrap();
+    for entry in fs::read_dir(src).unwrap().filter_map(Result::ok) {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let meta = fs::symlink_metadata(&from).unwrap();
+        if meta.is_dir() {
+            copy_tree(&from, &to);
+        } else if meta.is_file() {
+            fs::copy(&from, &to).unwrap();
+        }
+    }
+}
+
 fn write_builtin(root: &Path, body: &str) {
     let dir = root.join("claw-os");
     fs::create_dir_all(&dir).unwrap();
@@ -12,6 +26,7 @@ fn write_builtin(root: &Path, body: &str) {
     )
     .unwrap();
     fs::write(dir.join("network.md"), "NETWORK_RESOURCE").unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, "claw-os");
 }
 
 #[tokio::test]
@@ -85,6 +100,7 @@ async fn list_supports_bounded_pagination() {
             format!("---\nname: {id}\ndescription: {id}\n---\nBODY_{id}\n"),
         )
         .unwrap();
+        crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, id);
     }
     let tool = SkillDisclosure::with_roots(system.path(), user.path());
 
@@ -109,6 +125,7 @@ async fn user_skill_instructions_remain_inside_untrusted_boundary() {
         "---\nname: community\ndescription: Community skill\n---\nDO_SOMETHING\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, "community");
     let tool = SkillDisclosure::with_roots(system.path(), user.path());
 
     let result = tool
@@ -122,10 +139,22 @@ async fn user_skill_instructions_remain_inside_untrusted_boundary() {
 
 #[tokio::test]
 async fn repository_builtin_skill_is_readable_progressively() {
-    let system_root = Path::new(env!("CARGO_MANIFEST_DIR"))
+    // The repository checkout is not an approved package root, so the
+    // in-tree skill is staged into a signed copy first — the same shape
+    // the Debian package produces under /usr/lib/cos/skills.
+    let source = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .expect("repository root")
-        .join("skills");
+        .join("skills")
+        .join("claw-os");
+    let staged = tempdir().unwrap();
+    let system_root = staged.path().to_path_buf();
+    copy_tree(&source, &system_root.join("claw-os"));
+    crate::test_env::sign_test_package(
+        &system_root.join("claw-os"),
+        crate::provenance::PackageKind::Skill,
+        "claw-os",
+    );
     let user = tempdir().unwrap();
     let tool = SkillDisclosure::with_roots(&system_root, user.path());
 

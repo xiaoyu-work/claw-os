@@ -15,6 +15,60 @@ fn make_zip(path: &Path, files: &[(&str, &str)]) {
     zip.finish().unwrap();
 }
 
+/// Build a signed skill bundle: write the files into a scratch
+/// package, sign it with the process-wide test publisher key, then zip
+/// the package (including its `.provenance.json`) at `prefix`.
+///
+/// Install is signature-gated, so every archive a test expects to
+/// install successfully has to go through here.
+fn make_signed_zip(path: &Path, id: &str, prefix: Option<&str>, extra: &[(&str, &str)]) {
+    let scratch = TempDir::new().unwrap();
+    let pkg = scratch.path().join(id);
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("SKILL.md"), good_skill_md(id)).unwrap();
+    for (name, body) in extra {
+        let target = pkg.join(name);
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(target, body).unwrap();
+    }
+    crate::test_env::sign_test_package(&pkg, crate::provenance::PackageKind::Skill, id);
+
+    let f = File::create(path).unwrap();
+    let mut zip = ZipWriter::new(f);
+    let opts = SimpleFileOptions::default();
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    collect_pkg(&pkg, &pkg, &mut entries);
+    entries.sort();
+    for (rel, full) in entries {
+        let name = match prefix {
+            Some(p) => format!("{p}/{rel}"),
+            None => rel,
+        };
+        zip.start_file(name, opts).unwrap();
+        zip.write_all(&std::fs::read(&full).unwrap()).unwrap();
+    }
+    zip.finish().unwrap();
+}
+
+fn collect_pkg(root: &Path, dir: &Path, out: &mut Vec<(String, std::path::PathBuf)>) {
+    for entry in std::fs::read_dir(dir).unwrap().filter_map(Result::ok) {
+        let path = entry.path();
+        let meta = std::fs::symlink_metadata(&path).unwrap();
+        if meta.is_dir() {
+            collect_pkg(root, &path, out);
+        } else {
+            let rel = path
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.push((rel, path));
+        }
+    }
+}
+
 fn good_skill_md(name: &str) -> String {
     format!(
         "---\nname: {name}\nversion: 0.1.0\ndescription: test skill\n---\n# {name}\n\nA test skill.\n",
@@ -82,13 +136,7 @@ fn unsupported_format_rejected() {
 fn install_installs_flat_bundle() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("flat.zip");
-    make_zip(
-        &archive,
-        &[
-            ("SKILL.md", &good_skill_md("hello-skill")),
-            ("script.py", "print('ok')\n"),
-        ],
-    );
+    make_signed_zip(&archive, "hello-skill", None, &[("script.py", "print('ok')\n")]);
     let dest = tmp.path().join("skills");
     let res = install_into(&archive, &dest, false).unwrap();
     assert_eq!(res.id, "hello-skill");
@@ -96,7 +144,8 @@ fn install_installs_flat_bundle() {
     assert!(res.install_dir.join("SKILL.md").is_file());
     assert!(res.install_dir.join("script.py").is_file());
     assert!(!res.replaced_existing);
-    assert_eq!(res.files_extracted, 2);
+    // SKILL.md, script.py and the provenance envelope.
+    assert_eq!(res.files_extracted, 3);
     assert!(res.bytes_on_disk > 0);
 }
 
@@ -104,12 +153,11 @@ fn install_installs_flat_bundle() {
 fn install_strips_single_wrapper_dir() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("wrapped.zip");
-    make_zip(
+    make_signed_zip(
         &archive,
-        &[
-            ("my-bundle/SKILL.md", &good_skill_md("wrapped-skill")),
-            ("my-bundle/main.sh", "#!/bin/sh\necho hi\n"),
-        ],
+        "wrapped-skill",
+        Some("my-bundle"),
+        &[("main.sh", "#!/bin/sh\necho hi\n")],
     );
     let dest = tmp.path().join("skills");
     let res = install_into(&archive, &dest, false).unwrap();
@@ -122,18 +170,21 @@ fn install_strips_single_wrapper_dir() {
 fn install_uses_sanitised_id() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("cap.zip");
+    // The sanitised id is what the envelope must bind to: an id that
+    // only matches after sanitisation cannot be signed, so the install
+    // is refused rather than landing under a name nobody signed.
     make_zip(&archive, &[("SKILL.md", &good_skill_md("My Skill!"))]);
     let dest = tmp.path().join("skills");
-    let res = install_into(&archive, &dest, false).unwrap();
-    assert_eq!(res.id, "my-skill");
-    assert_eq!(res.install_dir, dest.join("my-skill"));
+    let err = install_into(&archive, &dest, false).unwrap_err();
+    assert!(format!("{err}").contains("provenance"), "{err}");
+    assert!(!dest.join("my-skill").exists());
 }
 
 #[test]
 fn install_rejects_existing_destination_without_force() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("a.zip");
-    make_zip(&archive, &[("SKILL.md", &good_skill_md("dup"))]);
+    make_signed_zip(&archive, "dup", None, &[]);
     let dest = tmp.path().join("skills");
     install_into(&archive, &dest, false).unwrap();
     let err = install_into(&archive, &dest, false).unwrap_err();
@@ -144,21 +195,14 @@ fn install_rejects_existing_destination_without_force() {
 fn default_install_rejects_builtin_id_collision() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("claw-os.zip");
-    make_zip(&archive, &[("SKILL.md", &good_skill_md("claw-os"))]);
+    make_signed_zip(&archive, "claw-os", None, &[]);
     let user_root = tmp.path().join("user-skills");
     let system_root = tmp.path().join("system-skills");
     fs::create_dir_all(system_root.join("claw-os")).unwrap();
     fs::write(system_root.join("claw-os").join("SKILL.md"), "built in").unwrap();
 
-    let error = install_into_with_policy_reserved(
-        &archive,
-        &user_root,
-        false,
-        None,
-        &SignatureVerifyConfig::default(),
-        Some(&system_root),
-    )
-    .expect_err("built-in id must be reserved");
+    let error = install_into_reserved(&archive, &user_root, false, None, Some(&system_root))
+        .expect_err("built-in id must be reserved");
 
     assert!(matches!(error, SyncError::BuiltInConflict { .. }));
     assert!(!user_root.join("claw-os").exists());
@@ -168,24 +212,12 @@ fn default_install_rejects_builtin_id_collision() {
 fn install_force_overwrites_existing() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("a.zip");
-    make_zip(
-        &archive,
-        &[
-            ("SKILL.md", &good_skill_md("dup2")),
-            ("v1.txt", "first install\n"),
-        ],
-    );
+    make_signed_zip(&archive, "dup2", None, &[("v1.txt", "first install\n")]);
     let dest = tmp.path().join("skills");
     install_into(&archive, &dest, false).unwrap();
 
     let archive2 = tmp.path().join("b.zip");
-    make_zip(
-        &archive2,
-        &[
-            ("SKILL.md", &good_skill_md("dup2")),
-            ("v2.txt", "second install\n"),
-        ],
-    );
+    make_signed_zip(&archive2, "dup2", None, &[("v2.txt", "second install\n")]);
     let res = install_into(&archive2, &dest, true).unwrap();
     assert!(res.replaced_existing);
     // Old file gone, new file present.
@@ -317,13 +349,7 @@ fn install_atomic_on_failure() {
     // install must survive intact.
     let tmp = TempDir::new().unwrap();
     let a1 = tmp.path().join("v1.zip");
-    make_zip(
-        &a1,
-        &[
-            ("SKILL.md", &good_skill_md("keepme")),
-            ("v1.txt", "keep me alive\n"),
-        ],
-    );
+    make_signed_zip(&a1, "keepme", None, &[("v1.txt", "keep me alive\n")]);
     let dest = tmp.path().join("skills");
     install_into(&a1, &dest, false).unwrap();
 
@@ -393,10 +419,7 @@ fn install_atomic_on_failure() {
 fn install_verifies_sha256_when_provided() {
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("a.zip");
-    make_zip(
-        &archive,
-        &[("SKILL.md", &good_skill_md("checksummed"))],
-    );
+    make_signed_zip(&archive, "checksummed", None, &[]);
     let actual = sha256_file(&archive).unwrap();
     let dest = tmp.path().join("skills");
 
@@ -412,175 +435,104 @@ fn install_verifies_sha256_when_provided() {
     assert_eq!(ok.id, "checksummed");
 }
 
-// ----- ed25519 signature flow -----
+// ----- package provenance -----
 
 #[test]
-fn install_rejects_malformed_trusted_keys_before_side_effects() {
-    let _lock = crate::test_env::lock_env();
-    let _trusted_keys = crate::test_env::TestEnvVarGuard::set(
-        provenance::ENV_TRUSTED_KEYS,
-        "not-hex",
-    );
+fn install_rejects_unsigned_bundle_by_default() {
+    // There is no environment variable that relaxes this: the old
+    // COS_SKILLS_REQUIRE_SIGNATURE opt-in is gone and unsigned bundles
+    // fail closed.
     let tmp = TempDir::new().unwrap();
     let archive = tmp.path().join("unsigned.zip");
-    make_zip(
-        &archive,
-        &[("SKILL.md", &good_skill_md("must-not-install"))],
-    );
+    make_zip(&archive, &[("SKILL.md", &good_skill_md("must-not-install"))]);
     let dest = tmp.path().join("skills");
-
     let err = install_into(&archive, &dest, false).unwrap_err();
-    let message = err.to_string();
-
-    assert!(matches!(err, SyncError::SignatureConfig(_)));
-    assert!(message.contains(provenance::ENV_TRUSTED_KEYS));
-    assert!(message.contains("not valid hex"));
-    assert!(!dest.exists(), "install created the skills directory");
+    assert!(format!("{err}").contains("provenance"), "{err}");
+    assert!(!dest.join("must-not-install").exists());
 }
 
 #[test]
-fn install_honors_valid_trusted_keys_from_env() {
-    let _lock = crate::test_env::lock_env();
-    let _require_signature = crate::test_env::TestEnvVarGuard::set(
-        provenance::ENV_REQUIRE_SIGNATURE,
-        "true",
-    );
-    let _trusted_keys = crate::test_env::TestEnvVarGuard::set(
-        provenance::ENV_TRUSTED_KEYS,
-        hex::encode([7u8; 32]),
-    );
+fn install_rejects_a_tampered_signed_bundle() {
     let tmp = TempDir::new().unwrap();
-    let archive = tmp.path().join("signed.zip");
-    let (md, signer_key) = signed_skill_md("env-signed", "0.1.0");
-    make_zip(&archive, &[("SKILL.md", &md)]);
-    let dest = tmp.path().join("skills");
+    let good = tmp.path().join("good.zip");
+    make_signed_zip(&good, "tampered", None, &[("data.txt", "original\n")]);
 
-    let err = install_into(&archive, &dest, false).unwrap_err();
-    assert!(matches!(
-        err,
-        SyncError::Signature(SignatureError::UntrustedKey { .. })
-    ));
-    assert!(
-        !dest.join("env-signed").exists(),
-        "untrusted skill was installed"
-    );
-
-    std::env::set_var(
-        provenance::ENV_TRUSTED_KEYS,
-        hex::encode(signer_key),
-    );
-    let installed = install_into(&archive, &dest, false).unwrap();
-    assert_eq!(installed.id, "env-signed");
-}
-
-/// Build a SKILL.md whose signature block authenticates the
-/// canonical signing input for the rest of the manifest.
-fn signed_skill_md(name: &str, version: &str) -> (String, [u8; 32]) {
-    use ed25519_dalek::{Signer, SigningKey};
-    let secret: [u8; 32] = [42u8; 32];
-    let signing_key = SigningKey::from_bytes(&secret);
-    let verifying_key = signing_key.verifying_key();
-    let pk_hex = hex::encode(verifying_key.to_bytes());
-
-    // Parse the unsigned form first to recover the same
-    // canonical bytes that the verifier will compute when the
-    // signed SKILL.md is loaded from disk.
-    let unsigned = format!(
-        "---\nname: {name}\nversion: {version}\ndescription: test skill\n---\n# {name}\n"
-    );
-    let doc = manifest::parse(&unsigned).unwrap();
-    let canonical = manifest::canonical_signing_input(&doc.manifest);
-    let mut hasher = crate::crypto::Sha256Stream::new();
-    hasher.update(&canonical);
-    let digest = hasher.finalize_bytes();
-    let signature = signing_key.sign(&digest);
-    let sig_hex = hex::encode(signature.to_bytes());
-
-    let signed = format!(
-        "---\nname: {name}\nversion: {version}\ndescription: test skill\nsignature:\n  algorithm: ed25519\n  public_key: {pk_hex}\n  value: {sig_hex}\n---\n# {name}\n"
-    );
-    (signed, verifying_key.to_bytes())
-}
-
-#[test]
-fn install_accepts_valid_signature() {
-    let tmp = TempDir::new().unwrap();
-    let archive = tmp.path().join("signed.zip");
-    let (md, _pk) = signed_skill_md("signed-skill", "0.1.0");
-    make_zip(&archive, &[("SKILL.md", &md)]);
-    let dest = tmp.path().join("skills");
-    let policy = SignatureVerifyConfig {
-        require_signature: true,
-        trusted_keys: None,
-    };
-    let res =
-        install_into_with_policy(&archive, &dest, false, None, &policy).unwrap();
-    assert_eq!(res.id, "signed-skill");
-}
-
-#[test]
-fn install_rejects_tampered_manifest() {
-    let tmp = TempDir::new().unwrap();
-    let archive = tmp.path().join("tampered.zip");
-    let (mut md, _pk) = signed_skill_md("tampered", "0.1.0");
-    // Flip the version after signing — every byte of the
-    // canonical signing input feeds the digest, so a value
-    // change must invalidate the signature.
-    md = md.replace("version: 0.1.0", "version: 9.9.9");
-    make_zip(&archive, &[("SKILL.md", &md)]);
-    let dest = tmp.path().join("skills");
-    let policy = SignatureVerifyConfig::default();
-    let err =
-        install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
-    match err {
-        SyncError::Signature(SignatureError::BadSignature(_)) => {}
-        other => panic!("expected BadSignature, got {other:?}"),
+    // Re-zip the signed package with one file swapped.
+    let scratch = TempDir::new().unwrap();
+    let unpacked = scratch.path().join("pkg");
+    std::fs::create_dir_all(&unpacked).unwrap();
+    let reader = File::open(&good).unwrap();
+    let mut zip = zip::ZipArchive::new(reader).unwrap();
+    for i in 0..zip.len() {
+        let mut entry = zip.by_index(i).unwrap();
+        let out = unpacked.join(entry.name());
+        if let Some(parent) = out.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut entry, &mut buf).unwrap();
+        std::fs::write(out, buf).unwrap();
     }
-    // No half-installed tree on rejection.
-    assert!(!dest.join("tampered").exists());
-}
+    std::fs::write(unpacked.join("data.txt"), "evil\n").unwrap();
 
-#[test]
-fn install_rejects_unsigned_when_required() {
-    let tmp = TempDir::new().unwrap();
-    let archive = tmp.path().join("nosig.zip");
-    make_zip(&archive, &[("SKILL.md", &good_skill_md("nosig"))]);
+    let archive = tmp.path().join("tampered.zip");
+    let f = File::create(&archive).unwrap();
+    let mut writer = ZipWriter::new(f);
+    let opts = SimpleFileOptions::default();
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    collect_pkg(&unpacked, &unpacked, &mut entries);
+    entries.sort();
+    for (rel, full) in entries {
+        writer.start_file(rel, opts).unwrap();
+        writer.write_all(&std::fs::read(&full).unwrap()).unwrap();
+    }
+    writer.finish().unwrap();
+
     let dest = tmp.path().join("skills");
-    let policy = SignatureVerifyConfig {
-        require_signature: true,
-        trusted_keys: None,
-    };
-    let err =
-        install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
-    assert!(matches!(
-        err,
-        SyncError::Signature(SignatureError::Required)
-    ));
-    // And without the policy flag, the same archive installs.
-    let res =
-        install_into_with_policy(&archive, &dest, false, None, &SignatureVerifyConfig::default())
-            .unwrap();
-    assert_eq!(res.id, "nosig");
+    let err = install_into(&archive, &dest, false).unwrap_err();
+    assert!(format!("{err}").contains("digest") || format!("{err}").contains("signature"), "{err}");
+    assert!(!dest.join("tampered").exists(), "no half-installed tree");
 }
 
 #[test]
-fn install_rejects_untrusted_key() {
+fn install_rejects_a_bundle_signed_by_an_untrusted_key() {
     let tmp = TempDir::new().unwrap();
+    let scratch = TempDir::new().unwrap();
+    let pkg = scratch.path().join("evil-skill");
+    std::fs::create_dir_all(&pkg).unwrap();
+    std::fs::write(pkg.join("SKILL.md"), good_skill_md("evil-skill")).unwrap();
+    let stranger = crate::provenance::sign::SigningKeyFile::generate(None).unwrap();
+    crate::provenance::sign::sign_directory(
+        &pkg,
+        &crate::provenance::sign::SignRequest {
+            kind: crate::provenance::PackageKind::Skill,
+            id: "evil-skill".to_string(),
+            version: "0.1.0".to_string(),
+            manifest_schema: "test".to_string(),
+            manifest_path: "SKILL.md".to_string(),
+            entrypoints: vec![],
+            resources: vec![],
+        },
+        &stranger,
+    )
+    .unwrap();
+    crate::test_env::install_test_trust();
+
     let archive = tmp.path().join("evil.zip");
-    let (md, _signer_pk) = signed_skill_md("evil-skill", "0.1.0");
-    make_zip(&archive, &[("SKILL.md", &md)]);
+    let f = File::create(&archive).unwrap();
+    let mut writer = ZipWriter::new(f);
+    let opts = SimpleFileOptions::default();
+    let mut entries: Vec<(String, std::path::PathBuf)> = Vec::new();
+    collect_pkg(&pkg, &pkg, &mut entries);
+    entries.sort();
+    for (rel, full) in entries {
+        writer.start_file(rel, opts).unwrap();
+        writer.write_all(&std::fs::read(&full).unwrap()).unwrap();
+    }
+    writer.finish().unwrap();
+
     let dest = tmp.path().join("skills");
-    // Allow-list contains a *different* key than the one that
-    // signed this manifest.
-    let other_key: [u8; 32] = [7u8; 32];
-    let policy = SignatureVerifyConfig {
-        require_signature: true,
-        trusted_keys: Some(vec![other_key]),
-    };
-    let err =
-        install_into_with_policy(&archive, &dest, false, None, &policy).unwrap_err();
-    assert!(matches!(
-        err,
-        SyncError::Signature(SignatureError::UntrustedKey { .. })
-    ));
+    let err = install_into(&archive, &dest, false).unwrap_err();
+    assert!(format!("{err}").contains("trusted"), "{err}");
+    assert!(!dest.join("evil-skill").exists());
 }

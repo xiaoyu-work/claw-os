@@ -109,15 +109,15 @@ fn panel_environment_requires_explicit_manifest_opt_in() {
 }
 
 #[test]
-fn run_app_errors_when_app_dir_missing() {
+fn an_absent_package_cannot_be_bound_for_launch() {
+    // The launch path starts from a verified snapshot, so a directory
+    // that does not exist fails before any runtime selection happens.
     let tmp = std::env::temp_dir().join("cos-bridge-test-missing");
     let _ = std::fs::remove_dir_all(&tmp);
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
-    // No app.json + no main.py → python branch surfaces
-    // "app has no main.py" via run_python_app.
+    let err = crate::test_env::try_app_launch(&tmp, "missing").unwrap_err();
     assert!(
-        err.contains("main.py") || err.contains("app.json"),
-        "expected main.py / app.json reference, got: {err}"
+        err.contains("provenance") || err.contains("open package directory"),
+        "expected a provenance failure, got: {err}"
     );
 }
 
@@ -131,7 +131,8 @@ fn run_app_rejects_non_main_py_for_python() {
         r#"{"id":"x","version":"0","name":"X","runtime":"python","entry":"alt.py"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
+    let launch = crate::test_env::app_launch(&tmp, "x");
+    let err = run_app(&launch, "ls", &[], "/tmp", "/tmp").unwrap_err();
     assert!(
         err.contains("entry='main.py'"),
         "expected python-entry guard, got: {err}"
@@ -149,8 +150,10 @@ fn run_app_errors_on_unknown_runtime() {
         r#"{"id":"x","version":"0","name":"X","runtime":"rust"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
-    // serde rejects unknown runtime values at parse time.
+    // An unparseable manifest never becomes a verified snapshot, so the
+    // error surfaces at bind time rather than at launch.
+    crate::test_env::sign_test_package(&tmp, crate::provenance::PackageKind::App, "x");
+    let err = crate::test_env::try_app_launch(&tmp, "x").unwrap_err();
     assert!(
         err.contains("unknown variant") || err.contains("runtime"),
         "expected runtime parse error, got: {err}"
@@ -168,9 +171,10 @@ fn run_app_node_entry_missing_surfaces_clear_error() {
         r#"{"id":"x","version":"0","name":"X","runtime":"node"}"#,
     )
     .unwrap();
-    let err = run_app(&tmp, "ls", &[], "/tmp", "/tmp").unwrap_err();
+    let launch = crate::test_env::app_launch(&tmp, "x");
+    let err = run_app(&launch, "ls", &[], "/tmp", "/tmp").unwrap_err();
     assert!(
-        err.contains("app entry not found"),
+        err.contains("app entry not found") || err.contains("not a signed entrypoint"),
         "expected entry-missing error, got: {err}"
     );
     let _ = std::fs::remove_dir_all(&tmp);
@@ -241,9 +245,9 @@ fn run_python_app_handles_stdout_larger_than_pipe_buffer() {
     // Hard timeout: any deadlock regresses this into a 10s failure
     // rather than a session-killing hang.
     let (tx, rx) = std::sync::mpsc::channel();
-    let app_dir = tmp.clone();
+    let launch = crate::test_env::app_launch(&tmp, "x");
     let t = std::thread::spawn(move || {
-        let r = run_python_app(&app_dir, "noop", &[], "/tmp", "/tmp");
+        let r = run_python_app(&launch, "noop", &[], "/tmp", "/tmp");
         let _ = tx.send(r);
     });
     let result = rx
@@ -1021,8 +1025,9 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     )
     .unwrap();
     let state_text = state.path().to_string_lossy();
+    let python_launch = crate::test_env::app_launch(&python, "python-app");
     let output = run_python_app_with_stdin(
-        &python,
+        &python_launch,
         "read",
         &[],
         &state_text,
@@ -1036,7 +1041,7 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
         "python input"
     );
     let closed = run_python_app(
-        &python,
+        &python_launch,
         "read",
         &[],
         &state_text,
@@ -1064,8 +1069,9 @@ fn explicit_stdin_bytes_reach_python_and_polyglot_children() {
     )
     .unwrap();
     std::fs::set_permissions(&entry, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let shell_launch = crate::test_env::app_launch(&shell, "shell-app");
     let output = run_app_with_stdin(
-        &shell,
+        &shell_launch,
         "read",
         &[],
         &state_text,

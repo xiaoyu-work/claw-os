@@ -52,6 +52,7 @@ fn make_spec(name: &str) -> McpServerSpec {
         timeout_secs: 5,
         url: None,
         bearer_env: None,
+        provenance: None,
     }
 }
 

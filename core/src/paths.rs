@@ -569,6 +569,37 @@ pub fn system_skills_dir() -> PathBuf {
     from_env_or_default("COS_SYSTEM_SKILLS_DIR", "/usr/lib/cos/skills", "skills")
 }
 
+/// Root for extension-provenance state.
+///
+/// Note that nothing under here is a *trust* root: publisher keys live
+/// only in the compiled-in roots resolved by
+/// [`crate::provenance::trust::TrustStore::default_roots`], which no
+/// environment variable can redirect. This tree holds derived state
+/// (retained artifacts, vendor pins) that is re-verified before use.
+pub fn provenance_dir() -> PathBuf {
+    data_dir().join("provenance")
+}
+
+/// Content-addressed store of verified extension artifacts. An update
+/// publishes here first, so a rollback can only land on content that
+/// already passed verification.
+pub fn provenance_artifacts_dir() -> PathBuf {
+    provenance_dir().join("artifacts")
+}
+
+/// Pinned content digests for vendor (Debian/rootfs) packages. A
+/// mismatch means the installed tree changed after the last use and is
+/// surfaced through the provenance audit log.
+pub fn vendor_pin_path() -> PathBuf {
+    provenance_dir().join("vendor-pins.json")
+}
+
+/// Append-only provenance audit log: install, activate, reject, revoke
+/// and use records referencing publisher key ids and package digests.
+pub fn provenance_audit_path() -> PathBuf {
+    log_dir().join("provenance.jsonl")
+}
+
 /// Output sink for media-tool-generated artifacts (TTS audio,
 /// generated images). Lives under `data_dir/agent/media/outputs/`.
 /// Tools write deterministic uuid-suffixed files here and return

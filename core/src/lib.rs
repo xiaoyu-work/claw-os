@@ -37,6 +37,7 @@ pub mod paths;
 pub mod perms;
 pub mod policy;
 pub mod proc;
+pub mod provenance;
 pub mod router;
 pub mod mem_bridge;
 pub mod sandbox;

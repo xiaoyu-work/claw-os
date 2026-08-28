@@ -382,6 +382,34 @@ fn reconcile(store: &Store) {
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "agentd lease reconciliation failed"),
     }
+    reconcile_revoked_instances();
+}
+
+/// Stop App and MCP instances whose package stopped being trusted.
+///
+/// Rides the reconcile pass rather than starting a loop of its own.
+/// The immediate guarantee is elsewhere — any authority call from a
+/// revoked instance is denied by `provenance::runtime::assert_live` the
+/// moment it is made — so this exists for the instance that is idle and
+/// would otherwise sit in the supervisor's world untouched.
+fn reconcile_revoked_instances() {
+    let owner = crate::provenance::runtime::current_owner();
+    let trust = crate::provenance::trust_store();
+    let report = crate::provenance::runtime::lifecycle_tick(
+        owner,
+        &trust,
+        crate::provenance::runtime::SHUTDOWN_GRACE,
+    );
+    if report.is_empty() {
+        return;
+    }
+    tracing::warn!(
+        target: "provenance",
+        marked = report.marked.len(),
+        terminated = report.terminated.len(),
+        released = report.released.len(),
+        "agentd stopped extension instances whose package is no longer trusted"
+    );
 }
 
 #[derive(Debug, Default)]

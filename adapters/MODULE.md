@@ -22,6 +22,22 @@ same manifest/operation contract as bundled apps.
 | `_template/` | Starting structure for a new adapter |
 | `README.md` | Adapter overview |
 
+## Provenance and packaging status
+
+Adapters are **not packaged today**: nothing under `packaging/` or
+`rootfs/` installs `adapters/` onto a system. They are therefore
+source-tree content, do not inherit vendor trust, and are quarantined by
+the extension-provenance gate until they are either signed and installed
+as packages or given an explicit developer grant:
+
+```bash
+cos provenance dev-trust --kind mcp --id <adapter-id> --path adapters/<id>
+```
+
+Productizing an adapter means shipping it as a signed package directory
+(`agent-api.json` plus `.provenance.json`) under an approved package
+root. See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).
+
 ## Dependencies
 
 Adapters use argument-vector subprocess APIs, never shell interpolation.

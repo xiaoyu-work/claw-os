@@ -296,7 +296,7 @@ fn require_tool_in_app_policy(app_id: &str, tool_name: &str) -> Result<(), Strin
     let apps_dir = std::env::var("COS_APPS_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
-    let discovered = apps::discover(&apps_dir);
+    let discovered = apps::discover_verified(&apps_dir);
     let app = discovered
         .get(app_id)
         .ok_or_else(|| format!("unknown app: {app_id}"))?;

@@ -75,6 +75,28 @@ the underlying home. A migration or unmount failure blocks package removal and
 retains the overlay/recovery data; see
 [`docs/updating.md`](../docs/updating.md#removing-the-claw-os-integration-package).
 
+## Extension trust roots
+
+`claw-os-agent` creates two root-owned publisher trust roots:
+
+| Path | Mode | Purpose |
+|---|---|---|
+| `/usr/lib/cos/trust/publishers.d/` | `0755`, files `0644` | Vendor keys shipped by the package |
+| `/etc/cos/trust/publishers.d/` | `0755`, empty | Operator-managed keys; never shipped |
+
+Content for the vendor root comes from
+`packaging/deb/claw-os-agent/trust/publishers.d/`. The build fails if a
+file there contains a `private_key` field, so signing keys can never be
+shipped by accident. Both roots — and every ancestor up to `/` — must be
+root-owned, non-symlink and free of group/world write bits; the loader
+refuses a root that fails those checks and reports it as a diagnostic.
+
+Apps and skills installed under `/usr/lib/cos` inherit package-manager
+(vendor) trust: their content digest is pinned on first use, and a
+later change rotates the pin with a `provenance.vendor_pin_rotated`
+audit record. Everything a user installs needs a publisher signature.
+See [`../docs/extension-provenance.md`](../docs/extension-provenance.md).
+
 ## Build
 
 The .debs are built **from already-compiled binaries** — `dpkg-deb --build`

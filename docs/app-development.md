@@ -522,7 +522,7 @@ and ship an app
 | `cos app <id> <op> --schema` | Schema for one op. |
 | `cos app lint [<id>]` | Refuse apps that import provider SDKs directly. Run on every app if no id given. |
 | `cos app tool list [<id>]` | Show the session-tool surface this app exposes to the agent. |
-| `cos app install <dir> [--force] [--no-consent] [--yes]` | Validate the manifest, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. |
+| `cos app install <dir> [--force] [--no-consent] [--yes] [--dev-trust]` | Validate the manifest, verify the package's provenance envelope, copy into `$COS_APPS_DIR/<id>/`, and (unless `--no-consent`) walk through the AI consent prompt. Copying is skipped only when the source resolves to that exact destination path. `--dev-trust` is the only route that installs unsigned content and records a persistent, digest-bound developer decision. |
 | `cos app consent list` | Which apps you have granted AI consent to. |
 | `cos app consent show <id>` | Display the manifest's AI block. |
 | `cos app consent grant <id> [--yes]` | Grant AI consent. |
@@ -553,19 +553,41 @@ Once the app does what you want:
 
 ```sh
 cos app lint ~/my-apps/hello         # static check
-cos app install ~/my-apps/hello      # validate manifest + copy into $COS_APPS_DIR
+cos provenance sign --kind app --id hello --version 1.0.0 \
+    --path ~/my-apps/hello --key ~/.secrets/my-publisher.json \
+    --entrypoint main.py             # bind the whole tree to your key
+cos app install ~/my-apps/hello      # verify provenance + copy into $COS_APPS_DIR
 # If the manifest has an `ai` block, the installer prompts for consent
 # (skip with --no-consent and run `cos app consent grant hello` later).
 cos app hello say                    # now lives under /usr/lib/cos/apps/hello/
 ```
 
-Subsequent edits to `/usr/lib/cos/apps/<id>/main.py` are picked up
-immediately — the same hot-reload story as §4. For a clean
-distributable, package the directory as a tarball: any machine with
-Claw OS can `cos app install <untarred-dir>` it.
+An App is authenticated before its manifest can influence capability
+grants or App identity, so `cos app install` refuses an unsigned tree
+unless the operator explicitly opts in:
+
+```sh
+cos app install ~/my-apps/hello --dev-trust
+```
+
+That records a developer grant bound to the installed content digest,
+runs the App with a restricted ceiling and no privileged routes, and is
+invalidated the moment the tree changes. Editing
+`/usr/lib/cos/apps/<id>/main.py` in place therefore no longer
+hot-reloads: the edited package stops verifying and is quarantined
+until it is re-signed and re-installed (or the developer grant is
+re-recorded). Iterate in your source tree and re-run `cos app install`.
+
+For a clean distributable, sign the directory and package it as a
+tarball: any machine that trusts your publisher key can
+`cos app install <untarred-dir>` it. See
+[`extension-provenance.md`](extension-provenance.md) for the envelope
+format, trust roots, revocation and rollback.
 
 ## See also
 
+* [`extension-provenance.md`](extension-provenance.md) — package
+  signing, trust roots, install pipeline, revocation, rollback.
 * [`app-ai-integration.md`](app-ai-integration.md) — AI gate, manifest
   reference, lifecycle, audit surface.
 * [`app-ai-tool-catalog.md`](app-ai-tool-catalog.md) — every

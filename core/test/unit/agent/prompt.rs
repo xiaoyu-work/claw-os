@@ -138,6 +138,7 @@ fn skill_catalog_is_metadata_only_and_traced() {
         "---\nname: claw-os\ndescription: Claw system operations\n---\nHIDDEN_BODY\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, "claw-os");
     let skills = crate::agent::skills::loader::load_layered(
         system.path(),
         user.path(),
@@ -167,6 +168,11 @@ fn traced_prompt_builder_discovers_configured_system_skills() {
         "---\nname: configured-skill\ndescription: DISCOVERED_METADATA\n---\nHIDDEN_BODY\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(
+        &dir,
+        crate::provenance::PackageKind::Skill,
+        "configured-skill",
+    );
     let _system_guard = EnvVarGuard::set("COS_SYSTEM_SKILLS_DIR", system.path());
     let _data_guard = EnvVarGuard::set("COS_DATA_DIR", data.path());
     let _user_data_guard = EnvVarGuard::set("COS_USER_DATA_DIR", data.path());

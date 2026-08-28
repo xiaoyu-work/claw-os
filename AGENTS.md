@@ -12,6 +12,9 @@ Read only the documents relevant to the task:
 2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — build commands and architecture rules.
 3. [`docs/app-development.md`](docs/app-development.md) — Python app manifest,
    capability, SDK, lint, and install contracts.
+   [`docs/extension-provenance.md`](docs/extension-provenance.md) — the
+   signing/trust/install contract every App, Skill and MCP package must
+   satisfy before it is trusted.
 4. [`docs/image-architecture.md`](docs/image-architecture.md) — rootfs features,
    image profiles, and target identity.
 5. [`packaging/README.md`](packaging/README.md) and
@@ -99,6 +102,10 @@ test file after selecting the implementation, when confirming existing
 behavior, adding a regression, or diagnosing a failure.
 
 ```bash
+# Extension provenance (format, trust, verify, install, CLI)
+cargo test -p cos --lib provenance:: -- --test-threads=1
+cargo test -p cos --test extension_provenance_process -- --test-threads=1
+
 # One Rust test or module
 cargo test -p cos <test-filter> -- --test-threads=1
 
@@ -211,4 +218,5 @@ Before completion:
 | App/manifest/SDK contract | `docs/app-development.md`, SDK README |
 | Image feature/profile/identity | `docs/image-architecture.md`, `rootfs/features/README.md` |
 | Package or installed update behavior | `packaging/README.md`, `docs/updating.md` |
+| Extension signing, trust roots, or package verification | `docs/extension-provenance.md`, `packaging/deb/claw-os-agent/trust/publishers.d/README.md` |
 | Desktop boundary or provenance | `desktop/README.md`, `desktop/PROVENANCE.md` |

@@ -44,6 +44,7 @@ use crate::apps::App;
 use crate::caps::{Cap, CapSet, Manifest, Need, Role, Scope, ScopeBinding, ScopeKind, Verb};
 use crate::clawd::protocol::BrokerError;
 use crate::proc::SessionInfo;
+use crate::provenance::Ceiling;
 
 use super::authority;
 use super::client_identity::ClientIdentity;
@@ -454,6 +455,18 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     let launcher = authenticate_launcher(client, uid, home.clone()).await?;
     let delegation = Delegation::new(&launcher, uid, &home, &params)?;
     let app = installed_app(&app_id)?;
+    // Resolved before any plan is built: the ceiling decides whether
+    // this launch kind is available at all, and every capability and
+    // audience below is filtered through it.
+    let ceiling = app_ceiling(&app)?;
+    if matches!(kind, LaunchKind::Mcp) && !ceiling.allows_mcp_attach() {
+        return Err(format!(
+            "App `{app_id}` is {}-trusted and may not run as an MCP server; \
+             sign and install it to attach a session",
+            ceiling.label()
+        )
+        .into());
+    }
 
     let (command, mut plan, invoke) = match kind {
         LaunchKind::Operation => {
@@ -529,12 +542,25 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
     };
 
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(&session_id, Some(&app_id), uid, &launcher, &grant_caps)?;
+    let handle = issue_launch_grant(
+        &session_id,
+        Some(&app_id),
+        uid,
+        &launcher,
+        &grant_caps,
+        Some(&ceiling),
+    )?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "app_id": app_id,
         "handle": handle,
+        // What clawd actually granted, so the launcher builds its
+        // sandbox from the daemon's decision instead of its own
+        // resolution of the same manifest. A launcher that finds a
+        // wider set than this refuses to launch.
+        "caps": grant_caps,
+        "trust_tier": ceiling.label(),
     }))
 }
 
@@ -550,8 +576,10 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
     // authority is the installed manifest itself. `native_manifest_caps`
     // still refuses argument-bound needs, which have no invocation to
     // bind to here.
+    let ceiling = app_ceiling(&app)?;
     let mut caps = native_manifest_caps(&app.manifest)?;
     caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name(&app_id)));
+    let caps = clamp_to_ceiling(&ceiling, &app_id, &caps, "register_native");
     let session_id = format!("app-{}", uuid::Uuid::new_v4().simple());
     let role = Role::Worker;
     let info = SessionInfo {
@@ -578,12 +606,21 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
     };
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(&session_id, Some(&app_id), uid, &launcher, &caps)?;
+    let handle = issue_launch_grant(
+        &session_id,
+        Some(&app_id),
+        uid,
+        &launcher,
+        &caps,
+        Some(&ceiling),
+    )?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
         "app_id": app_id,
         "handle": handle,
+        "caps": caps,
+        "trust_tier": ceiling.label(),
     }))
 }
 
@@ -625,7 +662,7 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
         ),
     };
     let proc_dir = install_session(uid, home, info).await?;
-    let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps)?;
+    let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps, None)?;
     Ok(json!({
         "session_id": session_id,
         "proc_data_dir": proc_dir,
@@ -665,6 +702,13 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
             "App process {child_pid} is not owned by execution uid {execution_uid}"
         ));
     }
+    // Re-resolved from the installed package rather than remembered
+    // from `register`, so a revocation landing between the two is seen
+    // here and the session grant is never derived from a stale tier.
+    let ceiling = match launch.subject.app_id.as_deref() {
+        Some(app_id) => Some(app_ceiling(&installed_app(app_id)?)?),
+        None => None,
+    };
     let bind_id = session_id.clone();
     let bound_caps = crate::paths::with_user_override(uid, home, async move {
         crate::proc::bind_session_process(&bind_id, child_pid)?;
@@ -673,6 +717,19 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
             .ok_or_else(|| "App session lost its capabilities during bind".to_string())
     })
     .await?;
+    // The registry row was written by `register` under this same
+    // ceiling, but it is re-clamped before it becomes live authority:
+    // the row is a file, and a grant derived from a file nobody
+    // re-checked is a grant derived from whatever last wrote it.
+    let bound_caps = match ceiling.as_ref() {
+        Some(ceiling) => clamp_to_ceiling(
+            ceiling,
+            launch.subject.app_id.as_deref().unwrap_or_default(),
+            &bound_caps,
+            "bind",
+        ),
+        None => bound_caps,
+    };
     // Deriving the session grant is what makes `bind` one-shot: the
     // store refuses a second claim on a session index, so two
     // concurrent binds cannot both install one.
@@ -683,6 +740,7 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         uid,
         child_pid,
         &bound_caps,
+        ceiling.as_ref(),
     )?;
     Ok(json!({"bound": true}))
 }
@@ -774,6 +832,34 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     }
     let child_pid = bound.pid;
 
+    let widening = !matches!(params.get("call"), None | Some(Value::Null));
+
+    // The same authoritative ceiling as `register`, resolved again from
+    // the installed package. A transient re-scope is the obvious way to
+    // widen an App after launch, so it is clamped by the identical
+    // rule: no MCP call, approval or parent capability can move a
+    // package above its tier once it is running.
+    //
+    // A package that can no longer be verified — uninstalled, revoked,
+    // replaced — may not widen anything. Clearing a transient set is
+    // still allowed, because refusing to *narrow* would strand exactly
+    // the grant the caller was trying to give up.
+    let verified = match installed_app(&app_id) {
+        Ok(app) => {
+            let ceiling = app_ceiling(&app)?;
+            Some((app, ceiling))
+        }
+        Err(error) if widening => return Err(error),
+        Err(error) => {
+            tracing::warn!(
+                app = %app_id,
+                error = %error,
+                "narrowing an App session whose package no longer verifies"
+            );
+            None
+        }
+    };
+
     // Derive and authorize the requested capabilities *before* anything
     // is written. A launch that cannot settle its approvals leaves both
     // the registry and the authority untouched.
@@ -823,6 +909,15 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     if let Some(transient) = caps.as_ref() {
         effective.extend(transient.iter().cloned());
     }
+    // Clamped once more over the union: the persisted row and the
+    // transient set are each within the ceiling, but the merge is what
+    // becomes the live grant, and that is the value that has to be
+    // provably inside it.
+    let ceiling = verified.as_ref().map(|(_, ceiling)| ceiling);
+    let effective = match ceiling {
+        Some(ceiling) => clamp_to_ceiling(ceiling, &app_id, &effective, "set_transient"),
+        None => effective,
+    };
 
     // Commit the two halves as one security transaction. The registry
     // write comes first because it is the one that can be rolled back
@@ -1215,15 +1310,113 @@ fn installed_app(app_id: &str) -> Result<App, String> {
     let apps_dir = std::path::PathBuf::from(
         std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".to_string()),
     );
-    let app = crate::apps::find(&apps_dir, app_id)
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    // Authority path: a quarantined install may never reach capability
+    // derivation or session binding, so the verified lookup is used
+    // rather than the listing-oriented one.
+    let app = crate::apps::find_verified(&apps_dir, app_id)?;
     if app.manifest.id != app_id {
         return Err(format!(
             "installed manifest declares id `{}`, not `{app_id}`",
             app.manifest.id
         ));
     }
+    let pkg = app.require_verified()?;
+    pkg.assert_current(&crate::provenance::trust_store())
+        .map_err(|e| format!("App `{app_id}` failed its pre-launch provenance check: {e}"))?;
     Ok(app)
+}
+
+/// The authoritative provenance ceiling for an installed App.
+///
+/// Derived here, inside the daemon, from the daemon's own verified
+/// package — never from anything the launcher sent. The launcher
+/// applies the same ceiling before it builds a sandbox, but that copy
+/// is defence in depth: a launcher is unprivileged local code and its
+/// view of the manifest, of the trust tier, or of what it "already
+/// dropped" is not evidence. Every grant this module mints is clamped
+/// against *this* value.
+fn app_ceiling(app: &App) -> Result<Ceiling, String> {
+    Ok(app.require_verified()?.ceiling())
+}
+
+/// Clamp a resolved capability set to a package's ceiling, auditing
+/// what the daemon refused.
+///
+/// This is the only place an App's capability set becomes authority, so
+/// it is also the only honest place to record the restriction: the
+/// audit line means "clawd did not grant these", not "a launcher says
+/// it did not ask for these".
+fn clamp_to_ceiling(ceiling: &Ceiling, app_id: &str, caps: &CapSet, stage: &str) -> CapSet {
+    let (kept, dropped) = ceiling.clamp(caps);
+    record_ceiling_drop(ceiling, app_id, stage, &dropped);
+    kept
+}
+
+fn record_ceiling_drop(ceiling: &Ceiling, app_id: &str, stage: &str, dropped: &[Cap]) {
+    if dropped.is_empty() {
+        return;
+    }
+    crate::provenance::audit(
+        "provenance.ceiling_applied",
+        json!({
+            "package_kind": "app",
+            "package_id": app_id,
+            "stage": stage,
+            "enforced_by": "clawd",
+            "trust_tier": ceiling.label(),
+            "dropped": dropped
+                .iter()
+                .map(|cap| json!({"verb": cap.verb.as_str(), "scope": cap.scope}))
+                .collect::<Vec<_>>(),
+        }),
+    );
+}
+
+/// The audiences a grant for this package may carry.
+///
+/// Structural rather than advisory: the requested set is filtered
+/// through the ceiling, so developer-trusted content receives
+/// `AppLaunch` at most and can never be handed the `AppRelay`,
+/// `SystemService` or `Credential` audiences that address a privileged
+/// broker route.
+fn permitted_audiences(
+    ceiling: Option<&Ceiling>,
+    requested: &[authority::Audience],
+) -> authority::AudienceSet {
+    match ceiling {
+        None => authority::AudienceSet::of(requested),
+        Some(ceiling) => {
+            let allowed: Vec<authority::Audience> = requested
+                .iter()
+                .copied()
+                .filter(|audience| ceiling.allows_audience(audience_facet(*audience)))
+                .collect();
+            authority::AudienceSet::of(&allowed)
+        }
+    }
+}
+
+/// Map a clawd audience onto the provenance vocabulary.
+///
+/// The two enums are deliberately separate — `provenance` must not
+/// depend on the daemon's authority types — so the crossing is made
+/// once, exhaustively, and a new audience will not compile until it is
+/// classified.
+fn audience_facet(audience: authority::Audience) -> crate::provenance::ceiling::Audience {
+    use crate::provenance::ceiling::Audience as Facet;
+    match audience {
+        authority::Audience::AppLaunch => Facet::AppLaunch,
+        authority::Audience::AppRelay => Facet::AppRelay,
+        authority::Audience::SystemService => Facet::SystemService,
+        authority::Audience::Credential => Facet::Credential,
+        authority::Audience::Scheduler => Facet::Scheduler,
+        authority::Audience::Permission => Facet::Permission,
+        authority::Audience::Transaction => Facet::Transaction,
+        authority::Audience::Context => Facet::Context,
+        authority::Audience::Notification => Facet::Notification,
+        authority::Audience::Task => Facet::Task,
+        authority::Audience::Daemon => Facet::Daemon,
+    }
 }
 
 /// Build the capability plan for one manifest operation.
@@ -1232,6 +1425,7 @@ fn operation_plan(
     operation: &str,
     args: &[String],
     delegation: &Delegation,
+    ceiling: &Ceiling,
 ) -> Result<LaunchPlan, BrokerError> {
     if operation == "__schema__" {
         return Err("App schema inspection does not run App code"
@@ -1249,11 +1443,17 @@ fn operation_plan(
         .manifest
         .resolve_operation_call(operation, &supplied, &delegation.paths)
         .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
-    derive_plan(&declared.needs, &effective.needs, delegation)
+    derive_plan(
+        &declared.needs,
+        &effective.needs,
+        delegation,
+        ceiling,
+        &app.manifest.id,
+    )
 }
 
 fn session_tool_plan(
-    app_id: &str,
+    app: &App,
     call: &Value,
     delegation: &Delegation,
 ) -> Result<(LaunchPlan, Option<McpCallAuthority>), BrokerError> {
@@ -1317,6 +1517,8 @@ fn derive_plan(
     needs: &[Need],
     resolved: &[Vec<Cap>],
     delegation: &Delegation,
+    ceiling: &Ceiling,
+    app_id: &str,
 ) -> Result<LaunchPlan, BrokerError> {
     if needs.len() != resolved.len() {
         return Err("manifest capability resolution is inconsistent"
@@ -1324,8 +1526,17 @@ fn derive_plan(
             .into());
     }
     let mut plan = LaunchPlan::default();
+    let mut refused_wild = Vec::new();
     for (need, caps) in needs.iter().zip(resolved) {
         if matches!(need.scope, ScopeBinding::Wild) {
+            // A `wild` binding is a request to borrow the launcher's
+            // reach. Unsigned content does not get to: the need is
+            // dropped rather than expanded, so nothing downstream ever
+            // sees the inherited scopes.
+            if !ceiling.allows_wild_binding(need.verb) {
+                refused_wild.push(Cap::new(need.verb, Scope::Wild));
+                continue;
+            }
             if !caps.is_empty() {
                 plan.inherit(inherited_wild_caps(need.verb, delegation)?);
             }
@@ -1335,6 +1546,7 @@ fn derive_plan(
             plan.require(cap.clone(), delegation);
         }
     }
+    record_ceiling_drop(ceiling, app_id, "wild_binding", &refused_wild);
     Ok(plan)
 }
 
@@ -1346,17 +1558,34 @@ fn derive_plan(
 /// one approval consumes nothing and files a deduplicated pending
 /// request for each missing capability, returning their ids so the same
 /// launcher process can wait for the decisions and retry.
-fn authorize_plan(delegation: &Delegation, plan: LaunchPlan) -> Result<CapSet, BrokerError> {
-    if plan.missing.is_empty() {
-        return Ok(plan.caps);
+fn authorize_plan(
+    delegation: &Delegation,
+    plan: LaunchPlan,
+    ceiling: &Ceiling,
+    app_id: &str,
+) -> Result<CapSet, BrokerError> {
+    // Clamp before the approvals store is touched. A capability outside
+    // the package's ceiling can never be granted, so asking the user to
+    // approve it — or worse, *consuming* an approval they granted for
+    // some other launch — would be a prompt for nothing. Both halves of
+    // the plan are filtered, so `missing` cannot resurrect a dropped
+    // capability through consent.
+    let (caps, dropped_caps) = ceiling.clamp(&plan.caps);
+    let (missing, dropped_missing) = ceiling.clamp_vec(&plan.missing);
+    let mut dropped = dropped_caps;
+    dropped.extend(dropped_missing);
+    record_ceiling_drop(ceiling, app_id, "authorize_plan", &dropped);
+
+    if missing.is_empty() {
+        return Ok(caps);
     }
     match crate::approvals::consume_grant_set_once_for_owner(
         &delegation.grant_session,
-        &plan.missing,
+        &missing,
         Some(delegation.uid),
     ) {
-        Ok(true) => Ok(plan.caps),
-        Ok(false) => Err(request_approvals(delegation, &plan.missing)),
+        Ok(true) => Ok(caps),
+        Ok(false) => Err(request_approvals(delegation, &missing)),
         Err(error) => Err(format!("could not settle approved permission grants: {error}").into()),
     }
 }
@@ -1590,7 +1819,12 @@ fn verb_addresses_a_resource(verb: Verb) -> bool {
 /// operation path, where arguments are bound and authorized. A GUI
 /// launch carries no operation arguments, so only manifest-fixed and
 /// wildcard needs can be bound; argument-bound needs are left out.
-fn gui_plan(app: &App, exec: &str, delegation: &Delegation) -> Result<LaunchPlan, BrokerError> {
+fn gui_plan(
+    app: &App,
+    exec: &str,
+    delegation: &Delegation,
+    ceiling: &Ceiling,
+) -> Result<LaunchPlan, BrokerError> {
     let desktop = app
         .manifest
         .desktop
@@ -1605,6 +1839,7 @@ fn gui_plan(app: &App, exec: &str, delegation: &Delegation) -> Result<LaunchPlan
     }
 
     let mut plan = LaunchPlan::default();
+    let mut refused_wild = Vec::new();
     for need in app
         .manifest
         .operations
@@ -1621,6 +1856,12 @@ fn gui_plan(app: &App, exec: &str, delegation: &Delegation) -> Result<LaunchPlan
                     plan.inherit([requested]);
                 }
             }
+            // Same rule as the operation path: unsigned content never
+            // borrows the launcher's reach over a resource namespace,
+            // whichever surface asked for it.
+            ScopeBinding::Wild if !ceiling.allows_wild_binding(need.verb) => {
+                refused_wild.push(Cap::new(need.verb, Scope::Wild));
+            }
             ScopeBinding::Wild => {
                 plan.inherit(inherited_wild_caps(need.verb, delegation)?);
             }
@@ -1629,6 +1870,7 @@ fn gui_plan(app: &App, exec: &str, delegation: &Delegation) -> Result<LaunchPlan
             | ScopeBinding::FromArgOrWild { .. } => {}
         }
     }
+    record_ceiling_drop(ceiling, &app.manifest.id, "wild_binding", &refused_wild);
     Ok(plan)
 }
 
@@ -1684,6 +1926,7 @@ fn issue_launch_grant(
     uid: u32,
     launcher: &LauncherAuthority,
     caps: &CapSet,
+    ceiling: Option<&Ceiling>,
 ) -> Result<String, String> {
     let principal = authority::Principal::of_process(uid, launcher.pid)
         .ok_or_else(|| "cannot bind an App launch to an unverifiable process".to_string())?;
@@ -1730,6 +1973,7 @@ fn issue_session_grant(
     uid: u32,
     child_pid: u32,
     caps: &CapSet,
+    ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
     let principal = authority::Principal::of_process(uid, child_pid)
         .ok_or_else(|| format!("App process {child_pid} could not be identified"))?;
@@ -1742,10 +1986,13 @@ fn issue_session_grant(
                 binding: authority::Binding::ProcessTree,
                 subject: authority::Subject::session(session_id)
                     .with_app(app_id.map(ToOwned::to_owned)),
-                audience: authority::AudienceSet::of(&[
-                    authority::Audience::SystemService,
-                    authority::Audience::Credential,
-                ]),
+                audience: permitted_audiences(
+                    ceiling,
+                    &[
+                        authority::Audience::SystemService,
+                        authority::Audience::Credential,
+                    ],
+                ),
                 caps: caps.clone(),
                 lifetime: SESSION_GRANT_TTL,
                 uses: authority::Uses::Unbounded,
@@ -1893,6 +2140,7 @@ fn reissue_session_grant(
     uid: u32,
     child_pid: u32,
     caps: &CapSet,
+    ceiling: Option<&Ceiling>,
 ) -> Result<(), String> {
     authority::authority().revoke_indexed_session(session_id);
     issue_session_grant(launch_handle, session_id, app_id, uid, child_pid, caps)

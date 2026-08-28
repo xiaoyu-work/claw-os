@@ -296,7 +296,7 @@ impl AppIdentitySession {
 
     /// Register the least-privileged identity for one manifest operation.
     pub fn for_operation(
-        app_dir: &Path,
+        launch: &AppLaunch,
         app_id: &str,
         operation: &str,
         args: &[String],
@@ -311,13 +311,17 @@ impl AppIdentitySession {
         // effective arguments and the authority derives the session's
         // capabilities from the same values, so a scope always names the
         // resource the App was actually handed.
-        let manifest = load_manifest(app_dir)?;
+        // The manifest comes from the verified snapshot, not from a
+        // fresh read of a mutable path: the bytes that decide which
+        // capabilities this launch gets are the bytes that were signed.
+        let manifest = Some(launch.manifest().clone());
         let declared = match manifest.as_ref() {
             Some(manifest) => Some(manifest.operations.get(operation).ok_or_else(|| {
                 format!("app `{app_id}` manifest has no operation `{operation}`")
             })?),
             None => None,
         };
+        let ceiling = launch.ceiling();
         let bound = match declared {
             Some(declared) => {
                 let trusted_args = trusted_pre_dispatch_args(app_id, declared, args)?;
@@ -334,20 +338,23 @@ impl AppIdentitySession {
             .map(|manifest| manifest.resolve_needs(operation, &bound.values))
             .transpose()
             .map_err(|error| format!("resolve `{operation}` capabilities: {error}"))?;
+        let local_ceiling = ceiling.clone();
         let session = Self::start(
             app_id,
             LaunchRequest::Operation {
                 operation,
                 args: &effective_args,
             },
+            Some(ceiling),
             |parent_caps| match declared {
                 Some(declared) => {
-                    constrained_operation_caps(
+                    let caps = constrained_operation_caps(
                         parent_caps,
                         false,
                         &declared.needs,
                         resolved.as_deref().unwrap_or_default(),
-                    )
+                    )?;
+                    Ok(apply_provenance_ceiling(&local_ceiling, caps))
                 }
                 None => Ok(CapSet::new()),
             },
@@ -356,16 +363,24 @@ impl AppIdentitySession {
     }
 
     /// Register a GUI identity with the constrained union of all operation needs.
-    pub fn for_gui(app_dir: &Path, app_id: &str, exec: &str) -> Result<Self, String> {
-        Self::start(app_id, LaunchRequest::Gui { exec }, |parent_caps| {
-            let manifest = load_manifest(app_dir)?;
-            let needs = manifest
-                .iter()
-                .flat_map(|manifest| manifest.operations.values())
-                .flat_map(|operation| operation.needs.iter())
-                .collect();
-            Ok(constrained_caps(parent_caps, needs))
-        })
+    pub fn for_gui(launch: &AppLaunch, app_id: &str, exec: &str) -> Result<Self, String> {
+        let ceiling = launch.ceiling();
+        let local_ceiling = ceiling.clone();
+        let manifest = launch.manifest().clone();
+        Self::start(
+            app_id,
+            LaunchRequest::Gui { exec },
+            Some(ceiling),
+            move |parent_caps| {
+                let needs = manifest
+                    .operations
+                    .values()
+                    .flat_map(|operation| operation.needs.iter())
+                    .collect();
+                let caps = constrained_caps(parent_caps, needs);
+                Ok(apply_provenance_ceiling(&local_ceiling, caps))
+            },
+        )
     }
 
     /// Register an MCP identity. Session tools receive their authority
@@ -399,7 +414,12 @@ impl AppIdentitySession {
     /// ever uses the reported parent capabilities to narrow the result.
     /// `local_caps` is therefore consulted solely for the in-process
     /// backend, which already runs as trusted code.
-    fn start<F>(app_id: &str, request: LaunchRequest<'_>, local_caps: F) -> Result<Self, String>
+    fn start<F>(
+        app_id: &str,
+        request: LaunchRequest<'_>,
+        ceiling: Option<crate::provenance::Ceiling>,
+        local_caps: F,
+    ) -> Result<Self, String>
     where
         F: FnOnce(&CapSet) -> Result<CapSet, String>,
     {
@@ -484,6 +504,36 @@ impl AppIdentitySession {
             .and_then(serde_json::Value::as_str)
             .map(ToOwned::to_owned)
             .ok_or_else(|| "clawd App session response omitted handle".to_string())?;
+        // The sandbox is built from what the daemon *granted*, not from
+        // what this process resolved. Both are derived from the same
+        // signed manifest and should agree, but only one of them is
+        // authority: clawd re-derives the launcher's identity, settles
+        // the approvals and applies the provenance ceiling itself.
+        // Adopting its answer is what keeps the isolation shape and the
+        // live grant describing the same world.
+        let _ = granted_caps;
+        let granted_caps = result
+            .get("caps")
+            .ok_or_else(|| {
+                "clawd App session response omitted the granted capability set".to_string()
+            })
+            .and_then(|value| {
+                serde_json::from_value::<CapSet>(value.clone())
+                    .map_err(|error| format!("clawd granted an unreadable capability set: {error}"))
+            })?;
+        // Defence in depth, not the enforcement point. A difference
+        // here means the two sides disagree about the package's trust
+        // tier, so the launch is refused rather than reconciled.
+        if let Some(ceiling) = ceiling {
+            let (_, above) = ceiling.clamp(&granted_caps);
+            if !above.is_empty() {
+                return Err(format!(
+                    "clawd granted App `{app_id}` {} capabilities above its {} provenance ceiling",
+                    above.len(),
+                    ceiling.label()
+                ));
+            }
+        }
         Ok(Self {
             session_id,
             backend: AppSessionBackend::Clawd {
@@ -955,6 +1005,24 @@ fn load_manifest(app_dir: &Path) -> Result<Option<Manifest>, String> {
     Manifest::from_json(&body)
         .map(Some)
         .map_err(|err| format!("parse {}: {err}", path.display()))
+}
+
+/// Clamp a locally resolved capability set to the package's ceiling.
+///
+/// A signed or vendor package keeps everything its manifest asked for
+/// and the parent session could cover. Unsigned developer content is
+/// cut down to the small allow-list in
+/// [`crate::provenance::ceiling`] — no system, secret, network,
+/// process, device or cross-App authority, and no wildcard scope —
+/// because nobody vouched for the code.
+///
+/// Deliberately silent. The launcher is unprivileged and its clamp is
+/// only a sanity gate on the set it proposes; the enforcement point and
+/// the `provenance.ceiling_applied` audit record both live in
+/// `clawd::app_sessions`, so the log describes authority that was
+/// actually withheld rather than a request that was never made.
+fn apply_provenance_ceiling(ceiling: &crate::provenance::Ceiling, caps: CapSet) -> CapSet {
+    ceiling.clamp(&caps).0
 }
 
 fn constrained_caps(parent: &CapSet, needs: Vec<&Need>) -> CapSet {
@@ -1672,17 +1740,17 @@ if result is not None:
 ///
 /// Returns the raw JSON string from stdout, or an error.
 pub fn run_python_app(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
-    run_python_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+    run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, None)
 }
 
 pub fn run_python_app_with_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
@@ -1699,18 +1767,21 @@ pub fn run_python_app_with_stdin(
         );
     }
 
+    let app_dir = launch.dir();
     let main_py = app_dir.join("main.py");
-    if !main_py.is_file() {
-        return Err(format!("app has no main.py at {}", main_py.display()));
-    }
 
     let python = if cfg!(windows) { "python" } else { "python3" };
 
-    let app_id = manifest_app_id(app_dir)?;
+    let app_id = launch.app_id().to_string();
+    // Re-hash the entrypoint from the verified snapshot and hold its
+    // descriptor open. The sandbox binds that exact inode, so replacing
+    // `main.py` between here and `execve` is either refused or has no
+    // effect on what runs.
+    let binding = launch.bind(&["main.py".to_string()])?;
     let (mut app_session, effective_args) =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+        AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
-    let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
+    let stdin_data = validated_operation_stdin(launch, command, stdin_data)?;
 
     let mut command = app_command(python, app_dir)?;
     reset_app_environment(&mut command, false);
@@ -1800,14 +1871,20 @@ fn operation_forwards_stdin(app_dir: &Path, operation: &str) -> Result<bool, Str
 }
 
 fn validated_operation_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     operation: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<Vec<u8>>, String> {
     if stdin_data.is_none() {
         return Ok(None);
     }
-    if !operation_forwards_stdin(app_dir, operation)? {
+    if !launch
+        .manifest()
+        .operations
+        .get(operation)
+        .map(|op| op.stdin)
+        .unwrap_or(false)
+    {
         return Err(format!(
             "App operation `{operation}` does not declare stdin input"
         ));
@@ -1864,13 +1941,13 @@ fn finish_child_stdin(
 /// return that string; otherwise stderr (or the exit code) is
 /// returned as an `Err`.
 pub fn run_app(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
-    run_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+    run_app_with_stdin(launch, command, args, data_dir, apps_dir, None)
 }
 
 pub(crate) fn run_app_with_isolation(
@@ -1892,7 +1969,7 @@ pub(crate) fn run_app_with_isolation(
 }
 
 pub fn run_app_with_stdin(
-    app_dir: &Path,
+    launch: &AppLaunch,
     command: &str,
     args: &[String],
     data_dir: &str,
@@ -1943,14 +2020,7 @@ pub fn run_app_with_stdin(
                  file an issue if you need a per-app entry override"
             ));
         }
-        return run_python_app_with_stdin(
-            app_dir,
-            command,
-            args,
-            data_dir,
-            apps_dir,
-            stdin_data,
-        );
+        return run_python_app_with_stdin(launch, command, args, data_dir, apps_dir, stdin_data);
     }
 
     let entry_path = app_dir.join(&entry);
@@ -1980,7 +2050,7 @@ pub fn run_app_with_stdin(
     };
     let app_id = manifest_app_id(app_dir)?;
     let (mut app_session, effective_args) =
-        AppIdentitySession::for_operation(app_dir, &app_id, command, args)?;
+        AppIdentitySession::for_operation(launch, &app_id, command, args)?;
     let args_json = serde_json::to_string(&effective_args)
         .map_err(|e| format!("failed to serialize args: {e}"))?;
     reset_app_environment(&mut cmd, false);
@@ -2069,37 +2139,27 @@ pub fn run_app_with_stdin(
 /// `desktop.exec`); `files` are the file paths passed by the launcher
 /// (`%F`). Returns once the GUI process exits.
 pub fn launch_gui(
-    app_dir: &Path,
+    launch: &AppLaunch,
     exec: &str,
     files: &[String],
     data_dir: &str,
     apps_dir: &str,
 ) -> Result<(), String> {
-    let manifest_path = app_dir.join("app.json");
-    let (runtime, entry, panel_applet) = if manifest_path.is_file() {
-        let body = std::fs::read_to_string(&manifest_path)
-            .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-        let manifest = crate::apps::AppManifest::from_json(&body)
-            .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-        let rt = manifest.runtime;
-        let panel_applet = manifest
-            .desktop
-            .as_ref()
-            .is_some_and(|desktop| desktop.panel_applet);
-        let entry = manifest
-            .entry
-            .unwrap_or_else(|| rt.default_entry().to_string());
-        (rt, entry, panel_applet)
-    } else {
-        (
-            Runtime::Python,
-            Runtime::Python.default_entry().to_string(),
-            false,
-        )
-    };
+    let app_dir = launch.dir();
+    let manifest = launch.manifest();
+    let runtime = manifest.runtime;
+    let panel_applet = manifest
+        .desktop
+        .as_ref()
+        .is_some_and(|desktop| desktop.panel_applet);
+    let entry = manifest
+        .entry
+        .clone()
+        .unwrap_or_else(|| runtime.default_entry().to_string());
 
-    let app_id = manifest_app_id(app_dir)?;
-    let mut app_session = AppIdentitySession::for_gui(app_dir, &app_id, exec)?;
+    let app_id = launch.app_id().to_string();
+    let binding = launch.bind(std::slice::from_ref(&entry))?;
+    let mut app_session = AppIdentitySession::for_gui(launch, &app_id, exec)?;
 
     let mut cmd = if matches!(runtime, Runtime::Python) {
         let main_py = app_dir.join("main.py");
@@ -2166,6 +2226,13 @@ pub fn launch_gui(
     let mut child = cmd
         .spawn()
         .map_err(|e| format!("failed to launch {runtime:?} GUI: {e}"))?;
+    let owner = crate::provenance::runtime::current_owner();
+        crate::provenance::runtime::register(owner, app_session.id(), launch.package());
+    crate::provenance::runtime::bind_process(
+        crate::provenance::runtime::current_owner(),
+        app_session.id(),
+        child.id(),
+    );
     bind_child_session(&mut app_session, &mut child)?;
     let status = child
         .wait()

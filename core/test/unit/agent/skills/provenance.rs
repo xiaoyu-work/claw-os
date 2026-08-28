@@ -33,7 +33,12 @@ fn write_skill(dir: &Path, id: &str, body: &str, tools: &[&str]) -> LoadedSkill 
         format!("---\nname: {id}\ndescription: test skill\n{allowed}---\n{body}\n"),
     )
     .unwrap();
+    // A skill only exists once its package authenticates, so the
+    // fixture signs itself with the process-wide test publisher key.
+    crate::test_env::sign_test_package(&sd, crate::provenance::PackageKind::Skill, id);
     let doc = super::super::manifest::parse(&fs::read_to_string(&mp).unwrap()).unwrap();
+    let verified = super::super::loader::verify_skill_dir(id, &sd)
+        .unwrap_or_else(|e| panic!("verify test skill {id}: {e}"));
     LoadedSkill {
         id: id.to_string(),
         dir: sd,
@@ -42,6 +47,7 @@ fn write_skill(dir: &Path, id: &str, body: &str, tools: &[&str]) -> LoadedSkill 
         body_bytes: doc.body.len(),
         body: doc.body,
         origin: super::super::loader::SkillOrigin::Local,
+        provenance: verified,
     }
 }
 
@@ -227,151 +233,40 @@ fn provenance_as_str_stable() {
     assert_eq!(Provenance::Unknown.as_str(), "unknown");
 }
 
-// ----- signature verification helpers -----
+// The ed25519 stack that used to live here (manifest-only signatures,
+// `COS_SKILLS_REQUIRE_SIGNATURE`, `COS_SKILLS_TRUSTED_KEYS`) is gone.
+// Skills authenticate through `crate::provenance`, which is covered by
+// `test/unit/provenance/*`. What remains here is the mapping from a
+// verified trust source onto the guard's provenance classes.
 
 #[test]
-fn parse_trusted_keys_accepts_colon_separated_hex() {
-    let raw = format!("{a}:{b}", a = "aa".repeat(32), b = "bb".repeat(32));
-    let keys = parse_trusted_keys(&raw).unwrap();
-    assert_eq!(keys.len(), 2);
-    assert_eq!(keys[0], [0xaa; 32]);
-    assert_eq!(keys[1], [0xbb; 32]);
+fn trust_source_maps_onto_guard_provenance() {
+    use crate::provenance::TrustSource;
+    assert_eq!(
+        Provenance::from_trust_source(&TrustSource::Vendor),
+        Provenance::Vendor
+    );
+    assert_eq!(
+        Provenance::from_trust_source(&TrustSource::Developer),
+        Provenance::Local
+    );
+    assert_eq!(
+        Provenance::from_trust_source(&TrustSource::Publisher {
+            key_id: "sha256:aa".to_string()
+        }),
+        Provenance::Hub
+    );
+    // Developer-trusted content is never treated as trusted by the
+    // guard: it goes through the full check tree.
+    assert!(!Provenance::from_trust_source(&TrustSource::Developer).is_trusted());
 }
 
 #[test]
-fn parse_trusted_keys_skips_blank_entries() {
-    let raw = format!(":{a}:: ", a = "11".repeat(32));
-    let keys = parse_trusted_keys(&raw).unwrap();
-    assert_eq!(keys.len(), 1);
-    assert_eq!(keys[0], [0x11; 32]);
-}
-
-#[test]
-fn parse_trusted_keys_rejects_wrong_length() {
-    let err = parse_trusted_keys("aabb").unwrap_err();
-    assert!(matches!(err, SignatureError::WrongLength { .. }));
-}
-
-#[test]
-fn parse_trusted_keys_rejects_non_hex() {
-    let err = parse_trusted_keys("not-hex").unwrap_err();
-    assert!(matches!(err, SignatureError::InvalidHex { .. }));
-}
-
-#[test]
-fn signature_config_from_env_rejects_any_malformed_trusted_key() {
-    let _lock = crate::test_env::lock_env();
-    let raw = format!("{}:not-hex", "aa".repeat(32));
-    let _trusted_keys =
-        crate::test_env::TestEnvVarGuard::set(ENV_TRUSTED_KEYS, raw);
-
-    let err = SignatureVerifyConfig::from_env().unwrap_err();
-    let message = err.to_string();
-
-    assert!(matches!(
-        err,
-        SignatureConfigError::InvalidTrustedKeys(SignatureError::InvalidHex { .. })
-    ));
-    assert!(message.contains(ENV_TRUSTED_KEYS));
-    assert!(message.contains("not valid hex"));
-}
-
-#[test]
-fn signature_config_from_env_preserves_valid_and_absent_values() {
-    let _lock = crate::test_env::lock_env();
-    let _require_signature =
-        crate::test_env::TestEnvVarGuard::set(ENV_REQUIRE_SIGNATURE, "yes");
-    let _trusted_keys =
-        crate::test_env::TestEnvVarGuard::set(ENV_TRUSTED_KEYS, "");
-
-    std::env::remove_var(ENV_TRUSTED_KEYS);
-    let absent = SignatureVerifyConfig::from_env().unwrap();
-    assert!(absent.require_signature);
-    assert!(absent.trusted_keys.is_none());
-
-    std::env::set_var(ENV_TRUSTED_KEYS, "ab".repeat(32));
-    let valid = SignatureVerifyConfig::from_env().unwrap();
-    assert!(valid.require_signature);
-    assert_eq!(valid.trusted_keys, Some(vec![[0xab; 32]]));
-}
-
-#[test]
-fn verify_signature_passes_for_valid_block_and_canonical_input() {
-    use ed25519_dalek::{Signer, SigningKey};
-    let signing_key = SigningKey::from_bytes(&[7u8; 32]);
-    let vk = signing_key.verifying_key();
-    let mut manifest = SkillManifest {
-        name: "sig-ok".into(),
-        ..Default::default()
-    };
-    // Compute signature input WITHOUT a signature block attached
-    // (so the signer and verifier compute the same bytes), then
-    // attach the signature.
-    let canonical = super::super::manifest::canonical_signing_input(&manifest);
-    let mut hasher = crate::crypto::Sha256Stream::new();
-    hasher.update(&canonical);
-    let digest = hasher.finalize_bytes();
-    let sig = signing_key.sign(&digest);
-    manifest.signature = Some(super::super::manifest::ManifestSignature {
-        algorithm: "ed25519".into(),
-        public_key: hex::encode(vk.to_bytes()),
-        value: hex::encode(sig.to_bytes()),
-    });
-    let res = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap();
-    match res {
-        SignatureCheck::Verified { public_key_hex } => {
-            assert_eq!(public_key_hex, hex::encode(vk.to_bytes()));
-        }
-        other => panic!("expected Verified, got {other:?}"),
-    }
-}
-
-#[test]
-fn verify_signature_rejects_wrong_key_length() {
-    let mut manifest = SkillManifest {
-        name: "x".into(),
-        ..Default::default()
-    };
-    manifest.signature = Some(super::super::manifest::ManifestSignature {
-        algorithm: "ed25519".into(),
-        public_key: "aa".into(), // 1 byte, not 32
-        value: "bb".repeat(64),
-    });
-    let err = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap_err();
-    assert!(matches!(err, SignatureError::WrongLength { field: "public_key", .. }));
-}
-
-#[test]
-fn verify_signature_rejects_unsupported_algorithm() {
-    let mut manifest = SkillManifest {
-        name: "x".into(),
-        ..Default::default()
-    };
-    manifest.signature = Some(super::super::manifest::ManifestSignature {
-        algorithm: "rsa-sha256".into(),
-        public_key: "aa".repeat(32),
-        value: "bb".repeat(64),
-    });
-    let err = verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap_err();
-    assert!(matches!(err, SignatureError::UnsupportedAlgorithm(_)));
-}
-
-#[test]
-fn verify_signature_unsigned_passes_by_default_but_fails_when_required() {
-    let manifest = SkillManifest {
-        name: "x".into(),
-        ..Default::default()
-    };
-    assert!(matches!(
-        verify_signature(&manifest, &SignatureVerifyConfig::default()).unwrap(),
-        SignatureCheck::Unsigned
-    ));
-    let strict = SignatureVerifyConfig {
-        require_signature: true,
-        trusted_keys: None,
-    };
-    assert!(matches!(
-        verify_signature(&manifest, &strict).unwrap_err(),
-        SignatureError::Required
-    ));
+fn signed_fixture_reports_its_publisher() {
+    let dir = tmpdir("publisher");
+    let skill = write_skill(&dir, "signed", "body", &[]);
+    assert_eq!(skill.trust_label(), "publisher");
+    assert!(skill.publisher_key_id().is_some());
+    assert!(skill.content_digest().starts_with("sha256:"));
+    let _ = fs::remove_dir_all(&dir);
 }
