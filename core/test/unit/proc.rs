@@ -1,5 +1,55 @@
 use super::*;
 
+#[test]
+fn detached_child_does_not_inherit_parent_attendance_after_parent_exit() {
+    let parent = SessionInfo {
+        session_id: "parent".into(),
+        pid: std::process::id(),
+        command: vec!["cos".into(), "agent".into(), "chat".into()],
+        started_at: "2026-01-01T00:00:00Z".into(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: None,
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::LocalCli,
+            true,
+            true,
+        ),
+    };
+    let child = spawned_child_client(&parent);
+    let mut child_session = parent.clone();
+    child_session.session_id = "child".into();
+    child_session.parent = Some(parent.session_id.clone());
+    child_session.client = child;
+    drop(parent);
+
+    assert_eq!(child.source, crate::session::SessionSource::ChildProcess);
+    assert!(!child.attended);
+    assert!(child.local);
+    let context = crate::agent::tools::exposure::ToolExposureContext::from_trusted_session(
+        &child_session,
+        Some("child"),
+        None,
+        1000,
+        crate::agent::tools::exposure::ExecutionHost::Direct,
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
+    assert!(!context.permits_interactive_authorization());
+}
+
 /// PID recycle protection: a registry entry with a pid that is
 /// currently alive but whose recorded `start_time_ticks` does
 /// not match the kernel's report must be treated as exited.

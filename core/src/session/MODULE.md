@@ -41,6 +41,9 @@ uses a non-persistent pid/start-time lease. The lease is bound into one signed
 worker grant, so queued, recovered, or post-restart work cannot inherit stale
 attendance.
 
+Generic detached child processes receive a derived `child-process` source with
+`attended = false`; copying the parent's terminal presence is forbidden.
+
 ## Tests
 
 ```bash

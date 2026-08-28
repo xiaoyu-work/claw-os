@@ -129,6 +129,7 @@ pub enum SessionSource {
     ScheduledTrigger,
     ExternalMcp,
     App,
+    ChildProcess,
     System,
     DelegatedAgent,
     #[default]
@@ -144,6 +145,7 @@ impl SessionSource {
             Self::ScheduledTrigger => "scheduled-trigger",
             Self::ExternalMcp => "external-mcp",
             Self::App => "app",
+            Self::ChildProcess => "child-process",
             Self::System => "system",
             Self::DelegatedAgent => "delegated-agent",
             Self::Unknown => "unknown",

@@ -250,8 +250,10 @@ CLI / web UI / bridge
 The `clawd` task record snapshots broker-derived source and locality, but never
 durable attendance. A short, in-memory presence lease binds an attended
 submission to the authenticated client's uid, pid, process start time, and a
-deadline. It is consumed when a worker is claimed and disappears on delay,
-client exit, cancellation, recovery, or daemon restart. `clawd` signs that
+deadline. The lease is installed before the pending job becomes visible under
+the same lock used to claim jobs, and failed publication removes it. It is
+consumed when a worker is claimed and disappears on delay, client exit,
+cancellation, recovery, or daemon restart. `clawd` signs that
 lease, the client metadata, and a content-addressed capability generation into
 the `claw-agentd` job grant; the worker verifies them before constructing
 `ToolExposureContext` and rechecks presence when projecting or executing a tool.
@@ -259,6 +261,9 @@ Direct CLI, authenticated web and external MCP surfaces construct the same
 context from their verified process session and trusted entry-point facts.
 There is no process-global authorization or availability cache; concurrent
 sessions project independently even when they share one descriptor registry.
+Detached `proc spawn` children receive a derived `child-process` source and
+never inherit the parent's attended bit; only the signed, expiring task
+presence lease can cross a process boundary.
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
 authorization, execution ordering, hooks, and conversation history meet.

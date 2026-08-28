@@ -1380,9 +1380,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         app_id: None,
         pending_bind: false,
         start_time_ticks,
-        client: current_session_info_for_caps()
-            .map(|session| session.client)
-            .unwrap_or_default(),
+        client: spawned_child_client(&parent_info),
     };
 
     let info_for_registry = info.clone();
@@ -1411,6 +1409,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(g) = group {
         result["group"] = json!(g);
     }
+
     if let Some(p) = parent {
         result["parent"] = json!(p);
     }
@@ -1444,6 +1443,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
 
     Ok(result)
+}
+
+fn spawned_child_client(_parent: &SessionInfo) -> crate::session::SessionClient {
+    crate::session::SessionClient::new(
+        crate::session::SessionSource::ChildProcess,
+        false,
+        true,
+    )
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
