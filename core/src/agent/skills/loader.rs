@@ -219,7 +219,7 @@ pub fn load_layered(system_root: &Path, user_root: &Path, opts: &LoadOptions) ->
     load_layered_with_origin(system_root, user_root, opts, SkillOrigin::BuiltIn)
 }
 
-fn load_layered_with_origin(
+pub(crate) fn load_layered_with_origin(
     system_root: &Path,
     user_root: &Path,
     opts: &LoadOptions,

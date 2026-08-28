@@ -10,12 +10,115 @@
 //! to `Approved`).
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::guardrails::Guardrails;
 use super::Tool;
 use crate::agent::llm;
 use crate::agent::runtime::approval::ApprovalGate;
+use crate::config::CosConfig;
+
+/// Filesystem locations consumed by tools in the default registry.
+///
+/// Process environment and routed-path state are resolved once by
+/// [`RegistryDeps::load`] at the composition boundary. Registry construction
+/// and tool execution then use this immutable snapshot.
+#[derive(Debug, Clone)]
+pub struct RegistryPaths {
+    pub apps_dir: PathBuf,
+    pub todos_dir: PathBuf,
+    pub system_skills_dir: PathBuf,
+    pub user_skills_dir: PathBuf,
+    pub skills_usage_path: PathBuf,
+    pub media_outputs_dir: PathBuf,
+    pub memory_db_path: PathBuf,
+    pub semantic_db_path: PathBuf,
+}
+
+impl RegistryPaths {
+    pub fn from_process() -> Self {
+        let apps_dir = std::env::var_os("COS_APPS_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+        Self {
+            apps_dir,
+            todos_dir: crate::paths::agent_todos_dir(),
+            system_skills_dir: crate::paths::system_skills_dir(),
+            user_skills_dir: crate::paths::agent_skills_dir(),
+            skills_usage_path: crate::paths::agent_skills_usage_path(),
+            media_outputs_dir: crate::paths::agent_media_outputs_dir(),
+            memory_db_path: crate::paths::agent_memory_db_path(),
+            semantic_db_path: crate::paths::agent_semantic_db_path(),
+        }
+    }
+}
+
+/// Explicit resources used to assemble the default tool registry.
+#[derive(Clone)]
+pub struct RegistryDeps {
+    pub config: Arc<CosConfig>,
+    pub paths: RegistryPaths,
+    pub memory: Option<crate::agent::memory::sqlite_fts::MemoryDb>,
+    pub semantic: Option<Arc<crate::agent::memory::semantic::SemanticStore>>,
+    app_session_manifests: Vec<Arc<crate::caps::manifest::Manifest>>,
+}
+
+impl RegistryDeps {
+    pub fn load_current() -> Self {
+        Self::load(crate::config::get(), RegistryPaths::from_process())
+    }
+
+    /// Resolve paths, discover App-session manifests, and open optional stores.
+    ///
+    /// This is intentionally separate from [`default_registry`]: callers can
+    /// perform process-state reads and fallible I/O at a visible composition
+    /// boundary, while registry assembly itself remains deterministic.
+    pub fn load(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        let memory = match crate::agent::memory::sqlite_fts::MemoryDb::open(&paths.memory_db_path) {
+            Ok(db) => Some(db),
+            Err(error) => {
+                tracing::warn!("cos_recall/cos_app_memory: failed to open memory DB: {error}");
+                None
+            }
+        };
+        let semantic = match crate::agent::memory::semantic::open_with_config(
+            &config.embed,
+            &config.agent,
+            paths.semantic_db_path.clone(),
+        ) {
+            Ok(store) => store.map(Arc::new),
+            Err(error) => {
+                tracing::warn!("cos_recall_semantic: failed to open semantic DB: {error}");
+                None
+            }
+        };
+        let app_session_manifests = crate::apps::discover(&paths.apps_dir)
+            .values()
+            .filter(|app| app.manifest.session.is_some())
+            .map(|app| Arc::new(app.manifest.clone()))
+            .collect();
+        Self {
+            config,
+            paths,
+            memory,
+            semantic,
+            app_session_manifests,
+        }
+    }
+
+    /// Side-effect-free dependency set for tests and deliberately minimal
+    /// compositions.
+    pub fn without_optional_resources(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        Self {
+            config,
+            paths,
+            memory: None,
+            semantic: None,
+            app_session_manifests: Vec::new(),
+        }
+    }
+}
 
 #[derive(Default)]
 pub struct ToolRegistry {
@@ -143,42 +246,31 @@ impl ToolRegistry {
 ///   plus any explicitly active stateful App-session tools.
 /// - `cos_memory` (notes) and, if the default memory DB opens cleanly,
 ///   `cos_recall` (FTS5 history search).
-pub fn default_registry() -> ToolRegistry {
+pub fn default_registry(deps: &RegistryDeps) -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
-    r.register(Arc::new(super::delegate::Delegate));
-    r.register(Arc::new(super::todo::Todo::default_tool()));
+    r.register(Arc::new(super::delegate::Delegate::new(deps.clone())));
+    r.register(Arc::new(super::todo::Todo::new(
+        super::todo::TodoStore::new(deps.paths.todos_dir.clone()),
+    )));
     r.register(Arc::new(super::clarify::Clarify::new()));
-    r.register(Arc::new(super::skills::SkillDisclosure::new()));
+    r.register(Arc::new(super::skills::SkillDisclosure::with_paths(
+        deps.paths.system_skills_dir.clone(),
+        deps.paths.user_skills_dir.clone(),
+        deps.paths.skills_usage_path.clone(),
+    )));
     r.register(Arc::new(super::cos_help::CosHelp));
     super::cos_proxy::register_all(&mut r);
     super::cos_apps::register_default(&mut r);
-    super::cos_apps_session::register_all(&mut r);
-    super::media::register_default_media_tools(&mut r);
-    // Best-effort: open the default memory DB; if it fails (read-only fs,
-    // etc.) the agent still works, just without searchable history.
-    match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-        Ok(db) => {
-            super::cos_proxy::register_recall(&mut r, db.clone());
-            super::cos_proxy::register_app_memory(&mut r, db);
-        }
-        Err(e) => tracing::warn!("cos_recall/cos_app_memory: failed to open default memory DB: {e}"),
+    super::cos_apps_session::register_manifests(&mut r, &deps.app_session_manifests);
+    super::media::register_default_media_tools(&mut r, deps.paths.media_outputs_dir.clone());
+    if let Some(db) = &deps.memory {
+        super::cos_proxy::register_recall(&mut r, db.clone());
+        super::cos_proxy::register_app_memory(&mut r, db.clone());
     }
-    // Best-effort: open the default semantic store; only registered
-    // when `[embed]` is configured. When disabled the tool silently
-    // doesn't exist (the LLM falls back to cos_recall keyword search).
-    use crate::agent::memory::semantic::{SemanticStore, SemanticStoreExt};
-    match SemanticStore::open_default() {
-        Ok(Some(store)) => {
-            super::cos_proxy::register_recall_semantic(&mut r, std::sync::Arc::new(store))
-        }
-        Ok(None) => {
-            tracing::debug!("cos_recall_semantic: [embed] disabled — tool not registered")
-        }
-        Err(e) => tracing::warn!(
-            "cos_recall_semantic: failed to open default semantic DB: {e}"
-        ),
+    if let Some(store) = &deps.semantic {
+        super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store));
     }
     r
 }

@@ -2043,7 +2043,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // `/home/<user>/.local/share/cos/credentials/...`.
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
-        let cfg = crate::config::intern_for_home(&home_path);
+        let cfg = crate::config::load_for_home(&home_path);
         let run = crate::config::with_override(cfg, run_one_job_inner(job));
         match job.owner_uid {
             Some(0) => run.await,
@@ -2087,6 +2087,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         },
         stream_sink,
         progress_sink,
+        crate::agent::runtime::hooks::HookRegistry::new(),
     )
     .await
 }
@@ -2114,6 +2115,7 @@ pub async fn execute_job(
     job: JobExecution,
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+    hooks: crate::agent::runtime::hooks::HookRegistry,
 ) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
@@ -2126,7 +2128,8 @@ pub async fn execute_job(
     // `config::get()` here is intentionally the *task-local* one
     // installed by the caller for clawd-routed jobs; for in-process
     // submits it falls through to the process-wide config as before.
-    let base = crate::config::get().agent.clone();
+    let current_config = crate::config::get();
+    let base = current_config.agent.clone();
     let mut cfg = base;
     if let Some(n) = job.max_turns {
         cfg.max_turns = n;
@@ -2135,21 +2138,32 @@ pub async fn execute_job(
         Ok(p) => p,
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let mut effective_config = (*current_config).clone();
+    effective_config.agent = cfg.clone();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
+        Arc::new(effective_config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+    );
+    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load_with_hooks(
+        &crate::agent::runtime::deps::RuntimePaths::from_process(),
+        registry_deps.semantic.clone(),
+        hooks,
+    );
+    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
     let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
 
     let result = if let Some(sid) = job.session_id.as_deref() {
-        match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => {
+        match registry_deps.memory.as_ref() {
+            Some(db) => {
                 if let Some(context) = job
                     .branch_context
                     .as_deref()
                     .filter(|context| !context.trim().is_empty())
                 {
-                    if let Err(error) = seed_branch_context(&db, sid, context) {
+                    if let Err(error) = seed_branch_context(db, sid, context) {
                         tracing::warn!(
                             session_id = sid,
                             %error,
@@ -2160,49 +2174,45 @@ pub async fn execute_job(
                 // Replay prior turns so multi-turn task.stream sessions (the
                 // desktop agent UI is the main caller) see continuous context
                 // instead of treating every job.submit as a fresh exchange.
-                loop_::ask_with_stream_continuation_scoped(
+                let request = loop_::RuntimeRequest::streaming(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
-                    job.context.as_deref(),
                     &tools,
-                    &db,
-                    sid,
-                    100,
                     stream_sink.clone(),
                     progress_sink.clone(),
-                    &job.id,
                 )
-                .await
+                .with_continuation(db, sid, 100)
+                .with_transient_context(job.context.as_deref())
+                .with_interrupt_scope(&job.id);
+                loop_::run_with_deps(&runtime_deps, request).await
             }
-            Err(_) => {
-                loop_::ask_with_stream_scoped(
+            None => {
+                let request = loop_::RuntimeRequest::streaming(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
-                    job.context.as_deref(),
                     &tools,
-                    None,
                     stream_sink.clone(),
                     progress_sink.clone(),
-                    &job.id,
                 )
-                .await
+                .with_transient_context(job.context.as_deref())
+                .with_interrupt_scope(&job.id);
+                loop_::run_with_deps(&runtime_deps, request).await
             }
         }
     } else {
-        loop_::ask_with_stream_scoped(
+        let request = loop_::RuntimeRequest::streaming(
             provider.clone(),
             &cfg,
             &job.prompt,
-            job.context.as_deref(),
             &tools,
-            None,
             stream_sink,
             progress_sink,
-            &job.id,
         )
-        .await
+        .with_transient_context(job.context.as_deref())
+        .with_interrupt_scope(&job.id);
+        loop_::run_with_deps(&runtime_deps, request).await
     };
 
     match result {

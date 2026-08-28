@@ -65,7 +65,7 @@ use crate::agent::llm::types::ToolCall;
 
 /// Snapshot of the agent state a hook sees on every callback.
 /// The runtime fills this in. Hooks must treat it as read-only.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct HookContext {
     pub session_id: String,
     /// 0-indexed turn within this session's run.
@@ -77,6 +77,21 @@ pub struct HookContext {
     pub started_at_ms: u64,
     /// True when the loop is acting as a delegated child agent.
     pub is_delegated: bool,
+    registry: HookRegistry,
+}
+
+impl std::fmt::Debug for HookContext {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("HookContext")
+            .field("session_id", &self.session_id)
+            .field("turn_index", &self.turn_index)
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("started_at_ms", &self.started_at_ms)
+            .field("is_delegated", &self.is_delegated)
+            .finish()
+    }
 }
 
 impl HookContext {
@@ -93,6 +108,7 @@ impl HookContext {
             model: model.into(),
             started_at_ms: now_ms(),
             is_delegated: false,
+            registry: global_registry(),
         }
     }
 
@@ -109,6 +125,15 @@ impl HookContext {
     pub fn with_delegated(mut self, b: bool) -> Self {
         self.is_delegated = b;
         self
+    }
+
+    pub fn with_registry(mut self, registry: HookRegistry) -> Self {
+        self.registry = registry;
+        self
+    }
+
+    pub(crate) fn registry(&self) -> &HookRegistry {
+        &self.registry
     }
 }
 

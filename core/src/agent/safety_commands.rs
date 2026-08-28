@@ -113,7 +113,8 @@ pub(super) fn redact_cmd(args: &[String]) -> Result<Value, String> {
 /// model would see if you ran `cos agent ask` in the same env.
 pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
     let cfg = &crate::config::get().agent;
-    let mut registry = tools::registry::default_registry();
+    let deps = tools::registry::RegistryDeps::load_current();
+    let mut registry = tools::registry::default_registry(&deps);
     registry.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
     registry.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
 

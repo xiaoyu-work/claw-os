@@ -23,12 +23,20 @@ impl SkillDisclosure {
         Self::default()
     }
 
+    pub fn with_paths(system_root: PathBuf, user_root: PathBuf, usage_path: PathBuf) -> Self {
+        Self {
+            roots: Some((system_root, user_root)),
+            usage_path: Some(usage_path),
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn with_roots(system_root: &std::path::Path, user_root: &std::path::Path) -> Self {
-        Self {
-            roots: Some((system_root.to_path_buf(), user_root.to_path_buf())),
-            usage_path: Some(user_root.join(".skills-usage.jsonl")),
-        }
+        Self::with_paths(
+            system_root.to_path_buf(),
+            user_root.to_path_buf(),
+            user_root.join(".skills-usage.jsonl"),
+        )
     }
 
     fn load_catalog(&self) -> LoadResult {

@@ -44,13 +44,14 @@ surfaces.
 | `setup/media.rs` | TTS/STT/image/embedding specs, wizards, status, and probes |
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
+| `runtime/deps.rs` | Explicit hooks, clock, semantic indexer, and runtime path context |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
-| `tools/registry.rs` | Tool exposure and dispatch lookup |
+| `tools/registry.rs` | Tool exposure, dispatch lookup, and explicit registry dependencies |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
@@ -76,6 +77,11 @@ CLI/web -> clawd task queue -> claw-agentd worker
 changes must preserve equivalent streaming/non-streaming text, tools, opaque
 reasoning state, usage, and error behavior. Tool calls only execute through the
 registry, guardrails, and hooks.
+
+CLI, web, and worker composition roots snapshot `Arc<CosConfig>`, resolve
+runtime/registry paths, and open optional stores before calling
+`runtime::loop_::run_with_deps`. Lower runtime code receives these dependencies
+through typed contexts rather than rediscovering process state.
 
 ## Tests
 

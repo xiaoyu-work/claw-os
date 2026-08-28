@@ -54,10 +54,7 @@ fn default_true() -> bool {
     true
 }
 
-pub async fn handler(
-    State(state): State<AppState>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
+pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
     if req.prompt.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -111,12 +108,7 @@ pub async fn handler(
                 Ok(v) => v,
                 Err(_) => json!({ "error": e }),
             };
-            let _ = send_frame(
-                &tx,
-                &scope_for_task,
-                sse::encode_event("error", &payload),
-            )
-            .await;
+            let _ = send_frame(&tx, &scope_for_task, sse::encode_event("error", &payload)).await;
         }
     });
 
@@ -167,7 +159,7 @@ async fn drive_chat(
     tx: mpsc::Sender<SseFrame>,
     _turn_lease: TurnLease,
 ) -> Result<(), String> {
-    use crate::agent::{memory, setup};
+    use crate::agent::setup;
 
     // Re-read the agent config from disk on every chat request. The
     // server captures a snapshot of `state.inner.cfg` at startup, but
@@ -181,7 +173,7 @@ async fn drive_chat(
     // empty provider AND the snapshot has one (paranoia for a config
     // file truncated mid-write).
     let cfg = {
-        let fresh = crate::config::intern_user_config().agent.clone();
+        let fresh = crate::config::load_user_config().agent.clone();
         if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
             state.inner.cfg.clone()
         } else {
@@ -193,19 +185,23 @@ async fn drive_chat(
     let provider = crate::ai::gate::build_system_provider(&cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
 
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let mut effective_config = (*crate::config::get()).clone();
+    effective_config.agent = cfg.clone();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
+        Arc::new(effective_config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+    );
+    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load(
+        &crate::agent::runtime::deps::RuntimePaths::from_process(),
+        registry_deps.semantic.clone(),
+    );
+    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(&cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
 
     let memory_db = if use_memory {
-        match memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => Some(db),
-            Err(e) => {
-                tracing::warn!("web: memory unavailable ({e}); chat will run without history");
-                None
-            }
-        }
+        registry_deps.memory.clone()
     } else {
         None
     };
@@ -239,34 +235,29 @@ async fn drive_chat(
     // truncates long tool-result bodies before replay.
     let result = match memory_db.as_ref() {
         Some(db) => {
-            runtime::loop_::ask_with_stream_continuation_scoped(
+            let request = runtime::loop_::RuntimeRequest::streaming(
                 provider.clone(),
                 &cfg,
                 &prompt,
-                None,
                 &tools,
-                db,
-                &session_id,
-                100,
                 sink,
                 progress,
-                &interrupt_scope,
             )
-            .await
+            .with_continuation(db, &session_id, 100)
+            .with_interrupt_scope(&interrupt_scope);
+            runtime::loop_::run_with_deps(&runtime_deps, request).await
         }
         None => {
-            runtime::loop_::ask_with_stream_scoped(
+            let request = runtime::loop_::RuntimeRequest::streaming(
                 provider.clone(),
                 &cfg,
                 &prompt,
-                None,
                 &tools,
-                None,
                 sink,
                 progress,
-                &interrupt_scope,
             )
-            .await
+            .with_interrupt_scope(&interrupt_scope);
+            runtime::loop_::run_with_deps(&runtime_deps, request).await
         }
     };
 
@@ -449,10 +440,7 @@ impl StreamSink for SseSink {
                 ));
             }
             StreamEvent::Warning { message } => {
-                self.send(sse::encode_event(
-                    "warning",
-                    &json!({ "message": message }),
-                ));
+                self.send(sse::encode_event("warning", &json!({ "message": message })));
             }
         }
     }

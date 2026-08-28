@@ -4,6 +4,23 @@ use std::sync::{
     Arc,
 };
 
+fn deps() -> RegistryDeps {
+    let root = std::env::temp_dir().join(format!("cos-registry-deps-{}", std::process::id()));
+    RegistryDeps::without_optional_resources(
+        Arc::new(crate::config::CosConfig::default()),
+        RegistryPaths {
+            apps_dir: root.join("apps"),
+            todos_dir: root.join("todos"),
+            system_skills_dir: root.join("system-skills"),
+            user_skills_dir: root.join("user-skills"),
+            skills_usage_path: root.join("skills-usage.jsonl"),
+            media_outputs_dir: root.join("media"),
+            memory_db_path: root.join("memory.db"),
+            semantic_db_path: root.join("semantic.db"),
+        },
+    )
+}
+
 struct OwnedDescriptorTool {
     name: String,
     description: String,
@@ -37,7 +54,7 @@ impl crate::agent::tools::Tool for OwnedDescriptorTool {
 
 #[test]
 fn default_registry_has_builtins_and_cos_proxy() {
-    let r = default_registry();
+    let r = default_registry(&deps());
     assert!(r.get("echo").is_some());
     assert!(r.get("now").is_some());
     assert!(r.get("cos_delegate").is_some());
@@ -80,8 +97,27 @@ fn builtin_only_registry_has_just_builtins() {
 }
 
 #[test]
+fn registry_construction_does_not_open_optional_stores_or_create_paths() {
+    let deps = deps();
+    let paths = deps.paths.clone();
+    assert!(!paths.memory_db_path.exists());
+    assert!(!paths.semantic_db_path.exists());
+    assert!(!paths.todos_dir.exists());
+    assert!(!paths.media_outputs_dir.exists());
+
+    let registry = default_registry(&deps);
+
+    assert!(registry.get("cos_recall").is_none());
+    assert!(registry.get("cos_recall_semantic").is_none());
+    assert!(!paths.memory_db_path.exists());
+    assert!(!paths.semantic_db_path.exists());
+    assert!(!paths.todos_dir.exists());
+    assert!(!paths.media_outputs_dir.exists());
+}
+
+#[test]
 fn names_are_sorted() {
-    let r = default_registry();
+    let r = default_registry(&deps());
     let names = r.names();
     let mut sorted = names.clone();
     sorted.sort();
@@ -90,7 +126,7 @@ fn names_are_sorted() {
 
 #[test]
 fn as_llm_tools_round_trips_schema() {
-    let r = default_registry();
+    let r = default_registry(&deps());
     let tools = r.as_llm_tools();
     assert!(tools.iter().any(|t| t.name == "echo"));
 }

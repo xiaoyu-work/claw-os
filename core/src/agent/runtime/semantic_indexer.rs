@@ -31,6 +31,10 @@ pub struct SemanticIndexer {
 }
 
 impl SemanticIndexer {
+    pub fn from_shared_store(store: Arc<SemanticStore>) -> Arc<Self> {
+        Arc::new(Self { store })
+    }
+
     /// Open the default-path semantic store using the configured
     /// embedder. Returns `None` (and logs at `debug!`) when
     /// embedding is disabled in config; `None` and a `warn!` when
@@ -38,9 +42,7 @@ impl SemanticIndexer {
     /// auto-indexing" and continues without semantic memory.
     pub fn from_default_logged() -> Option<Arc<Self>> {
         match SemanticStore::open_default() {
-            Ok(Some(store)) => Some(Arc::new(Self {
-                store: Arc::new(store),
-            })),
+            Ok(Some(store)) => Some(Self::from_shared_store(Arc::new(store))),
             Ok(None) => {
                 tracing::debug!("semantic: [embed] disabled — auto-indexing skipped");
                 None

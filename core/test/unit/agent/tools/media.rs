@@ -74,7 +74,9 @@ async fn stt_tool_missing_file_errors() {
     let dir = std::env::temp_dir().join(format!("cos-stt-missing-{}", Uuid::new_v4().simple()));
     std::fs::create_dir_all(&dir).unwrap();
     let missing = dir.join("nope.wav");
-    let r = tool.exec(json!({"path": missing.display().to_string()})).await;
+    let r = tool
+        .exec(json!({"path": missing.display().to_string()}))
+        .await;
     assert!(r.is_error);
     assert!(r.content.contains("read audio"), "got: {}", r.content);
     std::fs::remove_dir_all(&dir).ok();
@@ -103,8 +105,7 @@ async fn stt_path_must_be_in_scope() {
     let r = tool.exec(json!({"path": bad})).await;
     assert!(r.is_error, "expected refusal for {bad}, got: {}", r.content);
     assert!(
-        r.content.contains("refusing to read")
-            && r.content.contains("file-safety"),
+        r.content.contains("refusing to read") && r.content.contains("file-safety"),
         "expected file-safety refusal message, got: {}",
         r.content
     );
@@ -138,7 +139,7 @@ async fn imagegen_tool_missing_prompt_errors() {
 #[test]
 fn register_default_adds_three_tools() {
     let mut r = super::super::registry::ToolRegistry::new();
-    register_default_media_tools(&mut r);
+    register_default_media_tools(&mut r, std::env::temp_dir().join("cos-media-registry-test"));
     assert!(r.get("cos_tts").is_some());
     assert!(r.get("cos_stt").is_some());
     assert!(r.get("cos_imagegen").is_some());

@@ -1,7 +1,9 @@
 use super::*;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-fn current_override() -> Option<&'static CosConfig> {
-    CONFIG_OVERRIDE.try_with(|c| *c).ok()
+fn current_override() -> Option<Arc<CosConfig>> {
+    CONFIG_OVERRIDE.try_with(Arc::clone).ok()
 }
 
 #[test]
@@ -201,9 +203,9 @@ async fn with_override_swaps_get_inside_scope_only() {
     let mut cfg = CosConfig::default();
     cfg.agent.provider = "copilot".into();
     cfg.agent.model = "claude-opus-4.7".into();
-    let leaked = intern_static(cfg);
+    let scoped = Arc::new(cfg);
 
-    with_override(leaked, async {
+    with_override(scoped, async {
         let inside = get();
         assert_eq!(inside.agent.provider, "copilot");
         assert_eq!(inside.agent.model, "claude-opus-4.7");
@@ -228,9 +230,9 @@ async fn override_propagates_through_awaited_futures() {
     // parallel.
     let mut cfg = CosConfig::default();
     cfg.agent.provider = "openai".into();
-    let leaked = intern_static(cfg);
+    let scoped = Arc::new(cfg);
 
-    let observed = with_override(leaked, async move {
+    let observed = with_override(scoped, async move {
         // Plain `.await` of a child future.
         let a = async { get().agent.provider.clone() }.await;
         // join_all-style concurrency drives futures within the
@@ -256,9 +258,9 @@ async fn override_does_not_leak_across_spawn() {
     // and pass it through).
     let mut cfg = CosConfig::default();
     cfg.agent.provider = "openai".into();
-    let leaked = intern_static(cfg);
+    let scoped = Arc::new(cfg);
 
-    let observed = with_override(leaked, async move {
+    let observed = with_override(scoped, async move {
         tokio::spawn(async move {
             // Inside the spawned task: no override, so this
             // returns the process-wide config (defaults in the
@@ -274,29 +276,50 @@ async fn override_does_not_leak_across_spawn() {
     assert_ne!(observed, "openai");
 }
 
-#[test]
-fn intern_static_dedupes_by_content() {
-    let mut a = CosConfig::default();
-    a.agent.provider = "anthropic".into();
-    a.agent.model = "claude-sonnet-4.6".into();
+#[tokio::test]
+async fn parallel_override_scopes_are_isolated_and_reclaimed() {
+    let mut left = CosConfig::default();
+    left.agent.provider = "left".into();
+    let left = Arc::new(left);
+    let left_weak = Arc::downgrade(&left);
 
-    let mut b = CosConfig::default();
-    b.agent.provider = "anthropic".into();
-    b.agent.model = "claude-sonnet-4.6".into();
+    let mut right = CosConfig::default();
+    right.agent.provider = "right".into();
+    let right = Arc::new(right);
+    let right_weak = Arc::downgrade(&right);
 
-    let p1 = intern_static(a) as *const CosConfig;
-    let p2 = intern_static(b) as *const CosConfig;
-    assert_eq!(p1, p2, "identical config payloads must share leaked slot");
+    let (seen_left, seen_right) = tokio::join!(
+        with_override(left, async {
+            tokio::task::yield_now().await;
+            get().agent.provider.clone()
+        }),
+        with_override(right, async {
+            tokio::task::yield_now().await;
+            get().agent.provider.clone()
+        })
+    );
 
-    let mut c = CosConfig::default();
-    c.agent.provider = "anthropic".into();
-    c.agent.model = "claude-opus-4.7".into();
-    let p3 = intern_static(c) as *const CosConfig;
-    assert_ne!(p1, p3, "distinct config payloads must not dedupe");
+    assert_eq!(seen_left, "left");
+    assert_eq!(seen_right, "right");
+    assert!(left_weak.upgrade().is_none());
+    assert!(right_weak.upgrade().is_none());
+    assert!(current_override().is_none());
 }
 
 #[test]
-fn intern_for_home_reads_users_config_json() {
+fn scoped_config_is_reclaimed_after_scope() {
+    let scoped = Arc::new(CosConfig::default());
+    let weak = Arc::downgrade(&scoped);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    runtime.block_on(with_override(scoped, async {}));
+    assert!(weak.upgrade().is_none());
+}
+
+#[test]
+fn load_for_home_reads_users_config_json() {
     let pid = std::process::id();
     let home = std::env::temp_dir().join(format!("cos-config-home-{pid}"));
     let _ = fs::remove_dir_all(&home);
@@ -308,9 +331,9 @@ fn intern_for_home_reads_users_config_json() {
     )
     .unwrap();
 
-    let interned = intern_for_home(&home);
-    assert_eq!(interned.agent.provider, "xai");
-    assert_eq!(interned.agent.model, "grok-2");
+    let loaded = load_for_home(&home);
+    assert_eq!(loaded.agent.provider, "xai");
+    assert_eq!(loaded.agent.model, "grok-2");
 
     let _ = fs::remove_dir_all(&home);
 }

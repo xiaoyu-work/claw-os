@@ -896,10 +896,11 @@ impl Tool for AppSessionTool {
             Ok(paths) => paths,
             Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
         };
-        let effective = match self
-            .manifest
-            .resolve_session_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
-        {
+        let effective = match self.manifest.resolve_session_tool_call(
+            &self.manifest_tool_name,
+            &supplied_args,
+            &paths,
+        ) {
             Ok(effective) => effective,
             Err(error) => {
                 let message = format!("argument resolution failed: {error}");
@@ -1240,22 +1241,33 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
 /// meta-tools. The MCP servers themselves are *not* started here —
 /// they come up lazily on first call (or explicitly via
 /// `cos_app_session_open`).
-pub fn register_all(registry: &mut ToolRegistry) {
-    let apps = crate::apps::discover(&apps_root());
-    for app in apps.values() {
-        let Some(session) = &app.manifest.session else {
+pub fn register_manifests(
+    registry: &mut ToolRegistry,
+    manifests: &[Arc<crate::caps::manifest::Manifest>],
+) {
+    for manifest in manifests {
+        let Some(session) = &manifest.session else {
             continue;
         };
-        let arc_manifest = Arc::new(app.manifest.clone());
         for idx in 0..session.tools.len() {
             registry.register(Arc::new(AppSessionTool::from_manifest_tool(
-                arc_manifest.clone(),
+                Arc::clone(manifest),
                 idx,
             )));
         }
     }
     registry.register(Arc::new(CosAppSessionOpen));
     registry.register(Arc::new(CosAppSessionClose));
+}
+
+/// Compatibility composition helper for callers that intentionally discover
+/// the process-default App root.
+pub fn register_all(registry: &mut ToolRegistry) {
+    let manifests = crate::apps::discover(&apps_root())
+        .values()
+        .map(|app| Arc::new(app.manifest.clone()))
+        .collect::<Vec<_>>();
+    register_manifests(registry, &manifests);
 }
 
 #[cfg(test)]

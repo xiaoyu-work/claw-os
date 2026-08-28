@@ -437,21 +437,23 @@ async fn chat_cmd_async(
 
     // Build the registry once. MCP servers attach the same way as
     // `live`/`ask`, so the model has the full toolbox.
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let mut effective_config = (*crate::config::get()).clone();
+    effective_config.agent = cfg.clone();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
+        Arc::new(effective_config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+    );
+    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load(
+        &crate::agent::runtime::deps::RuntimePaths::from_process(),
+        registry_deps.semantic.clone(),
+    );
+    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
 
     let memory_db = if use_memory {
-        match memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => Some(db),
-            Err(e) => {
-                tracing::warn!(
-                    "memory: default DB unavailable ({e}); chat will run without history"
-                );
-                None
-            }
-        }
+        registry_deps.memory.clone()
     } else {
         None
     };
@@ -757,43 +759,44 @@ async fn chat_cmd_async(
             let sink: Arc<dyn StreamSink> = sink_obj.clone();
             let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
             if let Some(db) = &memory_db {
-                runtime::loop_::ask_with_stream_continuation(
+                let request = runtime::loop_::RuntimeRequest::streaming(
                     provider.clone(),
                     cfg,
                     &user_prompt,
                     &tools,
-                    db,
-                    &session_id,
-                    100,
                     sink,
                     progress,
                 )
-                .await
+                .with_continuation(db, &session_id, 100);
+                runtime::loop_::run_with_deps(&runtime_deps, request).await
             } else {
-                runtime::loop_::ask_with_stream(
+                let request = runtime::loop_::RuntimeRequest::streaming(
                     provider.clone(),
                     cfg,
                     &user_prompt,
                     &tools,
-                    None,
                     sink,
                     progress,
-                )
-                .await
+                );
+                runtime::loop_::run_with_deps(&runtime_deps, request).await
             }
         } else if let Some(db) = &memory_db {
-            runtime::loop_::ask_with_memory_continuation(
+            let request = runtime::loop_::RuntimeRequest::buffered(
                 provider.clone(),
                 cfg,
                 &user_prompt,
                 &tools,
-                db,
-                &session_id,
-                100,
             )
-            .await
+            .with_continuation(db, &session_id, 100);
+            runtime::loop_::run_with_deps(&runtime_deps, request).await
         } else {
-            runtime::loop_::ask_with(provider.clone(), cfg, &user_prompt, &tools).await
+            let request = runtime::loop_::RuntimeRequest::buffered(
+                provider.clone(),
+                cfg,
+                &user_prompt,
+                &tools,
+            );
+            runtime::loop_::run_with_deps(&runtime_deps, request).await
         };
 
         match result {

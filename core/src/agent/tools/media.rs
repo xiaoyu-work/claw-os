@@ -42,9 +42,13 @@ fn parse_audio_format(s: &str) -> AudioFormat {
     }
 }
 
-fn write_output(name: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, std::io::Error> {
-    let dir = crate::paths::agent_media_outputs_dir();
-    std::fs::create_dir_all(&dir)?;
+fn write_output(
+    dir: &std::path::Path,
+    name: &str,
+    ext: &str,
+    bytes: &[u8],
+) -> Result<PathBuf, std::io::Error> {
+    std::fs::create_dir_all(dir)?;
     let id = Uuid::new_v4().simple().to_string();
     let path = dir.join(format!("{name}-{id}.{ext}"));
     std::fs::write(&path, bytes)?;
@@ -55,11 +59,19 @@ fn write_output(name: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, std::io:
 
 pub struct TtsTool {
     registry: Arc<TtsRegistry>,
+    outputs_dir: PathBuf,
 }
 
 impl TtsTool {
     pub fn new(registry: Arc<TtsRegistry>) -> Self {
-        Self { registry }
+        Self::with_outputs_dir(registry, crate::paths::agent_media_outputs_dir())
+    }
+
+    pub fn with_outputs_dir(registry: Arc<TtsRegistry>, outputs_dir: PathBuf) -> Self {
+        Self {
+            registry,
+            outputs_dir,
+        }
     }
 }
 
@@ -117,7 +129,12 @@ impl Tool for TtsTool {
             Ok(r) => r,
             Err(e) => return ToolResult::err(format!("tts provider error: {e}")),
         };
-        let path = match write_output("tts", resp.format.extension(), &resp.audio) {
+        let path = match write_output(
+            &self.outputs_dir,
+            "tts",
+            resp.format.extension(),
+            &resp.audio,
+        ) {
             Ok(p) => p,
             Err(e) => return ToolResult::err(format!("failed to write audio: {e}")),
         };
@@ -257,11 +274,19 @@ impl Tool for SttTool {
 
 pub struct ImageGenTool {
     registry: Arc<ImageGenRegistry>,
+    outputs_dir: PathBuf,
 }
 
 impl ImageGenTool {
     pub fn new(registry: Arc<ImageGenRegistry>) -> Self {
-        Self { registry }
+        Self::with_outputs_dir(registry, crate::paths::agent_media_outputs_dir())
+    }
+
+    pub fn with_outputs_dir(registry: Arc<ImageGenRegistry>, outputs_dir: PathBuf) -> Self {
+        Self {
+            registry,
+            outputs_dir,
+        }
     }
 }
 
@@ -335,7 +360,7 @@ impl Tool for ImageGenTool {
         };
         let mut paths: Vec<String> = Vec::with_capacity(resp.images.len());
         for img in &resp.images {
-            match write_output("img", img.format.extension(), &img.bytes) {
+            match write_output(&self.outputs_dir, "img", img.format.extension(), &img.bytes) {
                 Ok(p) => paths.push(p.display().to_string()),
                 Err(e) => return ToolResult::err(format!("failed to write image: {e}")),
             }
@@ -358,13 +383,16 @@ impl Tool for ImageGenTool {
 /// Register all three media tools (TTS / STT / imagegen) backed by
 /// the `with_default_providers` registries. Concrete providers can
 /// be added later by callers via shared `Arc<Registry>` cloning.
-pub fn register_default_media_tools(reg: &mut super::registry::ToolRegistry) {
+pub fn register_default_media_tools(reg: &mut super::registry::ToolRegistry, outputs_dir: PathBuf) {
     let tts = Arc::new(TtsRegistry::with_default_providers());
     let stt = Arc::new(SttRegistry::with_default_providers());
     let img = Arc::new(ImageGenRegistry::with_default_providers());
-    reg.register(Arc::new(TtsTool::new(tts)));
+    reg.register(Arc::new(TtsTool::with_outputs_dir(
+        tts,
+        outputs_dir.clone(),
+    )));
     reg.register(Arc::new(SttTool::new(stt)));
-    reg.register(Arc::new(ImageGenTool::new(img)));
+    reg.register(Arc::new(ImageGenTool::with_outputs_dir(img, outputs_dir)));
 }
 
 #[cfg(test)]

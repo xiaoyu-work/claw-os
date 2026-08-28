@@ -1,5 +1,24 @@
 use super::*;
 
+fn delegate() -> Delegate {
+    let root = std::env::temp_dir().join(format!("cos-delegate-deps-{}", std::process::id()));
+    Delegate::new(
+        super::super::registry::RegistryDeps::without_optional_resources(
+            Arc::new(crate::config::CosConfig::default()),
+            super::super::registry::RegistryPaths {
+                apps_dir: root.join("apps"),
+                todos_dir: root.join("todos"),
+                system_skills_dir: root.join("system-skills"),
+                user_skills_dir: root.join("user-skills"),
+                skills_usage_path: root.join("skills-usage.jsonl"),
+                media_outputs_dir: root.join("media"),
+                memory_db_path: root.join("memory.db"),
+                semantic_db_path: root.join("semantic.db"),
+            },
+        ),
+    )
+}
+
 fn parent_cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),
@@ -19,7 +38,7 @@ fn test_registry() -> ToolRegistry {
 
 #[test]
 fn input_schema_has_required_fields() {
-    let schema = Delegate.input_schema();
+    let schema = delegate().input_schema();
     let required = schema["required"].as_array().unwrap();
     let names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
     assert!(names.contains(&"task"));
@@ -28,8 +47,8 @@ fn input_schema_has_required_fields() {
 
 #[test]
 fn tool_metadata() {
-    assert_eq!(Delegate.name(), "cos_delegate");
-    assert!(Delegate.description().contains("sub-agent"));
+    assert_eq!(delegate().name(), "cos_delegate");
+    assert!(delegate().description().contains("sub-agent"));
 }
 
 #[test]
@@ -186,7 +205,7 @@ async fn current_depth_inside_scope_reflects_value() {
 #[tokio::test]
 async fn invalid_input_returns_tool_error() {
     // Missing required `task`.
-    let result = Delegate.exec(json!({"allowed_tools": []})).await;
+    let result = delegate().exec(json!({"allowed_tools": []})).await;
     assert!(result.is_error);
     assert!(result.content.contains("invalid delegate input"));
 }

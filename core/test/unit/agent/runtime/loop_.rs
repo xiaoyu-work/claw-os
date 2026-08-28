@@ -77,10 +77,7 @@ fn rows_to_messages_skips_empty_payloads_and_maps_roles() {
         row("assistant", ""),
         row("assistant", "[tool_use:cos_sysinfo] {}"),
         row("user", "[tool_result] ok"),
-        row(
-            "assistant",
-            "all done [evidence:stale_call confidence=0.9]",
-        ),
+        row("assistant", "all done [evidence:stale_call confidence=0.9]"),
     ];
     let msgs = rows_to_messages(&rows);
     assert_eq!(msgs.len(), 4, "empty assistant row should be dropped");
@@ -567,12 +564,14 @@ async fn streaming_continuation_honors_configured_compression() {
     assert_eq!(result.answer, "actual answer");
     let request = mock.last_request().expect("main provider request");
     assert!(request.messages.iter().any(|message| {
-        message.content.iter().any(|block| matches!(
-            block,
-            crate::agent::llm::ContentBlock::Text { text }
-                if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
-                    && text.contains("compressed history")
-        ))
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                crate::agent::llm::ContentBlock::Text { text }
+                    if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
+                        && text.contains("compressed history")
+            )
+        })
     }));
 }
 
@@ -613,12 +612,14 @@ async fn non_streaming_continuation_honors_configured_compression() {
     assert_eq!(result.answer, "actual answer");
     let request = mock.last_request().expect("main provider request");
     assert!(request.messages.iter().any(|message| {
-        message.content.iter().any(|block| matches!(
-            block,
-            crate::agent::llm::ContentBlock::Text { text }
-                if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
-                    && text.contains("compressed history")
-        ))
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                crate::agent::llm::ContentBlock::Text { text }
+                    if text.contains(crate::agent::context::compressor::SUMMARY_MARKER)
+                        && text.contains("compressed history")
+            )
+        })
     }));
 }
 
@@ -777,7 +778,8 @@ async fn end_to_end_agent_drives_cos_primitive() {
     mock.push_response(MockResponse::Text("got system info".into()));
 
     let provider: Arc<dyn Provider> = Arc::new(mock);
-    let tools = default_registry();
+    let deps = crate::agent::tools::registry::RegistryDeps::load_current();
+    let tools = default_registry(&deps);
     let result = ask_with(provider, &cfg, "tell me about this system", &tools)
         .await
         .unwrap();
@@ -1474,9 +1476,7 @@ async fn approval_from_cfg_default_is_empty() {
     assert!(gate.config().auto_approve.is_empty());
     assert!(gate.config().auto_deny.is_empty());
     // A tool outside any set still passes through.
-    let out = gate
-        .evaluate("echo", &serde_json::json!({}), "n/a")
-        .await;
+    let out = gate.evaluate("echo", &serde_json::json!({}), "n/a").await;
     assert!(matches!(
         out,
         crate::agent::runtime::approval::ApprovalOutcome::Approved { .. }
@@ -2855,7 +2855,10 @@ fn background_drain_keeps_pending_tasks_alive_past_block_on() {
 fn background_drain_timeout_respects_env_override() {
     let prev = std::env::var("COS_AGENT_BACKGROUND_DRAIN_SECS").ok();
     std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", "7");
-    assert_eq!(background_drain_timeout(), std::time::Duration::from_secs(7));
+    assert_eq!(
+        background_drain_timeout(),
+        std::time::Duration::from_secs(7)
+    );
     std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", "not-a-number");
     assert_eq!(
         background_drain_timeout(),
@@ -2863,7 +2866,10 @@ fn background_drain_timeout_respects_env_override() {
         "malformed env value falls back to the 30s default"
     );
     std::env::remove_var("COS_AGENT_BACKGROUND_DRAIN_SECS");
-    assert_eq!(background_drain_timeout(), std::time::Duration::from_secs(30));
+    assert_eq!(
+        background_drain_timeout(),
+        std::time::Duration::from_secs(30)
+    );
     if let Some(v) = prev {
         std::env::set_var("COS_AGENT_BACKGROUND_DRAIN_SECS", v);
     }
@@ -2901,10 +2907,7 @@ fn merge_specs_configured_wins_on_collision() {
 
 #[test]
 fn merge_specs_drops_discovered_duplicates_among_themselves() {
-    let merged = merge_mcp_specs(
-        vec![],
-        vec![spec("x", "/first"), spec("x", "/second")],
-    );
+    let merged = merge_mcp_specs(vec![], vec![spec("x", "/first"), spec("x", "/second")]);
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].command, "/first");
 }

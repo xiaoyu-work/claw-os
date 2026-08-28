@@ -238,7 +238,8 @@ async fn live_cmd_async(
     use std::io::Write;
     use std::sync::{Arc, Mutex};
 
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let deps = crate::agent::tools::registry::RegistryDeps::load_current();
+    let mut tools = crate::agent::tools::registry::default_registry(&deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;

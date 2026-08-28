@@ -42,12 +42,26 @@ pub fn default_path() -> PathBuf {
 /// via the [`SemanticStoreExt`] trait below so the original
 /// `SemanticStore::open_default()` call-site shape keeps working.
 pub fn open_default() -> Result<Option<SemanticStore>, SemanticError> {
-    let embedder = match crate::model::tasks::embed::build_default() {
+    let config = crate::config::get();
+    open_with_config(
+        &config.embed,
+        &config.agent,
+        crate::paths::agent_semantic_db_path(),
+    )
+}
+
+/// Open a semantic store from an explicit configuration snapshot and path.
+pub fn open_with_config(
+    embed: &crate::config::EmbedConfig,
+    agent: &crate::config::AgentConfig,
+    path: impl Into<PathBuf>,
+) -> Result<Option<SemanticStore>, SemanticError> {
+    let embedder = match crate::model::tasks::embed::build_from_with_agent(embed, agent) {
         Ok(Some(e)) => e,
         Ok(None) => return Ok(None),
         Err(e) => return Err(SemanticError::Embed(e)),
     };
-    let store = SemanticStore::open(default_path(), Some(Arc::from(embedder)))?;
+    let store = SemanticStore::open(path.into(), Some(Arc::from(embedder)))?;
     Ok(Some(store))
 }
 

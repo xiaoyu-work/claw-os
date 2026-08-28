@@ -107,13 +107,23 @@ pub fn build_system_prompt_traced(
     extra_path: Option<&Path>,
     query: Option<&str>,
 ) -> (String, Vec<InjectedSegment>) {
+    let skills = crate::agent::skills::loader::load_catalog_default();
+    let notes = NotesStore::system_default();
+    build_system_prompt_traced_with(extra_path, query, &skills, &notes)
+}
+
+pub fn build_system_prompt_traced_with(
+    extra_path: Option<&Path>,
+    query: Option<&str>,
+    skills: &crate::agent::skills::loader::LoadResult,
+    notes: &NotesStore,
+) -> (String, Vec<InjectedSegment>) {
     let mut segments: Vec<InjectedSegment> = Vec::new();
     let mut out = String::from(SYSTEM_SCAFFOLD);
 
-    let skills = crate::agent::skills::loader::load_catalog_default();
-    append_skill_catalog(&mut out, &mut segments, &skills);
+    append_skill_catalog(&mut out, &mut segments, skills);
 
-    if let Some(notes) = NotesStore::system_default().assemble_for_prompt_relevant(
+    if let Some(notes) = notes.assemble_for_prompt_relevant(
         query,
         crate::agent::memory::notes::MAX_NOTE_CHARS_FOR_PROMPT,
     ) {
@@ -132,7 +142,10 @@ pub fn build_system_prompt_traced(
     if let Some(p) = extra_path {
         const MAX_PROMPT_EXTRA_BYTES: u64 = 256 * 1024;
         let meta = fs::metadata(p).ok();
-        let len_ok = meta.as_ref().map(|m| m.len() <= MAX_PROMPT_EXTRA_BYTES).unwrap_or(false);
+        let len_ok = meta
+            .as_ref()
+            .map(|m| m.len() <= MAX_PROMPT_EXTRA_BYTES)
+            .unwrap_or(false);
         if len_ok {
             if let Ok(extra) = fs::read_to_string(p) {
                 let trimmed = extra.trim_end();
@@ -160,7 +173,14 @@ pub fn build_turn_context_segments() -> Vec<InjectedSegment> {
     use crate::agent::nudge::{now_epoch_s, NudgeStore};
 
     let store = NudgeStore::new(crate::paths::agent_nudges_path());
-    let due = store.due(now_epoch_s());
+    build_turn_context_segments_with(&store, now_epoch_s())
+}
+
+pub fn build_turn_context_segments_with(
+    store: &crate::agent::nudge::NudgeStore,
+    now_epoch_s: u64,
+) -> Vec<InjectedSegment> {
+    let due = store.due(now_epoch_s);
     if due.is_empty() {
         return Vec::new();
     }

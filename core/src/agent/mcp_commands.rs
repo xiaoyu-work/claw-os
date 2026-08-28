@@ -34,7 +34,8 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
     match sub {
         "status" | "" => {
             let cfg = &crate::config::get().agent;
-            let mut tools = tools::registry::default_registry();
+            let deps = tools::registry::RegistryDeps::load_current();
+            let mut tools = tools::registry::default_registry(&deps);
             tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
             let configured_servers: Vec<Value> = cfg
@@ -195,7 +196,8 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                     }
                 }
             }
-            let mut tools = tools::registry::default_registry();
+            let deps = tools::registry::RegistryDeps::load_current();
+            let mut tools = tools::registry::default_registry(&deps);
             // Honour allow override when supplied; otherwise inherit
             // cfg.tool_allow via the standard helper. --deny appends
             // to (does not replace) cfg.tool_deny so global denies

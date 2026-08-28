@@ -715,7 +715,8 @@ fn check_hooks() -> Value {
 // permitted tool set without re-importing.
 #[allow(dead_code)]
 fn _force_tools_use() {
-    let _ = tools::registry::default_registry();
+    let deps = tools::registry::RegistryDeps::load_current();
+    let _ = tools::registry::default_registry(&deps);
 }
 
 /// Shim matching the [`crate::agent::tools::cos_proxy::PrimitiveFn`]
