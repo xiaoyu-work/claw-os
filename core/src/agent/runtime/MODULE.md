@@ -34,7 +34,8 @@ prompt/memory services, and an explicit `RuntimeDeps`. Production composition
 resolves hooks, audit/notes/nudge/Skill paths, clock, and semantic indexing
 before entering the lifecycle. Delegated children inherit the parent's runtime
 hooks, clock, and paths while retaining their own provider and narrowed tool
-registry. It never executes a model-emitted tool call
+registry, and their hook context is marked delegated. Detached curator work
+reinstalls the captured `Arc<CosConfig>` snapshot. It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
 every turn.
 

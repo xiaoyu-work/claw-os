@@ -1,5 +1,6 @@
 use super::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 fn current_override() -> Option<Arc<CosConfig>> {
@@ -342,6 +343,35 @@ fn legacy_static_config_api_remains_source_compatible() {
         get().agent.provider.clone()
     }));
     assert_eq!(observed, "legacy");
+}
+
+#[test]
+fn production_code_uses_owned_config_snapshots_not_legacy_get() {
+    fn visit(path: &Path, offenders: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(path).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                visit(&path, offenders);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs")
+                && path.file_name().and_then(|value| value.to_str()) != Some("config.rs")
+            {
+                let source = fs::read_to_string(&path).unwrap();
+                if source.contains("config::get()") || source.contains("crate::config::get()") {
+                    offenders.push(path);
+                }
+            }
+        }
+    }
+
+    let mut offenders = Vec::new();
+    visit(
+        &Path::new(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut offenders,
+    );
+    assert!(
+        offenders.is_empty(),
+        "production code must use config::current_snapshot(): {offenders:?}"
+    );
 }
 
 #[test]

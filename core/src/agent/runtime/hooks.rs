@@ -59,6 +59,10 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use crate::agent::llm::types::ToolCall;
 
+tokio::task_local! {
+    static SCOPED_REGISTRY: HookRegistry;
+}
+
 // =====================================================================
 // Hook context — what the runtime hands the hook on every call
 // =====================================================================
@@ -77,7 +81,6 @@ pub struct HookContext {
     pub started_at_ms: u64,
     /// True when the loop is acting as a delegated child agent.
     pub is_delegated: bool,
-    registry: HookRegistry,
 }
 
 impl std::fmt::Debug for HookContext {
@@ -108,7 +111,6 @@ impl HookContext {
             model: model.into(),
             started_at_ms: now_ms(),
             is_delegated: false,
-            registry: global_registry(),
         }
     }
 
@@ -127,14 +129,19 @@ impl HookContext {
         self
     }
 
-    pub fn with_registry(mut self, registry: HookRegistry) -> Self {
-        self.registry = registry;
-        self
-    }
+}
 
-    pub(crate) fn registry(&self) -> &HookRegistry {
-        &self.registry
-    }
+pub(crate) async fn with_registry<F>(registry: HookRegistry, future: F) -> F::Output
+where
+    F: std::future::Future,
+{
+    SCOPED_REGISTRY.scope(registry, future).await
+}
+
+pub(crate) fn current_registry() -> HookRegistry {
+    SCOPED_REGISTRY
+        .try_with(Clone::clone)
+        .unwrap_or_else(|_| global_registry())
 }
 
 fn now_ms() -> u64 {

@@ -148,7 +148,8 @@ impl RegistryDeps {
             &paths.runtime_paths(),
             semantic.clone(),
             hooks,
-        );
+        )
+        .with_config_snapshot(Arc::clone(&config));
         Self {
             config,
             paths,
@@ -162,8 +163,8 @@ impl RegistryDeps {
     /// Side-effect-free dependency set for tests and deliberately minimal
     /// compositions.
     pub fn without_optional_resources(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
-        let runtime =
-            crate::agent::runtime::deps::RuntimeDeps::load(&paths.runtime_paths(), None);
+        let runtime = crate::agent::runtime::deps::RuntimeDeps::load(&paths.runtime_paths(), None)
+            .with_config_snapshot(Arc::clone(&config));
         Self {
             config,
             paths,
@@ -301,7 +302,7 @@ impl ToolRegistry {
 ///   plus any explicitly active stateful App-session tools.
 /// - `cos_memory` (notes) and, if the default memory DB opens cleanly,
 ///   `cos_recall` (FTS5 history search).
-pub fn default_registry(deps: &RegistryDeps) -> ToolRegistry {
+pub fn default_registry_with_deps(deps: &RegistryDeps) -> ToolRegistry {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(super::builtin::Echo));
     r.register(Arc::new(super::builtin::Now));
@@ -318,21 +319,31 @@ pub fn default_registry(deps: &RegistryDeps) -> ToolRegistry {
     )));
     r.register(Arc::new(super::cos_help::CosHelp));
     super::cos_proxy::register_all_with_notes(&mut r, deps.runtime.notes().clone());
-    super::cos_apps::register_default(&mut r);
+    super::cos_apps::register_default_with_root(&mut r, deps.paths.apps_dir.clone());
     super::cos_apps_session::register_manifests(
         &mut r,
         &deps.paths.apps_dir,
         &deps.app_sessions,
     );
-    super::media::register_default_media_tools(&mut r, deps.paths.media_outputs_dir.clone());
+    super::media::register_default_media_tools_with_outputs_dir(
+        &mut r,
+        deps.paths.media_outputs_dir.clone(),
+    );
     if let Some(db) = &deps.memory {
         super::cos_proxy::register_recall(&mut r, db.clone());
         super::cos_proxy::register_app_memory(&mut r, db.clone());
     }
+
     if let Some(store) = &deps.semantic {
         super::cos_proxy::register_recall_semantic(&mut r, Arc::clone(store));
     }
     r
+}
+
+#[deprecated(note = "use default_registry_with_deps for explicit composition")]
+pub fn default_registry() -> ToolRegistry {
+    let deps = RegistryDeps::load_current();
+    default_registry_with_deps(&deps)
 }
 
 /// Minimal registry: only side-effect-free built-ins. Used by tests that

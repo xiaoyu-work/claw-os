@@ -13,10 +13,10 @@ pub(super) fn media_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("providers");
     match sub {
         "providers" | "" => {
-            let cfg = crate::config::get();
-            let tts = crate::agent::media::factory::tts_registry_from_cfg(cfg);
-            let stt = crate::agent::media::factory::stt_registry_from_cfg(cfg);
-            let imagegen = crate::agent::media::factory::imagegen_registry_from_cfg(cfg);
+            let cfg = crate::config::current_snapshot();
+            let tts = crate::agent::media::factory::tts_registry_from_cfg(&cfg);
+            let stt = crate::agent::media::factory::stt_registry_from_cfg(&cfg);
+            let imagegen = crate::agent::media::factory::imagegen_registry_from_cfg(&cfg);
 
             let tts_rows: Vec<_> = tts
                 .names()

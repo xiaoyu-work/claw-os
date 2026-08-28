@@ -1,8 +1,8 @@
 use super::*;
 use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, ToolCall, Usage};
 
-#[test]
-fn chat_registry_uses_the_same_complete_config_snapshot() {
+#[tokio::test]
+async fn chat_registry_uses_and_installs_the_same_complete_config_snapshot() {
     let temp = tempfile::tempdir().unwrap();
     let mut config = crate::config::CosConfig::default();
     config.agent.provider = "mock".into();
@@ -25,11 +25,17 @@ fn chat_registry_uses_the_same_complete_config_snapshot() {
         system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
     };
 
-    let deps = compose_registry_deps(Arc::clone(&config), paths);
+    let observed = crate::config::with_snapshot(Arc::clone(&config), async {
+        let current = crate::config::current_snapshot();
+        let deps = compose_registry_deps(Arc::clone(&current), paths);
+        assert!(Arc::ptr_eq(&current, &deps.config));
+        deps
+    })
+    .await;
 
-    assert!(Arc::ptr_eq(&config, &deps.config));
-    assert_eq!(deps.config.agent.model, "snapshot-model");
-    assert_eq!(deps.config.embed.provider, "none");
+    assert!(Arc::ptr_eq(&config, &observed.config));
+    assert_eq!(observed.config.agent.model, "snapshot-model");
+    assert_eq!(observed.config.embed.provider, "none");
 }
 
 #[test]

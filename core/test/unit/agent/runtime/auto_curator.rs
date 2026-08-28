@@ -50,6 +50,21 @@ fn auto_curator_respects_explicit_aux() {
     assert!(AutoCurator::from_cfg_logged(&cfg, &mem_db()).is_some());
 }
 
+#[test]
+fn auto_curator_retains_the_request_config_snapshot() {
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let notes = NotesStore::at(tempfile::tempdir().unwrap().path());
+
+    let curator =
+        AutoCurator::from_snapshot_logged(Arc::clone(&config), &mem_db(), notes).unwrap();
+
+    assert!(Arc::ptr_eq(curator.config_snapshot(), &config));
+}
+
 /// `aux_from_main` errors when the main model is empty — we
 /// shouldn't silently swallow a malformed config.
 #[test]

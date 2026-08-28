@@ -286,9 +286,12 @@ lifecycle. Standalone and `claw-agentd` audit hooks are installed into that
 exact registry, and delegated children inherit it. App-session tools retain
 their discovered App root; Skill roots retain their trust origin. Legacy
 `config::get()` and static `with_override` callers remain source compatible,
-while production uses Arc-owned `current_snapshot`/`with_snapshot`. Legacy
-direct-library agent adapters retain compatibility contexts, but production
-CLI, web, and worker flows use `runtime::loop_::run_with_deps`.
+while all production core code uses Arc-owned
+`current_snapshot`/`with_snapshot`; a source inventory test enforces that
+separation. Detached curation and web request composition reinstall the
+captured snapshot before gated work. Legacy direct-library agent adapters
+retain compatibility contexts, but production CLI, web, and worker flows use
+`runtime::loop_::run_with_deps`.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots

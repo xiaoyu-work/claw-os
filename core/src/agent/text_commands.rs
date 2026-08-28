@@ -259,7 +259,8 @@ pub(super) fn title_cmd(args: &[String]) -> Result<Value, String> {
     if !llm_mode {
         return Ok(title_heuristic_payload(&input));
     }
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
         .map_err(|e| format!("auxiliary client build failed: {e}"))?
         .ok_or_else(|| {
@@ -346,7 +347,8 @@ pub(super) fn summarise_cmd(args: &[String]) -> Result<Value, String> {
     if !llm_mode {
         return Ok(summarise_heuristic_payload(&input, max_chars));
     }
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
         .map_err(|e| format!("auxiliary client build failed: {e}"))?
         .ok_or_else(|| {

@@ -308,7 +308,7 @@ fn vision_analyze_cmd(args: &[String]) -> Result<Value, String> {
         }
     };
 
-    let cfg = crate::config::get();
+    let cfg = crate::config::current_snapshot();
     let provider_name = provider_override
         .clone()
         .unwrap_or_else(|| cfg.agent.provider.clone());

@@ -2,7 +2,7 @@ use super::*;
 use crate::agent::llm::providers::mock::{MockProvider, MockResponse};
 use crate::agent::llm::ToolCall;
 use crate::agent::memory::sqlite_fts::MessageRow;
-use crate::agent::tools::registry::{builtin_only_registry, default_registry};
+use crate::agent::tools::registry::{builtin_only_registry, default_registry_with_deps};
 
 fn row(role: &str, content: &str) -> MessageRow {
     MessageRow {
@@ -779,7 +779,7 @@ async fn end_to_end_agent_drives_cos_primitive() {
 
     let provider: Arc<dyn Provider> = Arc::new(mock);
     let deps = crate::agent::tools::registry::RegistryDeps::load_current();
-    let tools = default_registry(&deps);
+    let tools = default_registry_with_deps(&deps);
     let result = ask_with(provider, &cfg, "tell me about this system", &tools)
         .await
         .unwrap();

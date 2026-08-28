@@ -773,7 +773,7 @@ struct DispatchOutcome {
 fn apply_pre_hook(hook_ctx: Option<&HookContext>, call: &ToolCall) -> (ToolCall, Option<String>) {
     match hook_ctx {
         Some(ctx) => {
-            match ctx.registry().dispatch_pre_tool(ctx, call) {
+            match hooks::current_registry().dispatch_pre_tool(ctx, call) {
                 hooks::ToolDecision::Allow => (call.clone(), None),
                 hooks::ToolDecision::Deny(reason) => (
                     call.clone(),
@@ -951,8 +951,7 @@ async fn dispatch_calls(
                 },
             };
             if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) = ctx
-                    .registry()
+                if let hooks::HookOutcome::Stop(reason) = hooks::current_registry()
                     .dispatch_post_tool(ctx, &outcome.effective_call, &summary)
                 {
                     pending_stop = Some(reason);

@@ -383,7 +383,10 @@ impl Tool for ImageGenTool {
 /// Register all three media tools (TTS / STT / imagegen) backed by
 /// the `with_default_providers` registries. Concrete providers can
 /// be added later by callers via shared `Arc<Registry>` cloning.
-pub fn register_default_media_tools(reg: &mut super::registry::ToolRegistry, outputs_dir: PathBuf) {
+pub fn register_default_media_tools_with_outputs_dir(
+    reg: &mut super::registry::ToolRegistry,
+    outputs_dir: PathBuf,
+) {
     let tts = Arc::new(TtsRegistry::with_default_providers());
     let stt = Arc::new(SttRegistry::with_default_providers());
     let img = Arc::new(ImageGenRegistry::with_default_providers());
@@ -393,6 +396,14 @@ pub fn register_default_media_tools(reg: &mut super::registry::ToolRegistry, out
     )));
     reg.register(Arc::new(SttTool::new(stt)));
     reg.register(Arc::new(ImageGenTool::with_outputs_dir(img, outputs_dir)));
+}
+
+#[deprecated(note = "use register_default_media_tools_with_outputs_dir")]
+pub fn register_default_media_tools(reg: &mut super::registry::ToolRegistry) {
+    register_default_media_tools_with_outputs_dir(
+        reg,
+        crate::paths::agent_media_outputs_dir(),
+    );
 }
 
 #[cfg(test)]

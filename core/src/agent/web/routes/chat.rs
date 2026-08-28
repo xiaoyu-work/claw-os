@@ -151,7 +151,34 @@ struct TurnConflict {
 // ---------------------------------------------------------------------------
 
 async fn drive_chat(
+    state: AppState,
+    prompt: String,
+    session_id: String,
+    interrupt_scope: String,
+    use_memory: bool,
+    tx: mpsc::Sender<SseFrame>,
+    turn_lease: TurnLease,
+) -> Result<(), String> {
+    let config = crate::config::load_user_config();
+    crate::config::with_snapshot(
+        Arc::clone(&config),
+        drive_chat_scoped(
+            state,
+            config,
+            prompt,
+            session_id,
+            interrupt_scope,
+            use_memory,
+            tx,
+            turn_lease,
+        ),
+    )
+    .await
+}
+
+async fn drive_chat_scoped(
     _state: AppState,
+    config: Arc<crate::config::CosConfig>,
     prompt: String,
     session_id: String,
     interrupt_scope: String,
@@ -169,7 +196,6 @@ async fn drive_chat(
     // would forever report "agent not configured" — even after the
     // config file on disk has been fully populated.
     //
-    let config = crate::config::load_user_config();
     let cfg = &config.agent;
     setup::is_ready(cfg)?;
 
@@ -181,7 +207,8 @@ async fn drive_chat(
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
     let runtime_deps = registry_deps.runtime.clone();
-    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
+    let mut tools =
+        crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;

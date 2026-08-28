@@ -42,7 +42,7 @@ pub fn default_path() -> PathBuf {
 /// via the [`SemanticStoreExt`] trait below so the original
 /// `SemanticStore::open_default()` call-site shape keeps working.
 pub fn open_default() -> Result<Option<SemanticStore>, SemanticError> {
-    let config = crate::config::get();
+    let config = crate::config::current_snapshot();
     open_with_config(
         &config.embed,
         &config.agent,

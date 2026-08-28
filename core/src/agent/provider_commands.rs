@@ -2,7 +2,8 @@ use super::{llm, setup};
 use serde_json::{json, Value};
 
 pub(super) fn status_cmd() -> Result<Value, String> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let daemon = crate::clawd::agent_client::daemon_status()?;
     let ready = setup::is_ready(cfg);
     let key_source = match setup::resolved_key_source(cfg) {
@@ -97,7 +98,7 @@ pub(super) fn providers_cmd(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let cfg = crate::config::get();
+    let cfg = crate::config::current_snapshot();
     let active = cfg.agent.provider.clone();
     let active_model = if cfg.agent.model.is_empty() {
         "stub-model".to_string()
@@ -314,7 +315,7 @@ pub(super) fn provider_doctor_cmd(args: &[String]) -> Result<Value, String> {
     }
     let mut out = providers_cmd(&static_args)?;
 
-    let cfg = crate::config::get();
+    let cfg = crate::config::current_snapshot();
     let active_name = cfg.agent.provider.clone();
     let active_in_scope = filter_names
         .as_ref()

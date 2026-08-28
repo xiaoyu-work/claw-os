@@ -384,7 +384,8 @@ pub(super) fn chat_cmd(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     setup::is_ready(cfg)?;
     // Build the provider once and reuse across turns. If the user
     // mid-REPL wants a different model, they can `/quit` and re-launch.
@@ -444,7 +445,7 @@ async fn chat_cmd_async(
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
     let runtime_deps = registry_deps.runtime.clone();
-    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
+    let mut tools = crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
     let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;

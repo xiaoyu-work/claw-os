@@ -648,7 +648,8 @@ async fn execute(
 
     let home = std::path::PathBuf::from(&job.owner_home);
     let config = crate::config::load_for_home(&home);
-    let scoped = crate::agent::service::execute_job(request, stream_sink, progress_sink, hooks);
+    let scoped =
+        crate::agent::service::execute_job_with_hooks(request, stream_sink, progress_sink, hooks);
     let scoped = with_session(assignment.session, scoped);
     let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so

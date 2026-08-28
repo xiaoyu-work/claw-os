@@ -2027,7 +2027,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // therefore `paths::user_credentials_dir`,
     // `paths::user_app_override_path`, `paths::user_app_consent_path`,
     // `paths::user_budget_config_path`, …) to the owner's home before
-    // running the rest of the job. Every `config::get()` inside the
+    // running the rest of the job. Every `config::current_snapshot()` inside the
     // agent loop — and every credential / consent / app-override
     // lookup reached transitively from tool implementations, the LLM
     // gate, and the delegate tool — will see the user's
@@ -2076,7 +2076,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         Arc::new(JobProgressSink {
             job_id: job.id.clone(),
         });
-    execute_job(
+    execute_job_with_hooks(
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
@@ -2121,6 +2121,20 @@ pub async fn execute_job(
     job: JobExecution,
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+) -> FinishOutcome {
+    execute_job_with_hooks(
+        job,
+        stream_sink,
+        progress_sink,
+        crate::agent::runtime::hooks::HookRegistry::new(),
+    )
+    .await
+}
+
+pub async fn execute_job_with_hooks(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
     hooks: crate::agent::runtime::hooks::HookRegistry,
 ) -> FinishOutcome {
     use crate::agent::runtime::loop_;
@@ -2131,7 +2145,7 @@ pub async fn execute_job(
 
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
-    // `config::get()` here is intentionally the *task-local* one
+    // `config::current_snapshot()` here is intentionally the *task-local* one
     // installed by the caller for clawd-routed jobs; for in-process
     // submits it falls through to the process-wide config as before.
     let current_config = crate::config::current_snapshot();
@@ -2152,7 +2166,8 @@ pub async fn execute_job(
         hooks,
     );
     let runtime_deps = registry_deps.runtime.clone();
-    let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
+    let mut tools =
+        crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.

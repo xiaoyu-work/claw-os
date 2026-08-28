@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::guardrails::Guardrails;
-use super::registry::{default_registry, RegistryDeps, ToolRegistry};
+use super::registry::{default_registry_with_deps, RegistryDeps, ToolRegistry};
 use super::{Tool, ToolResult};
 use crate::agent::llm::{self, Provider};
 use crate::agent::runtime::approval::ApprovalGate;
@@ -214,7 +214,7 @@ impl Tool for Delegate {
         run_delegate_with_deps(
             parsed,
             &parent_cfg,
-            move || default_registry(&deps),
+            move || default_registry_with_deps(&deps),
             runtime,
         )
         .await
@@ -316,7 +316,8 @@ where
     let task = input.task.clone();
 
     let child_future = DELEGATE_DEPTH.scope(cur + 1, async move {
-        let request = loop_::RuntimeRequest::buffered(provider, &child_cfg, &task, &tools);
+        let request = loop_::RuntimeRequest::buffered(provider, &child_cfg, &task, &tools)
+            .with_delegated(true);
         loop_::run_with_deps(&runtime, request).await
     });
 

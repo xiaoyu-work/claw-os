@@ -315,7 +315,10 @@ async fn run_delegate_happy_path_uses_mock_echo_default() {
 
 #[tokio::test]
 async fn delegate_child_inherits_runtime_audit_hooks() {
-    struct AuditSpy(Arc<std::sync::atomic::AtomicUsize>);
+    struct AuditSpy {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        delegated: Arc<std::sync::atomic::AtomicBool>,
+    }
 
     impl crate::agent::runtime::hooks::Hook for AuditSpy {
         fn name(&self) -> &str {
@@ -324,18 +327,25 @@ async fn delegate_child_inherits_runtime_audit_hooks() {
 
         fn post_turn(
             &self,
-            _context: &crate::agent::runtime::hooks::HookContext,
+            context: &crate::agent::runtime::hooks::HookContext,
             _summary: &crate::agent::runtime::hooks::TurnSummary,
         ) -> crate::agent::runtime::hooks::HookOutcome {
-            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.delegated
+                .store(context.is_delegated, std::sync::atomic::Ordering::SeqCst);
             crate::agent::runtime::hooks::HookOutcome::Continue
         }
     }
 
     let _perms = crate::test_env::PermissiveModeGuard::new();
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let hooks = crate::agent::runtime::hooks::HookRegistry::new();
-    hooks.register(Arc::new(AuditSpy(Arc::clone(&calls))));
+    hooks.register(Arc::new(AuditSpy {
+        calls: Arc::clone(&calls),
+        delegated: Arc::clone(&delegated),
+    }));
     let runtime = crate::agent::runtime::deps::RuntimeDeps::new(
         hooks,
         Arc::new(crate::agent::runtime::deps::SystemClock),
@@ -356,6 +366,7 @@ async fn delegate_child_inherits_runtime_audit_hooks() {
         1,
         "child turn must pass through the inherited audit registry"
     );
+    assert!(delegated.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]

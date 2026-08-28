@@ -112,9 +112,10 @@ pub(super) fn redact_cmd(args: &[String]) -> Result<Value, String> {
 /// pair the runtime would build, so what you see here is what the
 /// model would see if you ran `cos agent ask` in the same env.
 pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let deps = tools::registry::RegistryDeps::load_current();
-    let mut registry = tools::registry::default_registry(&deps);
+    let mut registry = tools::registry::default_registry_with_deps(&deps);
     registry.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
     registry.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
 
@@ -200,7 +201,8 @@ pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
 /// before running a session.
 pub(super) fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::tools::guardrails::Decision;
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let g = crate::agent::runtime::loop_::guardrails_from_cfg(cfg);
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
@@ -260,7 +262,8 @@ pub(super) fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
 /// per-call predicate hooks land).
 pub(super) fn approval_cmd(args: &[String]) -> Result<Value, String> {
     use crate::agent::runtime::approval::ApprovalOutcome;
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let gate = crate::agent::runtime::loop_::approval_from_cfg(cfg);
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");

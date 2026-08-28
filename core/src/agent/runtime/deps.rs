@@ -56,6 +56,7 @@ pub struct RuntimeDeps {
     semantic_indexer: Option<Arc<SemanticIndexer>>,
     paths: Option<RuntimePaths>,
     notes: crate::agent::memory::notes::NotesStore,
+    config: Option<Arc<crate::config::CosConfig>>,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
 }
 
@@ -71,6 +72,7 @@ impl RuntimeDeps {
             semantic_indexer,
             paths: None,
             notes: crate::agent::memory::notes::NotesStore::system_default(),
+            config: None,
             _auto_hook_guard: None,
         }
     }
@@ -150,6 +152,15 @@ impl RuntimeDeps {
 
     pub fn notes(&self) -> &crate::agent::memory::notes::NotesStore {
         &self.notes
+    }
+
+    pub fn with_config_snapshot(mut self, config: Arc<crate::config::CosConfig>) -> Self {
+        self.config = Some(config);
+        self
+    }
+
+    pub fn config_snapshot(&self) -> Option<Arc<crate::config::CosConfig>> {
+        self.config.clone()
     }
 }
 

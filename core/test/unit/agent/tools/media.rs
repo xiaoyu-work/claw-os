@@ -139,10 +139,21 @@ async fn imagegen_tool_missing_prompt_errors() {
 #[test]
 fn register_default_adds_three_tools() {
     let mut r = super::super::registry::ToolRegistry::new();
-    register_default_media_tools(&mut r, std::env::temp_dir().join("cos-media-registry-test"));
+    register_default_media_tools_with_outputs_dir(
+        &mut r,
+        std::env::temp_dir().join("cos-media-registry-test"),
+    );
     assert!(r.get("cos_tts").is_some());
     assert!(r.get("cos_stt").is_some());
     assert!(r.get("cos_imagegen").is_some());
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_default_media_registration_signature_still_compiles() {
+    let register: fn(&mut super::super::registry::ToolRegistry) =
+        register_default_media_tools;
+    let _ = register;
 }
 
 #[test]

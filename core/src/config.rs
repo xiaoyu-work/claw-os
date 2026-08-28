@@ -1072,18 +1072,8 @@ pub fn load_user_config() -> Arc<CosConfig> {
     Arc::new(load_from_path(&path))
 }
 
-#[deprecated(note = "use load_for_home; static interning was removed")]
-pub fn intern_for_home(home: &Path) -> Arc<CosConfig> {
-    load_for_home(home)
-}
-
-#[deprecated(note = "use load_user_config; static interning was removed")]
-pub fn intern_user_config() -> Arc<CosConfig> {
-    load_user_config()
-}
-
 /// Run `fut` with `cfg` installed as the per-task override visible to
-/// every `config::get()` call polled inside it. Separately spawned Tokio
+/// every `config::current_snapshot()` call polled inside it. Separately spawned Tokio
 /// tasks do not inherit task-local values and must capture the `Arc` or
 /// establish their own scope. Outside the scope [`current_snapshot`] returns
 /// the process-wide snapshot.

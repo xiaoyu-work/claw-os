@@ -59,7 +59,7 @@ impl crate::agent::tools::Tool for OwnedDescriptorTool {
 
 #[test]
 fn default_registry_has_builtins_and_cos_proxy() {
-    let r = default_registry(&deps());
+    let r = default_registry_with_deps(&deps());
     assert!(r.get("echo").is_some());
     assert!(r.get("now").is_some());
     assert!(r.get("cos_delegate").is_some());
@@ -102,6 +102,13 @@ fn builtin_only_registry_has_just_builtins() {
 }
 
 #[test]
+#[allow(deprecated)]
+fn legacy_default_registry_signature_still_compiles() {
+    let constructor: fn() -> ToolRegistry = default_registry;
+    let _ = constructor;
+}
+
+#[test]
 fn registry_construction_does_not_open_optional_stores_or_create_paths() {
     let deps = deps();
     let paths = deps.paths.clone();
@@ -110,7 +117,7 @@ fn registry_construction_does_not_open_optional_stores_or_create_paths() {
     assert!(!paths.todos_dir.exists());
     assert!(!paths.media_outputs_dir.exists());
 
-    let registry = default_registry(&deps);
+    let registry = default_registry_with_deps(&deps);
 
     assert!(registry.get("cos_recall").is_none());
     assert!(registry.get("cos_recall_semantic").is_none());
@@ -130,7 +137,7 @@ async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
         Arc::new(crate::config::CosConfig::default()),
         paths,
     );
-    let registry = default_registry(&deps);
+    let registry = default_registry_with_deps(&deps);
     let memory = registry.get("cos_memory").expect("memory tool");
 
     let result = memory
@@ -169,7 +176,7 @@ async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
 
 #[test]
 fn names_are_sorted() {
-    let r = default_registry(&deps());
+    let r = default_registry_with_deps(&deps());
     let names = r.names();
     let mut sorted = names.clone();
     sorted.sort();
@@ -178,7 +185,7 @@ fn names_are_sorted() {
 
 #[test]
 fn as_llm_tools_round_trips_schema() {
-    let r = default_registry(&deps());
+    let r = default_registry_with_deps(&deps());
     let tools = r.as_llm_tools();
     assert!(tools.iter().any(|t| t.name == "echo"));
 }

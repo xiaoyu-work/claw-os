@@ -23,7 +23,7 @@ use crate::agent::runtime::hooks;
 use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::safety::redact::Redactor;
-use crate::agent::tools::registry::{default_registry, ToolRegistry};
+use crate::agent::tools::registry::{default_registry_with_deps, ToolRegistry};
 use crate::config::AgentConfig;
 
 const TURN_LIMIT_FINALIZATION_PROMPT: &str = "\
@@ -99,6 +99,7 @@ pub struct RuntimeRequest<'a> {
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
     compress: bool,
+    delegated: bool,
 }
 
 impl<'a> RuntimeRequest<'a> {
@@ -120,6 +121,7 @@ impl<'a> RuntimeRequest<'a> {
             progress: progress::null_progress(),
             interrupt_scope: None,
             compress: false,
+            delegated: false,
         }
     }
 
@@ -167,6 +169,11 @@ impl<'a> RuntimeRequest<'a> {
         self.interrupt_scope = Some(scope);
         self
     }
+
+    pub fn with_delegated(mut self, delegated: bool) -> Self {
+        self.delegated = delegated;
+        self
+    }
 }
 
 /// Execute one request against an explicit runtime dependency set.
@@ -199,6 +206,7 @@ pub async fn run_with_deps(
         output: request.output,
         progress: request.progress,
         interrupt_scope: request.interrupt_scope,
+        delegated: request.delegated,
     })
     .await
 }
@@ -227,6 +235,7 @@ pub async fn ask_with(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -256,6 +265,7 @@ pub async fn ask_with_memory(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -288,6 +298,7 @@ pub async fn ask_with_memory_continuation(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -318,6 +329,7 @@ pub async fn ask_with_compressor(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -769,6 +781,7 @@ struct LifecycleRequest<'a> {
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
+    delegated: bool,
 }
 
 /// Shared lifecycle state machine for buffered and streaming asks.
@@ -777,6 +790,11 @@ struct LifecycleRequest<'a> {
 /// [`LifecycleOutput`]. Preparation, turn boundaries, persistence,
 /// finalization, and terminal-state rules are owned here.
 async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentError> {
+    let hooks = request.deps.hooks().clone();
+    crate::agent::runtime::hooks::with_registry(hooks, ask_inner_scoped(request)).await
+}
+
+async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, AgentError> {
     let LifecycleRequest {
         deps,
         provider,
@@ -790,6 +808,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
         output,
         progress,
         interrupt_scope,
+        delegated,
     } = request;
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -810,7 +829,10 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
     // each final answer, fires `curate_session` in the background to
     // extract durable user facts and append them to MEMORY.md.
     let auto_curator = recorder.and_then(|(db, _)| {
-        AutoCurator::from_cfg_logged_with_notes(cfg, db, deps.notes().clone())
+        let config = deps
+            .config_snapshot()
+            .unwrap_or_else(crate::config::current_snapshot);
+        AutoCurator::from_snapshot_logged(config, db, deps.notes().clone())
     });
 
     if let Some((db, sid)) = recorder {
@@ -886,7 +908,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
             provider.effective_model_name(&cfg.model),
         )
         .with_started_at_ms(turn_started_ms)
-        .with_registry(hook_registry.clone())
+        .with_delegated(delegated)
         .with_turn_index(turn);
         if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
             return Err(AgentError::Interrupted(format!(
@@ -1217,6 +1239,7 @@ async fn ask_inner_streaming(
         output: LifecycleOutput::Streaming { sink },
         progress,
         interrupt_scope,
+        delegated: false,
     })
     .await
 }
@@ -1235,7 +1258,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
     let runtime_deps = registry_deps.runtime.clone();
-    let mut tools = default_registry(&registry_deps);
+    let mut tools = default_registry_with_deps(&registry_deps);
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));
 
@@ -1264,6 +1287,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                delegated: false,
             })
             .await
         }
@@ -1281,6 +1305,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                delegated: false,
             })
             .await
         }
