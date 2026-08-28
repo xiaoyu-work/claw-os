@@ -76,7 +76,8 @@ pub(super) fn learn_cmd(args: &[String]) -> Result<Value, String> {
                 "--session <id> required (use `cos agent sessions list` to find one)".to_string()
             })?;
 
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
 
             // For --dry-run, we don't need the auxiliary client; build
             // a placeholder that won't be invoked.
@@ -292,7 +293,8 @@ pub(super) fn semantic_cmd(args: &[String]) -> Result<Value, String> {
 
     match sub {
         "status" => {
-            let cfg = &crate::config::get().embed;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.embed;
             let store_res = SemanticStore::open_default();
             let path = crate::paths::agent_semantic_db_path();
             let (configured, count, embedder_model, pinned) = match &store_res {

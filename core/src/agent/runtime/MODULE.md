@@ -20,6 +20,7 @@ through model turns, tools, hooks, progress, and final records.
 | Path | Role |
 | --- | --- |
 | `loop_.rs` | Shared request lifecycle, public ask adapters, and turn repetition |
+| `deps.rs` | Explicit runtime hooks, clock, semantic indexer, and path snapshot |
 | `turn.rs` | Shared request/response/tool state transitions and provider delivery adapters |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |
@@ -29,7 +30,14 @@ through model turns, tools, hooks, progress, and final records.
 ## Dependencies
 
 Runtime depends on provider-neutral LLM types, the guarded tool registry,
-prompt/memory services, and hooks. It never executes a model-emitted tool call
+prompt/memory services, and an explicit `RuntimeDeps`. Production composition
+resolves hooks, audit/notes/nudge/Skill paths, clock, and semantic indexing
+before entering the lifecycle. Delegated children inherit the parent's runtime
+hooks, clock, and paths while retaining their own provider and narrowed tool
+registry, and their hook context is marked delegated. Detached curator work
+reinstalls both the captured `Arc<CosConfig>` and typed routed-path context
+(owner home, owner UID, routed-job marker); its curation log is an explicit
+composition-time path. It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
 every turn.
 

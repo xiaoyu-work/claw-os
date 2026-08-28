@@ -2371,7 +2371,6 @@ fn run_worker_loop_inner(
     // agent work is spawned into an unprivileged `claw-agentd` process
     // by `agentd::supervisor` instead.
     crate::agentd::guard::ensure_agent_runtime_allowed("in-process agent worker loop")?;
-    crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
     // Reclaim jobs stranded in running/ by a previously-crashed worker
     // before we start claiming new ones. This is what makes a daemon
@@ -2546,7 +2545,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // therefore `paths::user_credentials_dir`,
     // `paths::user_app_override_path`, `paths::user_app_consent_path`,
     // `paths::user_budget_config_path`, …) to the owner's home before
-    // running the rest of the job. Every `config::get()` inside the
+    // running the rest of the job. Every `config::current_snapshot()` inside the
     // agent loop — and every credential / consent / app-override
     // lookup reached transitively from tool implementations, the LLM
     // gate, and the delegate tool — will see the user's
@@ -2561,8 +2560,8 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     // `/home/<user>/.local/share/cos/credentials/...`.
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
-        let cfg = crate::config::intern_for_home(&home_path);
-        let run = crate::config::with_override(cfg, run_one_job_inner(job));
+        let cfg = crate::config::load_for_home(&home_path);
+        let run = crate::config::with_snapshot(cfg, run_one_job_inner(job));
         match job.owner_uid {
             Some(0) => run.await,
             Some(uid) => crate::paths::with_user_override(uid, home_path, run).await,
@@ -2587,6 +2586,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let hooks = standalone_runtime_hooks();
     let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
         job_id: job.id.clone(),
     });
@@ -2594,7 +2594,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         Arc::new(JobProgressSink {
             job_id: job.id.clone(),
         });
-    execute_job(
+    execute_job_with_hooks(
         JobExecution {
             id: job.id.clone(),
             prompt: job.prompt.clone(),
@@ -2606,8 +2606,15 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         },
         stream_sink,
         progress_sink,
+        hooks,
     )
     .await
+}
+
+fn standalone_runtime_hooks() -> crate::agent::runtime::hooks::HookRegistry {
+    let hooks = crate::agent::runtime::hooks::HookRegistry::new();
+    hooks.register(crate::clawd::audit::runtime_hook());
+    hooks
 }
 
 /// One unit of agent work, decoupled from where the job record lives.
@@ -2635,6 +2642,21 @@ pub async fn execute_job(
     stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
     progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
 ) -> FinishOutcome {
+    execute_job_with_hooks(
+        job,
+        stream_sink,
+        progress_sink,
+        crate::agent::runtime::hooks::HookRegistry::new(),
+    )
+    .await
+}
+
+pub async fn execute_job_with_hooks(
+    job: JobExecution,
+    stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink>,
+    progress_sink: Arc<dyn crate::agent::runtime::progress::ProgressSink>,
+    hooks: crate::agent::runtime::hooks::HookRegistry,
+) -> FinishOutcome {
     use crate::agent::runtime::loop_;
 
     if let Err(error) = crate::agentd::guard::ensure_agent_runtime_allowed("agent job execution") {
@@ -2642,10 +2664,11 @@ pub async fn execute_job(
     }
     // Apply per-job max-turns override on a clone of the global cfg
     // so other jobs in the same worker process aren't affected.
-    // `config::get()` here is intentionally the *task-local* one
+    // `config::current_snapshot()` here is intentionally the *task-local* one
     // installed by the caller for clawd-routed jobs; for in-process
     // submits it falls through to the process-wide config as before.
-    let base = crate::config::get().agent.clone();
+    let current_config = crate::config::current_snapshot();
+    let base = current_config.agent.clone();
     let mut cfg = base;
     if let Some(n) = job.max_turns {
         cfg.max_turns = n;
@@ -2655,87 +2678,58 @@ pub async fn execute_job(
         Ok(p) => p,
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
-    let mut tools = crate::agent::tools::registry::default_registry();
+    let mut effective_config = (*current_config).clone();
+    effective_config.agent = cfg.clone();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load_with_hooks(
+        Arc::new(effective_config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+        hooks,
+    );
+    let runtime_deps = registry_deps.runtime.clone();
+    let mut tools =
+        crate::agent::tools::registry::default_registry_with_deps(&registry_deps);
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
     let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
 
-    let result = if job.use_memory {
-        if let Some(sid) = job.session_id.as_deref() {
-            match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
-                Ok(db) => {
-                    if let Some(context) = job
-                        .branch_context
-                        .as_deref()
-                        .filter(|context| !context.trim().is_empty())
-                    {
-                        if let Err(error) = seed_branch_context(&db, sid, context) {
-                            tracing::warn!(
-                                session_id = sid,
-                                %error,
-                                "failed to seed retry branch context"
-                            );
-                        }
+    let request = loop_::RuntimeRequest::streaming(
+        provider,
+        &cfg,
+        &job.prompt,
+        &tools,
+        stream_sink,
+        progress_sink,
+    )
+    .with_transient_context(job.context.as_deref())
+    .with_interrupt_scope(&job.id);
+    let request = if job.use_memory {
+        match (
+            job.session_id.as_deref(),
+            registry_deps.memory.as_ref(),
+        ) {
+            (Some(sid), Some(db)) => {
+                if let Some(context) = job
+                    .branch_context
+                    .as_deref()
+                    .filter(|context| !context.trim().is_empty())
+                {
+                    if let Err(error) = seed_branch_context(db, sid, context) {
+                        tracing::warn!(
+                            session_id = sid,
+                            %error,
+                            "failed to seed retry branch context"
+                        );
                     }
-                    loop_::ask_with_stream_continuation_scoped(
-                        provider.clone(),
-                        &cfg,
-                        &job.prompt,
-                        job.context.as_deref(),
-                        &tools,
-                        &db,
-                        sid,
-                        100,
-                        stream_sink.clone(),
-                        progress_sink.clone(),
-                        &job.id,
-                    )
-                    .await
                 }
-                Err(_) => {
-                    loop_::ask_with_stream_scoped(
-                        provider.clone(),
-                        &cfg,
-                        &job.prompt,
-                        job.context.as_deref(),
-                        &tools,
-                        None,
-                        stream_sink.clone(),
-                        progress_sink.clone(),
-                        &job.id,
-                    )
-                    .await
-                }
+                request.with_continuation(db, sid, 100)
             }
-        } else {
-            loop_::ask_with_stream_scoped(
-                provider.clone(),
-                &cfg,
-                &job.prompt,
-                job.context.as_deref(),
-                &tools,
-                None,
-                stream_sink.clone(),
-                progress_sink.clone(),
-                &job.id,
-            )
-            .await
+            _ => request,
         }
     } else {
-        loop_::ask_with_stream_scoped(
-            provider.clone(),
-            &cfg,
-            &job.prompt,
-            job.context.as_deref(),
-            &tools,
-            None,
-            stream_sink,
-            progress_sink,
-            &job.id,
-        )
-        .await
+        request
     };
+    let result = loop_::run_with_deps(&runtime_deps, request).await;
 
     match result {
         Ok(r) => FinishOutcome::Ok {

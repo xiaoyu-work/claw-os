@@ -166,12 +166,20 @@ fn tmp_path_for(path: &Path) -> PathBuf {
 /// Each kind has exactly one canonical implementation. New kinds
 /// must add an arm here — the `match` is exhaustive so the compiler
 /// catches forgotten wire-ups.
-pub fn instantiate(kind: HookKind) -> Arc<dyn Hook> {
+pub fn instantiate_at(kind: HookKind, audit_path: &Path) -> Arc<dyn Hook> {
     match kind {
         HookKind::Logging => Arc::new(LoggingHook),
-        HookKind::Audit => Arc::new(AuditHook::new()),
-        HookKind::Checkpoint => Arc::new(CheckpointHook::new()),
+        HookKind::Audit => Arc::new(AuditHook::at(audit_path)),
+        HookKind::Checkpoint => Arc::new(CheckpointHook::with_overrides(
+            Arc::new(crate::agent::runtime::hooks::ProductionCheckpointCreator),
+            audit_path,
+            crate::agent::runtime::hooks::default_dangerous_tools(),
+        )),
     }
+}
+
+pub fn instantiate(kind: HookKind) -> Arc<dyn Hook> {
+    instantiate_at(kind, &crate::paths::agent_audit_log_path())
 }
 
 /// Auto-register every hook listed in `cfg` into `registry`.
@@ -182,10 +190,18 @@ pub fn instantiate(kind: HookKind) -> Arc<dyn Hook> {
 /// idempotency would replace them, but we want strict "only touch
 /// what we own" semantics so test isolation holds.
 pub fn register_into(registry: &HookRegistry, cfg: &HooksConfig) -> Vec<String> {
+    register_into_at(registry, cfg, &crate::paths::agent_audit_log_path())
+}
+
+pub fn register_into_at(
+    registry: &HookRegistry,
+    cfg: &HooksConfig,
+    audit_path: &Path,
+) -> Vec<String> {
     let existing: std::collections::HashSet<String> = registry.names().into_iter().collect();
     let mut ours = Vec::new();
     for kind in &cfg.enabled {
-        let hook = instantiate(*kind);
+        let hook = instantiate_at(*kind, audit_path);
         let name = hook.name().to_string();
         if existing.contains(&name) {
             continue;

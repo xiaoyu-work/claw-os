@@ -257,6 +257,7 @@ CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
   -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
+  -> composition snapshots Arc<CosConfig>, RegistryDeps, and RuntimeDeps
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
@@ -280,6 +281,25 @@ CLI / web UI / bridge
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
 authorization, execution ordering, hooks, and conversation history meet.
+Composition roots resolve environment-backed paths and open optional
+memory/semantic stores once. `RegistryDeps` makes registry assembly
+side-effect-free, while `RuntimeDeps` carries the scoped hook registry, clock,
+semantic indexer, notes store, and prompt/audit paths into the unified
+lifecycle. Standalone and `claw-agentd` audit hooks are installed into that
+exact registry, and delegated children inherit it. App-session tools retain
+their discovered App root; Skill roots retain their trust origin. Legacy
+`config::get()` and static `with_override` callers remain source compatible,
+while all production core code uses Arc-owned
+`current_snapshot`/`with_snapshot`; a source inventory test enforces that
+separation. Detached curation and web request composition reinstall the
+captured snapshot before gated work. Detached curation also reinstalls a typed
+`RoutedPathContext` containing the owner home, owner UID, and routed-job marker,
+so budget, run-log, notes, credentials, and other path resolvers remain in the
+owner partition after `tokio::spawn`. The curation log path itself is resolved
+at composition and passed to `AutoCurator`, so its initial durable run bracket
+never targets process-global state. Legacy direct-library agent adapters
+retain compatibility contexts, but production CLI, web, and worker flows use
+`runtime::loop_::run_with_deps`.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots

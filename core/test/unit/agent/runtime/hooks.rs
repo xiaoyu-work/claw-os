@@ -92,6 +92,19 @@ fn hook_context_builder_sets_fields() {
 }
 
 #[test]
+fn public_hook_context_struct_literal_remains_compatible() {
+    let context = HookContext {
+        session_id: "literal".into(),
+        turn_index: 2,
+        provider: "mock".into(),
+        model: "mock-model".into(),
+        started_at_ms: 42,
+        is_delegated: true,
+    };
+    assert!(context.is_delegated);
+}
+
+#[test]
 fn hook_context_default_started_at_is_recent() {
     let before = now_ms();
     let c = HookContext::new("s", "p", "m");

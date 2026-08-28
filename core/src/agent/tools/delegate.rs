@@ -41,7 +41,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::guardrails::Guardrails;
-use super::registry::{default_registry, ToolRegistry};
+use super::registry::{default_registry_with_deps, RegistryDeps, ToolRegistry};
 use super::{Tool, ToolResult};
 use crate::agent::llm::{self, Provider};
 use crate::agent::runtime::approval::ApprovalGate;
@@ -100,7 +100,15 @@ pub fn current_depth() -> u32 {
 }
 
 /// `cos_delegate` tool — spawn a child agent with a scoped tool subset.
-pub struct Delegate;
+pub struct Delegate {
+    deps: RegistryDeps,
+}
+
+impl Delegate {
+    pub fn new(deps: RegistryDeps) -> Self {
+        Self { deps }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct DelegateInput {
@@ -200,26 +208,43 @@ impl Tool for Delegate {
             Err(e) => return ToolResult::err(format!("invalid delegate input: {e}")),
         };
 
-        let parent_cfg = crate::config::get().agent.clone();
-        run_delegate(parsed, &parent_cfg, registry_factory).await
+        let parent_cfg = self.deps.config.agent.clone();
+        let deps = self.deps.clone();
+        let runtime = self.deps.runtime.clone();
+        run_delegate_with_deps(
+            parsed,
+            &parent_cfg,
+            move || default_registry_with_deps(&deps),
+            runtime,
+        )
+        .await
     }
-}
-
-/// Allow tests to inject a custom registry instead of opening the real
-/// default_registry (which does Disk I/O for the FTS5 DB).
-type RegistryFactory = fn() -> ToolRegistry;
-
-fn registry_factory() -> ToolRegistry {
-    default_registry()
 }
 
 /// Core delegate logic. Split out from `Tool::exec` so tests can drive it
 /// without going through `serde_json::Value`.
-async fn run_delegate(
+async fn run_delegate<F>(input: DelegateInput, parent_cfg: &AgentConfig, factory: F) -> ToolResult
+where
+    F: Fn() -> ToolRegistry,
+{
+    run_delegate_with_deps(
+        input,
+        parent_cfg,
+        factory,
+        crate::agent::runtime::deps::RuntimeDeps::isolated(),
+    )
+    .await
+}
+
+async fn run_delegate_with_deps<F>(
     input: DelegateInput,
     parent_cfg: &AgentConfig,
-    factory: RegistryFactory,
-) -> ToolResult {
+    factory: F,
+    runtime: crate::agent::runtime::deps::RuntimeDeps,
+) -> ToolResult
+where
+    F: Fn() -> ToolRegistry,
+{
     let cur = current_depth();
     let requested_max_depth = input
         .max_depth
@@ -291,7 +316,9 @@ async fn run_delegate(
     let task = input.task.clone();
 
     let child_future = DELEGATE_DEPTH.scope(cur + 1, async move {
-        loop_::ask_with(provider, &child_cfg, &task, &tools).await
+        let request = loop_::RuntimeRequest::buffered(provider, &child_cfg, &task, &tools)
+            .with_delegated(true);
+        loop_::run_with_deps(&runtime, request).await
     });
 
     let outcome = tokio::time::timeout(timeout, child_future).await;

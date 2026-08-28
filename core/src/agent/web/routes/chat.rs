@@ -138,6 +138,43 @@ async fn drive_chat(
     disconnected: Arc<AtomicBool>,
     turn_lease: TurnLease,
 ) -> Result<(), String> {
+    let config = crate::config::load_user_config();
+    with_request_snapshot(
+        config,
+        drive_chat_scoped(
+            state,
+            prompt,
+            requested_session,
+            provisional_session,
+            use_memory,
+            tx,
+            disconnected,
+            turn_lease,
+        ),
+    )
+    .await
+}
+
+async fn with_request_snapshot<F, R>(
+    config: Arc<crate::config::CosConfig>,
+    future: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    crate::config::with_snapshot(config, future).await
+}
+
+async fn drive_chat_scoped(
+    state: AppState,
+    prompt: String,
+    requested_session: Option<String>,
+    provisional_session: String,
+    use_memory: bool,
+    tx: mpsc::Sender<SseFrame>,
+    disconnected: Arc<AtomicBool>,
+    turn_lease: TurnLease,
+) -> Result<(), String> {
     let mut turn_lease = Some(turn_lease);
     if requested_session
         .as_deref()

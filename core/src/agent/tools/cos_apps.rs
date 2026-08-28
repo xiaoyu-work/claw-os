@@ -33,6 +33,10 @@ use crate::caps::manifest::Manifest;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
+tokio::task_local! {
+    static APPS_ROOT_OVERRIDE: PathBuf;
+}
+
 /// One LLM-visible proxy bound to a single cos app. Manifest-derived
 /// metadata is owned by the tool and released with its registry.
 pub struct CosAppTool {
@@ -132,6 +136,9 @@ fn build_description(manifest: &Manifest) -> String {
 /// env var read per tool call is sub-microsecond — well below the
 /// noise floor of the rest of the tool dispatch path.
 fn apps_root() -> PathBuf {
+    if let Ok(root) = APPS_ROOT_OVERRIDE.try_with(Clone::clone) {
+        return root;
+    }
     PathBuf::from(std::env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
 }
 
@@ -292,6 +299,31 @@ impl Tool for CosAppTool {
 // only these two gateways so app growth does not grow every request schema.
 
 pub struct CosAppCatalog;
+
+struct RootedCosAppCatalog {
+    apps_root: PathBuf,
+}
+
+#[async_trait]
+impl Tool for RootedCosAppCatalog {
+    fn name(&self) -> &str {
+        CosAppCatalog.name()
+    }
+
+    fn description(&self) -> &str {
+        CosAppCatalog.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        CosAppCatalog.input_schema()
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        APPS_ROOT_OVERRIDE
+            .scope(self.apps_root.clone(), CosAppCatalog.exec(input))
+            .await
+    }
+}
 
 #[async_trait]
 impl Tool for CosAppCatalog {
@@ -535,6 +567,31 @@ fn render_app_detail(app: &crate::apps::App) -> String {
 
 pub struct CosAppRun;
 
+struct RootedCosAppRun {
+    apps_root: PathBuf,
+}
+
+#[async_trait]
+impl Tool for RootedCosAppRun {
+    fn name(&self) -> &str {
+        CosAppRun.name()
+    }
+
+    fn description(&self) -> &str {
+        CosAppRun.description()
+    }
+
+    fn input_schema(&self) -> Value {
+        CosAppRun.input_schema()
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        APPS_ROOT_OVERRIDE
+            .scope(self.apps_root.clone(), CosAppRun.exec(input))
+            .await
+    }
+}
+
 #[async_trait]
 impl Tool for CosAppRun {
     fn name(&self) -> &str {
@@ -664,8 +721,14 @@ fn is_valid_app_id(s: &str) -> bool {
 /// App count does not affect the model schema: unfamiliar apps are discovered
 /// with `cos_app_catalog` and invoked through `cos_app_run`.
 pub fn register_default(registry: &mut ToolRegistry) {
-    registry.register(Arc::new(CosAppCatalog));
-    registry.register(Arc::new(CosAppRun));
+    register_default_with_root(registry, apps_root());
+}
+
+pub fn register_default_with_root(registry: &mut ToolRegistry, apps_root: PathBuf) {
+    registry.register(Arc::new(RootedCosAppCatalog {
+        apps_root: apps_root.clone(),
+    }));
+    registry.register(Arc::new(RootedCosAppRun { apps_root }));
 }
 
 /// Register one typed [`CosAppTool`] per discovered app plus the generic

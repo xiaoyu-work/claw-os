@@ -3,6 +3,7 @@
 pub mod approval;
 pub mod auto_curator;
 pub mod background;
+pub mod deps;
 pub mod evidence;
 pub mod hooks;
 pub mod hooks_config;

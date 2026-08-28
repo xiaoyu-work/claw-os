@@ -427,7 +427,8 @@ fn verify_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn verify_llm() -> Result<Value, String> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     if let Err(reason) = is_ready(cfg) {
         let reason_val: Value = serde_json::from_str(&reason).unwrap_or_else(|_| json!(reason));
         return Ok(json!({
@@ -685,7 +686,7 @@ fn status_cmd(modality: Modality) -> Result<Value, String> {
 }
 
 fn status_llm() -> Value {
-    status_llm_for(&crate::config::get().agent)
+    status_llm_for(&crate::config::current_snapshot().agent)
 }
 
 fn status_llm_for(cfg: &crate::config::AgentConfig) -> Value {
@@ -1181,7 +1182,7 @@ fn wizard_llm(verify_after: bool) -> Result<Value, String> {
         // config in-memory by cloning the cached one and overriding the
         // fields the wizard just wrote — this matches exactly what
         // `cos agent {ask,chat}` will see on next process start.
-        let mut probe_cfg = crate::config::get().agent.clone();
+        let mut probe_cfg = crate::config::current_snapshot().agent.clone();
         probe_cfg.provider = provider.clone();
         probe_cfg.model = model.clone();
         probe_cfg.api_key_credential = credential_name.clone();

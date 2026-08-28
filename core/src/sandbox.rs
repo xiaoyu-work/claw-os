@@ -79,7 +79,7 @@ fn parse_exec(args: &[String]) -> Result<ExecRequest, String> {
     let mut read_only = true;
     let mut workspace = crate::paths::current_home_override()
         .map(|path| path.to_string_lossy().into_owned())
-        .unwrap_or_else(|| crate::config::get().home.clone());
+        .unwrap_or_else(|| crate::config::current_snapshot().home.clone());
     let mut endpoints: Vec<Endpoint> = Vec::new();
     let mut limits = Limits::operation();
     limits.memory_bytes = DEFAULT_MEMORY_BYTES;

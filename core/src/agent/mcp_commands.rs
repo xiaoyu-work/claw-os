@@ -33,8 +33,10 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("status");
     match sub {
         "status" | "" => {
-            let cfg = &crate::config::get().agent;
-            let mut tools = tools::registry::default_registry();
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
+            let deps = tools::registry::RegistryDeps::load_current();
+            let mut tools = tools::registry::default_registry_with_deps(&deps);
             tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
             let configured_servers: Vec<Value> = cfg
@@ -71,7 +73,8 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             // mutate global state; the runtime registry is built
             // fresh inside this call and dropped on return).
             let probe = args.iter().any(|a| a == "--probe");
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             if !probe {
                 let entries: Vec<Value> = cfg
                     .mcp_servers
@@ -166,7 +169,8 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             // narrow the tool surface for this serve invocation
             // without touching global config — useful for exposing a
             // restricted catalogue to a single MCP client.
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let mut allow_overrides: Option<Vec<String>> = None;
             let mut deny_overrides: Vec<String> = Vec::new();
             let mut i = 1usize;
@@ -195,7 +199,8 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                     }
                 }
             }
-            let mut tools = tools::registry::default_registry();
+            let deps = tools::registry::RegistryDeps::load_current();
+            let mut tools = tools::registry::default_registry_with_deps(&deps);
             // Honour allow override when supplied; otherwise inherit
             // cfg.tool_allow via the standard helper. --deny appends
             // to (does not replace) cfg.tool_deny so global denies

@@ -121,6 +121,27 @@ async fn user_skill_instructions_remain_inside_untrusted_boundary() {
 }
 
 #[tokio::test]
+async fn overridden_system_root_remains_local_and_untrusted() {
+    let system = tempdir().unwrap();
+    let user = tempdir().unwrap();
+    write_builtin(system.path(), "OVERRIDDEN_SYSTEM_INSTRUCTIONS");
+    let tool = SkillDisclosure::with_paths(
+        system.path().to_path_buf(),
+        user.path().to_path_buf(),
+        user.path().join("usage.jsonl"),
+        SkillOrigin::Local,
+    );
+
+    let result = tool
+        .exec(json!({"command": "read", "id": "claw-os"}))
+        .await;
+
+    assert!(!result.is_error);
+    assert!(result.content.starts_with("<untrusted_skill_content>"));
+    assert!(result.content.contains("OVERRIDDEN_SYSTEM_INSTRUCTIONS"));
+}
+
+#[tokio::test]
 async fn repository_builtin_skill_is_readable_progressively() {
     let system_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()

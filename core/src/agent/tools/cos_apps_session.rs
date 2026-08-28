@@ -105,7 +105,7 @@ impl Drop for ActiveSession {
     }
 }
 
-type SessionKey = (u32, String, String);
+type SessionKey = (u32, String, String, PathBuf);
 type SessionTable = Mutex<HashMap<SessionKey, ActiveSession>>;
 /// Per-app exclusion for the lazy-open path. The session table mutex
 /// is held only for hash-map probes; the actual spawn + handshake
@@ -134,7 +134,7 @@ fn app_open_lock(key: &SessionKey) -> Arc<Mutex<()>> {
         .clone()
 }
 
-fn session_key(app_id: &str) -> Result<SessionKey, String> {
+fn session_key(app_id: &str, apps_root: &Path) -> Result<SessionKey, String> {
     let uid = match crate::paths::current_owner_uid_override() {
         Some(uid) => uid,
         None => {
@@ -153,7 +153,12 @@ fn session_key(app_id: &str) -> Result<SessionKey, String> {
     }
     let parent = crate::proc::current_session_info_for_caps()
         .ok_or_else(|| "App session requires a registered parent session".to_string())?;
-    Ok((uid, parent.session_id, app_id.to_string()))
+    Ok((
+        uid,
+        parent.session_id,
+        app_id.to_string(),
+        apps_root.to_path_buf(),
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +191,7 @@ fn session_key(app_id: &str) -> Result<SessionKey, String> {
 async fn bring_up_app(
     app_id: &str,
     app_dir: &Path,
+    apps_dir: &Path,
     manifest: &Manifest,
     timeout_dur: Duration,
 ) -> Result<
@@ -249,7 +255,6 @@ async fn bring_up_app(
         ));
     }
 
-    let apps_dir = apps_root();
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
 
@@ -260,7 +265,7 @@ async fn bring_up_app(
     // the production install path and the in-repo dev paths
     // (`<repo>/claw-os-sdk/python/src` and
     // `<repo>/cos-runtime/python/src`).
-    let py_dirs = resolve_python_pkg_dirs(&apps_dir);
+    let py_dirs = resolve_python_pkg_dirs(apps_dir);
     let mut path_parts: Vec<String> = py_dirs
         .iter()
         .map(|p| p.to_string_lossy().to_string())
@@ -475,8 +480,13 @@ const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 /// if no entry exists. Holds the manager mutex across spawn (which is
 /// fine — sessions are infrequent and the spawn happens off-thread
 /// via tokio's blocking pool inside `Command::spawn`).
-async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
-    let key = session_key(app_id)?;
+async fn get_or_open(
+    app_id: &str,
+    app_dir: &Path,
+    apps_root: &Path,
+    manifest: &Manifest,
+) -> Result<Arc<McpClient>, String> {
+    let key = session_key(app_id, apps_root)?;
     let stale = {
         let mut table = manager().lock().await;
         if let Some(s) = table.get(&key) {
@@ -487,7 +497,9 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
         table.remove(&key)
     };
     drop(stale);
-    open_session(app_id).await.map(|(c, _)| c)
+    open_session_at(app_id, app_dir, apps_root, manifest)
+        .await
+        .map(|(c, _)| c)
 }
 
 struct ActiveCallGuard {
@@ -526,11 +538,12 @@ impl Drop for ActiveCallGuard {
 
 async fn begin_active_session_call(
     app_id: &str,
+    apps_root: &Path,
     tool: &str,
     args: &BTreeMap<String, Value>,
     caps: &[crate::caps::Cap],
 ) -> Result<ActiveCallGuard, String> {
-    let key = session_key(app_id)?;
+    let key = session_key(app_id, apps_root)?;
     let (control, child_pid, call_lock, poisoned) = {
         let table = manager().lock().await;
         let session = table
@@ -581,8 +594,13 @@ async fn begin_active_session_call(
 /// dropped immediately. We now take a *per-app* mutex across the
 /// whole probe-then-spawn-then-insert sequence so exactly one child
 /// is created per app per process.
-async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
-    let key = session_key(app_id)?;
+async fn open_session_at(
+    app_id: &str,
+    app_dir: &Path,
+    apps_root: &Path,
+    manifest: &Manifest,
+) -> Result<(Arc<McpClient>, usize), String> {
+    let key = session_key(app_id, apps_root)?;
     let lock = app_open_lock(&key);
     let _open_guard = lock.lock().await;
 
@@ -598,16 +616,8 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
         table.remove(&key)
     };
     drop(stale);
-    let app_dir = crate::apps::find(&apps_root(), app_id)
-        .map(|app| app.dir)
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let manifest_path = app_dir.join("app.json");
-    let manifest_text = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read manifest for `{app_id}`: {e}"))?;
-    let manifest = Manifest::from_json(&manifest_text)
-        .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
     let (client, child, listed, identity) =
-        bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
+        bring_up_app(app_id, app_dir, apps_root, manifest, DEFAULT_TIMEOUT).await?;
     let child_pid = child
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
@@ -636,8 +646,8 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
 /// don't block here either — any in-flight `tools/call` against this
 /// session will return `ConnectionClosed` once the child's stdio is
 /// torn down.
-async fn close_session(app_id: &str) -> bool {
-    let Ok(key) = session_key(app_id) else {
+async fn close_session_at(app_id: &str, apps_root: &Path) -> bool {
+    let Ok(key) = session_key(app_id, apps_root) else {
         return false;
     };
     let removed = {
@@ -758,12 +768,19 @@ pub struct AppSessionTool {
     /// Cached manifest used for cap resolution. Kept here so every call
     /// avoids re-parsing the JSON file.
     manifest: Arc<Manifest>,
+    app_dir: PathBuf,
+    apps_root: PathBuf,
     /// Per-call timeout. Defaults to [`DEFAULT_TIMEOUT`].
     timeout: Duration,
 }
 
 impl AppSessionTool {
-    fn from_manifest_tool(manifest: Arc<Manifest>, tool_idx: usize) -> Self {
+    fn from_manifest_tool(
+        manifest: Arc<Manifest>,
+        app_dir: PathBuf,
+        apps_root: PathBuf,
+        tool_idx: usize,
+    ) -> Self {
         let session = manifest
             .session
             .as_ref()
@@ -784,6 +801,8 @@ impl AppSessionTool {
             app_id,
             manifest_tool_name,
             manifest,
+            app_dir,
+            apps_root,
             timeout: DEFAULT_TIMEOUT,
         }
     }
@@ -896,10 +915,11 @@ impl Tool for AppSessionTool {
             Ok(paths) => paths,
             Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
         };
-        let effective = match self
-            .manifest
-            .resolve_session_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
-        {
+        let effective = match self.manifest.resolve_session_tool_call(
+            &self.manifest_tool_name,
+            &supplied_args,
+            &paths,
+        ) {
             Ok(effective) => effective,
             Err(error) => {
                 let message = format!("argument resolution failed: {error}");
@@ -936,7 +956,14 @@ impl Tool for AppSessionTool {
         }
 
         // 2) Open / reuse session.
-        let client = match get_or_open(&self.app_id).await {
+        let client = match get_or_open(
+            &self.app_id,
+            &self.app_dir,
+            &self.apps_root,
+            &self.manifest,
+        )
+        .await
+        {
             Ok(c) => c,
             Err(e) => {
                 emit_audit(
@@ -953,6 +980,7 @@ impl Tool for AppSessionTool {
         };
         let mut active_call = match begin_active_session_call(
             &self.app_id,
+            &self.apps_root,
             &self.manifest_tool_name,
             &args_map,
             &caps,
@@ -961,7 +989,7 @@ impl Tool for AppSessionTool {
         {
             Ok(guard) => guard,
             Err(error) => {
-                close_session(&self.app_id).await;
+                close_session_at(&self.app_id, &self.apps_root).await;
                 return ToolResult::err(format!(
                     "could not grant App `{}` call capabilities: {error}",
                     self.app_id
@@ -995,7 +1023,7 @@ impl Tool for AppSessionTool {
                     started.elapsed(),
                 );
                 drop(active_call);
-                close_session(&self.app_id).await;
+                close_session_at(&self.app_id, &self.apps_root).await;
                 return ToolResult::err(msg);
             }
         };
@@ -1027,7 +1055,7 @@ impl Tool for AppSessionTool {
                     active_call.mark_completed();
                 } else {
                     drop(active_call);
-                    close_session(&self.app_id).await;
+                    close_session_at(&self.app_id, &self.apps_root).await;
                 }
                 let msg = format!(
                     "app `{}` tool `{}` failed: {e}",
@@ -1116,7 +1144,21 @@ fn emit_audit(
 /// Tell the kernel to bring up an app's session server (if it isn't
 /// already up). The model uses this to make session lifecycle
 /// explicit when planning a multi-step task.
-pub struct CosAppSessionOpen;
+pub struct CosAppSessionOpen {
+    apps_root: PathBuf,
+}
+
+impl CosAppSessionOpen {
+    pub fn new(apps_root: PathBuf) -> Self {
+        Self { apps_root }
+    }
+}
+
+impl Default for CosAppSessionOpen {
+    fn default() -> Self {
+        Self::new(apps_root())
+    }
+}
 
 #[async_trait]
 impl Tool for CosAppSessionOpen {
@@ -1159,11 +1201,21 @@ impl Tool for CosAppSessionOpen {
         ) {
             return ToolResult::err(denial.to_string());
         }
-        match open_session(&app_id).await {
+        let Some(app) = crate::apps::find(&self.apps_root, &app_id) else {
+            return ToolResult::err(format!("App `{app_id}` is not installed"));
+        };
+        match open_session_at(
+            &app_id,
+            &app.dir,
+            &self.apps_root,
+            &app.manifest,
+        )
+        .await
+        {
             Ok((_client, count)) => {
                 // Surface what's now callable so the model knows which
                 // names to use without a follow-up discovery call.
-                let tool_names = manifest_tool_names(&app_id).unwrap_or_default();
+                let tool_names = manifest_tool_names(&app.manifest);
                 let body = json!({
                     "app": app_id,
                     "tools_registered_from_manifest": tool_names,
@@ -1179,7 +1231,21 @@ impl Tool for CosAppSessionOpen {
 /// Tell the kernel to terminate an app's session server. Tool calls
 /// after this still work — the next one lazily re-opens the session
 /// — but any in-memory state is discarded.
-pub struct CosAppSessionClose;
+pub struct CosAppSessionClose {
+    apps_root: PathBuf,
+}
+
+impl CosAppSessionClose {
+    pub fn new(apps_root: PathBuf) -> Self {
+        Self { apps_root }
+    }
+}
+
+impl Default for CosAppSessionClose {
+    fn default() -> Self {
+        Self::new(apps_root())
+    }
+}
 
 #[async_trait]
 impl Tool for CosAppSessionClose {
@@ -1213,22 +1279,36 @@ impl Tool for CosAppSessionClose {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing `app` field".to_string()),
         };
-        let closed = close_session(&app_id).await;
+        let closed = close_session_at(&app_id, &self.apps_root).await;
         ToolResult::ok(json!({"app": app_id, "closed": closed}).to_string())
     }
 }
 
-fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
-    let manifest_path = crate::apps::find(&apps_root(), app_id)
-        .map(|app| app.dir.join("app.json"))
-        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
-    let text =
-        std::fs::read_to_string(&manifest_path).map_err(|e| format!("read manifest: {e}"))?;
-    let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
-    Ok(manifest
+fn manifest_tool_names(manifest: &Manifest) -> Vec<String> {
+    manifest
         .session
-        .map(|s| s.tools.into_iter().map(|t| t.name).collect())
-        .unwrap_or_default())
+        .as_ref()
+        .map(|s| s.tools.iter().map(|t| t.name.clone()).collect())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
+    let root = apps_root();
+    let app = crate::apps::find(&root, app_id)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    open_session_at(app_id, &app.dir, &root, &app.manifest).await
+}
+
+#[cfg(test)]
+async fn close_session(app_id: &str) -> bool {
+    close_session_at(app_id, &apps_root()).await
+}
+
+#[derive(Clone)]
+pub(crate) struct RegisteredAppSession {
+    pub manifest: Arc<Manifest>,
+    pub app_dir: PathBuf,
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,22 +1320,41 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
 /// meta-tools. The MCP servers themselves are *not* started here —
 /// they come up lazily on first call (or explicitly via
 /// `cos_app_session_open`).
-pub fn register_all(registry: &mut ToolRegistry) {
-    let apps = crate::apps::discover(&apps_root());
-    for app in apps.values() {
-        let Some(session) = &app.manifest.session else {
+pub(crate) fn register_manifests(
+    registry: &mut ToolRegistry,
+    apps_root: &Path,
+    apps: &[RegisteredAppSession],
+) {
+    for app in apps {
+        let manifest = &app.manifest;
+        let Some(session) = &manifest.session else {
             continue;
         };
-        let arc_manifest = Arc::new(app.manifest.clone());
         for idx in 0..session.tools.len() {
             registry.register(Arc::new(AppSessionTool::from_manifest_tool(
-                arc_manifest.clone(),
+                Arc::clone(manifest),
+                app.app_dir.clone(),
+                apps_root.to_path_buf(),
                 idx,
             )));
         }
     }
-    registry.register(Arc::new(CosAppSessionOpen));
-    registry.register(Arc::new(CosAppSessionClose));
+    registry.register(Arc::new(CosAppSessionOpen::new(apps_root.to_path_buf())));
+    registry.register(Arc::new(CosAppSessionClose::new(apps_root.to_path_buf())));
+}
+
+/// Compatibility composition helper for callers that intentionally discover
+/// the process-default App root.
+pub fn register_all(registry: &mut ToolRegistry) {
+    let root = apps_root();
+    let apps = crate::apps::discover(&root)
+        .values()
+        .map(|app| RegisteredAppSession {
+            manifest: Arc::new(app.manifest.clone()),
+            app_dir: app.dir.clone(),
+        })
+        .collect::<Vec<_>>();
+    register_manifests(registry, &root, &apps);
 }
 
 #[cfg(test)]

@@ -20,6 +20,7 @@ persistence, and structured primitive dispatch.
 | Path | Role |
 | --- | --- |
 | `src/main.rs` | `cos` process entry and output format selection |
+| `CHANGELOG.md` | Versioned core API migrations and compatibility transitions |
 | `src/router.rs` | Top-level command and hidden bridge dispatch |
 | `src/bin/clawd.rs` | System daemon entry |
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |

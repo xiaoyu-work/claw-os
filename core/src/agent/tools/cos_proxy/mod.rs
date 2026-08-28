@@ -434,6 +434,16 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 /// `cos_recall` — the caller must supply a `MemoryDb` via [`register_recall`].
 /// Keeps the proxy registration pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
+    register_all_with_notes(
+        registry,
+        crate::agent::memory::notes::NotesStore::system_default(),
+    );
+}
+
+pub fn register_all_with_notes(
+    registry: &mut ToolRegistry,
+    notes: crate::agent::memory::notes::NotesStore,
+) {
     for spec in PRIMITIVES {
         let tool = if spec.parallel_safe {
             CosPrimitiveTool::new_readonly(
@@ -448,7 +458,7 @@ pub fn register_all(registry: &mut ToolRegistry) {
         registry.register(Arc::new(tool));
     }
     registry.register(Arc::new(oauth_login::CosOauthLoginTool::new()));
-    registry.register(Arc::new(memory::CosMemoryTool::new()));
+    registry.register(Arc::new(memory::CosMemoryTool::with_store(notes)));
 }
 
 /// Register the `cos_recall` history-search tool against an explicit DB.

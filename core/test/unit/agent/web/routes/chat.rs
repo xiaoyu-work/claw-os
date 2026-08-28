@@ -1,6 +1,24 @@
 use super::*;
 use crate::agent::llm::{ChatResponse, FinishReason, ToolCall, Usage};
 
+#[tokio::test]
+async fn chat_drive_installs_one_complete_config_snapshot() {
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "mock".into();
+    config.agent.model = "snapshot-model".into();
+    config.embed.provider = "none".into();
+    let config = Arc::new(config);
+
+    let observed = with_request_snapshot(Arc::clone(&config), async {
+        crate::config::current_snapshot()
+    })
+    .await;
+
+    assert!(Arc::ptr_eq(&config, &observed));
+    assert_eq!(observed.agent.model, "snapshot-model");
+    assert_eq!(observed.embed.provider, "none");
+}
+
 #[test]
 fn generated_sessions_get_independent_turn_leases() {
     let state = AppState::new(crate::config::AgentConfig::default(), 1000);

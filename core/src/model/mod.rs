@@ -289,7 +289,8 @@ fn parse_format(v: &str) -> Result<registry::Format, String> {
 }
 
 fn embed_status_json() -> Value {
-    let cfg = &crate::config::get().embed;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.embed;
     let configured = match embed::build_from(cfg) {
         Ok(Some(e)) => e.is_configured(),
         _ => false,
@@ -302,7 +303,8 @@ fn embed_status_json() -> Value {
 }
 
 fn imagegen_status_json() -> Value {
-    let cfg = &crate::config::get().imagegen;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.imagegen;
     let configured = match imagegen::build_from(cfg) {
         Ok(Some(g)) => g.is_configured(),
         _ => false,
@@ -315,7 +317,8 @@ fn imagegen_status_json() -> Value {
 }
 
 fn stt_status_json() -> Value {
-    let cfg = &crate::config::get().stt;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.stt;
     let configured = match stt::build_from(cfg) {
         Ok(Some(s)) => s.is_configured(),
         _ => false,
@@ -328,7 +331,8 @@ fn stt_status_json() -> Value {
 }
 
 fn tts_status_json() -> Value {
-    let cfg = &crate::config::get().tts;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.tts;
     let configured = match tts::build_from(cfg) {
         Ok(Some(t)) => t.is_configured(),
         _ => false,
@@ -392,7 +396,7 @@ fn run_embed(args: &[String]) -> Result<Value, String> {
         inputs.push(positional.join(" "));
     }
 
-    let cfg = crate::config::get().embed.clone();
+    let cfg = crate::config::current_snapshot().embed.clone();
     let embedder = embed::build_from(&cfg)
         .map_err(|e| format!("embed config: {e}"))?
         .ok_or_else(|| {
@@ -514,7 +518,7 @@ fn run_imagegen(args: &[String]) -> Result<Value, String> {
     }
     let prompt = prompt_parts.join(" ");
 
-    let mut cfg = crate::config::get().imagegen.clone();
+    let mut cfg = crate::config::current_snapshot().imagegen.clone();
     if let Some(m) = model_override {
         cfg.model = m;
     }
@@ -691,7 +695,7 @@ fn run_transcribe(args: &[String], mode: SttMode) -> Result<Value, String> {
         .unwrap_or("audio")
         .to_string();
 
-    let mut cfg = crate::config::get().stt.clone();
+    let mut cfg = crate::config::current_snapshot().stt.clone();
     if let Some(m) = model_override {
         cfg.model = m;
     }
@@ -813,7 +817,7 @@ fn run_speak(args: &[String]) -> Result<Value, String> {
     }
     let text = text_parts.join(" ");
 
-    let mut cfg = crate::config::get().tts.clone();
+    let mut cfg = crate::config::current_snapshot().tts.clone();
     if let Some(m) = model_override {
         cfg.model = m;
     }

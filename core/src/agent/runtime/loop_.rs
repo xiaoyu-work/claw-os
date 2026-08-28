@@ -18,13 +18,12 @@ use crate::agent::llm::{self, Message, Provider};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
 use crate::agent::runtime::auto_curator::AutoCurator;
+use crate::agent::runtime::deps::RuntimeDeps;
 use crate::agent::runtime::hooks;
-use crate::agent::runtime::hooks_config;
 use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
-use crate::agent::runtime::semantic_indexer::SemanticIndexer;
 use crate::agent::safety::redact::Redactor;
-use crate::agent::tools::registry::{default_registry, ToolRegistry};
+use crate::agent::tools::registry::{default_registry_with_deps, ToolRegistry};
 use crate::config::AgentConfig;
 
 const TURN_LIMIT_FINALIZATION_PROMPT: &str = "\
@@ -88,6 +87,130 @@ pub struct AskResult {
     pub session_id: String,
 }
 
+pub struct RuntimeRequest<'a> {
+    provider: Arc<dyn Provider>,
+    cfg: &'a AgentConfig,
+    user_prompt: &'a str,
+    tools: &'a ToolRegistry,
+    recorder: Option<(&'a MemoryDb, &'a str)>,
+    continuation_limit: Option<usize>,
+    transient_context: Option<&'a str>,
+    output: LifecycleOutput,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: Option<&'a str>,
+    compress: bool,
+    delegated: bool,
+}
+
+impl<'a> RuntimeRequest<'a> {
+    pub fn buffered(
+        provider: Arc<dyn Provider>,
+        cfg: &'a AgentConfig,
+        user_prompt: &'a str,
+        tools: &'a ToolRegistry,
+    ) -> Self {
+        Self {
+            provider,
+            cfg,
+            user_prompt,
+            tools,
+            recorder: None,
+            continuation_limit: None,
+            transient_context: None,
+            output: LifecycleOutput::Buffered,
+            progress: progress::null_progress(),
+            interrupt_scope: None,
+            compress: false,
+            delegated: false,
+        }
+    }
+
+    pub fn streaming(
+        provider: Arc<dyn Provider>,
+        cfg: &'a AgentConfig,
+        user_prompt: &'a str,
+        tools: &'a ToolRegistry,
+        sink: Arc<dyn StreamSink>,
+        progress: Arc<dyn ProgressSink>,
+    ) -> Self {
+        Self {
+            output: LifecycleOutput::Streaming {
+                sink: super::presentation::user_visible_stream_sink(sink),
+            },
+            progress: super::presentation::user_visible_progress_sink(progress),
+            compress: true,
+            ..Self::buffered(provider, cfg, user_prompt, tools)
+        }
+    }
+
+    pub fn with_memory(mut self, db: &'a MemoryDb, session_id: &'a str) -> Self {
+        self.recorder = Some((db, session_id));
+        self
+    }
+
+    pub fn with_continuation(
+        mut self,
+        db: &'a MemoryDb,
+        session_id: &'a str,
+        history_limit: usize,
+    ) -> Self {
+        self.recorder = Some((db, session_id));
+        self.continuation_limit = Some(history_limit);
+        self.compress = true;
+        self
+    }
+
+    pub fn with_transient_context(mut self, context: Option<&'a str>) -> Self {
+        self.transient_context = context;
+        self
+    }
+
+    pub fn with_interrupt_scope(mut self, scope: &'a str) -> Self {
+        self.interrupt_scope = Some(scope);
+        self
+    }
+
+    pub fn with_delegated(mut self, delegated: bool) -> Self {
+        self.delegated = delegated;
+        self
+    }
+}
+
+/// Execute one request against an explicit runtime dependency set.
+pub async fn run_with_deps(
+    deps: &RuntimeDeps,
+    request: RuntimeRequest<'_>,
+) -> Result<AskResult, AgentError> {
+    let initial_messages = request
+        .continuation_limit
+        .and_then(|limit| {
+            request
+                .recorder
+                .map(|(db, session_id)| load_continuation_messages(db, session_id, limit))
+        })
+        .unwrap_or_default();
+    let compressor = request
+        .compress
+        .then(|| compressor_from_cfg(request.provider.clone(), request.cfg, request.tools))
+        .flatten();
+    ask_inner(LifecycleRequest {
+        deps,
+        provider: request.provider,
+        cfg: request.cfg,
+        user_prompt: request.user_prompt,
+        tools: request.tools,
+        recorder: request.recorder,
+        compressor,
+        initial_messages,
+        transient_context: request.transient_context,
+        output: request.output,
+        progress: request.progress,
+        interrupt_scope: request.interrupt_scope,
+        delegated: request.delegated,
+    })
+    .await
+}
+
 /// Run a single `cos agent ask` invocation end-to-end with the supplied
 /// provider and tool registry. Memory recording is disabled — the
 /// conversation history is not persisted. Use [`ask_with_memory`] for the
@@ -98,7 +221,9 @@ pub async fn ask_with(
     user_prompt: &str,
     tools: &ToolRegistry,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(false);
     ask_inner(LifecycleRequest {
+        deps: &deps,
         provider,
         cfg,
         user_prompt,
@@ -110,6 +235,7 @@ pub async fn ask_with(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -125,7 +251,9 @@ pub async fn ask_with_memory(
     db: &MemoryDb,
     session_id: &str,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(true);
     ask_inner(LifecycleRequest {
+        deps: &deps,
         provider,
         cfg,
         user_prompt,
@@ -137,6 +265,7 @@ pub async fn ask_with_memory(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -153,9 +282,11 @@ pub async fn ask_with_memory_continuation(
     session_id: &str,
     history_limit: usize,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(true);
     let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
     ask_inner(LifecycleRequest {
+        deps: &deps,
         provider,
         cfg,
         user_prompt,
@@ -167,6 +298,7 @@ pub async fn ask_with_memory_continuation(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -183,7 +315,9 @@ pub async fn ask_with_compressor(
     db: Option<(&MemoryDb, &str)>,
     compressor: Arc<dyn Compressor>,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(db.is_some());
     ask_inner(LifecycleRequest {
+        deps: &deps,
         provider,
         cfg,
         user_prompt,
@@ -195,6 +329,7 @@ pub async fn ask_with_compressor(
         output: LifecycleOutput::Buffered,
         progress: progress::null_progress(),
         interrupt_scope: None,
+        delegated: false,
     })
     .await
 }
@@ -221,8 +356,10 @@ pub async fn ask_with_stream(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(db.is_some());
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
     ask_inner_streaming(
+        &deps,
         provider,
         cfg,
         user_prompt,
@@ -249,8 +386,10 @@ pub async fn ask_with_stream_scoped(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(db.is_some());
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
     ask_inner_streaming(
+        &deps,
         provider,
         cfg,
         user_prompt,
@@ -296,9 +435,11 @@ pub async fn ask_with_stream_continuation(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(true);
     let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
     ask_inner_streaming(
+        &deps,
         provider,
         cfg,
         user_prompt,
@@ -327,9 +468,11 @@ pub async fn ask_with_stream_continuation_scoped(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
+    let deps = RuntimeDeps::compatibility(true);
     let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
     ask_inner_streaming(
+        &deps,
         provider,
         cfg,
         user_prompt,
@@ -419,30 +562,29 @@ fn flatten_stored_content(content: &str) -> String {
         }
     };
 
-    let flush_result =
-        |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
-            if let Some((is_error, body)) = active.take() {
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                out.push_str(if is_error {
-                    "[tool result error]"
+    let flush_result = |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
+        if let Some((is_error, body)) = active.take() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(if is_error {
+                "[tool result error]"
+            } else {
+                "[tool result]"
+            });
+            let trimmed = body.trim();
+            if !trimmed.is_empty() {
+                out.push('\n');
+                if trimmed.chars().count() > max_chars {
+                    let preview: String = trimmed.chars().take(max_chars).collect();
+                    out.push_str(&preview);
+                    out.push_str("\n…[truncated]");
                 } else {
-                    "[tool result]"
-                });
-                let trimmed = body.trim();
-                if !trimmed.is_empty() {
-                    out.push('\n');
-                    if trimmed.chars().count() > max_chars {
-                        let preview: String = trimmed.chars().take(max_chars).collect();
-                        out.push_str(&preview);
-                        out.push_str("\n…[truncated]");
-                    } else {
-                        out.push_str(trimmed);
-                    }
+                    out.push_str(trimmed);
                 }
             }
-        };
+        }
+    };
 
     for line in content.lines() {
         let trimmed = line.trim_start();
@@ -504,6 +646,7 @@ fn record_injected_segments(
 }
 
 fn resolve_system_prompt(
+    deps: &RuntimeDeps,
     cfg: &AgentConfig,
     user_prompt: &str,
     recorder: Option<(&MemoryDb, &str)>,
@@ -523,7 +666,27 @@ fn resolve_system_prompt(
     }
 
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
-    let (candidate, segments) = prompt::build_system_prompt_traced(extra, Some(user_prompt));
+    let (candidate, segments) = match deps.paths() {
+        Some(paths) => {
+            let options = crate::agent::skills::loader::LoadOptions {
+                include_body: false,
+                ..Default::default()
+            };
+            let skills = crate::agent::skills::loader::load_layered_with_origin(
+                &paths.system_skills_dir,
+                &paths.user_skills_dir,
+                &options,
+                paths.system_skills_origin,
+            );
+            prompt::build_system_prompt_traced_with(
+                extra,
+                Some(user_prompt),
+                &skills,
+                deps.notes(),
+            )
+        }
+        None => prompt::build_system_prompt_traced(extra, Some(user_prompt)),
+    };
     let Some((db, sid)) = recorder else {
         return candidate;
     };
@@ -548,11 +711,18 @@ fn resolve_system_prompt(
 }
 
 fn build_request_user_message(
+    deps: &RuntimeDeps,
     user_prompt: &str,
     transient_context: Option<&str>,
     recorder: Option<(&MemoryDb, &str)>,
 ) -> Message {
-    let mut segments = prompt::build_turn_context_segments();
+    let mut segments = match deps.paths() {
+        Some(paths) => prompt::build_turn_context_segments_with(
+            &crate::agent::nudge::NudgeStore::new(&paths.nudges_path),
+            deps.now_ms() / 1_000,
+        ),
+        None => prompt::build_turn_context_segments(),
+    };
     if let Some(context) = transient_context.filter(|value| !value.trim().is_empty()) {
         segments.push(prompt::InjectedSegment {
             source: prompt::INJECTED_SOURCE_TRANSIENT_APP_CONTEXT,
@@ -599,6 +769,7 @@ impl LifecycleOutput {
 }
 
 struct LifecycleRequest<'a> {
+    deps: &'a RuntimeDeps,
     provider: Arc<dyn Provider>,
     cfg: &'a AgentConfig,
     user_prompt: &'a str,
@@ -610,6 +781,7 @@ struct LifecycleRequest<'a> {
     output: LifecycleOutput,
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: Option<&'a str>,
+    delegated: bool,
 }
 
 /// Shared lifecycle state machine for buffered and streaming asks.
@@ -618,7 +790,13 @@ struct LifecycleRequest<'a> {
 /// [`LifecycleOutput`]. Preparation, turn boundaries, persistence,
 /// finalization, and terminal-state rules are owned here.
 async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentError> {
+    let hooks = request.deps.hooks().clone();
+    crate::agent::runtime::hooks::with_registry(hooks, ask_inner_scoped(request)).await
+}
+
+async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, AgentError> {
     let LifecycleRequest {
+        deps,
         provider,
         cfg,
         user_prompt,
@@ -630,6 +808,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
         output,
         progress,
         interrupt_scope,
+        delegated,
     } = request;
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -642,14 +821,25 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
     // do similarity search via `cos_recall_semantic`. `None` when
     // embedding is disabled — every spawn_index call is then a no-op.
     let semantic_indexer = if recorder.is_some() {
-        SemanticIndexer::from_default_logged()
+        deps.semantic_indexer()
     } else {
         None
     };
     // Auto-curator: opt-in via `[agent] auxiliary_*` config. After
     // each final answer, fires `curate_session` in the background to
     // extract durable user facts and append them to MEMORY.md.
-    let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
+    let auto_curator = recorder.and_then(|(db, _)| {
+        let config = deps
+            .config_snapshot()
+            .unwrap_or_else(crate::config::current_snapshot);
+        AutoCurator::from_snapshot_with_runtime_paths(
+            config,
+            db,
+            deps.notes().clone(),
+            deps.routed_paths(),
+            deps.curation_log().to_path_buf(),
+        )
+    });
 
     if let Some((db, sid)) = recorder {
         let to_record = redactor
@@ -666,10 +856,11 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
         }
     }
 
-    let system = resolve_system_prompt(cfg, user_prompt, recorder);
+    let system = resolve_system_prompt(deps, cfg, user_prompt, recorder);
 
     let mut messages = initial_messages;
     messages.push(build_request_user_message(
+        deps,
         user_prompt,
         transient_context,
         recorder,
@@ -695,9 +886,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
     // for the duration of this single invocation; the guard
     // unregisters them on drop so concurrent unrelated calls / tests
     // are not affected.
-    let hook_registry = hooks::global_registry();
-    let _hooks_auto_guard =
-        hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
+    let hook_registry = deps.hooks().clone();
     let hook_session_id = if session_id.is_empty() {
         interrupt_handle.session_id().to_string()
     } else {
@@ -718,11 +907,14 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
             ));
         }
 
+        let turn_started_ms = deps.now_ms();
         let hook_ctx = hooks::HookContext::new(
             hook_session_id.clone(),
             provider.effective_provider_name(),
             provider.effective_model_name(&cfg.model),
         )
+        .with_started_at_ms(turn_started_ms)
+        .with_delegated(delegated)
         .with_turn_index(turn);
         if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
             return Err(AgentError::Interrupted(format!(
@@ -777,10 +969,6 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
         }
 
         let len_before = messages.len();
-        let turn_started_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
         let outcome_result = match (&output, force_finalize) {
             (LifecycleOutput::Buffered, true) => {
                 super::turn::run_final_turn_interruptible(
@@ -856,10 +1044,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
             }
         };
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now_ms = deps.now_ms();
         let latency_ms = now_ms.saturating_sub(turn_started_ms);
 
         let outcome = match outcome_result {
@@ -1032,6 +1217,7 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
 /// into the public presentation contract, then delegates every lifecycle
 /// transition to the shared owner.
 async fn ask_inner_streaming(
+    deps: &RuntimeDeps,
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     user_prompt: &str,
@@ -1047,6 +1233,7 @@ async fn ask_inner_streaming(
     let sink = super::presentation::user_visible_stream_sink(sink);
     let progress = super::presentation::user_visible_progress_sink(progress);
     ask_inner(LifecycleRequest {
+        deps,
         provider,
         cfg,
         user_prompt,
@@ -1058,6 +1245,7 @@ async fn ask_inner_streaming(
         output: LifecycleOutput::Streaming { sink },
         progress,
         interrupt_scope,
+        delegated: false,
     })
     .await
 }
@@ -1067,10 +1255,16 @@ async fn ask_inner_streaming(
 /// and run `ask_with_memory`. If the memory DB cannot be opened (read-only
 /// filesystem etc.), falls back to `ask_with` with a warning.
 pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
-    let mut tools = default_registry();
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
+        Arc::clone(&config),
+        crate::agent::tools::registry::RegistryPaths::from_process(),
+    );
+    let runtime_deps = registry_deps.runtime.clone();
+    let mut tools = default_registry_with_deps(&registry_deps);
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));
 
@@ -1084,28 +1278,28 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
 
     let compressor = compressor_from_cfg(provider.clone(), cfg, &tools);
 
-    match MemoryDb::open_default() {
-        Ok(db) => {
+    match registry_deps.memory.as_ref() {
+        Some(db) => {
             ask_inner(LifecycleRequest {
+                deps: &runtime_deps,
                 provider,
                 cfg,
                 user_prompt,
                 tools: &tools,
-                recorder: Some((&db, session_id.as_str())),
+                recorder: Some((db, session_id.as_str())),
                 compressor,
                 initial_messages: Vec::new(),
                 transient_context: None,
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                delegated: false,
             })
             .await
         }
-        Err(e) => {
-            tracing::warn!(
-                "memory: default DB unavailable ({e}); running without history recording"
-            );
+        None => {
             ask_inner(LifecycleRequest {
+                deps: &runtime_deps,
                 provider,
                 cfg,
                 user_prompt,
@@ -1117,6 +1311,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 output: LifecycleOutput::Buffered,
                 progress: progress::null_progress(),
                 interrupt_scope: None,
+                delegated: false,
             })
             .await
         }
@@ -1236,7 +1431,10 @@ fn compressor_from_cfg(
         return None;
     }
     let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools());
-    let target_tokens = cfg.compress_target_tokens.saturating_sub(tool_tokens).max(1);
+    let target_tokens = cfg
+        .compress_target_tokens
+        .saturating_sub(tool_tokens)
+        .max(1);
     let trigger_tokens = cfg
         .compress_trigger_tokens
         .saturating_sub(tool_tokens)

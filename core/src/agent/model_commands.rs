@@ -277,7 +277,8 @@ pub(super) fn aux_cmd(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
     match sub {
         "show" | "" => {
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let aux_built = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg);
             let (configured, build_error) = match &aux_built {
                 Ok(Some(_)) => (true, None),
@@ -326,7 +327,8 @@ pub(super) fn aux_cmd(args: &[String]) -> Result<Value, String> {
                 }
             }
             let prompt = prompt.ok_or_else(|| "--prompt required".to_string())?;
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
                 .map_err(|e| e.to_string())?
                 .ok_or_else(|| {
@@ -378,7 +380,8 @@ pub(super) fn aux_cmd(args: &[String]) -> Result<Value, String> {
 /// includes the per-attempt delay AND the cap (`max_ms`) so callers
 /// can compute worst-case bounds.
 pub(super) fn retry_cmd(args: &[String]) -> Result<Value, String> {
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let sub = args.first().map(|s| s.as_str()).unwrap_or("show");
     match sub {
         "show" | "" => {

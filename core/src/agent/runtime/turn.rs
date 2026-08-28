@@ -109,8 +109,8 @@ where
 /// `session_id` is included in the per-call run-log record. Pass `None` if
 /// memory is disabled / the caller doesn't track sessions.
 ///
-/// `hook_ctx` enables `pre_tool` / `post_tool` dispatch through the
-/// global hook registry. Pass `None` to skip hook dispatch entirely
+/// `hook_ctx` enables `pre_tool` / `post_tool` dispatch through its
+/// explicitly composed hook registry. Pass `None` to skip hook dispatch entirely
 /// (zero-cost for callers that don't care about hooks). Pre/post-turn
 /// dispatch is the caller's responsibility.
 #[allow(clippy::too_many_arguments)]
@@ -773,8 +773,7 @@ struct DispatchOutcome {
 fn apply_pre_hook(hook_ctx: Option<&HookContext>, call: &ToolCall) -> (ToolCall, Option<String>) {
     match hook_ctx {
         Some(ctx) => {
-            let registry = hooks::global_registry();
-            match registry.dispatch_pre_tool(ctx, call) {
+            match hooks::current_registry().dispatch_pre_tool(ctx, call) {
                 hooks::ToolDecision::Allow => (call.clone(), None),
                 hooks::ToolDecision::Deny(reason) => (
                     call.clone(),
@@ -952,7 +951,7 @@ async fn dispatch_calls(
                 },
             };
             if pending_stop.is_none() {
-                if let hooks::HookOutcome::Stop(reason) = hooks::global_registry()
+                if let hooks::HookOutcome::Stop(reason) = hooks::current_registry()
                     .dispatch_post_tool(ctx, &outcome.effective_call, &summary)
                 {
                     pending_stop = Some(reason);

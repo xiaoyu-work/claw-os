@@ -50,6 +50,76 @@ fn an_unprivileged_worker_is_accepted() {
     assert!(identity(1000, 1000).require_expected_identity(1000).is_ok());
 }
 
+#[tokio::test]
+async fn routed_curator_context_survives_detached_spawn() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("owner-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let owner_uid = 4242;
+    let context = crate::paths::with_routed_job(crate::paths::with_user_override(
+        owner_uid,
+        home.clone(),
+        async { crate::paths::RoutedPathContext::capture() },
+    ))
+    .await;
+    let owner_root = root.path().join("users").join(owner_uid.to_string());
+    let curation_log = owner_root
+        .join("agent")
+        .join("memory")
+        .join("curation_log.json");
+    let notes = crate::agent::memory::notes::NotesStore::at(
+        owner_root.join("agent").join("notes"),
+    );
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let curator =
+        crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
+            Arc::clone(&config),
+            &db,
+            notes,
+            context.clone(),
+            curation_log.clone(),
+        )
+        .expect("routed curator");
+    assert_eq!(curator.log_path(), curation_log);
+
+    let observed = tokio::spawn(crate::agent::runtime::auto_curator::with_detached_context(
+        config,
+        context,
+        None,
+        async move {
+            curator.save_empty_log().expect("save routed curation log");
+            (
+                crate::paths::ai_budget_db_path(),
+                crate::paths::ai_run_log_path(),
+                crate::paths::agent_notes_dir(),
+                crate::paths::user_config_path(),
+                crate::paths::current_owner_uid_override(),
+                crate::paths::is_routed_job(),
+                curator.log_path().to_path_buf(),
+            )
+        },
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(observed.0, owner_root.join("ai_budget.db"));
+    assert_eq!(observed.1, owner_root.join("logs").join("ai.jsonl"));
+    assert_eq!(observed.2, owner_root.join("agent").join("notes"));
+    assert_eq!(observed.3, home.join(".config").join("cos").join("config.json"));
+    assert_eq!(observed.4, Some(owner_uid));
+    assert!(observed.5);
+    assert_eq!(observed.6, curation_log);
+    assert!(curation_log.is_file());
+    assert!(crate::paths::current_owner_uid_override().is_none());
+    assert!(!crate::paths::is_routed_job());
+}
+
 // ---------------------------------------------------------------------------
 // Permission mediation
 // ---------------------------------------------------------------------------

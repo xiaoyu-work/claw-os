@@ -64,6 +64,45 @@ tokio::task_local! {
     static ROUTED_JOB_OVERRIDE: bool;
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RoutedPathContext {
+    home: Option<PathBuf>,
+    owner_uid: Option<u32>,
+    routed_job: bool,
+}
+
+impl RoutedPathContext {
+    pub fn capture() -> Self {
+        Self {
+            home: current_home_override(),
+            owner_uid: current_owner_uid_override(),
+            routed_job: is_routed_job(),
+        }
+    }
+
+    pub async fn scope<F, R>(self, future: F) -> R
+    where
+        F: Future<Output = R>,
+    {
+        match (self.owner_uid, self.home, self.routed_job) {
+            (Some(uid), Some(home), true) => {
+                with_routed_job(with_user_override(uid, home, future)).await
+            }
+            (Some(uid), Some(home), false) => with_user_override(uid, home, future).await,
+            (Some(uid), None, true) => {
+                with_routed_job(with_owner_override(uid, future)).await
+            }
+            (Some(uid), None, false) => with_owner_override(uid, future).await,
+            (None, Some(home), true) => {
+                with_routed_job(with_home_override(home, future)).await
+            }
+            (None, Some(home), false) => with_home_override(home, future).await,
+            (None, None, true) => with_routed_job(future).await,
+            (None, None, false) => future.await,
+        }
+    }
+}
+
 /// Run `fut` with `home` installed as the per-task user-home override
 /// visible to every per-user resolver polled inside `fut`. A separately
 /// spawned Tokio task does not inherit this scope and must install its own
@@ -82,6 +121,13 @@ where
     OWNER_UID_OVERRIDE
         .scope(uid, HOME_OVERRIDE.scope(home, fut))
         .await
+}
+
+async fn with_owner_override<F, R>(uid: u32, fut: F) -> R
+where
+    F: Future<Output = R>,
+{
+    OWNER_UID_OVERRIDE.scope(uid, fut).await
 }
 
 pub async fn with_routed_job<F, R>(fut: F) -> R
@@ -507,6 +553,12 @@ pub fn agent_semantic_db_path() -> PathBuf {
 /// `data_dir/agent/nudges.json`. Created on first add.
 pub fn agent_nudges_path() -> PathBuf {
     routed_agent_state_dir().join("nudges.json")
+}
+
+pub fn agent_curation_log_path() -> PathBuf {
+    routed_agent_state_dir()
+        .join("memory")
+        .join("curation_log.json")
 }
 
 /// Path to the persistent agent-hooks config file. Lives at

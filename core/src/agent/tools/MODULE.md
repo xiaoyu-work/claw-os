@@ -18,7 +18,7 @@ which tool calls are exposed and executed.
 
 | Path | Role |
 | --- | --- |
-| `registry.rs` | Tool registration, filtering, lookup |
+| `registry.rs` | Tool registration, filtering, lookup, and explicit registry resources/paths |
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
@@ -30,8 +30,15 @@ which tool calls are exposed and executed.
 ## Dependencies
 
 Runtime dispatch depends on the registry, never on concrete tools directly.
-Tools consume stable service/capability definitions. Model output and external
-tool results are untrusted; authority comes only from session and capability
+Composition resolves `RegistryPaths`, optional memory/semantic stores, App
+session manifests, and immutable configuration into `RegistryDeps`; assembling
+`default_registry_with_deps(&deps)` performs no environment reads or store opens.
+Registry paths also preserve the system Skill trust origin, exact App root,
+generic App catalog/run root, and one notes store shared by prompt reads,
+`cos_memory`, and curation. Deprecated no-argument registry/media constructors
+remain only as compatibility composition wrappers. Tools
+consume stable service/capability definitions. Model output and external tool
+results are untrusted; authority comes only from session and capability
 context.
 
 ## Tests

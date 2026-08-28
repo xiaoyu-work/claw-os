@@ -195,7 +195,8 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
 // ---------------------------------------------------------------------------
 
 fn check_provider(probe_network: bool, probe_timeout_secs: u64) -> Value {
-    let cfg = &config::get().agent;
+    let config = config::current_snapshot();
+    let cfg = &config.agent;
     let registered = llm::registry::is_registered(&cfg.provider);
     let available = llm::available_providers();
 
@@ -715,7 +716,8 @@ fn check_hooks() -> Value {
 // permitted tool set without re-importing.
 #[allow(dead_code)]
 fn _force_tools_use() {
-    let _ = tools::registry::default_registry();
+    let deps = tools::registry::RegistryDeps::load_current();
+    let _ = tools::registry::default_registry_with_deps(&deps);
 }
 
 /// Shim matching the [`crate::agent::tools::cos_proxy::PrimitiveFn`]

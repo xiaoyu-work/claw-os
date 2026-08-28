@@ -1,5 +1,30 @@
 use super::*;
 
+fn delegate() -> Delegate {
+    let root = std::env::temp_dir().join(format!("cos-delegate-deps-{}", std::process::id()));
+    Delegate::new(
+        super::super::registry::RegistryDeps::without_optional_resources(
+            Arc::new(crate::config::CosConfig::default()),
+            super::super::registry::RegistryPaths {
+                apps_dir: root.join("apps"),
+                todos_dir: root.join("todos"),
+                system_skills_dir: root.join("system-skills"),
+                user_skills_dir: root.join("user-skills"),
+                skills_usage_path: root.join("skills-usage.jsonl"),
+                media_outputs_dir: root.join("media"),
+                memory_db_path: root.join("memory.db"),
+                semantic_db_path: root.join("semantic.db"),
+                notes_dir: root.join("notes"),
+                hooks_config_path: root.join("hooks.json"),
+                audit_log_path: root.join("audit.jsonl"),
+                nudges_path: root.join("nudges.json"),
+                system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+                curation_log_path: root.join("curation_log.json"),
+            },
+        ),
+    )
+}
+
 fn parent_cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),
@@ -19,7 +44,7 @@ fn test_registry() -> ToolRegistry {
 
 #[test]
 fn input_schema_has_required_fields() {
-    let schema = Delegate.input_schema();
+    let schema = delegate().input_schema();
     let required = schema["required"].as_array().unwrap();
     let names: Vec<&str> = required.iter().filter_map(|v| v.as_str()).collect();
     assert!(names.contains(&"task"));
@@ -28,8 +53,8 @@ fn input_schema_has_required_fields() {
 
 #[test]
 fn tool_metadata() {
-    assert_eq!(Delegate.name(), "cos_delegate");
-    assert!(Delegate.description().contains("sub-agent"));
+    assert_eq!(delegate().name(), "cos_delegate");
+    assert!(delegate().description().contains("sub-agent"));
 }
 
 #[test]
@@ -186,7 +211,7 @@ async fn current_depth_inside_scope_reflects_value() {
 #[tokio::test]
 async fn invalid_input_returns_tool_error() {
     // Missing required `task`.
-    let result = Delegate.exec(json!({"allowed_tools": []})).await;
+    let result = delegate().exec(json!({"allowed_tools": []})).await;
     assert!(result.is_error);
     assert!(result.content.contains("invalid delegate input"));
 }
@@ -287,6 +312,62 @@ async fn run_delegate_happy_path_uses_mock_echo_default() {
     assert!(result.content.contains("model=mock-model"));
     assert!(result.content.contains("turns=1"));
     assert!(result.content.contains("hello child agent"));
+}
+
+#[tokio::test]
+async fn delegate_child_inherits_runtime_audit_hooks() {
+    struct AuditSpy {
+        calls: Arc<std::sync::atomic::AtomicUsize>,
+        delegated: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl crate::agent::runtime::hooks::Hook for AuditSpy {
+        fn name(&self) -> &str {
+            "delegate-audit-spy"
+        }
+
+        fn post_turn(
+            &self,
+            context: &crate::agent::runtime::hooks::HookContext,
+            _summary: &crate::agent::runtime::hooks::TurnSummary,
+        ) -> crate::agent::runtime::hooks::HookOutcome {
+            self.calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            self.delegated
+                .store(context.is_delegated, std::sync::atomic::Ordering::SeqCst);
+            crate::agent::runtime::hooks::HookOutcome::Continue
+        }
+    }
+
+    let _perms = crate::test_env::PermissiveModeGuard::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let delegated = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hooks = crate::agent::runtime::hooks::HookRegistry::new();
+    hooks.register(Arc::new(AuditSpy {
+        calls: Arc::clone(&calls),
+        delegated: Arc::clone(&delegated),
+    }));
+    let runtime = crate::agent::runtime::deps::RuntimeDeps::new(
+        hooks,
+        Arc::new(crate::agent::runtime::deps::SystemClock),
+        None,
+    );
+
+    let result = run_delegate_with_deps(
+        fresh_input("audit child", &[]),
+        &parent_cfg(),
+        test_registry,
+        runtime,
+    )
+    .await;
+
+    assert!(!result.is_error, "delegate failed: {}", result.content);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "child turn must pass through the inherited audit registry"
+    );
+    assert!(delegated.load(std::sync::atomic::Ordering::SeqCst));
 }
 
 #[tokio::test]

@@ -1552,7 +1552,8 @@ fn dispatch_agent(args: &[String]) -> Result<Option<String>, String> {
         use std::io::IsTerminal;
         let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
         if interactive {
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let mut rewritten: Vec<String> = Vec::with_capacity(3);
             rewritten.push(args[0].clone());
             if agent::setup::is_ready(cfg).is_ok() {

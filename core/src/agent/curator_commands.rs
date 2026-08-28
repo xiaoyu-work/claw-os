@@ -334,7 +334,8 @@ fn curator_drafts_cmd(args: &[String]) -> Result<Value, String> {
                 "both" => format!("{}\n\n{}", rec.draft.title, rec.draft.description),
                 _ => unreachable!("validated above"),
             };
-            let cfg = &crate::config::get().agent;
+            let config = crate::config::current_snapshot();
+            let cfg = &config.agent;
             let aux = crate::agent::runtime::loop_::auxiliary_from_cfg(cfg)
                 .map_err(|e| format!("auxiliary client build failed: {e}"))?;
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -490,7 +491,8 @@ fn curator_author_cmd(args: &[String]) -> Result<Value, String> {
 
     // Build the provider. Auxiliary by default (when configured);
     // primary on --primary or when auxiliary isn't set.
-    let cfg = &crate::config::get().agent;
+    let config = crate::config::current_snapshot();
+    let cfg = &config.agent;
     let aux_available = cfg
         .auxiliary_provider
         .as_deref()

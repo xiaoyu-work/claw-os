@@ -640,7 +640,8 @@ async fn execute(assignment: Assignment, state: Arc<ChannelState>) -> WorkerOutc
     let task_id = job.id.clone();
     let tx = state.tx.clone();
 
-    hooks::global_registry().register(Arc::new(WorkerAuditHook {
+    let hooks = hooks::HookRegistry::new();
+    hooks.register(Arc::new(WorkerAuditHook {
         task_id: task_id.clone(),
         tx: tx.clone(),
     }));
@@ -665,10 +666,11 @@ async fn execute(assignment: Assignment, state: Arc<ChannelState>) -> WorkerOutc
         use_memory: job.use_memory,
     };
 
-    let config = crate::config::intern_for_home(&home);
-    let scoped = crate::agent::service::execute_job(request, stream_sink, progress_sink);
+    let config = crate::config::load_for_home(&home);
+    let scoped =
+        crate::agent::service::execute_job_with_hooks(request, stream_sink, progress_sink, hooks);
     let scoped = with_session(assignment.session, scoped);
-    let scoped = crate::config::with_override(config, scoped);
+    let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so
     // config, credentials, consents and memory resolve inside the
     // owner's own account.

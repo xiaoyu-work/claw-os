@@ -505,3 +505,30 @@ fn is_valid_app_id_accepts_canonical_and_rejects_garbage() {
     assert!(!is_valid_app_id("with space"));
     assert!(!is_valid_app_id("../etc"));
 }
+#[tokio::test]
+async fn generic_catalog_and_run_use_the_injected_app_root() {
+    let _guard = env_lock();
+    let injected = write_two_demo_apps();
+    let ambient = tempfile::tempdir().unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", ambient.path());
+    let mut registry = ToolRegistry::new();
+    register_default_with_root(&mut registry, injected.path().to_path_buf());
+
+    let catalog = registry.get("cos_app_catalog").unwrap();
+    let listed = catalog
+        .exec(serde_json::json!({"command":"list","args":[]}))
+        .await;
+    assert!(!listed.is_error);
+    assert!(listed.content.contains("fs"));
+
+    let run = registry.get("cos_app_run").unwrap();
+    let schema = run
+        .exec(serde_json::json!({
+            "app":"fs",
+            "command":"__schema__",
+            "args":[]
+        }))
+        .await;
+    assert!(!schema.is_error, "schema failed: {}", schema.content);
+    assert!(crate::apps::find(ambient.path(), "fs").is_none());
+}

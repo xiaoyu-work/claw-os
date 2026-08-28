@@ -195,6 +195,7 @@ async fn pilot_kv_e2e_call_chain() {
         eprintln!("skip pilot_kv_e2e: {} not present", apps_dir.display());
         return;
     }
+
     if std::process::Command::new("python3")
         .arg("--version")
         .output()
@@ -356,6 +357,44 @@ async fn open_race_single_child() {
         Some(v) => std::env::set_var("COS_CAPS_MODE", v),
         None => std::env::remove_var("COS_CAPS_MODE"),
     }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn injected_app_root_is_used_for_discovery_and_execution() {
+    let _g = env_lock();
+    let injected_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("apps");
+    if !injected_root.join("kv").join("server.py").is_file()
+        || std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+    {
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let ambient_root = temp.path().join("ambient-apps");
+    std::fs::create_dir_all(&ambient_root).unwrap();
+    let _apps = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", &ambient_root);
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_MODE", "permissive");
+    let _session = crate::test_env::TestSessionGuard::admin(temp.path());
+    let _local_sessions =
+        crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
+    let _runner = install_test_app_runner(temp.path());
+    let app = crate::apps::find(&injected_root, "kv").expect("injected kv app");
+
+    let _ = close_session_at("kv", &injected_root).await;
+    let opened = open_session_at("kv", &app.dir, &injected_root, &app.manifest)
+        .await
+        .expect("open from injected root");
+
+    assert!(opened.1 >= 5);
+    assert!(crate::apps::find(&ambient_root, "kv").is_none());
+    assert!(close_session_at("kv", &injected_root).await);
 }
 
 fn first_text(res: &crate::agent::tools::mcp::protocol::CallToolResult) -> String {
