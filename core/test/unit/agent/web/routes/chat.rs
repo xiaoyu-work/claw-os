@@ -23,6 +23,7 @@ async fn chat_registry_uses_and_installs_the_same_complete_config_snapshot() {
         audit_log_path: temp.path().join("audit.jsonl"),
         nudges_path: temp.path().join("nudges.json"),
         system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+        curation_log_path: temp.path().join("curation_log.json"),
     };
 
     let observed = crate::config::with_snapshot(Arc::clone(&config), async {

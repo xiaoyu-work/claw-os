@@ -30,7 +30,8 @@
 //!
 //! ## Storage
 //!
-//! Curation log lives at `data_dir/agent/memory/curation_log.json`.
+//! Curation log lives at the explicitly composed
+//! `agent/memory/curation_log.json` path, owner-partitioned for routed jobs.
 //! Schema:
 //!
 //! ```json
@@ -437,9 +438,7 @@ impl CurationLog {
 
 /// Default location for the curation log.
 pub fn default_log_path() -> PathBuf {
-    crate::paths::agent_state_dir()
-        .join("memory")
-        .join("curation_log.json")
+    crate::paths::agent_curation_log_path()
 }
 
 fn now_unix_s() -> u64 {
@@ -924,6 +923,11 @@ impl MemoryCurator {
 
     pub fn log_path(&self) -> &Path {
         &self.log_path
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_empty_log(&self) -> Result<(), CurationError> {
+        CurationLog::default().save(&self.log_path)
     }
 
     /// Run extraction over the most recent `max_messages` of a

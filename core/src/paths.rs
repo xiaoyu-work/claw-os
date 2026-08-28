@@ -537,6 +537,12 @@ pub fn agent_nudges_path() -> PathBuf {
     routed_agent_state_dir().join("nudges.json")
 }
 
+pub fn agent_curation_log_path() -> PathBuf {
+    routed_agent_state_dir()
+        .join("memory")
+        .join("curation_log.json")
+}
+
 /// Path to the persistent agent-hooks config file. Lives at
 /// `data_dir/agent/hooks.json`. Lists which built-in hook kinds
 /// (`logging`, etc.) should auto-register at the start of every

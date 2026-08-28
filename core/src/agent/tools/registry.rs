@@ -39,6 +39,7 @@ pub struct RegistryPaths {
     pub audit_log_path: PathBuf,
     pub nudges_path: PathBuf,
     pub system_skills_origin: crate::agent::skills::loader::SkillOrigin,
+    pub curation_log_path: PathBuf,
 }
 
 impl RegistryPaths {
@@ -65,6 +66,7 @@ impl RegistryPaths {
             audit_log_path: crate::paths::agent_audit_log_path(),
             nudges_path: crate::paths::agent_nudges_path(),
             system_skills_origin,
+            curation_log_path: crate::paths::agent_curation_log_path(),
         }
     }
 
@@ -77,6 +79,7 @@ impl RegistryPaths {
             system_skills_dir: self.system_skills_dir.clone(),
             user_skills_dir: self.user_skills_dir.clone(),
             system_skills_origin: self.system_skills_origin,
+            curation_log: self.curation_log_path.clone(),
         }
     }
 }

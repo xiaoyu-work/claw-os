@@ -29,6 +29,7 @@ pub struct RuntimePaths {
     pub system_skills_dir: PathBuf,
     pub user_skills_dir: PathBuf,
     pub system_skills_origin: crate::agent::skills::loader::SkillOrigin,
+    pub curation_log: PathBuf,
 }
 
 impl RuntimePaths {
@@ -45,6 +46,7 @@ impl RuntimePaths {
             } else {
                 crate::agent::skills::loader::SkillOrigin::BuiltIn
             },
+            curation_log: crate::paths::agent_curation_log_path(),
         }
     }
 }
@@ -58,6 +60,7 @@ pub struct RuntimeDeps {
     notes: crate::agent::memory::notes::NotesStore,
     config: Option<Arc<crate::config::CosConfig>>,
     routed_paths: crate::paths::RoutedPathContext,
+    curation_log: PathBuf,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
 }
 
@@ -75,6 +78,7 @@ impl RuntimeDeps {
             notes: crate::agent::memory::notes::NotesStore::system_default(),
             config: None,
             routed_paths: crate::paths::RoutedPathContext::capture(),
+            curation_log: crate::paths::agent_curation_log_path(),
             _auto_hook_guard: None,
         }
     }
@@ -129,6 +133,7 @@ impl RuntimeDeps {
         let mut deps = Self::new(hooks, Arc::new(SystemClock), semantic_indexer);
         deps.paths = Some(paths.clone());
         deps.notes = crate::agent::memory::notes::NotesStore::at(&paths.notes_dir);
+        deps.curation_log = paths.curation_log.clone();
         deps._auto_hook_guard = Some(Arc::new(super::hooks_config::AutoHookGuard::new(
             deps.hooks.clone(),
             names,
@@ -167,6 +172,10 @@ impl RuntimeDeps {
 
     pub fn routed_paths(&self) -> crate::paths::RoutedPathContext {
         self.routed_paths.clone()
+    }
+
+    pub fn curation_log(&self) -> &std::path::Path {
+        &self.curation_log
     }
 }
 

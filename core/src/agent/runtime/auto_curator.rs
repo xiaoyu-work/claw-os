@@ -76,6 +76,22 @@ impl AutoCurator {
         notes: NotesStore,
         routed_paths: crate::paths::RoutedPathContext,
     ) -> Option<Arc<Self>> {
+        Self::from_snapshot_with_runtime_paths(
+            config,
+            db,
+            notes,
+            routed_paths,
+            default_log_path(),
+        )
+    }
+
+    pub fn from_snapshot_with_runtime_paths(
+        config: Arc<crate::config::CosConfig>,
+        db: &MemoryDb,
+        notes: NotesStore,
+        routed_paths: crate::paths::RoutedPathContext,
+        log_path: std::path::PathBuf,
+    ) -> Option<Arc<Self>> {
         let cfg = &config.agent;
         let aux = match auxiliary_from_cfg(cfg) {
             Ok(Some(a)) => a,
@@ -100,7 +116,6 @@ impl AutoCurator {
                 return None;
             }
         };
-        let log_path = default_log_path();
         let curator = MemoryCurator::new(aux, notes, log_path);
         Some(Arc::new(Self {
             curator: Arc::new(curator),
@@ -116,6 +131,15 @@ impl AutoCurator {
 
     pub fn config_snapshot(&self) -> &Arc<crate::config::CosConfig> {
         &self.config
+    }
+
+    pub fn log_path(&self) -> &std::path::Path {
+        self.curator.log_path()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn save_empty_log(&self) -> Result<(), crate::agent::memory::curator::CurationError> {
+        self.curator.save_empty_log()
     }
 
     /// Fire-and-forget curation pass over `session_id`. The curator

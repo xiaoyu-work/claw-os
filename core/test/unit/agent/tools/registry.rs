@@ -22,6 +22,7 @@ fn deps() -> RegistryDeps {
             audit_log_path: root.join("audit.jsonl"),
             nudges_path: root.join("nudges.json"),
             system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+            curation_log_path: root.join("curation_log.json"),
         },
     )
 }

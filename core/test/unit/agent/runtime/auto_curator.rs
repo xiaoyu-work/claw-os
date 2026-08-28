@@ -73,7 +73,26 @@ async fn non_routed_detached_context_keeps_process_paths() {
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", &data);
     let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", &logs);
     let context = crate::paths::RoutedPathContext::capture();
-    let config = Arc::new(crate::config::CosConfig::default());
+    let curation_log = data
+        .join("agent")
+        .join("memory")
+        .join("curation_log.json");
+    let notes = NotesStore::at(data.join("agent").join("notes"));
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let db = mem_db();
+    let curator = AutoCurator::from_snapshot_with_runtime_paths(
+        Arc::clone(&config),
+        &db,
+        notes,
+        context.clone(),
+        curation_log.clone(),
+    )
+    .expect("non-routed curator");
+    assert_eq!(curator.log_path(), curation_log);
 
     let observed = tokio::spawn(with_detached_context(config, context, None, async {
         (

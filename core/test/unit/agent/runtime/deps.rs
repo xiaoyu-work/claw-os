@@ -36,6 +36,7 @@ fn load_uses_injected_hook_and_audit_paths() {
         system_skills_dir: temp.path().join("system-skills"),
         user_skills_dir: temp.path().join("user-skills"),
         system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+        curation_log: temp.path().join("curation_log.json"),
     };
 
     let deps = RuntimeDeps::load(&paths, None);

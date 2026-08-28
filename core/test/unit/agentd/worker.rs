@@ -63,13 +63,37 @@ async fn routed_curator_context_survives_detached_spawn() {
         async { crate::paths::RoutedPathContext::capture() },
     ))
     .await;
-    let config = Arc::new(crate::config::CosConfig::default());
+    let owner_root = root.path().join("users").join(owner_uid.to_string());
+    let curation_log = owner_root
+        .join("agent")
+        .join("memory")
+        .join("curation_log.json");
+    let notes = crate::agent::memory::notes::NotesStore::at(
+        owner_root.join("agent").join("notes"),
+    );
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "openai".into();
+    config.agent.model = "gpt-4o-mini".into();
+    config.agent.api_key_env = Some("OPENAI_API_KEY".into());
+    let config = Arc::new(config);
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open_in_memory().unwrap();
+    let curator =
+        crate::agent::runtime::auto_curator::AutoCurator::from_snapshot_with_runtime_paths(
+            Arc::clone(&config),
+            &db,
+            notes,
+            context.clone(),
+            curation_log.clone(),
+        )
+        .expect("routed curator");
+    assert_eq!(curator.log_path(), curation_log);
 
     let observed = tokio::spawn(crate::agent::runtime::auto_curator::with_detached_context(
         config,
         context,
         None,
-        async {
+        async move {
+            curator.save_empty_log().expect("save routed curation log");
             (
                 crate::paths::ai_budget_db_path(),
                 crate::paths::ai_run_log_path(),
@@ -77,19 +101,21 @@ async fn routed_curator_context_survives_detached_spawn() {
                 crate::paths::user_config_path(),
                 crate::paths::current_owner_uid_override(),
                 crate::paths::is_routed_job(),
+                curator.log_path().to_path_buf(),
             )
         },
     ))
     .await
     .unwrap();
 
-    let owner_root = root.path().join("users").join(owner_uid.to_string());
     assert_eq!(observed.0, owner_root.join("ai_budget.db"));
     assert_eq!(observed.1, owner_root.join("logs").join("ai.jsonl"));
     assert_eq!(observed.2, owner_root.join("agent").join("notes"));
     assert_eq!(observed.3, home.join(".config").join("cos").join("config.json"));
     assert_eq!(observed.4, Some(owner_uid));
     assert!(observed.5);
+    assert_eq!(observed.6, curation_log);
+    assert!(curation_log.is_file());
     assert!(crate::paths::current_owner_uid_override().is_none());
     assert!(!crate::paths::is_routed_job());
 }

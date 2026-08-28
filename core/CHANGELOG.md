@@ -21,3 +21,6 @@
 - Detached runtime work captures and reinstalls `RoutedPathContext`, preserving
   owner-partitioned budget, audit, notes, credential, and user-state paths
   across Tokio task boundaries.
+- The memory-curation log is resolved into `RuntimePaths` before spawning and
+  passed directly to `AutoCurator`; routed workers no longer attempt to bracket
+  curation runs in root-owned process-global state.

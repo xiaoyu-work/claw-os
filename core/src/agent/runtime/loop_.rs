@@ -832,11 +832,12 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         let config = deps
             .config_snapshot()
             .unwrap_or_else(crate::config::current_snapshot);
-        AutoCurator::from_snapshot_with_paths(
+        AutoCurator::from_snapshot_with_runtime_paths(
             config,
             db,
             deps.notes().clone(),
             deps.routed_paths(),
+            deps.curation_log().to_path_buf(),
         )
     });
 
