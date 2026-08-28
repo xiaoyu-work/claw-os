@@ -264,11 +264,15 @@ fn submit_snapshots_trusted_client_metadata() {
             client,
         )
         .unwrap();
-    assert_eq!(job.client, client);
+    let persisted = crate::session::SessionClient {
+        attended: false,
+        ..client
+    };
+    assert_eq!(job.client, persisted);
 
     let path = dir.path().join("pending").join(format!("{}.json", job.id));
     let parsed: Job = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
-    assert_eq!(parsed.client, client);
+    assert_eq!(parsed.client, persisted);
 }
 
 #[test]

@@ -265,6 +265,7 @@ struct Lease {
     session_id: Option<String>,
     owner_uid: u32,
     client: crate::session::SessionClient,
+    presence: Option<crate::session::SessionPresence>,
     capability_generation: String,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
@@ -324,7 +325,7 @@ async fn supervise(
         },
         None => None,
     };
-    let effective_client = if job.client.source != crate::session::SessionSource::Unknown {
+    let mut effective_client = if job.client.source != crate::session::SessionSource::Unknown {
         job.client
     } else {
         session
@@ -332,6 +333,11 @@ async fn supervise(
             .map(|session| session.client)
             .unwrap_or_default()
     };
+    // `attended` is never durable authority. A live, in-memory submission
+    // presence lease is the only way a queued task may recover attendance.
+    effective_client.attended = false;
+    let presence =
+        crate::clawd::tasks::claim_attended_presence(&job.id, owner_uid, config.lease);
     if let Some(session) = session.as_mut() {
         session.client = effective_client;
     }
@@ -377,6 +383,7 @@ async fn supervise(
         session_id: job.session_id.clone(),
         owner_uid,
         client: effective_client,
+        presence,
         capability_generation: session
             .as_ref()
             .and_then(|session| session.caps.as_ref())
@@ -469,6 +476,7 @@ async fn pump(
             owner_home: job.owner_home.clone().unwrap_or_default(),
         },
         session,
+        presence: lease.presence,
     };
     if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
         return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
@@ -616,6 +624,7 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         session_id: lease.session_id.clone(),
         owner_uid: lease.owner_uid,
         client: lease.client,
+        presence: lease.presence,
         capability_generation: lease.capability_generation.clone(),
         owner_gid: 0,
         worker_pid: lease.worker_pid,
@@ -651,6 +660,7 @@ fn accept(
                 session_id: lease.session_id.clone(),
                 owner_uid: lease.owner_uid,
                 client: lease.client,
+                presence: lease.presence,
                 capability_generation: lease.capability_generation.clone(),
                 worker_pid: lease.worker_pid,
                 worker_start_time_ticks: lease.worker_start_time_ticks,

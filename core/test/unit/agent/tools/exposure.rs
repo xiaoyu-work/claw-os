@@ -149,3 +149,39 @@ async fn verified_worker_override_supplies_context_without_process_metadata() {
     assert_eq!(context.host(), ExecutionHost::AgentWorker);
     assert!(!context.has_transport(ToolTransport::AppSession));
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn presence_requires_a_live_matching_process_and_unexpired_lease() {
+    let pid = std::process::id();
+    let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid).unwrap();
+    let owner_uid = unsafe { libc::geteuid() as u32 };
+    let future = now_ms().saturating_add(60_000);
+    let base = ToolExposureContext::isolated(Guardrails::permissive())
+        .with_identity("worker", owner_uid, SessionSource::BrokerTask)
+        .with_presence(false, true);
+
+    let live = base.clone().with_presence_lease(SessionPresence {
+        owner_uid,
+        pid,
+        start_time_ticks,
+        expires_at_ms: future,
+    });
+    assert!(live.is_attended_local());
+
+    let exited = base.clone().with_presence_lease(SessionPresence {
+        owner_uid,
+        pid,
+        start_time_ticks: start_time_ticks.saturating_add(1),
+        expires_at_ms: future,
+    });
+    assert!(!exited.is_attended_local());
+
+    let expired = base.with_presence_lease(SessionPresence {
+        owner_uid,
+        pid,
+        start_time_ticks,
+        expires_at_ms: now_ms().saturating_sub(1),
+    });
+    assert!(!expired.is_attended_local());
+}

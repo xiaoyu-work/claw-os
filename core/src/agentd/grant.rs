@@ -21,7 +21,7 @@ use sha2::Sha256;
 
 /// Wire format version. Bumped whenever the claim set changes shape so
 /// a mixed old/new install fails closed instead of mis-parsing.
-pub const GRANT_VERSION: u32 = 2;
+pub const GRANT_VERSION: u32 = 3;
 
 /// Intended recipient of the grant. A token issued for the worker
 /// channel is meaningless anywhere else because every verifier requires
@@ -39,6 +39,7 @@ pub enum GrantError {
     Task { expected: String, actual: String },
     Session,
     Client,
+    Presence,
     CapabilityGeneration,
     Owner { expected: u32, actual: u32 },
     WorkerPid { expected: u32, actual: u32 },
@@ -68,6 +69,9 @@ impl std::fmt::Display for GrantError {
             GrantError::Session => f.write_str("agentd grant is bound to a different session"),
             GrantError::Client => {
                 f.write_str("agentd grant is bound to different session client metadata")
+            }
+            GrantError::Presence => {
+                f.write_str("agentd grant is bound to a different presence lease")
             }
             GrantError::CapabilityGeneration => {
                 f.write_str("agentd grant is bound to a different capability generation")
@@ -111,6 +115,8 @@ pub struct GrantClaims {
     pub session_id: Option<String>,
     pub owner_uid: u32,
     pub client: crate::session::SessionClient,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
     pub owner_gid: u32,
     pub worker_pid: u32,
@@ -149,6 +155,16 @@ impl GrantClaims {
         push_bytes(&mut buf, self.client.source.as_str().as_bytes());
         push_u64(&mut buf, u64::from(self.client.attended));
         push_u64(&mut buf, u64::from(self.client.local));
+        match self.presence {
+            Some(presence) => {
+                push_u64(&mut buf, 1);
+                push_u64(&mut buf, presence.owner_uid as u64);
+                push_u64(&mut buf, presence.pid as u64);
+                push_u64(&mut buf, presence.start_time_ticks);
+                push_u64(&mut buf, presence.expires_at_ms);
+            }
+            None => push_u64(&mut buf, 0),
+        }
         push_bytes(&mut buf, self.capability_generation.as_bytes());
         push_u64(&mut buf, self.owner_gid as u64);
         push_u64(&mut buf, self.worker_pid as u64);
@@ -192,6 +208,7 @@ pub struct GrantExpectation {
     pub session_id: Option<String>,
     pub owner_uid: u32,
     pub client: crate::session::SessionClient,
+    pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
     pub worker_pid: u32,
     pub worker_start_time_ticks: Option<u64>,
@@ -286,6 +303,9 @@ impl GrantSigner {
         }
         if grant.claims.client != expect.client {
             return Err(GrantError::Client);
+        }
+        if grant.claims.presence != expect.presence {
+            return Err(GrantError::Presence);
         }
         if grant.claims.capability_generation != expect.capability_generation {
             return Err(GrantError::CapabilityGeneration);

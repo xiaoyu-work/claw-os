@@ -13,6 +13,12 @@ fn claims(worker_pid: u32) -> GrantClaims {
             true,
             true,
         ),
+        presence: Some(crate::session::SessionPresence {
+            owner_uid: 1000,
+            pid: 55,
+            start_time_ticks: 44,
+            expires_at_ms: 30_000,
+        }),
         capability_generation: "caps-a".to_string(),
         owner_gid: 1000,
         worker_pid,
@@ -34,6 +40,12 @@ fn expectation(route: &str) -> GrantExpectation {
             true,
             true,
         ),
+        presence: Some(crate::session::SessionPresence {
+            owner_uid: 1000,
+            pid: 55,
+            start_time_ticks: 44,
+            expires_at_ms: 30_000,
+        }),
         capability_generation: "caps-a".to_string(),
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
@@ -99,6 +111,13 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
     assert_eq!(
         signer.verify(&grant, &other_generation, 2_000),
         Err(GrantError::CapabilityGeneration)
+    );
+
+    let mut other_presence = expectation("hello");
+    other_presence.presence.as_mut().unwrap().pid = 56;
+    assert_eq!(
+        signer.verify(&grant, &other_presence, 2_000),
+        Err(GrantError::Presence)
     );
 
     let mut other_session = expectation("hello");

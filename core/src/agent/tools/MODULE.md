@@ -16,6 +16,8 @@ which tool calls are exposed and executed.
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
 - Apply guardrails and session/capability context.
+- Require `memory.read:self:agent` versus `memory.write:self:agent` after
+  validating each `cos_memory` or `cos_todo` command and resource.
 - Keep untrusted tool output inside explicit model-data boundaries.
 
 ## Key Files

@@ -156,6 +156,8 @@ impl SessionSource {
 pub struct SessionClient {
     #[serde(default)]
     pub source: SessionSource,
+    /// Synchronous presence for direct in-process sessions. Daemon task
+    /// records always persist this as false and use [`SessionPresence`].
     #[serde(default)]
     pub attended: bool,
     #[serde(default)]
@@ -170,6 +172,19 @@ impl SessionClient {
             local,
         }
     }
+}
+
+/// Short-lived proof that an authenticated local client is still present.
+///
+/// Unlike [`SessionClient`], this value is never persisted in durable session
+/// or task records. `clawd` keeps it in memory, binds it into one signed worker
+/// assignment, and a consumer must re-check the process identity and expiry.
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionPresence {
+    pub owner_uid: u32,
+    pub pid: u32,
+    pub start_time_ticks: u64,
+    pub expires_at_ms: u64,
 }
 
 // ---------------------------------------------------------------------------

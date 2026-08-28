@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use crate::agent::tools::guardrails::Guardrails;
 use crate::caps::{Cap, CapSet, Verb};
 use crate::proc::SessionInfo;
-use crate::session::{SessionClient, SessionSource};
+use crate::session::{SessionClient, SessionPresence, SessionSource};
 
 /// Execution boundary a tool needs in order to be reachable.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
@@ -53,6 +53,7 @@ pub struct ToolExposureContext {
     task_id: Option<String>,
     owner_uid: u32,
     client: SessionClient,
+    presence: Option<SessionPresence>,
     capabilities: CapSet,
     capability_generation: String,
     host: ExecutionHost,
@@ -72,6 +73,26 @@ impl ToolExposureContext {
         host: ExecutionHost,
         guardrails: Guardrails,
     ) -> Self {
+        Self::from_trusted_session_with_presence(
+            session,
+            conversation_session_id,
+            task_id,
+            owner_uid,
+            host,
+            guardrails,
+            None,
+        )
+    }
+
+    pub(crate) fn from_trusted_session_with_presence(
+        session: &SessionInfo,
+        conversation_session_id: Option<&str>,
+        task_id: Option<&str>,
+        owner_uid: u32,
+        host: ExecutionHost,
+        guardrails: Guardrails,
+        presence: Option<SessionPresence>,
+    ) -> Self {
         let capabilities = session.caps.clone().unwrap_or_default();
         let mut transports = BTreeSet::from([
             ToolTransport::LocalProcess,
@@ -81,7 +102,7 @@ impl ToolExposureContext {
         if host == ExecutionHost::Direct && session.client.local {
             transports.insert(ToolTransport::AppSession);
         }
-        if session.client.local && session.client.attended {
+        if session.client.local && (session.client.attended || presence.is_some()) {
             transports.insert(ToolTransport::InteractiveAuthorization);
         }
         Self {
@@ -90,6 +111,7 @@ impl ToolExposureContext {
             task_id: task_id.map(str::to_string),
             owner_uid,
             client: session.client,
+            presence,
             capability_generation: capability_generation(&capabilities),
             capabilities,
             host,
@@ -137,6 +159,28 @@ impl ToolExposureContext {
         ))
     }
 
+    pub(crate) fn from_current_session_with_presence(
+        conversation_session_id: Option<&str>,
+        task_id: Option<&str>,
+        host: ExecutionHost,
+        guardrails: Guardrails,
+        presence: Option<SessionPresence>,
+    ) -> Result<Self, String> {
+        let mut context =
+            Self::from_current_session(conversation_session_id, task_id, host, guardrails)?;
+        context.presence = presence;
+        if context.client.local && context.attended_now() {
+            context
+                .transports
+                .insert(ToolTransport::InteractiveAuthorization);
+        } else {
+            context
+                .transports
+                .remove(&ToolTransport::InteractiveAuthorization);
+        }
+        Ok(context)
+    }
+
     /// Fail-closed context for library calls that have no authenticated
     /// session. Only tools without authority/reachability requirements appear.
     pub(crate) fn isolated(guardrails: Guardrails) -> Self {
@@ -146,6 +190,7 @@ impl ToolExposureContext {
             task_id: None,
             owner_uid: 0,
             client: SessionClient::default(),
+            presence: None,
             capabilities: CapSet::new(),
             capability_generation: capability_generation(&CapSet::new()),
             host: ExecutionHost::Direct,
@@ -161,6 +206,7 @@ impl ToolExposureContext {
         self.client.source = SessionSource::LocalWeb;
         self.client.attended = true;
         self.client.local = local;
+        self.presence = None;
         if local {
             self.transports
                 .insert(ToolTransport::InteractiveAuthorization);
@@ -175,6 +221,7 @@ impl ToolExposureContext {
     pub(crate) fn for_external_mcp(mut self) -> Self {
         self.client.source = SessionSource::ExternalMcp;
         self.client.attended = false;
+        self.presence = None;
         self.transports
             .remove(&ToolTransport::InteractiveAuthorization);
         self
@@ -183,6 +230,7 @@ impl ToolExposureContext {
     pub(crate) fn delegated(mut self, guardrails: Guardrails) -> Self {
         self.client.source = SessionSource::DelegatedAgent;
         self.client.attended = false;
+        self.presence = None;
         self.transports
             .remove(&ToolTransport::InteractiveAuthorization);
         self.guardrails = guardrails;
@@ -256,6 +304,14 @@ impl ToolExposureContext {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_presence_lease(mut self, presence: SessionPresence) -> Self {
+        self.presence = Some(presence);
+        self.transports
+            .insert(ToolTransport::InteractiveAuthorization);
+        self
+    }
+
     pub fn authority_session_id(&self) -> &str {
         &self.authority_session_id
     }
@@ -273,7 +329,9 @@ impl ToolExposureContext {
     }
 
     pub fn client(&self) -> SessionClient {
-        self.client
+        let mut client = self.client;
+        client.attended = self.attended_now();
+        client
     }
 
     pub fn capabilities(&self) -> &CapSet {
@@ -309,9 +367,24 @@ impl ToolExposureContext {
     }
 
     pub fn is_attended_local(&self) -> bool {
-        self.client.attended
+        self.attended_now()
             && self.client.local
             && self.has_transport(ToolTransport::InteractiveAuthorization)
+    }
+
+    fn attended_now(&self) -> bool {
+        match self.presence {
+            Some(presence) => {
+                presence.owner_uid == self.owner_uid
+                    && now_ms() <= presence.expires_at_ms
+                    && crate::proc::process_identity_is_live(
+                        presence.pid,
+                        presence.start_time_ticks,
+                        presence.owner_uid,
+                    )
+            }
+            None => self.client.attended,
+        }
     }
 
     pub fn permits_interactive_authorization(&self) -> bool {
@@ -473,6 +546,13 @@ pub fn capability_generation(caps: &CapSet) -> String {
         digest.update(cap.as_bytes());
     }
     hex::encode(&digest.finalize()[..8])
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 #[cfg(unix)]

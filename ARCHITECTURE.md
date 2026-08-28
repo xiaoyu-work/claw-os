@@ -247,10 +247,14 @@ CLI / web UI / bridge
   -> clawd persists usage/session/audit records and finishes the task
 ```
 
-The `clawd` task record snapshots broker-derived source, locality and attended
-state. `clawd` re-derives the session capability set, signs that client metadata
-and a content-addressed capability generation into the `claw-agentd` job grant,
-and the worker verifies both before constructing `ToolExposureContext`.
+The `clawd` task record snapshots broker-derived source and locality, but never
+durable attendance. A short, in-memory presence lease binds an attended
+submission to the authenticated client's uid, pid, process start time, and a
+deadline. It is consumed when a worker is claimed and disappears on delay,
+client exit, cancellation, recovery, or daemon restart. `clawd` signs that
+lease, the client metadata, and a content-addressed capability generation into
+the `claw-agentd` job grant; the worker verifies them before constructing
+`ToolExposureContext` and rechecks presence when projecting or executing a tool.
 Direct CLI, authenticated web and external MCP surfaces construct the same
 context from their verified process session and trusted entry-point facts.
 There is no process-global authorization or availability cache; concurrent

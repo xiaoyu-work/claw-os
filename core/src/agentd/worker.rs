@@ -486,6 +486,9 @@ where
     if assignment.grant.claims.client != session_client {
         return Err("agentd grant does not cover the assigned session client".to_string());
     }
+    if assignment.grant.claims.presence != assignment.presence {
+        return Err("agentd grant does not cover the assigned presence lease".to_string());
+    }
     let capability_generation = assignment
         .session
         .as_ref()
@@ -662,6 +665,7 @@ async fn execute(
         branch_context: job.branch_context,
         session_id: job.session_id,
         max_turns: job.max_turns,
+        presence: assignment.presence,
     };
 
     let home = std::path::PathBuf::from(&job.owner_home);

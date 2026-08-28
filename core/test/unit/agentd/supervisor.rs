@@ -13,6 +13,7 @@ fn new_lease() -> Lease {
             true,
             true,
         ),
+        presence: None,
         capability_generation: "caps-a".to_string(),
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),

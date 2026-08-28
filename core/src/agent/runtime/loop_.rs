@@ -775,7 +775,6 @@ async fn ask_inner(
 
     let mut messages = initial_messages;
     messages.push(build_request_user_message(user_prompt, None, recorder));
-    let llm_tools = tools.as_llm_tools_for(exposure);
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the
@@ -881,6 +880,7 @@ async fn ask_inner(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let llm_tools = tools.as_llm_tools_for(exposure);
         let retry_policy = retry_policy_from_cfg(cfg);
         let outcome_result = if force_finalize {
             super::turn::run_final_turn_interruptible(
@@ -1149,7 +1149,6 @@ async fn ask_inner_streaming(
         ));
         v
     };
-    let llm_tools = tools.as_llm_tools_for(exposure);
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     let interrupt_handle = if let Some(scope) = interrupt_scope {
@@ -1229,6 +1228,7 @@ async fn ask_inner_streaming(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let llm_tools = tools.as_llm_tools_for(exposure);
         let outcome_result = if force_finalize {
             super::turn::run_final_turn_streaming_interruptible(
                 provider.clone(),

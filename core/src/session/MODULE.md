@@ -36,8 +36,10 @@ confirms the record could not have been authored by the account it would
 delegate to. `None` always means "no delegation".
 
 `SessionMeta::client` is separate interaction provenance. Daemon-created task
-records snapshot it into the job, then bind it into the signed worker grant so
-concurrent submissions cannot overwrite one another's source or attendance.
+records snapshot source and locality into each job, while attended presence
+uses a non-persistent pid/start-time lease. The lease is bound into one signed
+worker grant, so queued, recovered, or post-restart work cannot inherit stale
+attendance.
 
 ## Tests
 

@@ -24,7 +24,13 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
         session::get_meta(&sid).unwrap().origin,
         Some(SessionOrigin::SystemAgentTask)
     );
-    assert_eq!(session::get_meta(&sid).unwrap().client, trusted_client);
+    assert_eq!(
+        session::get_meta(&sid).unwrap().client,
+        SessionClient {
+            attended: false,
+            ..trusted_client
+        }
+    );
     session::set_caps(&sid, &crate::caps::CapSet::new()).unwrap();
     // A session that acquired a delegation marker is re-stamped as
     // ambient when it is resumed, so it can never be replayed as one.
@@ -77,4 +83,81 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         .expect_err("a root-owned task must be refused");
     assert_eq!(error, crate::agentd::spawn::ROOT_OWNER_REFUSAL);
     assert!(error.contains("non-root"), "{error}");
+}
+
+fn attended_client() -> ClientIdentity {
+    ClientIdentity {
+        pid: Some(4242),
+        uid: Some(1000),
+        gid: Some(1000),
+        start_time_ticks: Some(77),
+        attended_local: true,
+    }
+}
+
+#[test]
+fn live_submission_presence_is_consumed_once() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    remember_submission_presence_at("task-live", &attended_client(), 1_000);
+    let presence = claim_attended_presence_at(
+        "task-live",
+        1000,
+        2_000,
+        60_000,
+        |pid, start, uid| pid == 4242 && start == 77 && uid == 1000,
+    )
+    .expect("live authenticated submitter should retain attendance");
+    assert_eq!(presence.owner_uid, 1000);
+    assert_eq!(presence.pid, 4242);
+    assert_eq!(presence.expires_at_ms, 62_000);
+    assert!(
+        claim_attended_presence_at("task-live", 1000, 2_000, 60_000, |_, _, _| true).is_none()
+    );
+}
+
+#[test]
+fn submitter_exit_expires_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    remember_submission_presence_at("task-exit", &attended_client(), 1_000);
+    assert!(claim_attended_presence_at(
+        "task-exit",
+        1000,
+        2_000,
+        60_000,
+        |_, _, _| false
+    )
+    .is_none());
+}
+
+#[test]
+fn queue_delay_expires_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    remember_submission_presence_at("task-delay", &attended_client(), 1_000);
+    assert!(claim_attended_presence_at(
+        "task-delay",
+        1000,
+        1_000 + SUBMISSION_PRESENCE_TTL_MS + 1,
+        60_000,
+        |_, _, _| true,
+    )
+    .is_none());
+}
+
+#[test]
+fn daemon_restart_drops_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    remember_submission_presence_at("task-restart", &attended_client(), 1_000);
+    clear_presence_leases();
+    assert!(claim_attended_presence_at(
+        "task-restart",
+        1000,
+        2_000,
+        60_000,
+        |_, _, _| true
+    )
+    .is_none());
 }

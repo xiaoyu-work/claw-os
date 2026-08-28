@@ -594,6 +594,19 @@ pub fn is_pid_alive(pid: u32) -> bool {
     is_alive(pid)
 }
 
+pub(crate) fn process_identity_is_live(pid: u32, start_time_ticks: u64, owner_uid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        read_start_time_ticks(pid) == Some(start_time_ticks)
+            && read_real_uid(pid) == Some(owner_uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, start_time_ticks, owner_uid);
+        false
+    }
+}
+
 /// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
 /// -1/EPERM for a pid that exists but belongs to a different uid,
 /// which the old code interpreted as "process is gone" — that

@@ -104,6 +104,7 @@ fn assignment(
             owner_home: home.to_string_lossy().into_owned(),
         },
         session: None,
+        presence: None,
     }
 }
 
@@ -123,6 +124,7 @@ fn grant_for(
         session_id: None,
         owner_uid: owner.uid,
         client: cos::session::SessionClient::default(),
+        presence: None,
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),
@@ -552,6 +554,7 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         session_id: None,
         owner_uid: harness.identity.uid,
         client: cos::session::SessionClient::default(),
+        presence: None,
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),

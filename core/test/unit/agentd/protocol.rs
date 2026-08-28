@@ -11,6 +11,7 @@ fn signed_grant() -> crate::agentd::grant::SignedGrant {
         session_id: None,
         owner_uid: 1000,
         client: crate::session::SessionClient::default(),
+        presence: None,
         capability_generation: "empty".to_string(),
         owner_gid: 1000,
         worker_pid: 2,

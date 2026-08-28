@@ -459,8 +459,11 @@ impl Store {
         max_turns: Option<u32>,
         owner_uid: Option<u32>,
         owner_home: Option<String>,
-        client: crate::session::SessionClient,
+        mut client: crate::session::SessionClient,
     ) -> io::Result<Job> {
+        // Presence is ephemeral and process-bound. Persist only provenance;
+        // a recovered or delayed job must never inherit attended authority.
+        client.attended = false;
         let job = Job::new_pending_with_client(
             prompt,
             context,
@@ -2028,6 +2031,7 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.max_turns,
+            presence: None,
         },
         stream_sink,
         progress_sink,
@@ -2047,6 +2051,7 @@ pub struct JobExecution {
     pub branch_context: Option<String>,
     pub session_id: Option<String>,
     pub max_turns: Option<u32>,
+    pub presence: Option<crate::session::SessionPresence>,
 }
 
 /// Run the agent loop for one task.
@@ -2081,11 +2086,12 @@ pub async fn execute_job(
     };
     let guardrails = loop_::guardrails_from_cfg(&cfg);
     let mut exposure =
-        match crate::agent::tools::exposure::ToolExposureContext::from_current_session(
+        match crate::agent::tools::exposure::ToolExposureContext::from_current_session_with_presence(
             job.session_id.as_deref(),
             Some(&job.id),
             crate::agent::tools::exposure::ExecutionHost::AgentWorker,
             guardrails,
+            job.presence,
         ) {
             Ok(context) => context,
             Err(error) if job.session_id.is_none() => {
