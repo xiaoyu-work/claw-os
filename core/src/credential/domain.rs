@@ -101,6 +101,11 @@ pub(super) struct LoadedBundle {
 /// encryption, locking, and key material; OAuth sees only typed operations.
 pub(super) trait CredentialStore {
     fn contains(&self, id: &CredentialId) -> Result<bool, String>;
+    /// Load a value after the caller has handled capability authorization.
+    ///
+    /// `enforce_tier` controls record-tier enforcement only; it is not a
+    /// substitute for `secret.read`. Broker-only callers may disable the tier
+    /// check only after their process boundary has authorized the operation.
     fn load(&self, id: &CredentialId, enforce_tier: bool) -> Result<String, String>;
     fn minimum_tier(&self, id: &CredentialId) -> Result<Option<u8>, String>;
     fn store(&self, request: StoreRequest<'_>) -> Result<StoreResult, String>;

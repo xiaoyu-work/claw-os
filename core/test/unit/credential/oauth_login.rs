@@ -1,17 +1,23 @@
 use super::*;
 
-struct FakeStore;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+#[derive(Default)]
+struct FakeStore {
+    contains_calls: AtomicUsize,
+    load_calls: AtomicUsize,
+    last_enforce_tier: AtomicBool,
+}
 
 impl super::super::CredentialStore for FakeStore {
     fn contains(&self, _id: &super::super::CredentialId) -> Result<bool, String> {
+        self.contains_calls.fetch_add(1, Ordering::SeqCst);
         Ok(true)
     }
 
-    fn load(
-        &self,
-        _id: &super::super::CredentialId,
-        _enforce_tier: bool,
-    ) -> Result<String, String> {
+    fn load(&self, _id: &super::super::CredentialId, enforce_tier: bool) -> Result<String, String> {
+        self.load_calls.fetch_add(1, Ordering::SeqCst);
+        self.last_enforce_tier.store(enforce_tier, Ordering::SeqCst);
         Ok("from-store-interface".to_string())
     }
 
@@ -24,6 +30,74 @@ impl super::super::CredentialStore for FakeStore {
         _request: super::super::StoreRequest<'_>,
     ) -> Result<super::super::StoreResult, String> {
         unreachable!("configuration lookup is read-only")
+    }
+}
+
+struct StrictCapabilityEnv {
+    previous_data_dir: Option<std::ffi::OsString>,
+    previous_log_dir: Option<std::ffi::OsString>,
+    previous_session: Option<std::ffi::OsString>,
+    previous_mode: Option<std::ffi::OsString>,
+    previous_test_setting: Option<std::ffi::OsString>,
+    _temp: tempfile::TempDir,
+}
+
+impl StrictCapabilityEnv {
+    fn new(caps: serde_json::Value) -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let proc_dir = temp.path().join("proc");
+        std::fs::create_dir_all(&proc_dir).unwrap();
+        std::fs::write(
+            proc_dir.join("registry.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "sessions": [{
+                    "session_id": "oauth-credential-auth-test",
+                    "pid": 0,
+                    "caps": caps,
+                }]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let previous_data_dir = std::env::var_os("COS_DATA_DIR");
+        let previous_log_dir = std::env::var_os("COS_LOG_DIR");
+        let previous_session = std::env::var_os("COS_SESSION");
+        let previous_mode = std::env::var_os("COS_PERMS_MODE");
+        let previous_test_setting = std::env::var_os("COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST");
+        std::env::set_var("COS_DATA_DIR", temp.path());
+        std::env::set_var("COS_LOG_DIR", temp.path());
+        std::env::set_var("COS_SESSION", "oauth-credential-auth-test");
+        std::env::set_var("COS_PERMS_MODE", "strict");
+        std::env::remove_var("COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST");
+        Self {
+            previous_data_dir,
+            previous_log_dir,
+            previous_session,
+            previous_mode,
+            previous_test_setting,
+            _temp: temp,
+        }
+    }
+}
+
+impl Drop for StrictCapabilityEnv {
+    fn drop(&mut self) {
+        restore_env("COS_DATA_DIR", self.previous_data_dir.take());
+        restore_env("COS_LOG_DIR", self.previous_log_dir.take());
+        restore_env("COS_SESSION", self.previous_session.take());
+        restore_env("COS_PERMS_MODE", self.previous_mode.take());
+        restore_env(
+            "COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST",
+            self.previous_test_setting.take(),
+        );
+    }
+}
+
+fn restore_env(name: &str, value: Option<std::ffi::OsString>) {
+    match value {
+        Some(value) => std::env::set_var(name, value),
+        None => std::env::remove_var(name),
     }
 }
 
@@ -178,12 +252,60 @@ fn accepts_complete_google_scope_grant() {
 
 #[test]
 fn oauth_configuration_uses_credential_store_interface() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let _env = StrictCapabilityEnv::new(serde_json::json!([{
+        "verb": "secret.read",
+        "scope": {"kind": "name", "value": "default/GOOGLE_CLIENT_ID"},
+    }]));
+    let store = FakeStore::default();
     let value = client_setting(
-        &FakeStore,
+        &store,
         "COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST",
         "GOOGLE_CLIENT_ID",
         "default",
     )
     .unwrap();
     assert_eq!(value.as_deref(), Some("from-store-interface"));
+    assert_eq!(store.contains_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+    assert!(store.last_enforce_tier.load(Ordering::SeqCst));
+}
+
+#[test]
+fn oauth_configuration_denies_store_probe_without_secret_read() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let _env = StrictCapabilityEnv::new(serde_json::json!([]));
+    let store = FakeStore::default();
+
+    let error = client_setting(
+        &store,
+        "COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST",
+        "GOOGLE_CLIENT_ID",
+        "default",
+    )
+    .unwrap_err();
+
+    assert!(error.contains("secret.read"), "{error}");
+    assert_eq!(store.contains_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(store.load_calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn daemon_configuration_uses_only_the_documented_broker_bypass() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let _env = StrictCapabilityEnv::new(serde_json::json!([]));
+    let store = FakeStore::default();
+
+    let value = daemon_client_setting(
+        &store,
+        "COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST",
+        "GOOGLE_CLIENT_ID",
+        "default",
+    )
+    .unwrap();
+
+    assert_eq!(value.as_deref(), Some("from-store-interface"));
+    assert_eq!(store.contains_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(store.load_calls.load(Ordering::SeqCst), 1);
+    assert!(!store.last_enforce_tier.load(Ordering::SeqCst));
 }

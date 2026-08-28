@@ -34,7 +34,7 @@ pub(super) fn cmd_oauth_refresh(
 }
 
 fn oauth_refresh_google(store: &dyn CredentialStore, namespace: &str) -> Result<Value, String> {
-    let refresh_token = load_for_oauth(store, "GOOGLE_REFRESH_TOKEN", namespace, true)?;
+    let refresh_token = load_authorized_oauth_credential(store, "GOOGLE_REFRESH_TOKEN", namespace)?;
     let (client_id, client_secret) = oauth_login::google_client_config(store, namespace)?;
     let refresh_tier = minimum_tier(store, "GOOGLE_REFRESH_TOKEN", namespace)?;
     let output_tier =
@@ -103,7 +103,8 @@ fn refresh_google_tokens(
 }
 
 fn oauth_refresh_microsoft(store: &dyn CredentialStore, namespace: &str) -> Result<Value, String> {
-    let refresh_token = load_for_oauth(store, "MICROSOFT_REFRESH_TOKEN", namespace, true)?;
+    let refresh_token =
+        load_authorized_oauth_credential(store, "MICROSOFT_REFRESH_TOKEN", namespace)?;
     let (client_id, tenant_id) = oauth_login::microsoft_client_config(store, namespace)?;
     let refresh_tier = minimum_tier(store, "MICROSOFT_REFRESH_TOKEN", namespace)?;
     let access_tier =
@@ -231,7 +232,8 @@ pub(crate) fn broker_refresh_access_token(
 ) -> Result<Value, String> {
     match name {
         "GOOGLE_ACCESS_TOKEN" => {
-            let refresh_token = load_for_oauth(store, "GOOGLE_REFRESH_TOKEN", namespace, false)?;
+            let refresh_token =
+                load_broker_oauth_credential(store, "GOOGLE_REFRESH_TOKEN", namespace)?;
             let (client_id, client_secret) =
                 oauth_login::google_client_config_for_daemon(store, namespace)?;
             let access_tier = minimum_tier(store, "GOOGLE_ACCESS_TOKEN", namespace)?;
@@ -245,7 +247,8 @@ pub(crate) fn broker_refresh_access_token(
             )
         }
         "MICROSOFT_ACCESS_TOKEN" => {
-            let refresh_token = load_for_oauth(store, "MICROSOFT_REFRESH_TOKEN", namespace, false)?;
+            let refresh_token =
+                load_broker_oauth_credential(store, "MICROSOFT_REFRESH_TOKEN", namespace)?;
             let (client_id, tenant_id) =
                 oauth_login::microsoft_client_config_for_daemon(store, namespace)?;
             let refresh_tier = minimum_tier(store, "MICROSOFT_REFRESH_TOKEN", namespace)?;
@@ -266,17 +269,25 @@ pub(crate) fn broker_refresh_access_token(
     }
 }
 
-fn load_for_oauth(
+fn load_authorized_oauth_credential(
     store: &dyn CredentialStore,
     name: &str,
     namespace: &str,
-    enforce_tier: bool,
 ) -> Result<String, String> {
     let id = CredentialId::parse(namespace, name)?;
-    if enforce_tier {
-        require_secret(Verb::SECRET_READ, credential_scope(namespace, name)?)?;
-    }
-    store.load(&id, enforce_tier)
+    require_secret(Verb::SECRET_READ, credential_scope(namespace, name)?)?;
+    store.load(&id, true)
+}
+
+/// Load refresh material inside clawd after the credential OAuth route has
+/// authorized the peer and assumed its filesystem identity.
+fn load_broker_oauth_credential(
+    store: &dyn CredentialStore,
+    name: &str,
+    namespace: &str,
+) -> Result<String, String> {
+    let id = CredentialId::parse(namespace, name)?;
+    store.load(&id, false)
 }
 
 fn minimum_tier(store: &dyn CredentialStore, name: &str, namespace: &str) -> Result<u8, String> {

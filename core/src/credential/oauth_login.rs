@@ -558,12 +558,22 @@ fn client_setting(
         }
     }
     let id = super::CredentialId::parse(namespace, credential_name)?;
+    super::require_secret(
+        Verb::SECRET_READ,
+        super::credential_scope(id.namespace(), id.name())?,
+    )?;
     if !store.contains(&id)? {
         return Ok(None);
     }
     store.load(&id, true).map(Some)
 }
 
+/// Read OAuth client configuration inside the credential refresh broker.
+///
+/// The public/direct OAuth path uses [`client_setting`] and performs an exact
+/// `secret.read` check. This separate bypass is only used after clawd has
+/// authorized the broker route and switched to the requesting user's
+/// filesystem identity; it must not be used by CLI or provider code.
 fn daemon_client_setting(
     store: &dyn super::CredentialStore,
     env_name: &str,
