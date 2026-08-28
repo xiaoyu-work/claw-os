@@ -7,8 +7,8 @@
 
 use std::fmt::{self, Display, Formatter};
 #[cfg(target_os = "linux")]
-use std::io::Write;
-use std::io::{self, Read};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
 #[cfg(target_os = "linux")]
 use std::os::fd::{AsRawFd, FromRawFd};
 #[cfg(target_os = "linux")]
@@ -33,9 +33,12 @@ pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 
 /// Maximum serialized activation accepted from the Agent UI's stdin.
 pub const MAX_ACTIVATION_BYTES: usize = MAX_CONTEXT_BYTES * 2 + 1024;
+pub const SDK_LAUNCHER_PROTOCOL: u32 = 1;
+pub const PACKAGED_SDK_LAUNCHER: &str = "/usr/local/bin/cos-ask-claw-launcher";
 
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_FD: i32 = 3;
+const EXECUTABLE_FD: i32 = 10;
 const READY_MESSAGE: &[u8] = b"READY\n";
 const PACKAGED_AGENT_UI: &str = "/usr/local/bin/cos-agent-ui";
 const OVERLAY_FLAG: &str = "--overlay";
@@ -500,37 +503,69 @@ fn signal_ready(_fd: i32) -> Result<(), ActivationInputError> {
     ))
 }
 
-fn packaged_agent_ui() -> Result<PathBuf, LaunchError> {
-    let path = PathBuf::from(PACKAGED_AGENT_UI);
-    validate_executable(&path, true)?;
-    Ok(path)
+#[cfg(target_os = "linux")]
+struct TrustedExecutable {
+    file: File,
 }
 
-fn validate_executable(path: &Path, require_packaged_owner: bool) -> Result<(), LaunchError> {
+#[cfg(not(target_os = "linux"))]
+struct TrustedExecutable;
+
+#[cfg(target_os = "linux")]
+fn packaged_agent_ui() -> Result<TrustedExecutable, LaunchError> {
+    let path = PathBuf::from(PACKAGED_AGENT_UI);
+    open_executable(&path, true)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn packaged_agent_ui() -> Result<TrustedExecutable, LaunchError> {
+    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
+}
+
+#[cfg(target_os = "linux")]
+fn open_executable(
+    path: &Path,
+    require_packaged_owner: bool,
+) -> Result<TrustedExecutable, LaunchError> {
     if !path.is_absolute() {
         return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
     }
-    let metadata = std::fs::symlink_metadata(path).map_err(LaunchError::ExecutableUnavailable)?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-
-        let mode = metadata.mode();
-        if mode & 0o111 == 0
-            || (require_packaged_owner && (metadata.uid() != 0 || mode & 0o022 != 0))
-        {
-            return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
+    if require_packaged_owner {
+        for parent in [Path::new("/usr/local"), Path::new("/usr/local/bin")] {
+            let metadata =
+                std::fs::symlink_metadata(parent).map_err(LaunchError::ExecutableUnavailable)?;
+            use std::os::unix::fs::MetadataExt;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err(LaunchError::UntrustedExecutable(parent.to_path_buf()));
+            }
         }
     }
-    Ok(())
+    use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .open(path)
+        .map_err(LaunchError::ExecutableUnavailable)?;
+    let metadata = file
+        .metadata()
+        .map_err(LaunchError::ExecutableUnavailable)?;
+    let mode = metadata.mode();
+    if !metadata.is_file()
+        || mode & 0o111 == 0
+        || (require_packaged_owner && (metadata.uid() != 0 || mode & 0o022 != 0))
+    {
+        return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
+    }
+    Ok(TrustedExecutable { file })
 }
 
-fn launch_argv(program: &Path) -> Vec<String> {
+fn launch_argv() -> Vec<String> {
     vec![
-        program.to_string_lossy().into_owned(),
+        format!("/proc/self/fd/{EXECUTABLE_FD}"),
         OVERLAY_FLAG.to_string(),
         CONTEXT_STDIN_FLAG.to_string(),
         READY_FD_FLAG.to_string(),
@@ -555,11 +590,12 @@ fn prepare_launch<C: Context>(context: &C) -> Result<Vec<u8>, LaunchError> {
 fn launch_prepared_with_program(
     payload: &[u8],
     timeout: Duration,
-    program: &Path,
+    program: TrustedExecutable,
 ) -> Result<(), LaunchError> {
-    let argv = launch_argv(program);
+    let argv = launch_argv();
     let (mut ready_parent, ready_child) = UnixStream::pair().map_err(LaunchError::ReadyChannel)?;
     let ready_child_fd = ready_child.as_raw_fd();
+    let executable_fd = program.file.as_raw_fd();
     let mut command = Command::new(&argv[0]);
     command
         .args(&argv[1..])
@@ -572,22 +608,30 @@ fn launch_prepared_with_program(
             if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
                 return Err(io::Error::last_os_error());
             }
-            if ready_child_fd == READY_FD {
-                if libc::fcntl(READY_FD, libc::F_SETFD, 0) < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-            } else {
-                if libc::dup2(ready_child_fd, READY_FD) < 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                libc::close(ready_child_fd);
+            let executable_tmp = libc::fcntl(executable_fd, libc::F_DUPFD_CLOEXEC, 20);
+            if executable_tmp < 0 {
+                return Err(io::Error::last_os_error());
             }
+            let ready_tmp = libc::fcntl(ready_child_fd, libc::F_DUPFD_CLOEXEC, 20);
+            if ready_tmp < 0 {
+                libc::close(executable_tmp);
+                return Err(io::Error::last_os_error());
+            }
+            if libc::dup2(executable_tmp, EXECUTABLE_FD) < 0 || libc::dup2(ready_tmp, READY_FD) < 0
+            {
+                libc::close(executable_tmp);
+                libc::close(ready_tmp);
+                return Err(io::Error::last_os_error());
+            }
+            libc::close(executable_tmp);
+            libc::close(ready_tmp);
             Ok(())
         });
     }
 
     let started = Instant::now();
     let mut child = command.spawn().map_err(LaunchError::Spawn)?;
+    drop(program);
     drop(ready_child);
     let remaining = timeout
         .checked_sub(started.elapsed())
@@ -702,6 +746,89 @@ fn terminate_child(mut child: Child, error: LaunchError) -> Result<(), LaunchErr
     Err(error)
 }
 
+#[derive(Deserialize, Serialize)]
+struct SdkLaunchRequest {
+    protocol: u32,
+    app: String,
+    hint: Option<String>,
+}
+
+#[derive(Serialize)]
+struct SdkContext<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    hint: Option<&'a str>,
+}
+
+impl Context for SdkContext<'_> {
+    const APP_ID: &'static str = "sdk-app";
+}
+
+#[doc(hidden)]
+pub fn run_sdk_launcher() -> Result<(), LaunchError> {
+    require_process_handoff_isolation()?;
+    let arguments = std::env::args().skip(1).collect::<Vec<_>>();
+    let protocol = arguments
+        .windows(2)
+        .find(|pair| pair[0] == "--protocol")
+        .and_then(|pair| pair[1].parse::<u32>().ok())
+        .ok_or_else(|| {
+            LaunchError::Ready(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "missing SDK launcher protocol",
+            ))
+        })?;
+    if protocol != SDK_LAUNCHER_PROTOCOL {
+        return Err(LaunchError::Ready(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported SDK launcher protocol",
+        )));
+    }
+    io::stdout()
+        .write_all(b"READY 1\n")
+        .and_then(|_| io::stdout().flush())
+        .map_err(LaunchError::Ready)?;
+    let mut input = Vec::new();
+    io::stdin()
+        .take(MAX_CONTEXT_BYTES as u64 + 1)
+        .read_to_end(&mut input)
+        .map_err(LaunchError::Write)?;
+    if input.len() > MAX_CONTEXT_BYTES {
+        return Err(LaunchError::ActivationTooLarge {
+            actual: input.len(),
+            limit: MAX_CONTEXT_BYTES,
+        });
+    }
+    let request: SdkLaunchRequest =
+        serde_json::from_slice(&input).map_err(LaunchError::ActivationSerialization)?;
+    if request.protocol != SDK_LAUNCHER_PROTOCOL || request.app.trim().is_empty() {
+        return Err(LaunchError::Ready(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid SDK launcher request",
+        )));
+    }
+    let mut value = serde_json::to_value(SdkContext {
+        hint: request.hint.as_deref(),
+    })
+    .map_err(ContextError::Serialization)?;
+    value
+        .as_object_mut()
+        .unwrap()
+        .insert("app".to_string(), serde_json::Value::String(request.app));
+    let context = serde_json::to_string(&value).map_err(ContextError::Serialization)?;
+    let activation = Activation::overlay_with_context(context);
+    let payload =     serde_json::to_vec(&activation).map_err(LaunchError::ActivationSerialization)?;
+    #[cfg(target_os = "linux")]
+    {
+    let program = packaged_agent_ui()?;
+    launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, program)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+    let _ = payload;
+    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
+    }
+}
+
 /// Schedule Ask Claw without blocking the caller's UI thread.
 ///
 /// Serialization and process-isolation checks complete before returning.
@@ -716,13 +843,12 @@ pub fn launch<C: Context>(context: &C) -> Result<(), LaunchError> {
 #[cfg(target_os = "linux")]
 fn spawn_prepared(
     payload: Vec<u8>,
-    program: PathBuf,
+    program: TrustedExecutable,
 ) -> Result<thread::JoinHandle<()>, LaunchError> {
     thread::Builder::new()
         .name("ask-claw-launch".to_string())
         .spawn(move || {
-            if let Err(error) = launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, &program)
-            {
+            if let Err(error) = launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, program) {
                 eprintln!("Ask Claw launch failed: {error}");
             }
         })
@@ -732,7 +858,7 @@ fn spawn_prepared(
 #[cfg(not(target_os = "linux"))]
 fn spawn_prepared(
     _payload: Vec<u8>,
-    _program: PathBuf,
+    _program: TrustedExecutable,
 ) -> Result<thread::JoinHandle<()>, LaunchError> {
     Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
 }
@@ -743,7 +869,7 @@ fn launch_prepared_for_test(
     timeout: Duration,
     program: &Path,
 ) -> Result<(), LaunchError> {
-    validate_executable(program, false)?;
+    let program = open_executable(program, false)?;
     launch_prepared_with_program(payload, timeout, program)
 }
 
@@ -752,7 +878,7 @@ fn spawn_prepared_for_test(
     payload: Vec<u8>,
     program: PathBuf,
 ) -> Result<thread::JoinHandle<()>, LaunchError> {
-    validate_executable(&program, false)?;
+    let program = open_executable(&program, false)?;
     spawn_prepared(payload, program)
 }
 

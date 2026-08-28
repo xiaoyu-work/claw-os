@@ -49,8 +49,10 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import select
+import stat
 import subprocess
+import threading
 from dataclasses import dataclass, field
 from typing import Any, List, Optional
 
@@ -60,6 +62,7 @@ from . import ai, tools
 #: an app is launched as a GUI. Authors can override ``desktop.exec`` in
 #: their manifest; :func:`is_gui_launch` also honours ``COS_APP_GUI``.
 GUI_COMMAND = "--gui"
+ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher"
 
 
 def is_gui_launch(command: Optional[str] = None) -> bool:
@@ -93,30 +96,53 @@ class GuiContext:
     def open_agent_overlay(self, hint: Optional[str] = None) -> None:
         """Summon the system "Ask Claw" agent overlay.
 
-        This is the same ``cos-agent-ui --overlay`` window the global
-        hotkey raises. Pass ``hint`` to ground the agent's first response
+        This uses the fixed packaged launcher's versioned READY/stdin
+        protocol. Pass ``hint`` to ground the agent's first response
         in the app's current state (e.g. the open document) without
         polluting the visible chat transcript.
 
         Raises :class:`FileNotFoundError` if the overlay binary is not
         installed (e.g. a headless box with no desktop shell).
         """
-        bin_name = os.environ.get("COS_AGENT_UI_BIN", "cos-agent-ui")
-        if shutil.which(bin_name) is None:
-            raise FileNotFoundError(
-                f"agent overlay binary `{bin_name}` not found on PATH"
-            )
-        argv = [bin_name, "--overlay"]
-        if hint:
-            argv += ["--context", hint]
-        # Detach: the overlay outlives this call and must not block the
-        # app's event loop or be tied to its stdio.
-        subprocess.Popen(  # noqa: S603 - argv is a fixed, non-shell command
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
+        _validate_launcher()
+        child = subprocess.Popen(  # noqa: S603 - fixed trusted absolute path
+            [ASK_CLAW_LAUNCHER, "--protocol", "1"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
         )
+        assert child.stdout is not None
+        ready, _, _ = select.select([child.stdout], [], [], 5)
+        if not ready or child.stdout.readline() != b"READY 1\n":
+            child.kill()
+            child.wait()
+            raise RuntimeError("Ask Claw launcher did not become ready")
+        assert child.stdin is not None
+        request = {"protocol": 1, "app": self.app_id, "hint": hint}
+        child.stdin.write(json.dumps(request, separators=(",", ":")).encode())
+        child.stdin.close()
+        threading.Thread(target=child.wait, name="ask-claw-sdk-reaper", daemon=True).start()
+
+
+def _validate_launcher() -> None:
+    for path in ("/usr", "/usr/local", "/usr/local/bin"):
+        info = os.lstat(path)
+        if (
+            stat.S_ISLNK(info.st_mode)
+            or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != 0
+            or info.st_mode & 0o022
+        ):
+            raise PermissionError(f"untrusted Ask Claw launcher parent: {path}")
+    info = os.lstat(ASK_CLAW_LAUNCHER)
+    if (
+        stat.S_ISLNK(info.st_mode)
+        or not stat.S_ISREG(info.st_mode)
+        or info.st_uid != 0
+        or not info.st_mode & 0o111
+        or info.st_mode & 0o022
+    ):
+        raise PermissionError("untrusted Ask Claw launcher")
 
 
 def context(files: Optional[List[str]] = None) -> GuiContext:

@@ -21,6 +21,7 @@ Rust, Python, Node, and Go bindings.
 | --- | --- |
 | `wire/` | Versioned contract and code generation |
 | `wire/v1/contract.json` | Generated decoder set, stable validation errors, and JSON-RPC codes |
+| `wire/v1/ask-claw-launcher.md` | Versioned secure desktop overlay launcher handshake |
 | `rust/` | Rust public SDK |
 | `python/` | Python public SDK |
 | `node/` | Node public SDK |
@@ -45,6 +46,12 @@ conversion; u64-domain Node values materialize as `bigint` when necessary.
 Unrestricted payloads use `serde_json::Value` (Rust), `Decimal`/`WireDecimal` plus
 `encode_wire_json` (Python), `WireDecimal`/`bigint` plus `stringifyWireJson`
 (Node), and `json.Number` with `encoding/json` (Go).
+
+All GUI bindings preserve their existing `open_agent_overlay` signatures but
+delegate to the fixed `/usr/local/bin/cos-ask-claw-launcher`. The helper uses a
+versioned READY/stdin protocol and exclusively owns the secure Agent UI
+handoff; bindings do not invoke `cos-agent-ui`, consult `PATH`, or put hints in
+argv/environment/files.
 
 ## Tests
 

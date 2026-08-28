@@ -76,8 +76,7 @@ class ContextTests(unittest.TestCase):
 class OverlayTests(unittest.TestCase):
     def test_missing_binary_raises(self) -> None:
         ctx = gui.GuiContext(app_id="notes")
-        # Point at a binary that certainly does not exist on PATH.
-        os.environ["COS_AGENT_UI_BIN"] = "definitely-not-a-real-binary-xyz"
+        os.environ["COS_AGENT_UI_BIN"] = "/nonexistent/attacker"
         try:
             with self.assertRaises(FileNotFoundError):
                 ctx.open_agent_overlay()

@@ -31,7 +31,12 @@
 //! }
 //! ```
 
+use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
+
+const ASK_CLAW_LAUNCHER: &str = "/usr/local/bin/cos-ask-claw-launcher";
 
 /// Command value the bridge passes (and the default `desktop.exec`) when
 /// an app is launched as a GUI.
@@ -77,8 +82,8 @@ impl Context {
 
     /// Summon the system "Ask Claw" agent overlay.
     ///
-    /// This raises the same `cos-agent-ui --overlay` window the global
-    /// hotkey does. Pass `hint` to ground the agent's first response in
+    /// This uses the fixed packaged Ask Claw launcher and its versioned
+    /// READY/stdin protocol. Pass `hint` to ground the agent's first response in
     /// the app's current state (e.g. the open document) without
     /// polluting the visible chat transcript. The overlay is detached —
     /// it outlives this call and is not tied to the app's stdio.
@@ -86,24 +91,96 @@ impl Context {
     /// Returns the spawn error if the overlay binary is missing (e.g. a
     /// headless box with no desktop shell).
     pub fn open_agent_overlay(&self, hint: Option<&str>) -> std::io::Result<()> {
-        let bin = std::env::var("COS_AGENT_UI_BIN").unwrap_or_else(|_| "cos-agent-ui".to_string());
-        let mut cmd = Command::new(bin);
-        cmd.arg("--overlay");
-        if let Some(h) = hint {
-            cmd.arg("--context").arg(h);
-        }
-        cmd.stdin(Stdio::null())
-            .stdout(Stdio::null())
+        validate_launcher()?;
+        let mut child = Command::new(ASK_CLAW_LAUNCHER)
+            .args(["--protocol", "1"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-            .map(|_| ())
+            .spawn()?;
+        let stdout = child.stdout.take().ok_or_else(|| {
+            std::io::Error::other("Ask Claw launcher readiness channel unavailable")
+        })?;
+        let (sender, receiver) = mpsc::sync_channel(1);
+        std::thread::spawn(move || {
+            let mut ready = String::new();
+            let result = BufReader::new(stdout).read_line(&mut ready).map(|_| ready);
+            let _ = sender.send(result);
+        });
+        let ready = match receiver.recv_timeout(Duration::from_secs(5)) {
+            Ok(result) => result?,
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Ask Claw launcher readiness timed out",
+                ));
+            }
+        };
+        if ready != "READY 1\n" {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(std::io::Error::other(
+                "Ask Claw launcher did not become ready",
+            ));
+        }
+        let request = serde_json::json!({
+            "protocol": 1,
+            "app": self.app_id,
+            "hint": hint,
+        });
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| std::io::Error::other("Ask Claw launcher stdin unavailable"))?;
+        serde_json::to_writer(&mut stdin, &request)?;
+        stdin.flush()?;
+        drop(stdin);
+        std::thread::Builder::new()
+            .name("ask-claw-sdk-reaper".into())
+            .spawn(move || {
+                let _ = child.wait();
+            })?;
+        Ok(())
     }
+}
+
+fn validate_launcher() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        for path in ["/usr", "/usr/local", "/usr/local/bin"] {
+            let metadata = std::fs::symlink_metadata(path)?;
+            if metadata.file_type().is_symlink()
+                || !metadata.is_dir()
+                || metadata.uid() != 0
+                || metadata.mode() & 0o022 != 0
+            {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "untrusted Ask Claw launcher parent",
+                ));
+            }
+        }
+        let metadata = std::fs::symlink_metadata(ASK_CLAW_LAUNCHER)?;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_file()
+            || metadata.uid() != 0
+            || metadata.mode() & 0o111 == 0
+            || metadata.mode() & 0o022 != 0
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "untrusted Ask Claw launcher",
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/gui.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/gui.rs"));
 }

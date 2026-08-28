@@ -24,6 +24,7 @@
 //   }
 
 import { spawn } from "node:child_process";
+import { lstatSync } from "node:fs";
 
 import * as ai from "./ai";
 import * as tools from "./tools";
@@ -31,6 +32,7 @@ import * as tools from "./tools";
 /** Command value the bridge passes (and the default `desktop.exec`)
  * when an app is launched as a GUI. */
 export const GUI_COMMAND = "--gui";
+const ASK_CLAW_LAUNCHER = "/usr/local/bin/cos-ask-claw-launcher";
 
 /**
  * Return `true` when the current invocation is a desktop GUI launch.
@@ -60,8 +62,8 @@ export class GuiContext {
   }
 
   /**
-   * Summon the system "Ask Claw" agent overlay — the same
-   * `cos-agent-ui --overlay` window the global hotkey raises. Pass
+   * Summon the system "Ask Claw" agent overlay through the fixed packaged
+   * launcher's versioned READY/stdin protocol. Pass
    * `hint` to ground the agent's first response in the app's current
    * state without polluting the visible chat transcript.
    *
@@ -71,20 +73,58 @@ export class GuiContext {
    * box with no desktop shell).
    */
   openAgentOverlay(hint?: string): Promise<void> {
-    const bin = process.env.COS_AGENT_UI_BIN || "cos-agent-ui";
-    const argv = ["--overlay"];
-    if (hint) argv.push("--context", hint);
+    validateAskClawLauncher();
     return new Promise<void>((resolve, reject) => {
-      const child = spawn(bin, argv, {
-        stdio: "ignore",
-        detached: true,
+      const child = spawn(ASK_CLAW_LAUNCHER, ["--protocol", "1"], {
+        stdio: ["pipe", "pipe", "ignore"],
       });
-      child.once("error", (err) => reject(err));
-      child.once("spawn", () => {
+      const timer = setTimeout(() => {
+        child.kill();
+        reject(new Error("Ask Claw launcher readiness timed out"));
+      }, 5000);
+      let ready = "";
+      child.once("error", (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+      child.stdout.on("data", (chunk: Buffer) => {
+        ready += chunk.toString("utf8");
+        if (!ready.includes("\n")) return;
+        clearTimeout(timer);
+        if (ready !== "READY 1\n") {
+          child.kill();
+          reject(new Error("unexpected Ask Claw launcher handshake"));
+          return;
+        }
+        child.stdin.end(JSON.stringify({
+          protocol: 1,
+          app: this.appId,
+          hint: hint ?? null,
+        }));
+        child.stdout.destroy();
         child.unref();
         resolve();
       });
     });
+  }
+}
+
+function validateAskClawLauncher(): void {
+  for (const path of ["/usr", "/usr/local", "/usr/local/bin"]) {
+    const info = lstatSync(path);
+    if (info.isSymbolicLink() || !info.isDirectory() || info.uid !== 0 || (info.mode & 0o022) !== 0) {
+      throw new Error(`untrusted Ask Claw launcher parent: ${path}`);
+    }
+  }
+  const info = lstatSync(ASK_CLAW_LAUNCHER);
+  if (
+    info.isSymbolicLink() ||
+    !info.isFile() ||
+    info.uid !== 0 ||
+    (info.mode & 0o111) === 0 ||
+    (info.mode & 0o022) !== 0
+  ) {
+    throw new Error("untrusted Ask Claw launcher");
   }
 }
 

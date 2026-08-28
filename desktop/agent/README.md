@@ -115,8 +115,9 @@ avoiding plaintext context on the unauthenticated single-instance D-Bus path.
 It then sends context through an untrusted-data system boundary without
 storing it as the visible user prompt.
 
-The UI install recipe targets `/usr/local/bin/cos-agent-ui`; private context
-launches accept no executable override or `PATH` lookup.
+The UI install recipe targets `/usr/local/bin/cos-agent-ui` and installs the
+cross-language SDK entry point at `/usr/local/bin/cos-ask-claw-launcher`;
+private context launches accept no executable override or `PATH` lookup.
 
 ## Endpoint discovery
 

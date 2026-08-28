@@ -1,4 +1,5 @@
 name := 'cos-agent-ui'
+launcher-name := 'cos-ask-claw-launcher'
 
 rootdir := ''
 prefix := '/usr/local'
@@ -8,6 +9,8 @@ base-dir := absolute_path(clean(rootdir / prefix))
 cargo-target-dir := env('CARGO_TARGET_DIR', '../target')
 bin-src := cargo-target-dir / 'release' / name
 bin-dst := base-dir / 'bin' / name
+launcher-src := cargo-target-dir / 'release' / launcher-name
+launcher-dst := base-dir / 'bin' / launcher-name
 
 # Default recipe: build release
 default: build-release
@@ -15,6 +18,7 @@ default: build-release
 # Compile with debug profile
 build-debug *args:
     cargo build {{args}}
+    CARGO_TARGET_DIR={{cargo-target-dir}} cargo build --manifest-path ../../../cos-runtime/rust/Cargo.toml --bin {{launcher-name}} {{args}}
 
 # Compile with release profile
 build-release *args: (build-debug '--release' args)
@@ -29,6 +33,7 @@ check *args:
 # and now prefers `cos-agent-ui` when present.
 install:
     install -Dm0755 {{bin-src}} {{bin-dst}}
+    install -Dm0755 {{launcher-src}} {{launcher-dst}}
 
 uninstall:
-    rm -f {{bin-dst}}
+    rm -f {{bin-dst}} {{launcher-dst}}

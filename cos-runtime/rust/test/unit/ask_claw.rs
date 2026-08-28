@@ -90,11 +90,11 @@ fn context_at_limit_is_accepted_and_larger_context_is_rejected() {
 }
 
 #[test]
-fn packaged_launcher_argv_is_fixed_and_contains_no_payload() {
+fn descriptor_launcher_argv_is_fixed_and_contains_no_payload() {
     assert_eq!(
-        launch_argv(Path::new(PACKAGED_AGENT_UI)),
+        launch_argv(),
         [
-            "/usr/local/bin/cos-agent-ui",
+            "/proc/self/fd/10",
             "--overlay",
             "--context-stdin",
             "--ready-fd",
@@ -104,19 +104,45 @@ fn packaged_launcher_argv_is_fixed_and_contains_no_payload() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
+fn retained_executable_descriptor_survives_path_substitution() {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+    let environment = TestEnvironment::new();
+    let executable = environment.directory.path().join("agent");
+    std::fs::write(&executable, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let trusted = open_executable(&executable, false).unwrap();
+    let original = trusted.file.metadata().unwrap();
+
+    let moved = environment.directory.path().join("agent-old");
+    std::fs::rename(&executable, moved).unwrap();
+    std::fs::write(&executable, "#!/bin/sh\nexit 99\n").unwrap();
+    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let replacement = std::fs::metadata(&executable).unwrap();
+    let retained = trusted.file.metadata().unwrap();
+
+    assert_eq!((retained.dev(), retained.ino()), (original.dev(), original.ino()));
+    assert_ne!(
+        (retained.dev(), retained.ino()),
+        (replacement.dev(), replacement.ino())
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn executable_validation_rejects_missing_and_non_regular_targets() {
     let environment = TestEnvironment::new();
     let missing = environment.directory.path().join("missing-agent");
     assert!(matches!(
-        validate_executable(&missing, false),
+        open_executable(&missing, false),
         Err(LaunchError::ExecutableUnavailable(_))
     ));
 
     let directory = environment.directory.path().join("agent-directory");
     std::fs::create_dir(&directory).unwrap();
     assert!(matches!(
-        validate_executable(&directory, false),
+        open_executable(&directory, false),
         Err(LaunchError::UntrustedExecutable(_))
     ));
 
@@ -126,7 +152,7 @@ fn executable_validation_rejects_missing_and_non_regular_targets() {
     let link = environment.directory.path().join("agent-link");
     symlink(&target, &link).unwrap();
     assert!(matches!(
-        validate_executable(&link, false),
+        open_executable(&link, false),
         Err(LaunchError::UntrustedExecutable(_))
     ));
 }
@@ -230,6 +256,7 @@ fn reserved_app_field_is_rejected() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn process_spawn_failures_are_preserved() {
     let environment = TestEnvironment::new();
     let missing = environment.directory.path().join("missing-agent");
@@ -244,7 +271,7 @@ fn process_spawn_failures_are_preserved() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn missing_ready_signal_times_out_and_reaps_child() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -277,7 +304,7 @@ fn missing_ready_signal_times_out_and_reaps_child() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn child_crash_before_ready_is_reaped() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -307,7 +334,7 @@ fn child_crash_before_ready_is_reaped() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn parent_waits_for_ready_before_writing_private_context() {
     use std::os::unix::fs::PermissionsExt;
 
@@ -371,7 +398,7 @@ fn parent_waits_for_ready_before_writing_private_context() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn launcher_worker_does_not_block_the_calling_thread() {
     use std::os::unix::fs::PermissionsExt;
     use std::time::{Duration, Instant};
@@ -401,7 +428,7 @@ fn launcher_worker_does_not_block_the_calling_thread() {
 }
 
 #[test]
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn partial_context_write_kills_and_reaps_child() {
     use std::os::unix::fs::PermissionsExt;
 

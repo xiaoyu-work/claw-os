@@ -43,7 +43,8 @@ rejected; `--context-stdin` plus the inherited readiness descriptor is the only
 private activation path.
 
 The install target and runtime launch target are both fixed at
-`/usr/local/bin/cos-agent-ui`.
+`/usr/local/bin/cos-agent-ui`. The same recipe installs
+`/usr/local/bin/cos-ask-claw-launcher` for public SDK bindings.
 
 ## Tests
 

@@ -16,14 +16,19 @@
 package clawossdk
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
+	"syscall"
+	"time"
 )
 
 // GUICommand is the command value the bridge passes (and the default
 // `desktop.exec`) when an app is launched as a GUI.
 const GUICommand = "--gui"
+const askClawLauncher = "/usr/local/bin/cos-ask-claw-launcher"
 
 // IsGUILaunch reports whether the current invocation is a desktop GUI
 // launch. It prefers the COS_APP_GUI environment variable the bridge
@@ -61,8 +66,8 @@ func Context(files []string) *GuiContext {
 	return &GuiContext{AppID: appID, Files: files}
 }
 
-// OpenAgentOverlay summons the system "Ask Claw" agent overlay — the
-// same `cos-agent-ui --overlay` window the global hotkey raises. Pass a
+// OpenAgentOverlay summons the system "Ask Claw" agent overlay through the
+// fixed packaged launcher's versioned READY/stdin protocol. Pass a
 // non-empty hint to ground the agent's first response in the app's
 // current state without polluting the visible chat transcript.
 //
@@ -70,21 +75,78 @@ func Context(files []string) *GuiContext {
 // app's stdio or event loop. Returns an error if the overlay binary is
 // missing (e.g. a headless box with no desktop shell).
 func (c *GuiContext) OpenAgentOverlay(hint string) error {
-	bin := os.Getenv("COS_AGENT_UI_BIN")
-	if bin == "" {
-		bin = "cos-agent-ui"
+	if err := validateAskClawLauncher(); err != nil {
+		return err
 	}
-	argv := []string{"--overlay"}
-	if hint != "" {
-		argv = append(argv, "--context", hint)
+	cmd := exec.Command(askClawLauncher, "--protocol", "1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
 	}
-	// Nil stdio connects the child to the null device (see os/exec docs),
-	// so the overlay is not tied to the app's terminal.
-	cmd := exec.Command(bin, argv...)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	ready := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err == nil && line != "READY 1\n" {
+			err = fmt.Errorf("unexpected Ask Claw launcher handshake")
+		}
+		ready <- err
+	}()
+	select {
+	case err := <-ready:
+		if err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return err
+		}
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("Ask Claw launcher readiness timed out")
+	}
+	request := map[string]any{"protocol": 1, "app": c.AppID, "hint": hint}
+	if err := json.NewEncoder(stdin).Encode(request); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	if err := stdin.Close(); err != nil {
+		return err
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func validateAskClawLauncher() error {
+	for _, path := range []string{"/usr", "/usr/local", "/usr/local/bin"} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		statInfo, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
+			statInfo.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("untrusted Ask Claw launcher parent: %s", path)
+		}
+	}
+	info, err := os.Lstat(askClawLauncher)
+	if err != nil {
+		return err
+	}
+	statInfo, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
+		statInfo.Uid != 0 || info.Mode().Perm()&0o111 == 0 ||
+		info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("untrusted Ask Claw launcher")
+	}
+	return nil
 }
 
 func filesFromEnv() []string {

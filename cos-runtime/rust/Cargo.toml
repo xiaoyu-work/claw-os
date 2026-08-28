@@ -7,6 +7,10 @@ description = "INTERNAL runtime crate for claw-os bundled apps and desktop GUI b
 repository = "https://github.com/xiaoyu-work/claw-os"
 publish = false
 
+[[bin]]
+name = "cos-ask-claw-launcher"
+path = "src/bin/cos-ask-claw-launcher.rs"
+
 [dependencies]
 claw-os-sdk = { path = "../../claw-os-sdk/rust" }
 base64 = "0.22"

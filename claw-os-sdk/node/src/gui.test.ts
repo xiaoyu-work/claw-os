@@ -60,7 +60,7 @@ test("explicit files override the environment", () => {
 
 test("openAgentOverlay rejects when the binary is missing", async () => {
   const ctx = new gui.GuiContext("notes", []);
-  await withEnv({ COS_AGENT_UI_BIN: "/nonexistent/cos-agent-ui-xyz" }, async () => {
+  await withEnv({ COS_AGENT_UI_BIN: "/nonexistent/attacker" }, async () => {
     await assert.rejects(() => ctx.openAgentOverlay());
   });
 });
