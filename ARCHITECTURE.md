@@ -305,7 +305,14 @@ Process spawn also canonicalizes its executable before consent, requires both
 `proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds approval
 matching across the worker protocol and authority redemption to a digest of
 the validated executable, argv, working directory, and child-security
-options. `cos_sysinfo` additionally requires
+options. On Linux `core/src/proc.rs` opens the canonical executable without
+following a final symlink, validates its owner and mode, snapshots and seals
+its exact bytes in a memfd, and retains that descriptor through both
+capability checks. The digest includes source file identity and content hash.
+The cwd is also held by descriptor and selected with `fchdir`; execution uses
+the snapshot's `/proc/self/fd` descriptor path, so pathname, inode, symlink,
+in-place content, and cwd replacement races cannot change what runs.
+`cos_sysinfo` additionally requires
 `secret.read:name:environment` before honoring `env --include-secrets`.
 
 The owner's baseline authority is still daemon policy rather than a consequence

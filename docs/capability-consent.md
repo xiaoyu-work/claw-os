@@ -42,8 +42,16 @@ until its whole command surface is mapped. Independently of that compatibility
 gate, spawn resolves the executable to a canonical path, requires both
 `proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds both
 approval records to a digest of the validated executable, argv, working
-directory, and child-security options. Changing `/usr/bin/printf` to `/bin/sh`
-or changing any argument cannot redeem the prior approval.
+directory, and child-security options. On Linux the executable is opened with
+`O_NOFOLLOW`, checked as a regular executable owned by root or the execution
+user, copied into a sealed memfd, and retained through authorization. The
+digest includes the source device/inode/mode/owner and the SHA-256 of the exact
+sealed bytes. The working directory is likewise opened and bound by
+device/inode, then selected with `fchdir`. Execution uses
+`/proc/self/fd/<snapshot-fd>`, an atomic descriptor reference, rather than
+reopening the approved pathname. Changing `/usr/bin/printf` to `/bin/sh`,
+rewriting the same inode, swapping a symlink, replacing the cwd, or changing
+any argument cannot alter or redeem the approved invocation.
 
 Model output cannot approve a request. The worker channel has no decision
 route, and a request id is metadata rather than authority.
@@ -98,4 +106,6 @@ tool name is too coarse and no longer intercepts execution.
 The authoritative implementation is in
 [`core/src/caps/enforcement.rs`](../core/src/caps/enforcement.rs),
 [`core/src/approvals.rs`](../core/src/approvals.rs), and
-[`core/src/agentd/supervisor.rs`](../core/src/agentd/supervisor.rs).
+[`core/src/agentd/supervisor.rs`](../core/src/agentd/supervisor.rs). The
+descriptor-pinned process boundary is in
+[`core/src/proc.rs`](../core/src/proc.rs).

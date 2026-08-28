@@ -952,6 +952,379 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct SpawnFileIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner_uid: u32,
+    owner_gid: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SpawnResourceBinding {
+    path: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    identity: Option<SpawnFileIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_sha256: Option<String>,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SpawnFileVersion {
+    identity: SpawnFileIdentity,
+    size: u64,
+    modified_secs: i64,
+    modified_nanos: i64,
+    changed_secs: i64,
+    changed_nanos: i64,
+}
+
+#[cfg(target_os = "linux")]
+impl SpawnFileVersion {
+    fn from_metadata(metadata: &fs::Metadata) -> Self {
+        use std::os::unix::fs::MetadataExt;
+
+        Self {
+            identity: SpawnFileIdentity {
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                mode: metadata.mode(),
+                owner_uid: metadata.uid(),
+                owner_gid: metadata.gid(),
+            },
+            size: metadata.len(),
+            modified_secs: metadata.mtime(),
+            modified_nanos: metadata.mtime_nsec(),
+            changed_secs: metadata.ctime(),
+            changed_nanos: metadata.ctime_nsec(),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct SpawnExecutionIdentity {
+    uid: u32,
+    gid: u32,
+    supplementary_groups: Vec<u32>,
+}
+
+#[cfg(target_os = "linux")]
+impl SpawnExecutionIdentity {
+    fn current() -> Result<Self, String> {
+        let count = unsafe { libc::getgroups(0, std::ptr::null_mut()) };
+        if count < 0 {
+            return Err(format!(
+                "read supplementary groups: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut groups = vec![0 as libc::gid_t; count as usize];
+        if count > 0 && unsafe { libc::getgroups(count, groups.as_mut_ptr()) } < 0 {
+            return Err(format!(
+                "read supplementary groups: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        Ok(Self {
+            uid: unsafe { libc::geteuid() as u32 },
+            gid: unsafe { libc::getegid() as u32 },
+            supplementary_groups: groups,
+        })
+    }
+
+    fn routed(uid: u32, gid: u32) -> Self {
+        Self {
+            uid,
+            gid,
+            supplementary_groups: Vec::new(),
+        }
+    }
+
+    fn permission_bits(&self, identity: &SpawnFileIdentity) -> u32 {
+        if self.uid == identity.owner_uid {
+            (identity.mode >> 6) & 0o7
+        } else if self.gid == identity.owner_gid
+            || self.supplementary_groups.contains(&identity.owner_gid)
+        {
+            (identity.mode >> 3) & 0o7
+        } else {
+            identity.mode & 0o7
+        }
+    }
+
+    fn can_execute(&self, identity: &SpawnFileIdentity) -> bool {
+        if self.uid == 0 {
+            identity.mode & 0o111 != 0
+        } else {
+            self.permission_bits(identity) & 0o1 != 0
+        }
+    }
+
+    fn validate_owner(&self, identity: &SpawnFileIdentity, kind: &str) -> Result<(), String> {
+        if self.uid != 0 && identity.owner_uid != 0 && identity.owner_uid != self.uid {
+            return Err(format!(
+                "{kind} is owned by uid {}, not root or execution uid {}",
+                identity.owner_uid, self.uid
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PinnedSpawnDirectory {
+    path: PathBuf,
+    descriptor: fs::File,
+    identity: SpawnFileIdentity,
+}
+
+#[cfg(target_os = "linux")]
+impl PinnedSpawnDirectory {
+    fn open(path: &Path, execution: &SpawnExecutionIdentity) -> Result<Self, String> {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let path = path
+            .canonicalize()
+            .map_err(|error| format!("canonicalize process workdir: {error}"))?;
+        let encoded = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "process workdir contains NUL".to_string())?;
+        let fd = unsafe {
+            libc::open(
+                encoded.as_ptr(),
+                libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(format!(
+                "pin process workdir {}: {}",
+                path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+        let descriptor = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = descriptor
+            .metadata()
+            .map_err(|error| format!("inspect pinned process workdir: {error}"))?;
+        if !metadata.is_dir() {
+            return Err(format!(
+                "process workdir {} is not a directory",
+                path.display()
+            ));
+        }
+        let identity = SpawnFileVersion::from_metadata(&metadata).identity;
+        execution.validate_owner(&identity, "process workdir")?;
+        if !execution.can_execute(&identity) {
+            return Err(format!(
+                "process workdir {} is not searchable by execution uid {}",
+                path.display(),
+                execution.uid
+            ));
+        }
+        let current = fs::symlink_metadata(&path)
+            .map_err(|error| format!("revalidate process workdir {}: {error}", path.display()))?;
+        if current.file_type().is_symlink()
+            || current.dev() != identity.device
+            || current.ino() != identity.inode
+        {
+            return Err("process workdir changed while it was being pinned".to_string());
+        }
+        Ok(Self {
+            path,
+            descriptor,
+            identity,
+        })
+    }
+
+    fn resolution_path(&self) -> PathBuf {
+        use std::os::fd::AsRawFd;
+        PathBuf::from(format!("/proc/self/fd/{}", self.descriptor.as_raw_fd()))
+    }
+
+    fn binding(&self) -> SpawnResourceBinding {
+        SpawnResourceBinding {
+            path: self.path.to_string_lossy().into_owned(),
+            identity: Some(self.identity.clone()),
+            content_sha256: None,
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+struct PinnedSpawnExecutable {
+    path: PathBuf,
+    _source: fs::File,
+    snapshot: fs::File,
+    identity: SpawnFileIdentity,
+    content_sha256: String,
+}
+
+#[cfg(target_os = "linux")]
+impl PinnedSpawnExecutable {
+    const MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+    fn open(path: &Path, execution: &SpawnExecutionIdentity) -> Result<Self, String> {
+        use std::io::{Read, Seek, Write};
+        use std::os::fd::FromRawFd;
+        use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+
+        let path = path.to_path_buf();
+        let mut source = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK)
+            .open(&path)
+            .map_err(|error| format!("pin process executable {}: {error}", path.display()))?;
+        let before = source
+            .metadata()
+            .map_err(|error| format!("inspect pinned process executable: {error}"))?;
+        if !before.is_file() {
+            return Err(format!(
+                "process executable {} is not a regular file",
+                path.display()
+            ));
+        }
+        let version = SpawnFileVersion::from_metadata(&before);
+        execution.validate_owner(&version.identity, "process executable")?;
+        if !execution.can_execute(&version.identity) {
+            return Err(format!(
+                "process executable {} is not executable by uid {}",
+                path.display(),
+                execution.uid
+            ));
+        }
+        if version.identity.mode & (libc::S_ISUID | libc::S_ISGID) != 0 {
+            return Err("setuid and setgid process executables are not supported".to_string());
+        }
+        if version.size > Self::MAX_BYTES {
+            return Err(format!(
+                "process executable is too large to pin safely ({} bytes, max {})",
+                version.size,
+                Self::MAX_BYTES
+            ));
+        }
+        let current = fs::symlink_metadata(&path).map_err(|error| {
+            format!("revalidate process executable {}: {error}", path.display())
+        })?;
+        if current.file_type().is_symlink()
+            || current.dev() != version.identity.device
+            || current.ino() != version.identity.inode
+        {
+            return Err("process executable changed while it was being pinned".to_string());
+        }
+
+        let label = std::ffi::CString::new("cos-proc-executable").expect("static string");
+        const MFD_EXEC: libc::c_uint = 0x0010;
+        let base_flags = libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING;
+        let mut fd = unsafe { libc::memfd_create(label.as_ptr(), base_flags | MFD_EXEC) };
+        if fd < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINVAL) {
+            fd = unsafe { libc::memfd_create(label.as_ptr(), base_flags) };
+        }
+        if fd < 0 {
+            return Err(format!(
+                "create pinned executable snapshot: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let mut snapshot = unsafe { fs::File::from_raw_fd(fd) };
+        let mut hasher = crate::crypto::Sha256Stream::new();
+        let mut copied = 0u64;
+        let mut buffer = [0u8; 64 * 1024];
+        loop {
+            let read = source
+                .read(&mut buffer)
+                .map_err(|error| format!("read pinned process executable: {error}"))?;
+            if read == 0 {
+                break;
+            }
+            copied = copied.saturating_add(read as u64);
+            if copied > Self::MAX_BYTES {
+                return Err("process executable grew beyond the pinning limit".to_string());
+            }
+            hasher.update(&buffer[..read]);
+            snapshot
+                .write_all(&buffer[..read])
+                .map_err(|error| format!("snapshot process executable: {error}"))?;
+        }
+        let after = source
+            .metadata()
+            .map_err(|error| format!("reinspect pinned process executable: {error}"))?;
+        if SpawnFileVersion::from_metadata(&after) != version || copied != version.size {
+            return Err("process executable changed while its snapshot was created".to_string());
+        }
+        let effective_uid = unsafe { libc::geteuid() as u32 };
+        if effective_uid == 0
+            && (execution.uid != 0 || execution.gid != unsafe { libc::getegid() as u32 })
+            && unsafe { libc::fchown(fd, execution.uid, execution.gid) } != 0
+        {
+            return Err(format!(
+                "assign pinned executable ownership: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if unsafe { libc::fchmod(fd, 0o500) } != 0 {
+            return Err(format!(
+                "set pinned executable mode: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        snapshot
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| format!("rewind pinned executable: {error}"))?;
+        let seals =
+            libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+        if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, seals) } < 0 {
+            return Err(format!(
+                "seal pinned executable snapshot: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+
+        Ok(Self {
+            path,
+            _source: source,
+            snapshot,
+            identity: version.identity,
+            content_sha256: hasher.finalize_hex(),
+        })
+    }
+
+    fn binding(&self) -> SpawnResourceBinding {
+        SpawnResourceBinding {
+            path: self.path.to_string_lossy().into_owned(),
+            identity: Some(self.identity.clone()),
+            content_sha256: Some(self.content_sha256.clone()),
+        }
+    }
+}
+
+#[cfg(test)]
+static PRE_SPAWN_TEST_HOOK: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
+    std::sync::Mutex::new(None);
+
+#[cfg(test)]
+fn set_pre_spawn_test_hook(hook: impl FnOnce() + Send + 'static) {
+    *PRE_SPAWN_TEST_HOOK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner()) = Some(Box::new(hook));
+}
+
+#[cfg(test)]
+fn run_pre_spawn_test_hook() {
+    let hook = PRE_SPAWN_TEST_HOOK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .take();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+#[cfg(not(test))]
+fn run_pre_spawn_test_hook() {}
+
 fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
     let canonical = candidate.canonicalize().ok()?;
     let metadata = canonical.metadata().ok()?;
@@ -1018,12 +1391,12 @@ fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<P
 
 #[allow(clippy::too_many_arguments)]
 fn spawn_operation_digest(
-    executable: &Path,
+    executable: &SpawnResourceBinding,
     argv: &[String],
     requested_session: Option<&str>,
     group: Option<&str>,
     parent: &str,
-    workdir: &str,
+    workdir: &SpawnResourceBinding,
     tier: Option<u8>,
     scope: Option<&str>,
     priority: Option<&str>,
@@ -1032,7 +1405,7 @@ fn spawn_operation_digest(
     isolated_workspace: bool,
 ) -> Result<String, String> {
     let canonical = serde_json::to_vec(&json!({
-        "executable": executable.to_string_lossy(),
+        "executable": executable,
         "argv": argv,
         "requested_session": requested_session,
         "group": group,
@@ -1336,14 +1709,43 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             .and_then(|path| path.canonicalize())
             .map_err(|error| format!("resolve process working directory: {error}"))?
     };
+    if isolated_workspace {
+        fs::create_dir_all(&execution_workdir)
+            .map_err(|error| format!("failed to create isolated workspace: {error}"))?;
+        workdir = Some(execution_workdir.to_string_lossy().into_owned());
+    }
+
+    #[cfg(target_os = "linux")]
+    let execution_identity = match routed_identity.as_ref() {
+        Some((uid, gid, _)) => SpawnExecutionIdentity::routed(*uid, *gid),
+        None => SpawnExecutionIdentity::current()?,
+    };
+    #[cfg(target_os = "linux")]
+    let pinned_workdir = PinnedSpawnDirectory::open(&execution_workdir, &execution_identity)?;
+    #[cfg(target_os = "linux")]
+    let executable = resolve_spawn_executable(&command_args[0], &pinned_workdir.resolution_path())?;
+    #[cfg(not(target_os = "linux"))]
     let executable = resolve_spawn_executable(&command_args[0], &execution_workdir)?;
-    let workdir_binding = if isolated_workspace {
-        "isolated".to_string()
-    } else {
-        execution_workdir.to_string_lossy().into_owned()
+    #[cfg(target_os = "linux")]
+    let pinned_executable = PinnedSpawnExecutable::open(&executable, &execution_identity)?;
+    #[cfg(target_os = "linux")]
+    let executable_binding = pinned_executable.binding();
+    #[cfg(not(target_os = "linux"))]
+    let executable_binding = SpawnResourceBinding {
+        path: executable.to_string_lossy().into_owned(),
+        identity: None,
+        content_sha256: None,
+    };
+    #[cfg(target_os = "linux")]
+    let workdir_binding = pinned_workdir.binding();
+    #[cfg(not(target_os = "linux"))]
+    let workdir_binding = SpawnResourceBinding {
+        path: execution_workdir.to_string_lossy().into_owned(),
+        identity: None,
+        content_sha256: None,
     };
     let operation_digest = spawn_operation_digest(
-        &executable,
+        &executable_binding,
         &command_args[1..],
         requested_session.as_deref(),
         group.as_deref(),
@@ -1375,17 +1777,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         &operation_digest,
     )
     .map_err(|v| v.to_string())?;
+    run_pre_spawn_test_hook();
 
     let dir = proc_dir();
     fs::create_dir_all(&dir)
         .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
-
-    // Handle isolated workspace
-    if isolated_workspace {
-        fs::create_dir_all(&execution_workdir)
-            .map_err(|e| format!("failed to create isolated workspace: {e}"))?;
-        workdir = Some(execution_workdir.to_string_lossy().to_string());
-    }
 
     let stdout_path = dir.join(format!("{sid}.stdout"));
     let stderr_path = dir.join(format!("{sid}.stderr"));
@@ -1401,7 +1797,26 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         }
     };
 
+    #[cfg(target_os = "linux")]
+    let (exec_fd, workdir_fd) = {
+        use std::os::fd::AsRawFd;
+        (
+            pinned_executable.snapshot.as_raw_fd(),
+            pinned_workdir.descriptor.as_raw_fd(),
+        )
+    };
+    // The procfs descriptor path is a kernel reference to the inherited,
+    // sealed memfd. It lets Command keep its stdio/environment handling
+    // without reopening the user-controlled executable pathname.
+    #[cfg(target_os = "linux")]
+    let mut cmd = Command::new(format!("/proc/self/fd/{exec_fd}"));
+    #[cfg(not(target_os = "linux"))]
     let mut cmd = Command::new(&executable);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.arg0(&executable);
+    }
     cmd.args(&command_args[1..])
         .stdin(Stdio::null())
         .stdout(stdout_file)
@@ -1416,6 +1831,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         .env("NPM_CONFIG_YES", "true")
         .env("PYTHONDONTWRITEBYTECODE", "1");
 
+    #[cfg(not(target_os = "linux"))]
     cmd.current_dir(&execution_workdir);
     #[cfg(unix)]
     if let Some((_, _, home)) = routed_identity.as_ref() {
@@ -1426,7 +1842,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     cmd.env("COS_SESSION", &sid)
         .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     unsafe {
         use std::os::unix::process::CommandExt;
         let identity = routed_identity.as_ref().map(|(uid, gid, _)| (*uid, *gid));
@@ -1458,8 +1874,52 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
                     return Err(std::io::Error::last_os_error());
                 }
             }
+            if libc::fchdir(workdir_fd) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let fd_flags = libc::fcntl(exec_fd, libc::F_GETFD);
+            if fd_flags < 0 || libc::fcntl(exec_fd, libc::F_SETFD, fd_flags & !libc::FD_CLOEXEC) < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+
+    #[cfg(all(unix, not(target_os = "linux")))]
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        let identity = routed_identity.as_ref().map(|(uid, gid, _)| (*uid, *gid));
+        let nice_adjustment = priority.as_deref().map(|priority| match priority {
+            "low" => 10,
+            "normal" => 0,
+            "high" => -5,
+            "realtime" => -10,
+            _ => 0,
+        });
+        let euid = libc::geteuid() as u32;
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            if let Some((uid, gid)) = identity {
+                if euid == 0
+                    && (libc::setgroups(0, std::ptr::null()) != 0
+                        || libc::setgid(gid) != 0
+                        || libc::setuid(uid) != 0)
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
+            }
+            if let Some(adjustment) = nice_adjustment {
+                let current = libc::getpriority(libc::PRIO_PROCESS, 0);
+                let target = current.saturating_add(adjustment).clamp(-20, 19);
+                if libc::setpriority(libc::PRIO_PROCESS, 0, target) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             Ok(())
         });
