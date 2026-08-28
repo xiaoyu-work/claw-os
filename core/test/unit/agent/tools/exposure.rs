@@ -32,6 +32,36 @@ fn exact_capability_scope_is_recomputed_per_context() {
 }
 
 #[test]
+fn any_exact_capability_requires_one_compatible_scope() {
+    let rule = ToolExposure::always().requiring_any_cap([
+        Cap::new(Verb::AI_AUDIO_TTS, crate::caps::Scope::name("provider-a")),
+        Cap::new(Verb::AI_AUDIO_TTS, crate::caps::Scope::name("provider-b")),
+    ]);
+    let provider_a = ToolExposureContext::isolated(Guardrails::permissive())
+        .with_capabilities(cap(
+            Verb::AI_AUDIO_TTS,
+            crate::caps::Scope::name("provider-a"),
+        ));
+    let provider_c = ToolExposureContext::isolated(Guardrails::permissive())
+        .with_capabilities(cap(
+            Verb::AI_AUDIO_TTS,
+            crate::caps::Scope::name("provider-c"),
+        ));
+
+    assert_eq!(rule.decide(&provider_a), ExposureDecision::Visible);
+    assert!(matches!(
+        rule.decide(&provider_c),
+        ExposureDecision::Hidden(_)
+    ));
+    assert!(matches!(
+        ToolExposure::always()
+            .requiring_any_cap([])
+            .decide(&provider_a),
+        ExposureDecision::Hidden(_)
+    ));
+}
+
+#[test]
 fn source_presence_and_transport_are_independent_requirements() {
     let rule = ToolExposure::always()
         .from_sources([SessionSource::LocalCli])

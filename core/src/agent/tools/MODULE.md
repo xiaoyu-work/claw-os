@@ -21,6 +21,9 @@ which tool calls are exposed and executed.
 - Scope conversation recall to `self:<session>` unless the caller holds the
   system-Agent memory scope; app-memory queries require `self:<app>` before
   source-filtered rows are returned.
+- Advertise media tools only when a configured provider has a compatible
+  exact name scope, then recheck that provider immediately before invocation;
+  STT independently enforces its exact `fs.read` path scope.
 - Keep untrusted tool output inside explicit model-data boundaries.
 
 ## Key Files

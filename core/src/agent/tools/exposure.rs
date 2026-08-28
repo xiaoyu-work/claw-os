@@ -418,6 +418,7 @@ pub struct ToolExposure {
     all_verbs: Vec<Verb>,
     any_verbs: Vec<Verb>,
     exact_caps: Vec<Cap>,
+    any_exact_caps: Option<Vec<Cap>>,
     sources: Option<Vec<SessionSource>>,
     transport: Option<ToolTransport>,
     attended_local: bool,
@@ -442,6 +443,11 @@ impl ToolExposure {
 
     pub fn requiring_caps(mut self, caps: impl IntoIterator<Item = Cap>) -> Self {
         self.exact_caps.extend(caps);
+        self
+    }
+
+    pub fn requiring_any_cap(mut self, caps: impl IntoIterator<Item = Cap>) -> Self {
+        self.any_exact_caps = Some(caps.into_iter().collect());
         self
     }
 
@@ -535,6 +541,13 @@ impl ToolExposure {
             return ExposureDecision::Hidden(
                 "required capability scope is not in the effective grant".to_string(),
             );
+        }
+        if let Some(caps) = &self.any_exact_caps {
+            if !caps.iter().any(|cap| context.capabilities.covers(cap)) {
+                return ExposureDecision::Hidden(
+                    "no usable capability scope is in the effective grant".to_string(),
+                );
+            }
         }
         ExposureDecision::Visible
     }

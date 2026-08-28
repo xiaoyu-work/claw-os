@@ -32,6 +32,7 @@ use crate::agent::media::{
     stt::{SttRegistry, SttRequest},
     tts::{AudioFormat, TtsRegistry, TtsRequest},
 };
+use crate::caps::{Cap, Scope, Verb};
 
 fn parse_audio_format(s: &str) -> AudioFormat {
     match s.trim().to_ascii_lowercase().as_str() {
@@ -50,6 +51,27 @@ fn write_output(name: &str, ext: &str, bytes: &[u8]) -> Result<PathBuf, std::io:
     let path = dir.join(format!("{name}-{id}.{ext}"));
     std::fs::write(&path, bytes)?;
     Ok(path)
+}
+
+fn provider_capabilities(
+    verb: Verb,
+    names: Vec<String>,
+    is_configured: impl Fn(&str) -> bool,
+) -> Vec<Cap> {
+    names
+        .into_iter()
+        .filter(|name| is_configured(name))
+        .map(|name| Cap::new(verb, Scope::name(name)))
+        .collect()
+}
+
+fn require_provider(verb: Verb, provider: &str) -> Result<(), ToolResult> {
+    crate::caps::require(verb, Scope::name(provider)).map_err(|denial| {
+        ToolResult::err(format!(
+            "{} denied for provider '{provider}': {denial}",
+            verb.as_str()
+        ))
+    })
 }
 
 // =============== TTS tool ===============
@@ -89,7 +111,15 @@ impl Tool for TtsTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AI_AUDIO_TTS])
+        ToolExposure::always().requiring_any_cap(provider_capabilities(
+            Verb::AI_AUDIO_TTS,
+            self.registry.names(),
+            |name| {
+                self.registry
+                    .get(name)
+                    .is_some_and(|provider| provider.is_configured())
+            },
+        ))
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -118,6 +148,13 @@ impl Tool for TtsTool {
         if let Some(s) = input.get("speed").and_then(|v| v.as_f64()) {
             req.speed = Some(s as f32);
         }
+        if let Err(error) = req.validate() {
+            return ToolResult::err(format!("tts provider error: {error}"));
+        }
+        let effective_provider = provider.name().to_string();
+        if let Err(error) = require_provider(Verb::AI_AUDIO_TTS, &effective_provider) {
+            return error;
+        }
         let resp = match provider.synthesize(req).await {
             Ok(r) => r,
             Err(e) => return ToolResult::err(format!("tts provider error: {e}")),
@@ -128,7 +165,7 @@ impl Tool for TtsTool {
         };
         ToolResult::ok(
             json!({
-                "provider": provider_name,
+                "provider": effective_provider,
                 "format": resp.format.extension(),
                 "bytes": resp.audio.len(),
                 "sample_rate": resp.sample_rate,
@@ -176,7 +213,16 @@ impl Tool for SttTool {
 
     fn exposure(&self) -> ToolExposure {
         ToolExposure::always()
-            .requiring_all_verbs([crate::caps::Verb::AI_AUDIO_STT, crate::caps::Verb::FS_READ])
+            .requiring_all_verbs([Verb::FS_READ])
+            .requiring_any_cap(provider_capabilities(
+                Verb::AI_AUDIO_STT,
+                self.registry.names(),
+                |name| {
+                    self.registry
+                        .get(name)
+                        .is_some_and(|provider| provider.is_configured())
+                },
+            ))
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -247,13 +293,20 @@ impl Tool for SttTool {
         if let Some(l) = input.get("language").and_then(|v| v.as_str()) {
             req.language = Some(l.to_string());
         }
+        if let Err(error) = req.validate() {
+            return ToolResult::err(format!("stt provider error: {error}"));
+        }
+        let effective_provider = provider.name().to_string();
+        if let Err(error) = require_provider(Verb::AI_AUDIO_STT, &effective_provider) {
+            return error;
+        }
         let resp = match provider.transcribe(req).await {
             Ok(r) => r,
             Err(e) => return ToolResult::err(format!("stt provider error: {e}")),
         };
         ToolResult::ok(
             json!({
-                "provider": provider_name,
+                "provider": effective_provider,
                 "text": resp.text,
                 "language": resp.language,
                 "segments": resp.segments.len(),
@@ -303,7 +356,15 @@ impl Tool for ImageGenTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AI_IMAGE_GENERATE])
+        ToolExposure::always().requiring_any_cap(provider_capabilities(
+            Verb::AI_IMAGE_GENERATE,
+            self.registry.names(),
+            |name| {
+                self.registry
+                    .get(name)
+                    .is_some_and(|provider| provider.is_configured())
+            },
+        ))
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -343,6 +404,13 @@ impl Tool for ImageGenTool {
         if let Some(n) = input.get("n").and_then(|v| v.as_u64()) {
             req.n = n as u32;
         }
+        if let Err(error) = req.validate() {
+            return ToolResult::err(format!("imagegen provider error: {error}"));
+        }
+        let effective_provider = provider.name().to_string();
+        if let Err(error) = require_provider(Verb::AI_IMAGE_GENERATE, &effective_provider) {
+            return error;
+        }
         let resp = match provider.generate(req).await {
             Ok(r) => r,
             Err(e) => return ToolResult::err(format!("imagegen provider error: {e}")),
@@ -356,7 +424,7 @@ impl Tool for ImageGenTool {
         }
         ToolResult::ok(
             json!({
-                "provider": provider_name,
+                "provider": effective_provider,
                 "model": resp.model,
                 "seed_used": resp.seed_used,
                 "count": resp.images.len(),
