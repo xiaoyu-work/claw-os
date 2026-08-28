@@ -14,7 +14,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::sqlite_fts::{MemoryDb, MessageRow, SearchHit};
-use crate::agent::tools::exposure::ToolExposure;
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 const DEFAULT_LIMIT: usize = 10;
@@ -76,7 +76,10 @@ impl Tool for CosRecallTool {
     }
 
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::MEMORY_READ])
+        ToolExposure::always().requiring_memory(
+            [crate::caps::Verb::MEMORY_READ],
+            MemoryExposure::SystemAgentOrSession,
+        )
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -103,14 +106,62 @@ impl Tool for CosRecallTool {
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LIMIT)
             .clamp(1, MAX_LIMIT);
+        let scope = match command.as_str() {
+            "search" => {
+                if query.is_empty() {
+                    return ToolResult::err("'search' requires non-empty 'query'");
+                }
+                match session_id.as_deref() {
+                    Some(session_id) => {
+                        if let Err(error) =
+                            crate::agent::tools::validate_memory_scope(session_id, "session_id")
+                        {
+                            return ToolResult::err(error);
+                        }
+                        crate::agent::tools::MemoryScope::Session(session_id)
+                    }
+                    None => crate::agent::tools::MemoryScope::SystemAgent,
+                }
+            }
+            "recent" => {
+                let Some(session_id) = session_id.as_deref() else {
+                    return ToolResult::err("'recent' requires 'session_id'");
+                };
+                if let Err(error) =
+                    crate::agent::tools::validate_memory_scope(session_id, "session_id")
+                {
+                    return ToolResult::err(error);
+                }
+                crate::agent::tools::MemoryScope::Session(session_id)
+            }
+            "sessions" => crate::agent::tools::MemoryScope::SystemAgent,
+            "stats" => match session_id.as_deref() {
+                Some(session_id) => {
+                    if let Err(error) =
+                        crate::agent::tools::validate_memory_scope(session_id, "session_id")
+                    {
+                        return ToolResult::err(error);
+                    }
+                    crate::agent::tools::MemoryScope::Session(session_id)
+                }
+                None => crate::agent::tools::MemoryScope::SystemAgent,
+            },
+            other => {
+                return ToolResult::err(format!(
+                    "unknown command '{other}'. valid: search|recent|sessions|stats"
+                ))
+            }
+        };
+        if let Err(denial) =
+            crate::agent::tools::require_memory(crate::caps::Verb::MEMORY_READ, scope)
+        {
+            return ToolResult::err(denial.to_string());
+        }
 
         let db = self.db.clone();
         let join = tokio::task::spawn_blocking(move || -> Result<Value, String> {
             match command.as_str() {
                 "search" => {
-                    if query.is_empty() {
-                        return Err("'search' requires non-empty 'query'".to_string());
-                    }
                     // FTS5 query strings have their own grammar (`AND`,
                     // `OR`, `NEAR`, column filters like `body:foo`). A
                     // raw user query containing `:` or `"` can either
@@ -135,9 +186,7 @@ impl Tool for CosRecallTool {
                     }))
                 }
                 "recent" => {
-                    let sid = session_id
-                        .clone()
-                        .ok_or_else(|| "'recent' requires 'session_id'".to_string())?;
+                    let sid = session_id.clone().expect("validated above");
                     let rows = db.recent(&sid, limit).map_err(|e| e.to_string())?;
                     Ok(json!({
                         "session_id": sid,
@@ -158,10 +207,12 @@ impl Tool for CosRecallTool {
                     }))
                 }
                 "stats" => {
-                    let total = db.count_total().map_err(|e| e.to_string())?;
-                    let session_count = match &session_id {
-                        Some(sid) => Some(db.count_session(sid).map_err(|e| e.to_string())?),
-                        None => None,
+                    let (total, session_count) = match &session_id {
+                        Some(sid) => {
+                            let count = db.count_session(sid).map_err(|e| e.to_string())?;
+                            (count, Some(count))
+                        }
+                        None => (db.count_total().map_err(|e| e.to_string())?, None),
                     };
                     Ok(json!({
                         "total_messages": total,
@@ -169,9 +220,7 @@ impl Tool for CosRecallTool {
                         "session_messages": session_count,
                     }))
                 }
-                other => Err(format!(
-                    "unknown command '{other}'. valid: search|recent|sessions|stats"
-                )),
+                other => Err(format!("unexpected validated command '{other}'")),
             }
         })
         .await;

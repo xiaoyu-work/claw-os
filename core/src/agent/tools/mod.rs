@@ -24,11 +24,38 @@ use serde::{Deserialize, Serialize};
 
 pub(crate) const SYSTEM_AGENT_MEMORY_SCOPE: &str = "agent";
 
-pub(crate) fn require_agent_memory(verb: crate::caps::Verb) -> Result<(), crate::caps::Denial> {
-    crate::caps::require(
-        verb,
-        crate::caps::Scope::self_ref(SYSTEM_AGENT_MEMORY_SCOPE),
-    )
+pub(crate) enum MemoryScope<'a> {
+    SystemAgent,
+    Session(&'a str),
+    App(&'a str),
+}
+
+pub(crate) fn validate_memory_scope(value: &str, label: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(format!("{label} must be a non-empty single-line identifier"));
+    }
+    Ok(())
+}
+
+pub(crate) fn require_memory(
+    verb: crate::caps::Verb,
+    target: MemoryScope<'_>,
+) -> Result<(), crate::caps::Denial> {
+    let target = match target {
+        MemoryScope::SystemAgent => SYSTEM_AGENT_MEMORY_SCOPE,
+        MemoryScope::Session(session) | MemoryScope::App(session) => session,
+    };
+    let system_scope = crate::caps::Scope::self_ref(SYSTEM_AGENT_MEMORY_SCOPE);
+    let requested_scope = crate::caps::Scope::self_ref(target);
+    let scope = exposure::current()
+        .filter(|context| {
+            context
+                .capabilities()
+                .covers(&crate::caps::Cap::new(verb, system_scope.clone()))
+        })
+        .map_or(requested_scope, |_| system_scope);
+    crate::caps::require(verb, scope)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

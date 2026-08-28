@@ -16,6 +16,8 @@ use crate::caps::{Cap, CapSet, Verb};
 use crate::proc::SessionInfo;
 use crate::session::{SessionClient, SessionPresence, SessionSource};
 
+use super::SYSTEM_AGENT_MEMORY_SCOPE;
+
 /// Execution boundary a tool needs in order to be reachable.
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub enum ToolTransport {
@@ -45,6 +47,13 @@ pub enum ExecutionHost {
     AgentWorker,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryExposure {
+    SystemAgent,
+    SystemAgentOrSession,
+    SystemAgentOrApp,
+}
+
 /// Trusted identity and authority facts for one model request.
 #[derive(Clone, Debug)]
 pub struct ToolExposureContext {
@@ -52,6 +61,7 @@ pub struct ToolExposureContext {
     conversation_session_id: Option<String>,
     task_id: Option<String>,
     owner_uid: u32,
+    app_id: Option<String>,
     client: SessionClient,
     presence: Option<SessionPresence>,
     capabilities: CapSet,
@@ -110,6 +120,7 @@ impl ToolExposureContext {
             conversation_session_id: conversation_session_id.map(str::to_string),
             task_id: task_id.map(str::to_string),
             owner_uid,
+            app_id: session.app_id.clone(),
             client: session.client,
             presence,
             capability_generation: capability_generation(&capabilities),
@@ -189,6 +200,7 @@ impl ToolExposureContext {
             conversation_session_id: None,
             task_id: None,
             owner_uid: 0,
+            app_id: None,
             client: SessionClient::default(),
             presence: None,
             capabilities: CapSet::new(),
@@ -328,6 +340,10 @@ impl ToolExposureContext {
         self.owner_uid
     }
 
+    pub fn app_id(&self) -> Option<&str> {
+        self.app_id.as_deref()
+    }
+
     pub fn client(&self) -> SessionClient {
         let mut client = self.client;
         client.attended = self.attended_now();
@@ -406,6 +422,7 @@ pub struct ToolExposure {
     transport: Option<ToolTransport>,
     attended_local: bool,
     extension: Option<String>,
+    memory: Option<(Vec<Verb>, MemoryExposure)>,
 }
 
 impl ToolExposure {
@@ -448,6 +465,15 @@ impl ToolExposure {
         self
     }
 
+    pub fn requiring_memory(
+        mut self,
+        verbs: impl IntoIterator<Item = Verb>,
+        scope: MemoryExposure,
+    ) -> Self {
+        self.memory = Some((verbs.into_iter().collect(), scope));
+        self
+    }
+
     pub fn decide(&self, context: &ToolExposureContext) -> ExposureDecision {
         if self.attended_local && !context.is_attended_local() {
             return ExposureDecision::Hidden("requires an attended local session".to_string());
@@ -474,6 +500,20 @@ impl ToolExposure {
                 ));
             }
         }
+        if let Some((verbs, scope)) = &self.memory {
+            let candidates = memory_scope_candidates(context, *scope);
+            if !verbs.iter().any(|verb| {
+                candidates.iter().any(|scope| {
+                    context
+                        .capabilities
+                        .covers(&Cap::new(*verb, scope.clone()))
+                })
+            }) {
+                return ExposureDecision::Hidden(
+                    "required memory scope is not in the effective grant".to_string(),
+                );
+            }
+        }
         let held_verbs = context.capabilities.verbs();
         if self.all_verbs.iter().any(|verb| !held_verbs.contains(verb)) {
             return ExposureDecision::Hidden(
@@ -498,6 +538,30 @@ impl ToolExposure {
         }
         ExposureDecision::Visible
     }
+}
+
+fn memory_scope_candidates(
+    context: &ToolExposureContext,
+    exposure: MemoryExposure,
+) -> Vec<crate::caps::Scope> {
+    let mut scopes = vec![crate::caps::Scope::self_ref(SYSTEM_AGENT_MEMORY_SCOPE)];
+    match exposure {
+        MemoryExposure::SystemAgent => {}
+        MemoryExposure::SystemAgentOrSession => {
+            if let Some(session_id) = context.conversation_session_id().or_else(|| {
+                (!context.authority_session_id().is_empty())
+                    .then(|| context.authority_session_id())
+            }) {
+                scopes.push(crate::caps::Scope::self_ref(session_id));
+            }
+        }
+        MemoryExposure::SystemAgentOrApp => {
+            if let Some(app_id) = context.app_id() {
+                scopes.push(crate::caps::Scope::self_ref(app_id));
+            }
+        }
+    }
+    scopes
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

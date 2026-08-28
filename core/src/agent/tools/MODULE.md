@@ -18,6 +18,9 @@ which tool calls are exposed and executed.
 - Apply guardrails and session/capability context.
 - Require `memory.read:self:agent` versus `memory.write:self:agent` after
   validating each `cos_memory` or `cos_todo` command and resource.
+- Scope conversation recall to `self:<session>` unless the caller holds the
+  system-Agent memory scope; app-memory queries require `self:<app>` before
+  source-filtered rows are returned.
 - Keep untrusted tool output inside explicit model-data boundaries.
 
 ## Key Files

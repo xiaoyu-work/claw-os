@@ -38,7 +38,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::agent::tools::exposure::ToolExposure;
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 /// Windows-reserved device names. These names — regardless of suffix
@@ -346,10 +346,13 @@ impl Tool for Todo {
     }
 
     fn exposure(&self) -> ToolExposure {
-        ToolExposure::always().requiring_any_verb([
-            crate::caps::Verb::MEMORY_READ,
-            crate::caps::Verb::MEMORY_WRITE,
-        ])
+        ToolExposure::always().requiring_memory(
+            [
+                crate::caps::Verb::MEMORY_READ,
+                crate::caps::Verb::MEMORY_WRITE,
+            ],
+            MemoryExposure::SystemAgent,
+        )
     }
 
     async fn exec(&self, input: serde_json::Value) -> ToolResult {
@@ -388,7 +391,10 @@ impl Tool for Todo {
             "clear" => crate::caps::Verb::MEMORY_WRITE,
             other => return ToolResult::err(format!("unknown command: {other}")),
         };
-        if let Err(denial) = crate::agent::tools::require_agent_memory(required_verb) {
+        if let Err(denial) = crate::agent::tools::require_memory(
+            required_verb,
+            crate::agent::tools::MemoryScope::SystemAgent,
+        ) {
             return ToolResult::err(denial.to_string());
         }
         match parsed.command.as_str() {
