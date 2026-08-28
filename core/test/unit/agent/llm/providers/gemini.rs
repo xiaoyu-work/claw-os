@@ -691,6 +691,6 @@ fn gemini_is_configured_true_with_pool_only() {
     c.api_key_envs = vec!["COS_TEST_GEM_POOL_ICONFIG".into()];
     let gc = GeminiConfig::from_agent_config("gemini-1.5-flash", &c);
     std::env::remove_var("COS_TEST_GEM_POOL_ICONFIG");
-    let provider = GeminiProvider::new(gc);
+    let provider = GeminiProvider::new(gc, HttpTransport::new().unwrap());
     assert!(provider.is_configured());
 }

@@ -2,16 +2,16 @@
 
 ## Purpose
 
-`providers/` authenticates to each backend and translates between
+`providers/` authenticates already-resolved requests and translates between
 provider-neutral agent types and provider-specific HTTP/event protocols.
 
 ## Responsibilities
 
-- Resolve credentials and provider endpoints.
 - Serialize messages, images, tools, reasoning, and provider options.
 - Parse non-streaming responses and bounded streaming events.
+- Apply provider-specific authentication headers and error classification.
 - Preserve tool IDs, opaque state, usage, and retry/fallback semantics.
-- Keep provider-specific behavior out of runtime orchestration.
+- Consume resolved credentials and the shared transport supplied by `llm/`.
 
 ## Key Files
 
@@ -30,10 +30,13 @@ provider-neutral agent types and provider-specific HTTP/event protocols.
 
 ## Dependencies
 
-Providers implement `llm::Provider` and use `llm::types`. They may share
-bounded parsers and credential infrastructure, but provider-specific headers or
-state do not leak into unrelated wire formats. Setup/model discovery changes
-stay consistent with runtime routing.
+Providers implement `llm::Provider` and use `llm::types`. They never discover
+configuration, credential stores, process environment, audit paths, or HTTP
+client policy. `llm::registry` supplies provider-specific settings,
+`llm::construction` supplies resolved credential ownership and a shared
+transport, and provider-specific headers or state do not leak into unrelated
+wire formats. Setup/model discovery changes stay consistent with runtime
+routing.
 
 ## Tests
 

@@ -1810,7 +1810,7 @@ fn is_configured_true_with_pool_only() {
     c.api_key_envs = vec!["COS_TEST_POOL_ICONFIG_X".into()];
     let oc = OpenAICompatConfig::from_agent_config("openai", "gpt-4o-mini", &c);
     std::env::remove_var("COS_TEST_POOL_ICONFIG_X");
-    let provider = OpenAICompatProvider::new(oc);
+    let provider = OpenAICompatProvider::new(oc, HttpTransport::new().unwrap());
     assert!(provider.is_configured());
 }
 

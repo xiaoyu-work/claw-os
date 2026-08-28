@@ -106,7 +106,7 @@ impl OpenAICompatTts {
             .unwrap_or_else(|| DEFAULT_OPENAI_BASE.to_string());
         let base_url = base_url.trim_end_matches('/').to_string();
 
-        let api_key = crate::agent::llm::providers::openai_compat::resolve_api_key(
+        let api_key = crate::agent::llm::construction::resolve_process_api_key(
             cfg.api_key_credential.as_deref(),
             cfg.api_key_env.as_deref(),
         )

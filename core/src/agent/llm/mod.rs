@@ -8,8 +8,10 @@
 //! exposed via crate::model::tasks::llm.
 
 pub mod accumulate;
+pub mod attempt_observer;
 pub mod auxiliary;
 pub mod aws_eventstream;
+pub mod construction;
 pub mod credential_pool;
 pub mod error_classifier;
 pub mod metadata;

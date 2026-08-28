@@ -711,7 +711,7 @@ fn anthropic_is_configured_true_with_pool_only() {
     c.api_key_envs = vec!["COS_TEST_ANTH_POOL_ICONFIG".into()];
     let ac = AnthropicConfig::from_agent_config("claude-3-5-haiku-20241022", &c);
     std::env::remove_var("COS_TEST_ANTH_POOL_ICONFIG");
-    let provider = AnthropicProvider::new(ac);
+    let provider = AnthropicProvider::new(ac, HttpTransport::new().unwrap());
     assert!(provider.is_configured());
 }
 

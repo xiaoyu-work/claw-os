@@ -8,10 +8,10 @@ construction, streaming accumulation, fallback, credentials, and usage.
 ## Responsibilities
 
 - Define messages, content blocks, tools, finish reasons, usage, and events.
-- Build providers from configuration.
+- Resolve provider settings and infrastructure at the registry boundary.
 - Normalize provider streams into complete history.
 - Rotate credentials and classify failures.
-- Run fallback/auxiliary provider chains.
+- Run fallback/auxiliary provider chains through injected attempt observation.
 - Record model usage without leaking credentials or prompt bodies.
 
 ## Key Files
@@ -19,8 +19,10 @@ construction, streaming accumulation, fallback, credentials, and usage.
 | Path | Role |
 | --- | --- |
 | `types.rs` | Provider-neutral wire-independent types |
-| `registry.rs` | Provider construction |
-| `providers/` | Provider authentication and wire formats |
+| `construction.rs` | Credential source/resolution and shared HTTP transport |
+| `registry.rs` | Provider settings and typed construction |
+| `attempt_observer.rs` | Request metadata and fallback observation |
+| `providers/` | Provider authentication and wire formats over injected infrastructure |
 | `accumulate.rs` | StreamEvent to ChatResponse/history |
 | `provider_chain.rs` | Ordered provider fallback |
 | `credential_pool.rs` | Key selection, health, cooldown |
@@ -30,9 +32,13 @@ construction, streaming accumulation, fallback, credentials, and usage.
 
 ## Dependencies
 
-Provider modules translate only at the wire boundary. Runtime and tools consume
-the neutral types. Streaming and non-streaming paths preserve equivalent
-content, tools, opaque reasoning/tool state, usage, and errors.
+Provider modules translate only at the wire boundary. `registry` receives an
+immutable `AgentConfig` snapshot plus `ProviderBuildContext`; credential-store
+and environment precedence lives once in `construction`, and providers share
+its HTTP connection pool. `ProviderChain` owns fallback state but receives a
+`ProviderAttemptObserver`, so audit path and session metadata discovery remain
+at the composition boundary. Streaming and non-streaming paths preserve
+equivalent content, tools, opaque reasoning/tool state, usage, and errors.
 
 ## Tests
 

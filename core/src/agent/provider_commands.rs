@@ -54,7 +54,8 @@ pub(super) fn status_cmd() -> Result<Value, String> {
         "model": cfg.model,
         "key_source": key_source,
         "credential_pool": {
-            "declared": llm::credential_pool::Pool::is_declared(cfg),
+            "declared": llm::construction::ApiCredentialConfig::from_agent_config(cfg)
+                .pool_declared(),
             "credential_names": cfg.api_key_credentials,
             "environment_variables": cfg.api_key_envs,
             "strategy": cfg.pool_strategy,

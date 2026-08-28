@@ -33,9 +33,15 @@ use std::time::Duration;
 
 pub(crate) use super::openai_responses as responses_wire;
 
+use crate::agent::llm::construction::HttpTransport;
+#[cfg(test)]
+use crate::agent::llm::construction::{
+    resolve_process_api_key as resolve_api_key, ProviderBuildContext,
+};
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, LlmError, Provider, Result, StreamEvent,
 };
+#[cfg(test)]
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "openai";
@@ -134,42 +140,6 @@ fn alias_is_copilot(alias: &str) -> bool {
     matches!(alias, "copilot")
 }
 
-/// Resolve an API key from the credential store, then env var, then None.
-/// Missing and blank entries fall through; unreadable stored credentials
-/// produce a typed error so construction cannot silently drop corruption.
-pub fn resolve_api_key(
-    api_key_credential: Option<&str>,
-    api_key_env: Option<&str>,
-) -> Result<Option<String>> {
-    if let Some(name) = api_key_credential {
-        match crate::credential::try_load(name, "agent").map_err(|message| {
-            LlmError::CredentialStore {
-                credential: name.to_string(),
-                message,
-            }
-        })? {
-            Some(value) => {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return Ok(Some(value.to_string()));
-                }
-            }
-            None => {
-                // Fall through to env.
-            }
-        }
-    }
-    if let Some(env_name) = api_key_env {
-        if let Ok(value) = std::env::var(env_name) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Ok(Some(value.to_string()));
-            }
-        }
-    }
-    Ok(None)
-}
-
 #[derive(Clone)]
 pub struct OpenAICompatConfig {
     /// Stable name reported by [`Provider::name`] — one of [`PROVIDER_ALIASES`].
@@ -205,53 +175,18 @@ impl std::fmt::Debug for OpenAICompatConfig {
 }
 
 impl OpenAICompatConfig {
-    /// Build from a registered alias + the agent config block.
-    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| default_base_url_for(alias).to_string());
-
-        // Strip a trailing slash so the request path concat is clean.
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        // A declared pool is authoritative. Resolve it before touching the
-        // legacy fields so stale single-key credentials can neither rescue
-        // nor interfere with pool configuration.
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            format!("provider:{alias}"),
-            agent,
-        )?
-        .map(Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            alias: alias.to_string(),
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
-        })
+    #[cfg(test)]
+    pub fn try_from_agent_config(
+        alias: &str,
+        model: &str,
+        agent: &crate::config::AgentConfig,
+    ) -> Result<Self> {
+        let context = ProviderBuildContext::from_process()?;
+        crate::agent::llm::registry::openai_config(alias, model, agent, &context)
     }
 
     #[cfg(test)]
-    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+    pub fn from_agent_config(alias: &str, model: &str, agent: &crate::config::AgentConfig) -> Self {
         Self::try_from_agent_config(alias, model, agent)
             .expect("test credential configuration should resolve")
     }
@@ -259,7 +194,7 @@ impl OpenAICompatConfig {
 
 pub struct OpenAICompatProvider {
     cfg: OpenAICompatConfig,
-    client: reqwest::Client,
+    transport: HttpTransport,
     copilot_auth: Arc<dyn CopilotAuthSource>,
 }
 
@@ -327,22 +262,10 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
 }
 
 impl OpenAICompatProvider {
-    pub fn new(cfg: OpenAICompatConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase timeouts. `request_timeout` covers
-            // the whole call; `connect_timeout` bounds just the TCP +
-            // TLS handshake so a black-holed DNS / firewalled host
-            // can't tie up a worker for the full request budget.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+    pub fn new(cfg: OpenAICompatConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            client,
+            transport,
             copilot_auth: Arc::new(LiveCopilotAuthSource),
         }
     }
@@ -352,23 +275,23 @@ impl OpenAICompatProvider {
         cfg: OpenAICompatConfig,
         copilot_auth: Arc<dyn CopilotAuthSource>,
     ) -> Self {
-        let mut provider = Self::new(cfg);
+        let mut provider = Self::new(
+            cfg,
+            ProviderBuildContext::from_process()
+                .expect("test HTTP transport should build")
+                .transport(),
+        );
         provider.copilot_auth = copilot_auth;
         provider
     }
 
-    /// Convenience constructor that pulls everything from `AgentConfig`.
-    /// Used by the registry.
-    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
-            alias, model, agent,
-        )?))
-    }
-
     #[cfg(test)]
-    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(alias, model, agent)
-            .expect("test credential configuration should resolve")
+    pub fn from_agent_config(alias: &str, model: &str, agent: &crate::config::AgentConfig) -> Self {
+        let context =
+            ProviderBuildContext::from_process().expect("test HTTP transport should build");
+        let cfg = crate::agent::llm::registry::openai_config(alias, model, agent, &context)
+            .expect("test credential configuration should resolve");
+        Self::new(cfg, context.transport())
     }
 
     fn endpoint(&self) -> String {
@@ -722,8 +645,8 @@ impl Provider for OpenAICompatProvider {
             };
 
             let mut http = self
-                .client
-                .post(&target.endpoint_url)
+                .transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .json(&body);
 
@@ -886,8 +809,8 @@ impl Provider for OpenAICompatProvider {
             };
 
             let mut http = self
-                .client
-                .post(&target.endpoint_url)
+                .transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .json(&body);
@@ -984,13 +907,6 @@ pub(crate) use super::openai_chat as wire;
 // Free function so the registry can decide whether the alias is one we own.
 pub fn is_alias(name: &str) -> bool {
     PROVIDER_ALIASES.contains(&name)
-}
-
-// Construction helper used by the registry.
-pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
-    Ok(Arc::new(OpenAICompatProvider::try_from_agent_config(
-        alias, model, agent,
-    )?))
 }
 
 #[cfg(test)]

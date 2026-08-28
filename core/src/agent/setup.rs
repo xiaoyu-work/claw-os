@@ -561,7 +561,7 @@ pub(super) fn provider_configuration_error(
                 "details": details,
         }),
         llm::LlmError::NotConfigured(message)
-            if llm::credential_pool::Pool::is_declared(cfg)
+            if llm::construction::ApiCredentialConfig::from_agent_config(cfg).pool_declared()
                 && message.starts_with("credential pool '") =>
         {
             json!({
@@ -601,10 +601,13 @@ pub fn provider_needs_credential(name: &str) -> bool {
 /// resolved. Used by both the readiness gate and `cos agent status`
 /// so they agree on what "key present" means.
 pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Option<KeySource>> {
-    if let Some(pool) = llm::credential_pool::Pool::try_from_agent_config(
+    let source = llm::construction::ProcessCredentialSource;
+    let resolved = llm::construction::resolve_api_credentials(
         format!("provider:{}", cfg.provider),
-        cfg,
-    )? {
+        llm::construction::ApiCredentialConfig::from_agent_config(cfg),
+        &source,
+    )?;
+    if let Some(pool) = resolved.pool {
         return Ok(pool
             .stats()
             .into_iter()
@@ -612,12 +615,12 @@ pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Opti
             .map(|stats| KeySource::from_pool_source(stats.source)));
     }
     if let Some(name) = cfg.api_key_credential.as_deref() {
-        if llm::providers::openai_compat::resolve_api_key(Some(name), None)?.is_some() {
+        if llm::construction::resolve_process_api_key(Some(name), None)?.is_some() {
             return Ok(Some(KeySource::credential(name)));
         }
     }
     if let Some(env_name) = cfg.api_key_env.as_deref() {
-        if llm::providers::openai_compat::resolve_api_key(None, Some(env_name))?.is_some() {
+        if llm::construction::resolve_process_api_key(None, Some(env_name))?.is_some() {
             return Ok(Some(KeySource::env(env_name)));
         }
     }

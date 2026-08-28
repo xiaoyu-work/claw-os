@@ -36,11 +36,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::openai_compat::resolve_api_key;
+use crate::agent::llm::construction::HttpTransport;
+#[cfg(test)]
+use crate::agent::llm::construction::ProviderBuildContext;
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
     StreamEvent, Tool, ToolCall, ToolChoice, Usage,
 };
+#[cfg(test)]
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "gemini";
@@ -94,47 +97,17 @@ impl std::fmt::Debug for GeminiConfig {
 }
 
 impl GeminiConfig {
-    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE.to_string());
-
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            "provider:gemini",
-            agent,
-        )?
-        .map(Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
-        })
+    #[cfg(test)]
+    pub fn try_from_agent_config(
+        model: &str,
+        agent: &crate::config::AgentConfig,
+    ) -> Result<Self> {
+        let context = ProviderBuildContext::from_process()?;
+        crate::agent::llm::registry::gemini_config(model, agent, &context)
     }
 
     #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
         Self::try_from_agent_config(model, agent)
             .expect("test credential configuration should resolve")
     }
@@ -142,35 +115,21 @@ impl GeminiConfig {
 
 pub struct GeminiProvider {
     cfg: GeminiConfig,
-    client: reqwest::Client,
+    transport: HttpTransport,
 }
 
 impl GeminiProvider {
-    pub fn new(cfg: GeminiConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: cap the TCP/TLS handshake separately from
-            // the overall request budget so a black-holed DNS or
-            // firewalled host can't tie up the kernel.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
-    }
-
-    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(GeminiConfig::try_from_agent_config(
-            model, agent,
-        )?))
+    pub fn new(cfg: GeminiConfig, transport: HttpTransport) -> Self {
+        Self { cfg, transport }
     }
 
     #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
+        let context =
+            ProviderBuildContext::from_process().expect("test HTTP transport should build");
+        let cfg = crate::agent::llm::registry::gemini_config(model, agent, &context)
+            .expect("test credential configuration should resolve");
+        Self::new(cfg, context.transport())
     }
 
     fn endpoint(&self) -> String {
@@ -222,8 +181,8 @@ impl Provider for GeminiProvider {
         };
 
         let mut http = self
-            .client
-            .post(self.endpoint())
+            .transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .json(&body);
 
@@ -695,12 +654,6 @@ pub(crate) mod wire {
 
 pub fn is_alias(name: &str) -> bool {
     name == PROVIDER_NAME
-}
-
-pub fn build_provider(model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
-    Ok(Arc::new(GeminiProvider::try_from_agent_config(
-        model, agent,
-    )?))
 }
 
 #[cfg(test)]
