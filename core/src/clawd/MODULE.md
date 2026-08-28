@@ -227,6 +227,18 @@ authenticated parent session, or the peer's exact uid/pid/start-time — never t
 a session string the request supplied and never to anything a sibling process
 shares.
 
+The installed package's provenance ceiling is applied here too, and here is
+where it is authoritative. `app_sessions.rs` resolves it from its own verified
+package — never from the launcher's report — and clamps the fully resolved plan
+before `authorize_plan`, before the session row is written and before any grant
+is minted, so a developer-trusted package cannot reach a forbidden capability
+through a manifest need, a `wild` scope binding, an approval, a wider parent, a
+GUI launch or a session-tool re-scope. Audiences are filtered the same way:
+developer content receives `AppLaunch` alone, is issued no relay grant, and its
+session grant addresses no provider route. `register` returns the set the daemon
+actually granted; the launcher adopts it for the sandbox policy and refuses to
+launch if it is wider than the ceiling it computed itself.
+
 A launch is authorized as one plan: the complete canonical capability set is
 derived first, every capability the launcher cannot delegate is collected, a
 deduplicated pending request is filed for each, and their ids are returned as

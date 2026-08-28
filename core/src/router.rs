@@ -22,6 +22,7 @@ use crate::engine_pkg;
 use crate::mem_bridge;
 use crate::model;
 use crate::perms;
+use crate::provenance;
 use crate::service;
 use crate::sysinfo;
 use crate::triggers;
@@ -54,6 +55,9 @@ fn app_operation_accepts_stdin_in(args: &[String], root: &Path) -> bool {
     if app_commands::schema_requested(&args[3..]) {
         return false;
     }
+    // Whether to read stdin eagerly is a parsing decision made before
+    // any capability check; it grants nothing. The launch itself is
+    // gated by `require_runnable`.
     apps::find(root, app_id)
         .and_then(|app| {
             app.manifest
@@ -1331,9 +1335,13 @@ pub fn dispatch_with_stdin(
         "agent" => dispatch_agent(args),
         "model" => dispatch_builtin(args, "model", model::run),
         "engine" => dispatch_builtin(args, "engine", engine_pkg::run),
+        "provenance" => dispatch_builtin(args, "provenance", provenance::cli::run),
         _ => {
             // Check if user forgot "app" prefix — helpful error
             let apps_dir = apps_dir();
+            // "Did you mean `cos app <name>`?" — a diagnostic, not a
+            // dispatch. Quarantined installs should still produce the
+            // helpful hint rather than a bare "unknown command".
             let discovered = apps::discover(&apps_dir);
             if discovered.contains_key(name.as_str()) {
                 Err(format!(
@@ -1373,8 +1381,20 @@ fn run_app_command(
         }
     }
 
-    let result =
-        bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
+    // One verified snapshot drives both the capability decision and
+    // the bytes that execute. `require_runnable` already re-asserted it
+    // against the current trust store immediately before this call.
+    let launch = match app
+        .require_verified()
+        .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))
+    {
+        Ok(launch) => launch,
+        Err(reason) => {
+            audit::log_entry(&audit, app_name, command, args, start, "error", Some(&reason));
+            return Err(reason);
+        }
+    };
+    let result = bridge::run_app_with_stdin(&launch, command, args, &data, &apps, stdin_data);
 
     match result {
         Ok(output) => {
@@ -1437,7 +1457,10 @@ fn launch_app_gui(
     let data = data_dir();
     let apps = apps_dir().to_string_lossy().to_string();
 
-    match bridge::launch_gui(&app.dir, exec, files, &data, &apps) {
+    let launch = app
+        .require_verified()
+        .and_then(|pkg| bridge::AppLaunch::new(std::sync::Arc::clone(pkg)))?;
+    match bridge::launch_gui(&launch, exec, files, &data, &apps) {
         Ok(()) => {
             audit::log_entry(&audit, app_name, exec, files, start, "ok", None);
             Ok(None)

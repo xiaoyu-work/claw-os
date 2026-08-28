@@ -137,6 +137,43 @@ App's own process registry starts empty there. Apps still write to the shared
 agent memory through `cos_runtime.memory`, which the launcher carries out on
 their behalf.
 
+## Extension packages across an update
+
+Apps, Skills and MCP/adapter packages are authenticated before use, and
+an update does not change that:
+
+* Vendor content under `/usr/lib/cos` is re-verified against its pinned
+  content digest on first use after the upgrade. Because only root can
+  write there, a changed digest is a package upgrade: the pin rotates
+  and a `provenance.vendor_pin_rotated` record is written to
+  `/var/log/cos/provenance.jsonl`. A path that stops being root-owned or
+  becomes group/world-writable fails closed instead.
+* Publisher trust roots (`/usr/lib/cos/trust/publishers.d`,
+  `/etc/cos/trust/publishers.d`) survive the upgrade. `/etc/cos` is
+  operator-owned configuration and is not overwritten.
+* User-installed extensions that carry no signature **fail closed** into
+  a quarantined state after upgrading. They are listed by
+  `cos app` (and in the skill/MCP discovery diagnostics) with an
+  actionable reason. Re-install a signed package, or record an explicit
+  developer decision with `cos provenance dev-trust`. Nothing is
+  silently grandfathered.
+* App **data** lives under `<data_dir>/apps/<id>`, separate from the
+  code artifact, so quarantine, re-install and rollback never touch it.
+* Verified artifacts are retained under
+  `<data_dir>/provenance/artifacts/`, so
+  `cos provenance rollback --kind app --id <id> --digest sha256:… --dest <dir>`
+  can re-activate a previous version. The artifact is verified again
+  before activation, so a rollback can only land on content that passed
+  verification and has not been revoked.
+
+Revoking a compromised publisher key or a single artifact digest takes
+effect immediately for later launches, disclosures and attachments:
+
+```bash
+cos provenance trust revoke --key-id sha256:…
+cos provenance trust revoke --digest sha256:…
+```
+
 ## Removing the Claw OS integration package
 
 Removing `claw-os-base` also removes the service that presents the managed

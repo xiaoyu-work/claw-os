@@ -81,6 +81,22 @@ impl PinnedSources {
             if after.dev() != before.dev() || after.ino() != before.ino() {
                 return Err("worker mount source changed during launch setup".to_string());
             }
+            // Provenance binding: a mount carrying an expected identity
+            // was authenticated by content. Binding a different inode
+            // would run bytes nobody verified, so a mismatch fails the
+            // launch rather than degrading to the path's current
+            // contents.
+            if let Some((dev, ino)) = mount.expect_identity {
+                if after.dev() != dev || after.ino() != ino {
+                    return Err(format!(
+                        "worker mount source {} is not the verified artifact \
+                         (expected dev {dev} inode {ino}, found dev {} inode {})",
+                        mount.target.display(),
+                        after.dev(),
+                        after.ino()
+                    ));
+                }
+            }
             let index = files.len();
             let target_fd = PINNED_FD_BASE + index as libc::c_int;
             pinned.push(super::policy::Mount {
@@ -88,6 +104,9 @@ impl PinnedSources {
                 target: mount.target.clone(),
                 mode: mount.mode,
                 class: mount.class,
+                // The identity has been proven; the pinned descriptor is
+                // now the source of truth and needs no further check.
+                expect_identity: None,
             });
             let _ = file.as_raw_fd();
             files.push(file);

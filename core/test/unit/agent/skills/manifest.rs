@@ -228,52 +228,24 @@ fn missing_opening_delimiter_after_blanks_errors() {
 }
 
 #[test]
-fn parses_signature_block() {
+fn legacy_signature_frontmatter_is_refused_not_ignored() {
+    // A manifest-only signature covered the frontmatter but neither the
+    // instruction body nor the skill's scripts. Silently ignoring the
+    // key would leave authors believing they had signed something, so
+    // the parser refuses and points at the package envelope.
     let pubkey = "1".repeat(64);
     let sig_val = "2".repeat(128);
     let raw = format!(
         "---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: {pubkey}\n  value: {sig_val}\n---\n"
     );
-    let s = doc(&raw);
-    let sig = s.manifest.signature.expect("signature parsed");
-    assert_eq!(sig.algorithm, "ed25519");
-    assert_eq!(sig.public_key.len(), 64);
-    assert_eq!(sig.value.len(), 128);
-    // signature must not also appear in extras
+    let err = parse(&raw).unwrap_err();
+    assert!(matches!(err, ManifestError::LegacySignatureBlock), "{err}");
+    assert!(format!("{err}").contains("cos provenance sign"));
+}
+
+#[test]
+fn manifest_without_a_signature_block_still_parses() {
+    let s = doc("---\nname: plain\nversion: 1.0\n---\nbody\n");
+    assert_eq!(s.manifest.name, "plain");
     assert!(!s.manifest.extra.contains_key("signature"));
-}
-
-#[test]
-fn rejects_signature_block_with_unknown_field() {
-    let err = parse(
-        "---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: aa\n  value: bb\n  evil: yes\n---\n",
-    )
-    .unwrap_err();
-    assert!(matches!(err, ManifestError::InvalidSignatureBlock(_)));
-}
-
-#[test]
-fn rejects_signature_block_missing_field() {
-    let err =
-        parse("---\nname: signed\nsignature:\n  algorithm: ed25519\n  public_key: aa\n---\n")
-            .unwrap_err();
-    assert!(matches!(err, ManifestError::InvalidSignatureBlock(_)));
-}
-
-#[test]
-fn canonical_signing_input_is_stable_across_signature_block_changes() {
-    // The point of canonical_signing_input is that the byte stream
-    // is the same whether or not a signature is attached — that's
-    // what lets a signer compute the bytes once, sign them, and a
-    // verifier reproduce them from the on-disk manifest.
-    let m_unsigned = parse("---\nname: x\nversion: 1.0\n---\n").unwrap().manifest;
-    let m_signed = parse(
-        "---\nname: x\nversion: 1.0\nsignature:\n  algorithm: ed25519\n  public_key: aa\n  value: bb\n---\n",
-    )
-    .unwrap()
-    .manifest;
-    assert_eq!(
-        canonical_signing_input(&m_unsigned),
-        canonical_signing_input(&m_signed)
-    );
 }

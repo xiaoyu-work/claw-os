@@ -40,6 +40,52 @@ fn write_kv_app(root: &Path) {
         "# placeholder — not exec'd in this test\n",
     )
     .unwrap();
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "kv");
+}
+
+/// Copy the in-tree `apps/kv` package into a scratch root and sign it.
+///
+/// The repository checkout is not an approved package root, so an
+/// in-tree App is quarantined by design. Tests that need to *run* one
+/// stage a signed copy instead of weakening the gate.
+fn signed_copy_of_repo_apps() -> std::path::PathBuf {
+    let source = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("apps");
+    let root = std::env::temp_dir().join(format!(
+        "cos-session-apps-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let kv_src = source.join("kv");
+    if !kv_src.join("server.py").is_file() {
+        return source;
+    }
+    // `_shared` is the sibling helper tree the App imports at runtime;
+    // it is mounted read-only next to the package, not part of it.
+    let shared = source.join("_shared");
+    if shared.is_dir() {
+        copy_tree(&shared, &root.join("_shared"));
+    }
+    let kv_dst = root.join("kv");
+    copy_tree(&kv_src, &kv_dst);
+    crate::test_env::sign_test_package(&kv_dst, crate::provenance::PackageKind::App, "kv");
+    root
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    std::fs::create_dir_all(dst).unwrap();
+    for entry in std::fs::read_dir(src).unwrap().filter_map(Result::ok) {
+        let from = entry.path();
+        let to = dst.join(entry.file_name());
+        let meta = std::fs::symlink_metadata(&from).unwrap();
+        if meta.is_dir() {
+            copy_tree(&from, &to);
+        } else if meta.is_file() {
+            std::fs::copy(&from, &to).unwrap();
+        }
+    }
 }
 
 fn install_test_app_runner(root: &Path) -> crate::test_env::TestEnvVarGuard {
@@ -187,10 +233,7 @@ fn build_schema_exposes_conditional_requiredness() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pilot_kv_e2e_call_chain() {
     let _g = env_lock();
-    let apps_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps");
+    let apps_dir = signed_copy_of_repo_apps();
     if !apps_dir.join("kv").join("server.py").is_file() {
         eprintln!("skip pilot_kv_e2e: {} not present", apps_dir.display());
         return;
@@ -292,10 +335,7 @@ async fn pilot_kv_e2e_call_chain() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn open_race_single_child() {
     let _g = env_lock();
-    let apps_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps");
+    let apps_dir = signed_copy_of_repo_apps();
     if !apps_dir.join("kv").join("server.py").is_file() {
         eprintln!(
             "skip open_race_single_child: {} not present",
@@ -362,10 +402,10 @@ async fn open_race_single_child() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn injected_app_root_is_used_for_discovery_and_execution() {
     let _g = env_lock();
-    let injected_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("apps");
+    // A signed copy, not the checkout: the repository tree is not an
+    // approved package root, so an in-tree App is quarantined by
+    // design and could not be opened from either root.
+    let injected_root = signed_copy_of_repo_apps();
     if !injected_root.join("kv").join("server.py").is_file()
         || std::process::Command::new("python3")
             .arg("--version")
@@ -385,7 +425,7 @@ async fn injected_app_root_is_used_for_discovery_and_execution() {
     let _local_sessions =
         crate::test_env::TestEnvVarGuard::set("COS_TEST_LOCAL_APP_SESSIONS", "1");
     let _runner = install_test_app_runner(temp.path());
-    let app = crate::apps::find(&injected_root, "kv").expect("injected kv app");
+    let app = crate::apps::find_verified(&injected_root, "kv").expect("injected kv app");
 
     let _ = close_session_at("kv", &injected_root).await;
     let opened = open_session_at("kv", &app.dir, &injected_root, &app.manifest)
@@ -405,4 +445,172 @@ fn first_text(res: &crate::agent::tools::mcp::protocol::CallToolResult) -> Strin
         }
     }
     String::new()
+}
+
+
+// ---------------------------------------------------------------------------
+// The session server runs the signed snapshot, or it does not run
+// ---------------------------------------------------------------------------
+
+/// A minimal stdio App package whose session entry is a real script.
+fn session_package(root: &Path, id: &str, entrypoints: &[&str]) -> std::path::PathBuf {
+    let dir = root.join(id);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("app.json"),
+        serde_json::json!({
+            "id": id,
+            "version": "1.0.0",
+            "name": id,
+            "runtime": "python",
+            "operations": {},
+            "session": {
+                "transport": "stdio",
+                "entry": "server.py",
+                "tools": []
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("server.py"), "# verified\n").unwrap();
+    std::fs::write(dir.join("helper.py"), "# signed but not declared\n").unwrap();
+    crate::test_env::install_test_trust();
+    crate::test_env::sign_test_package_with_entrypoints(
+        &dir,
+        crate::provenance::PackageKind::App,
+        id,
+        entrypoints,
+    );
+    dir
+}
+
+fn launch_for(dir: &Path, id: &str) -> Result<crate::bridge::AppLaunch, String> {
+    let app = crate::apps::find_verified(dir.parent().unwrap(), id)?;
+    let verified = app.require_verified()?;
+    crate::bridge::AppLaunch::new(std::sync::Arc::clone(verified))
+}
+
+#[cfg(unix)]
+#[test]
+fn the_session_entry_must_be_a_declared_signed_entrypoint() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let root = crate::test_env::secure_scratch_dir("session-entry");
+    let apps = root.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
+
+    // Declared: resolves.
+    let dir = session_package(&apps, "declared", &["server.py"]);
+    let launch = launch_for(&dir, "declared").expect("verified");
+    assert_eq!(
+        declared_session_entry(&launch).expect("declared entry"),
+        "server.py"
+    );
+
+    // Present in the package and covered by the signed file tree, but
+    // never declared as an entrypoint. Being signed is not the same as
+    // being something the publisher said may be executed — otherwise a
+    // signed package becomes a launcher for anything shipped with it.
+    let other = session_package(&apps, "undeclared", &["helper.py"]);
+    let launch = launch_for(&other, "undeclared").expect("verified");
+    let error = declared_session_entry(&launch).expect_err("undeclared entry is refused");
+    assert!(
+        error.contains("not a declared, signed entrypoint"),
+        "unexpected: {error}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn replacing_the_session_script_after_binding_is_detected() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let root = crate::test_env::secure_scratch_dir("session-toctou");
+    let apps = root.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
+    let dir = session_package(&apps, "toctou", &["server.py"]);
+    let launch = launch_for(&dir, "toctou").expect("verified");
+
+    let entry = declared_session_entry(&launch).expect("entry");
+    let binding = launch.bind(&[entry.clone()]).expect("bind");
+    let bound = SessionBinding::new(binding, entry, dir.join("server.py"));
+    bound.assert_pinned().expect("nothing has moved yet");
+
+    // Replace the script the way an attacker would: a fresh file at the
+    // same path. The descriptors this binding holds still name the
+    // verified inode, so the swap is visible as a different identity.
+    std::fs::remove_file(dir.join("server.py")).unwrap();
+    std::fs::write(dir.join("server.py"), "# swapped\n").unwrap();
+    let error = bound
+        .assert_pinned()
+        .expect_err("a replaced session script must fail the launch");
+    assert!(error.contains("replaced after verification"), "unexpected: {error}");
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn replacing_the_package_directory_after_binding_is_detected() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let root = crate::test_env::secure_scratch_dir("session-dir-swap");
+    let apps = root.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
+    let dir = session_package(&apps, "dirswap", &["server.py"]);
+    let launch = launch_for(&dir, "dirswap").expect("verified");
+    let entry = declared_session_entry(&launch).expect("entry");
+    let binding = launch.bind(&[entry.clone()]).expect("bind");
+    let bound = SessionBinding::new(binding, entry, dir.join("server.py"));
+    bound.assert_pinned().expect("clean");
+
+    // Swap the whole directory for another one — the classic
+    // "verify one tree, execute another" move.
+    let decoy = apps.join("dirswap-decoy");
+    std::fs::create_dir_all(&decoy).unwrap();
+    std::fs::write(decoy.join("server.py"), "# decoy\n").unwrap();
+    std::fs::rename(&dir, apps.join("dirswap-old")).unwrap();
+    std::fs::rename(&decoy, &dir).unwrap();
+
+    let error = bound
+        .assert_pinned()
+        .expect_err("a replaced package directory must fail the launch");
+    // Either shape is a refusal: the decoy may not even contain the
+    // signed files, in which case they are simply gone.
+    assert!(
+        error.contains("replaced after verification") || error.contains("unreadable"),
+        "unexpected: {error}"
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_revoked_package_cannot_be_bound_for_a_session() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let root = crate::test_env::secure_scratch_dir("session-revoked");
+    let apps = root.join("apps");
+    std::fs::create_dir_all(&apps).unwrap();
+    let dir = session_package(&apps, "revoked", &["server.py"]);
+    let launch = launch_for(&dir, "revoked").expect("verified");
+    let entry = declared_session_entry(&launch).expect("entry");
+    assert!(
+        launch.bind(&[entry.clone()]).is_ok(),
+        "the package binds while it is still trusted"
+    );
+
+    // Revoke the artifact, then try to bind again. `bind` re-asserts
+    // the snapshot against the current store before it opens anything,
+    // so the launch is refused rather than started and then stopped.
+    let digest = launch.package().content_digest().to_string();
+    crate::test_env::revoke_test_package(&digest);
+    let error = match launch.bind(&[entry]) {
+        Ok(_) => panic!("a revoked package must not be bound for launch"),
+        Err(error) => error,
+    };
+    assert!(error.contains("provenance check"), "unexpected: {error}");
+
+    crate::test_env::install_test_trust();
+    let _ = std::fs::remove_dir_all(&root);
 }

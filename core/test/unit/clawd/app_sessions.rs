@@ -84,10 +84,18 @@ const USER_MANAGER_MANIFEST: &str = r#"{
   }
 }"#;
 
+/// Capability-plan tests operate on a manifest, not on a package on
+/// disk, so the fixture records the quarantine state an unverified tree
+/// would carry. `installed_app` — the authority path — never returns
+/// one of these; it uses `apps::find_verified`.
 fn app_from(manifest: &str) -> App {
     let manifest = Manifest::from_json(manifest).expect("test manifest");
     let dir = std::path::PathBuf::from("/usr/lib/cos/apps").join(&manifest.id);
-    App { manifest, dir }
+    App {
+        manifest,
+        dir,
+        provenance: Err("test fixture is not an installed package".to_string()),
+    }
 }
 
 fn test_app() -> App {
@@ -147,6 +155,8 @@ fn daemon_plan_skips_inactive_calendar_provider_needs() {
         &operation.needs,
         &resolved,
         &delegation(CapSet::from_iter([local.clone(), google.clone()])),
+        &publisher_ceiling(),
+        "calendar",
     )
     .unwrap();
 
@@ -163,13 +173,13 @@ fn operation_caps(
     args: &[String],
     delegation: &Delegation,
 ) -> Result<CapSet, BrokerError> {
-    let plan = operation_plan(app, operation, args, delegation)?;
-    authorize_plan(delegation, plan)
+    let plan = operation_plan(app, operation, args, delegation, &publisher_ceiling())?;
+    authorize_plan(delegation, plan, &publisher_ceiling(), &app.manifest.id)
 }
 
 fn gui_caps(app: &App, exec: &str, delegation: &Delegation) -> Result<CapSet, BrokerError> {
-    let plan = gui_plan(app, exec, delegation)?;
-    authorize_plan(delegation, plan)
+    let plan = gui_plan(app, exec, delegation, &publisher_ceiling())?;
+    authorize_plan(delegation, plan, &publisher_ceiling(), &app.manifest.id)
 }
 
 fn with_invoke_cap(
@@ -183,7 +193,14 @@ fn with_invoke_cap(
         Cap::new(Verb::AGENT_INVOKE, Scope::name(app_id)),
         delegation,
     );
-    authorize_plan(delegation, plan)
+    authorize_plan(delegation, plan, &publisher_ceiling(), app_id)
+}
+
+/// The ceiling a normally signed package runs under: unrestricted, so
+/// these tests exercise the delegation rules rather than the tier. The
+/// developer tier has its own dedicated coverage below.
+fn publisher_ceiling() -> Ceiling {
+    Ceiling::for_tier(crate::provenance::TrustTier::User)
 }
 
 /// Launcher authority for a synthetic peer process.
@@ -1158,6 +1175,7 @@ fn a_launch_grant_is_bound_to_its_session_and_launcher() {
         this_uid(),
         &launcher,
         &caps,
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1198,6 +1216,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         &launcher,
         &caps,
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1208,6 +1227,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         std::process::id(),
         &caps,
+        None,
     )
     .expect("bind derives the session grant");
 
@@ -1218,6 +1238,7 @@ fn a_session_grant_is_derived_from_the_launch_grant_exactly_once() {
         this_uid(),
         std::process::id(),
         &caps,
+        None,
     )
     .expect_err("bind is one-shot");
     assert!(error.contains("ceiling"), "unexpected: {error}");
@@ -1234,6 +1255,7 @@ fn a_session_grant_cannot_widen_the_launch_grant() {
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
+        None,
     )
     .expect("mint a launch grant");
 
@@ -1246,6 +1268,7 @@ fn a_session_grant_cannot_widen_the_launch_grant() {
         this_uid(),
         std::process::id(),
         &wider,
+        None,
     )
     .expect_err("a bind cannot mint authority the launcher never had");
     assert!(error.contains("widen"), "unexpected: {error}");
@@ -1266,6 +1289,7 @@ fn a_launch_grant_for_an_unverifiable_launcher_is_refused() {
         this_uid(),
         &launcher,
         &home_reader_ceiling(),
+        None,
     )
     .expect_err("an unverifiable launcher gets no grant");
     authority::authority().clear_for_test();
@@ -1476,8 +1500,15 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         priority: None,
         role: None,
     };
-    let handle = issue_launch_grant(session_id, Some("fs"), E2E_UID, &launcher, &e2e_app_caps())
-        .expect("launch grant");
+    let handle = issue_launch_grant(
+        session_id,
+        Some("fs"),
+        E2E_UID,
+        &launcher,
+        &e2e_app_caps(),
+        None,
+    )
+    .expect("launch grant");
     // Present only when the App process can be identified; the rollback
     // test deliberately uses a pid that cannot.
     let _ = issue_session_grant(
@@ -1487,6 +1518,7 @@ fn e2e_install_grants(session_id: &str, child_pid: u32) -> String {
         E2E_UID,
         child_pid,
         &e2e_app_caps(),
+        None,
     );
     handle
 }
@@ -2072,6 +2104,7 @@ fn a_relayed_decision_carries_the_exact_live_session_authority() {
             caps.extend(e2e_call_caps().iter().cloned());
             caps
         },
+        None,
     )
     .expect("reissue with call scope");
     let widened = decide(&relay, session_id)
@@ -2083,8 +2116,16 @@ fn a_relayed_decision_carries_the_exact_live_session_authority() {
 
     // … and disappears the moment it is cleared.
     e2e_install_row(e2e_row(session_id, child_pid, None));
-    reissue_session_grant(&launch, session_id, Some("fs"), E2E_UID, child_pid, &e2e_app_caps())
-        .expect("clear call scope");
+    reissue_session_grant(
+        &launch,
+        session_id,
+        Some("fs"),
+        E2E_UID,
+        child_pid,
+        &e2e_app_caps(),
+        None,
+    )
+    .expect("clear call scope");
     let narrowed = decide(&relay, session_id)
         .expect("relayed authorization")
         .expect("decision");
@@ -2241,4 +2282,1029 @@ fn the_outer_relay_audience_is_distinct_from_the_inner_one() {
             assert_ne!(route.authority.audience, authority::Audience::AppRelay);
         }
     }
+}
+// ---------------------------------------------------------------------------
+// The provenance ceiling is enforced by the daemon, not by the launcher
+// ---------------------------------------------------------------------------
+//
+// A launcher is unprivileged local code. It applies the same ceiling
+// before it builds a sandbox, but the question these tests answer is
+// what happens when that copy is wrong, absent or hostile: does `clawd`
+// still refuse to *grant* a developer-trusted package anything above its
+// tier? Every assertion below therefore goes through the real
+// authorization funnel and the real authority store, never through
+// `bridge`.
+
+/// An unsigned App that asks for everything the developer tier forbids.
+const DEV_MANIFEST: &str = r#"{
+  "id": "scratch",
+  "version": "0.1.0",
+  "name": "Scratch",
+  "desktop": {"exec": "--gui"},
+  "operations": {
+    "grab": {
+      "label": "Grab",
+      "args": [],
+      "needs": [
+        {"verb": "sys.package",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
+         "why": "install"},
+        {"verb": "secret.read",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
+         "why": "auth"},
+        {"verb": "net.dial",
+         "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
+         "why": "sync"},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+        {"verb": "fs.exec",
+         "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
+         "why": "run"},
+        {"verb": "fs.read",
+         "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/etc/**"}},
+         "why": "config"},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"},
+        {"verb": "data.kv.write",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
+         "why": "state"}
+      ]
+    }
+  },
+  "session": {
+    "tools": [
+      {
+        "name": "escalate",
+        "summary": "widen after launch",
+        "args": [],
+        "needs": [
+          {"verb": "sys.package",
+           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
+           "why": "install"},
+          {"verb": "data.kv.read",
+           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
+           "why": "state"}
+        ]
+      }
+    ]
+  }
+}"#;
+
+fn dev_app() -> App {
+    app_from(DEV_MANIFEST)
+}
+
+fn developer_ceiling() -> Ceiling {
+    Ceiling::for_package(crate::provenance::TrustTier::Developer, "scratch")
+}
+
+fn vendor_ceiling() -> Ceiling {
+    Ceiling::for_tier(crate::provenance::TrustTier::Vendor)
+}
+
+/// A launcher that holds every verb in the catalog at the widest scope
+/// a wildcard need is allowed to inherit, so nothing below is denied
+/// merely because the parent could not delegate it.
+///
+/// Resource-addressed verbs get a *bounded* scope on purpose:
+/// `inherited_wild_caps` refuses to expand a `wild` need from an
+/// unbounded parent scope, and that refusal is a different rule from
+/// the one under test.
+fn omnipotent_delegation() -> Delegation {
+    let mut caps = CapSet::new();
+    for meta in crate::caps::catalog::CATALOG {
+        let scope = match meta.scope_kind {
+            ScopeKind::Path => Scope::path("/srv/**"),
+            ScopeKind::Host => Scope::host("*.example"),
+            ScopeKind::Name => Scope::name("a*"),
+            ScopeKind::SelfRef | ScopeKind::Wild | ScopeKind::None => Scope::Wild,
+        };
+        caps.insert(Cap::new(meta.verb, scope));
+    }
+    // Plus the exact scopes the fixture manifest names, so its
+    // non-wildcard needs are delegable rather than merely "missing".
+    caps.extend([
+        Cap::new(Verb::SYS_PACKAGE, Scope::name("nano")),
+        Cap::new(Verb::SECRET_READ, Scope::name("default/TOKEN")),
+        Cap::new(Verb::NET_DIAL, Scope::host("evil.example")),
+        Cap::new(Verb::FS_EXEC, Scope::path("/usr/bin/**")),
+        Cap::new(Verb::FS_READ, Scope::path("/etc/**")),
+        Cap::new(Verb::FS_READ, Scope::path("/root/scratch/**")),
+        Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch")),
+        Cap::new(Verb::DATA_KV_READ, Scope::name("scratch")),
+    ]);
+    delegation(caps)
+}
+
+const FORBIDDEN_FOR_DEVELOPER: &[(Verb, &str)] = &[
+    (Verb::SYS_PACKAGE, "sys.package"),
+    (Verb::SECRET_READ, "secret.read"),
+    (Verb::NET_DIAL, "net.dial"),
+    (Verb::PROC_SPAWN, "proc.spawn"),
+    (Verb::FS_EXEC, "fs.exec"),
+    (Verb::AGENT_SPAWN, "agent.spawn"),
+];
+
+fn assert_within_developer_ceiling(caps: &CapSet) {
+    for cap in caps.iter() {
+        assert!(
+            developer_ceiling().allows_cap(cap),
+            "clawd granted `{}` to developer-trusted content",
+            cap.verb.as_str()
+        );
+    }
+    for (verb, name) in FORBIDDEN_FOR_DEVELOPER {
+        assert!(
+            !caps.iter().any(|cap| cap.verb == *verb),
+            "`{name}` survived into a developer grant"
+        );
+    }
+    for cap in caps.iter() {
+        assert!(
+            !cap.scope.is_wildcard()
+                || !crate::provenance::ceiling::verb_addresses_a_resource(cap.verb),
+            "a wildcard `{}` scope survived into a developer grant",
+            cap.verb.as_str()
+        );
+    }
+}
+
+#[test]
+fn the_daemon_clamps_a_developer_operation_plan_before_it_becomes_authority() {
+    let app = dev_app();
+    let delegation = omnipotent_delegation();
+    let plan = operation_plan(&app, "grab", &[], &delegation, &publisher_ceiling()).expect("plan");
+
+    // The launcher could delegate every one of these, so the plan the
+    // daemon starts from really does contain them.
+    assert!(plan.caps.covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
+    assert!(plan
+        .caps
+        .covers(&Cap::new(Verb::SECRET_READ, Scope::name("default/TOKEN"))));
+
+    let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
+        .expect("a clamped plan still authorizes");
+    assert_within_developer_ceiling(&granted);
+
+    // The benign allow-list survives exactly.
+    assert!(granted.iter().any(|cap| cap.verb == Verb::UI_NOTIFY));
+    assert!(granted.covers(&Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))));
+    assert!(granted.covers(&Cap::new(Verb::FS_READ, Scope::path("/etc/**"))));
+}
+
+#[test]
+fn a_signed_package_keeps_everything_the_same_plan_asked_for() {
+    let app = dev_app();
+    let delegation = omnipotent_delegation();
+
+    for ceiling in [publisher_ceiling(), vendor_ceiling()] {
+        let plan =
+            operation_plan(&app, "grab", &[], &delegation, &ceiling).expect("plan");
+        let granted =
+            authorize_plan(&delegation, plan, &ceiling, "scratch").expect("signed content");
+        for (verb, name) in FORBIDDEN_FOR_DEVELOPER {
+            assert!(
+                granted.iter().any(|cap| cap.verb == *verb),
+                "`{name}` must survive for {} content",
+                ceiling.label()
+            );
+        }
+    }
+}
+
+#[test]
+fn a_developer_gui_launch_is_clamped_on_the_same_path() {
+    let app = dev_app();
+    let delegation = omnipotent_delegation();
+    let signed = gui_plan(&app, "--gui", &delegation, &publisher_ceiling()).expect("gui plan");
+    assert!(signed
+        .caps
+        .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
+
+    let plan = gui_plan(&app, "--gui", &delegation, &developer_ceiling()).expect("gui plan");
+    let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
+        .expect("gui authorization");
+    assert_within_developer_ceiling(&granted);
+}
+
+#[test]
+fn a_developer_session_tool_cannot_widen_after_launch() {
+    let app = dev_app();
+    let delegation = omnipotent_delegation();
+    let call = json!({"tool": "escalate"});
+    let signed = session_tool_plan(&app, &call, &delegation, &publisher_ceiling())
+        .expect("session tool plan");
+    assert!(signed
+        .caps
+        .covers(&Cap::new(Verb::SYS_PACKAGE, Scope::name("nano"))));
+
+    let plan = session_tool_plan(&app, &call, &delegation, &developer_ceiling())
+        .expect("session tool plan");
+    let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
+        .expect("transient authorization");
+    assert_within_developer_ceiling(&granted);
+    assert!(
+        granted.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("scratch"))),
+        "the benign half of the call must still be granted"
+    );
+}
+
+#[test]
+fn a_wider_parent_cannot_lift_a_developer_package() {
+    let app = dev_app();
+    // Two launchers: one that can delegate everything, and one that
+    // holds only the resourceless verbs the manifest asks for wild —
+    // so the plan still builds and everything interesting lands in
+    // `missing`, where consent would otherwise be able to grant it.
+    let narrow = delegation(CapSet::from_caps([
+        Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch")),
+        Cap::new(Verb::PROC_SPAWN, Scope::Wild),
+        Cap::new(Verb::AGENT_SPAWN, Scope::Wild),
+        Cap::new(Verb::UI_NOTIFY, Scope::Wild),
+    ]));
+    let wide = omnipotent_delegation();
+
+    let wide_granted = authorize_plan(
+        &wide,
+        operation_plan(&app, "grab", &[], &wide, &developer_ceiling()).expect("plan"),
+        &developer_ceiling(),
+        "scratch",
+    )
+    .expect("wide launcher");
+    assert_within_developer_ceiling(&wide_granted);
+
+    // The narrow launcher is short several capabilities. Whatever
+    // reaches the approvals store must already be inside the ceiling,
+    // so a user consenting to a prompt can never reintroduce a
+    // forbidden verb.
+    let plan = operation_plan(&app, "grab", &[], &narrow, &developer_ceiling()).expect("plan");
+    let (kept, dropped) = developer_ceiling().clamp_vec(&plan.missing);
+    assert!(
+        !dropped.is_empty(),
+        "the fixture must actually ask for something forbidden"
+    );
+    for cap in &kept {
+        assert!(
+            !FORBIDDEN_FOR_DEVELOPER
+                .iter()
+                .any(|(verb, _)| cap.verb == *verb),
+            "a forbidden capability reached the approvals store as `{}`",
+            cap.verb.as_str()
+        );
+    }
+}
+
+#[test]
+fn a_developer_package_never_inherits_a_wild_scope_binding() {
+    let app = dev_app();
+    let delegation = omnipotent_delegation();
+
+    // Signed content borrows the launcher's bounded `fs.meta` reach …
+    let signed =
+        operation_plan(&app, "grab", &[], &delegation, &publisher_ceiling()).expect("plan");
+    assert!(signed
+        .caps
+        .covers(&Cap::new(Verb::FS_META, Scope::path("/srv/x"))));
+
+    // … and unsigned content borrows none of the launcher's reach over
+    // a real resource namespace.
+    let plan =
+        operation_plan(&app, "grab", &[], &delegation, &developer_ceiling()).expect("plan");
+    assert!(
+        !plan.caps.iter().any(|cap| cap.verb == Verb::FS_META),
+        "a wild need over a resource must not expand for developer content"
+    );
+
+    // `proc.spawn` and `agent.spawn` address no resource namespace, so
+    // the *binding* is not what stops them — the allow-list is, one
+    // step later, where authority is actually granted.
+    let granted = authorize_plan(&delegation, plan, &developer_ceiling(), "scratch")
+        .expect("authorization");
+    assert!(!granted.iter().any(|cap| cap.verb == Verb::PROC_SPAWN));
+    assert!(!granted.iter().any(|cap| cap.verb == Verb::AGENT_SPAWN));
+
+    // A resourceless verb on the allow-list has no narrower scope than
+    // wild, so it is not an inheritance and survives.
+    assert!(granted.iter().any(|cap| cap.verb == Verb::UI_NOTIFY));
+}
+
+#[test]
+fn a_developer_launch_grant_reaches_only_the_launch_audience() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let caps = CapSet::from_caps([Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))]);
+    let handle = issue_launch_grant(
+        "app-dev-1",
+        Some("scratch"),
+        this_uid(),
+        &launcher,
+        &caps,
+        Some(&developer_ceiling()),
+    )
+    .expect("mint a developer launch grant");
+
+    // The launcher can still drive the launch lifecycle …
+    require_launch_grant(&test_client(), &handle, "app-dev-1", this_uid())
+        .expect("app-launch audience survives");
+
+    // … and nothing else. These are the audiences that address a
+    // privileged provider route.
+    for audience in [
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ] {
+        let error = authority::authority()
+            .resolve(
+                &handle,
+                &authority::Presentation::new(
+                    this_uid(),
+                    std::process::id(),
+                    this_process().1,
+                    audience,
+                    "test",
+                ),
+            )
+            .expect_err("a developer grant must not reach a privileged audience");
+        let _ = error;
+    }
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_signed_launch_grant_still_reaches_every_audience() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let caps = home_reader_ceiling();
+    let handle = issue_launch_grant(
+        "app-dev-2",
+        Some("fs"),
+        this_uid(),
+        &launcher,
+        &caps,
+        Some(&publisher_ceiling()),
+    )
+    .expect("mint a signed launch grant");
+    for audience in [
+        authority::Audience::AppLaunch,
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ] {
+        authority::authority()
+            .resolve(
+                &handle,
+                &authority::Presentation::new(
+                    this_uid(),
+                    std::process::id(),
+                    this_process().1,
+                    audience,
+                    "test",
+                ),
+            )
+            .unwrap_or_else(|error| panic!("{} should resolve: {error}", audience.as_str()));
+    }
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_developer_session_grant_addresses_no_provider_route() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let ceiling = developer_ceiling();
+    let caps = CapSet::from_caps([Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))]);
+    let handle = issue_launch_grant(
+        "app-dev-3",
+        Some("scratch"),
+        this_uid(),
+        &launcher,
+        &caps,
+        Some(&ceiling),
+    )
+    .expect("launch grant");
+    issue_session_grant(
+        &handle,
+        "app-dev-3",
+        Some("scratch"),
+        this_uid(),
+        std::process::id(),
+        &caps,
+        Some(&ceiling),
+    )
+    .expect("session grant");
+
+    // The row exists — the App is a real session — but every audience a
+    // provider route is addressed by is refused.
+    for audience in [
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ] {
+        authority::authority()
+            .resolve_session(
+                "app-dev-3",
+                &authority::Presentation {
+                    uid: this_uid(),
+                    pid: std::process::id(),
+                    start_time_ticks: this_process().1,
+                    audience,
+                    route: "test",
+                    session_id: Some("app-dev-3".to_string()),
+                },
+            )
+            .expect_err("a developer session grant must reach no provider audience");
+    }
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn a_developer_package_is_never_issued_a_relay_grant() {
+    authority::authority().clear_for_test();
+    let launcher = test_authority();
+    let ceiling = developer_ceiling();
+    let handle = issue_launch_grant(
+        "app-dev-4",
+        Some("scratch"),
+        this_uid(),
+        &launcher,
+        &CapSet::new(),
+        Some(&ceiling),
+    )
+    .expect("launch grant");
+
+    // `bind` skips this call for developer content; if a future change
+    // ever calls it anyway, the attenuation itself must refuse, because
+    // the parent grant does not carry the relay audience.
+    assert!(!ceiling.allows_relay());
+    issue_relay_grant(&handle, "app-dev-4", Some("scratch"), this_uid(), std::process::id())
+        .expect_err("a developer launch grant cannot be attenuated into a relay");
+    authority::authority().clear_for_test();
+}
+
+#[test]
+fn every_audience_is_classified_for_the_provenance_ceiling() {
+    // `audience_facet` is exhaustive by construction; this pins the
+    // mapping so a renamed variant cannot quietly become permissive.
+    for (audience, expected) in [
+        (
+            authority::Audience::AppLaunch,
+            crate::provenance::ceiling::Audience::AppLaunch,
+        ),
+        (
+            authority::Audience::AppRelay,
+            crate::provenance::ceiling::Audience::AppRelay,
+        ),
+        (
+            authority::Audience::SystemService,
+            crate::provenance::ceiling::Audience::SystemService,
+        ),
+        (
+            authority::Audience::Credential,
+            crate::provenance::ceiling::Audience::Credential,
+        ),
+        (
+            authority::Audience::Scheduler,
+            crate::provenance::ceiling::Audience::Scheduler,
+        ),
+        (
+            authority::Audience::Permission,
+            crate::provenance::ceiling::Audience::Permission,
+        ),
+        (
+            authority::Audience::Transaction,
+            crate::provenance::ceiling::Audience::Transaction,
+        ),
+        (
+            authority::Audience::Context,
+            crate::provenance::ceiling::Audience::Context,
+        ),
+        (
+            authority::Audience::Notification,
+            crate::provenance::ceiling::Audience::Notification,
+        ),
+        (
+            authority::Audience::Task,
+            crate::provenance::ceiling::Audience::Task,
+        ),
+        (
+            authority::Audience::Daemon,
+            crate::provenance::ceiling::Audience::Daemon,
+        ),
+    ] {
+        assert_eq!(audience_facet(audience), expected);
+        assert_eq!(audience.as_str(), expected.as_str());
+    }
+
+    // And the production filter really is a filter.
+    let requested = [
+        authority::Audience::AppLaunch,
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ];
+    let developer = permitted_audiences(Some(&developer_ceiling()), &requested);
+    assert!(developer.contains(authority::Audience::AppLaunch));
+    for audience in [
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ] {
+        assert!(!developer.contains(audience));
+    }
+    let signed = permitted_audiences(Some(&publisher_ceiling()), &requested);
+    let unbounded = permitted_audiences(None, &requested);
+    for audience in requested {
+        assert!(signed.contains(audience));
+        assert!(unbounded.contains(audience));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// End to end, as root, through the real routes
+// ---------------------------------------------------------------------------
+//
+// The tests above prove the funnel clamps. These prove the funnel is
+// the only way in: a real dev-trusted package on disk, registered and
+// bound through `register`/`bind`, with the routed registry row, the
+// live authority grant and the relay handle all read back afterwards.
+
+/// The dangerous half is what a hostile unsigned package would ask for;
+/// the benign half is what the developer tier is meant to allow.
+const E2E_DEV_MANIFEST: &str = r#"{
+  "id": "scratch",
+  "version": "0.1.0",
+  "name": "Scratch",
+  "operations": {
+    "run": {
+      "label": "Run",
+      "args": [],
+      "needs": [
+        {"verb": "sys.package",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
+         "why": "install"},
+        {"verb": "secret.read",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "default/TOKEN"}},
+         "why": "auth"},
+        {"verb": "net.dial",
+         "scope": {"kind": "fixed", "scope": {"kind": "host", "value": "evil.example"}},
+         "why": "sync"},
+        {"verb": "proc.spawn", "scope": {"kind": "wild"}, "why": "helper"},
+        {"verb": "fs.exec",
+         "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/usr/bin/**"}},
+         "why": "run"},
+        {"verb": "fs.meta", "scope": {"kind": "wild"}, "why": "list"},
+        {"verb": "agent.spawn", "scope": {"kind": "wild"}, "why": "delegate"},
+        {"verb": "fs.read",
+         "scope": {"kind": "fixed", "scope": {"kind": "path", "value": "/root/scratch/**"}},
+         "why": "its own tree"},
+        {"verb": "data.kv.write",
+         "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
+         "why": "state"},
+        {"verb": "ui.notify", "scope": {"kind": "wild"}, "why": "tell the user"}
+      ]
+    }
+  }
+}"#;
+
+/// Install an unsigned App under an owner developer-trust grant and
+/// point the process at it. Returns the apps root, which the caller
+/// keeps alive for the length of the test.
+#[cfg(unix)]
+fn e2e_install_dev_app(manifest: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    use crate::provenance::{sign, trust::TrustRootSpec, PackageKind, TrustStore, TrustTier};
+
+    let root = crate::test_env::secure_scratch_dir("clawd-dev-app");
+    let apps = root.join("apps");
+    let dir = apps.join("scratch");
+    std::fs::create_dir_all(&dir).expect("app dir");
+    std::fs::write(dir.join("app.json"), manifest).expect("manifest");
+    std::fs::write(dir.join("main.py"), "print('hi')\n").expect("entrypoint");
+
+    let body = sign::build_body(
+        &dir,
+        &sign::SignRequest {
+            kind: PackageKind::App,
+            id: "scratch".to_string(),
+            version: "0.1.0".to_string(),
+            manifest_schema: "developer".to_string(),
+            manifest_path: "app.json".to_string(),
+            entrypoints: vec!["main.py".to_string()],
+            resources: vec![],
+        },
+    )
+    .expect("build content manifest");
+    let digest = crate::provenance::envelope::content_digest(&body.files);
+
+    let dev_root = root.join("devtrust");
+    std::fs::create_dir_all(&dev_root).expect("dev trust root");
+    let grants = json!({
+        "schema": crate::provenance::trust::DEV_TRUST_SCHEMA_V1,
+        "grants": [{
+            "kind": "app",
+            "id": "scratch",
+            "path": dir.canonicalize().expect("canonical app dir"),
+            "content_digest": digest,
+            "granted_at": "2026-01-01T00:00:00Z",
+        }],
+    });
+    let grants_path = dev_root.join("grants.json");
+    std::fs::write(&grants_path, serde_json::to_vec_pretty(&grants).unwrap()).expect("grants");
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&grants_path, std::fs::Permissions::from_mode(0o600))
+            .expect("grant mode");
+    }
+
+    let roots = vec![TrustRootSpec {
+        path: dev_root,
+        tier: TrustTier::Developer,
+        allowed_uids: vec![crate::provenance::fsec::effective_uid()],
+        domain: crate::provenance::state::TrustDomain::Owner(
+            crate::provenance::fsec::effective_uid(),
+        ),
+    }];
+    // Trust files with no recorded generation fail the domain closed,
+    // so the fixture records it exactly as `cos provenance dev-trust`
+    // does.
+    crate::test_env::record_trust_state(&roots);
+    crate::provenance::set_trust_store_for_roots(TrustStore::load_roots(&roots), roots);
+    std::env::set_var("COS_APPS_DIR", &apps);
+    (root, apps)
+}
+
+/// A registered non-App parent session for this very process, holding
+/// every capability the fixture asks for. Without it the launcher falls
+/// back to the daemon's home-bounded policy and the interesting caps
+/// would be refused for the wrong reason.
+#[cfg(unix)]
+fn e2e_install_parent_session(session_id: &str) {
+    let (pid, ticks) = this_process();
+    let mut caps = omnipotent_delegation().ceiling;
+    caps.insert(Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch")));
+    caps.insert(Cap::new(Verb::FS_READ, Scope::path("/root/scratch/**")));
+    let info = SessionInfo {
+        session_id: session_id.to_string(),
+        pid,
+        command: vec!["cos".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("cli".to_string()),
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: Some(1),
+        scope: None,
+        priority: None,
+        caps: Some(caps),
+        transient_caps: None,
+        role: Some(Role::Automator.name().to_string()),
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: ticks,
+    };
+    e2e_install_row(info);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dev_trusted_app_is_registered_and_bound_with_no_privileged_authority() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let previous_apps = std::env::var_os("COS_APPS_DIR");
+    let (root, _apps) = e2e_install_dev_app(E2E_DEV_MANIFEST);
+    e2e_install_parent_session("cli-parent");
+
+    let result = e2e_runtime()
+        .block_on(register(
+            json!({"app_id": "scratch", "kind": "operation", "operation": "run", "args": []}),
+            &e2e_client(),
+        ))
+        .expect("a dev-trusted App still launches");
+
+    // 1. What the daemon told the launcher it granted.
+    let granted: CapSet =
+        serde_json::from_value(result["caps"].clone()).expect("clawd reports its own grant");
+    assert_eq!(result["trust_tier"], "developer");
+    assert_within_developer_ceiling(&granted);
+    assert!(granted.covers(&Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))));
+    assert!(granted.covers(&Cap::new(Verb::AGENT_INVOKE, Scope::name("scratch"))));
+
+    let session_id = result["session_id"].as_str().expect("session id").to_string();
+    let handle = result["handle"].as_str().expect("handle").to_string();
+
+    // 2. What the routed registry row records — this is what
+    //    `caps::require` inside the App reads.
+    let row = e2e_read_row(&session_id).expect("session row");
+    let row_caps = row.caps.clone().expect("row caps");
+    assert_within_developer_ceiling(&row_caps);
+    assert_eq!(row_caps, granted, "the row and the response must agree");
+
+    // 3. The launch grant reaches only the launch audience.
+    for audience in [
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+        authority::Audience::AppRelay,
+    ] {
+        authority::authority()
+            .resolve(
+                &handle,
+                &authority::Presentation::new(
+                    E2E_UID,
+                    std::process::id(),
+                    this_process().1,
+                    audience,
+                    "test",
+                ),
+            )
+            .expect_err("a developer launch grant must not address a provider audience");
+    }
+
+    // 4. Binding a real child yields no relay handle at all.
+    let child = e2e_spawn_child(&mut harness);
+    let bound = e2e_runtime()
+        .block_on(bind(
+            json!({"session_id": session_id, "handle": handle, "pid": child}),
+            &e2e_client(),
+        ))
+        .expect("bind a developer App");
+    assert_eq!(bound["bound"], json!(true));
+    assert_eq!(
+        bound["relay_handle"],
+        Value::Null,
+        "a developer package must not be handed a relay grant"
+    );
+
+    // 5. The live session grant addresses no provider route, and still
+    //    carries only the clamped set.
+    for audience in [
+        authority::Audience::SystemService,
+        authority::Audience::Credential,
+    ] {
+        authority::authority()
+            .resolve_session(
+                &session_id,
+                &authority::Presentation {
+                    uid: E2E_UID,
+                    pid: child,
+                    start_time_ticks: crate::proc::read_start_time_ticks_pub(child),
+                    audience,
+                    route: "test",
+                    session_id: Some(session_id.clone()),
+                },
+            )
+            .expect_err("a developer session grant reaches no provider route");
+    }
+
+    crate::provenance::reload_trust();
+    match previous_apps {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_dev_trusted_app_cannot_widen_itself_through_a_session_tool() {
+    if !e2e_is_root() {
+        eprintln!("skipped: the routed capability partition can only be prepared as root");
+        return;
+    }
+    let mut harness = transient_harness();
+    let previous_apps = std::env::var_os("COS_APPS_DIR");
+    // Same package, plus a session tool that asks for the world.
+    let manifest = E2E_DEV_MANIFEST.replace(
+        "  }\n}",
+        r#"  },
+  "session": {
+    "tools": [
+      {
+        "name": "escalate",
+        "summary": "widen after launch",
+        "args": [],
+        "needs": [
+          {"verb": "sys.package",
+           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "nano"}},
+           "why": "install"},
+          {"verb": "data.kv.read",
+           "scope": {"kind": "fixed", "scope": {"kind": "name", "value": "scratch"}},
+           "why": "state"}
+        ]
+      }
+    ]
+  }
+}"#,
+    );
+    let (root, _apps) = e2e_install_dev_app(&manifest);
+    e2e_install_parent_session("cli-parent-tool");
+
+    let result = e2e_runtime()
+        .block_on(register(
+            json!({"app_id": "scratch", "kind": "operation", "operation": "run", "args": []}),
+            &e2e_client(),
+        ))
+        .expect("register");
+    let session_id = result["session_id"].as_str().unwrap().to_string();
+    let handle = result["handle"].as_str().unwrap().to_string();
+    let child = e2e_spawn_child(&mut harness);
+    e2e_runtime()
+        .block_on(bind(
+            json!({"session_id": session_id, "handle": handle, "pid": child}),
+            &e2e_client(),
+        ))
+        .expect("bind");
+
+    e2e_runtime()
+        .block_on(set_transient(
+            json!({
+                "session_id": session_id,
+                "handle": handle,
+                "call": {"tool": "escalate"},
+            }),
+            &e2e_client(),
+        ))
+        .expect("a benign half of the call is still granted");
+
+    let transient = e2e_read_transient(&session_id).expect("transient set");
+    assert_within_developer_ceiling(&transient);
+    assert!(
+        transient.covers(&Cap::new(Verb::DATA_KV_READ, Scope::name("scratch"))),
+        "the allowed half of the tool call must survive"
+    );
+    assert!(
+        !transient
+            .iter()
+            .any(|cap| cap.verb == Verb::SYS_PACKAGE),
+        "a session tool must not lift a developer package"
+    );
+
+    crate::provenance::reload_trust();
+    match previous_apps {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn the_daemon_resolves_a_dev_trusted_package_to_the_developer_ceiling() {
+    // Everything up to the routed registry, without needing root: the
+    // package really is verified from disk, its tier really is read
+    // from the trust store, and the plan really is clamped by the
+    // ceiling the daemon derived — not one a caller supplied.
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let previous_apps = std::env::var_os("COS_APPS_DIR");
+    let (root, _apps) = e2e_install_dev_app(E2E_DEV_MANIFEST);
+
+    let app = installed_app("scratch").expect("a dev-trusted App is installed");
+    let ceiling = app_ceiling(&app).expect("ceiling");
+    assert!(ceiling.is_developer());
+    assert_eq!(ceiling.own_id(), Some("scratch"));
+    assert_eq!(app.trust_label(), "developer");
+
+    let delegation = omnipotent_delegation();
+    let plan = operation_plan(&app, "run", &[], &delegation, &ceiling).expect("plan");
+    let granted = authorize_plan(&delegation, plan, &ceiling, "scratch").expect("authorize");
+    assert_within_developer_ceiling(&granted);
+    assert!(granted.covers(&Cap::new(Verb::DATA_KV_WRITE, Scope::name("scratch"))));
+    assert!(granted.covers(&Cap::new(Verb::FS_READ, Scope::path("/root/scratch/**"))));
+    assert!(granted.iter().any(|cap| cap.verb == Verb::UI_NOTIFY));
+
+    // The launch grant built from it addresses only `AppLaunch`.
+    let audiences = permitted_audiences(
+        Some(&ceiling),
+        &[
+            authority::Audience::AppLaunch,
+            authority::Audience::SystemService,
+            authority::Audience::Credential,
+            authority::Audience::AppRelay,
+        ],
+    );
+    assert!(audiences.contains(authority::Audience::AppLaunch));
+    assert!(!audiences.contains(authority::Audience::AppRelay));
+    assert!(!ceiling.allows_relay());
+    assert!(!ceiling.allows_granted_path_mounts());
+
+    // Editing the package invalidates the developer grant, so the next
+    // authority derivation fails closed rather than running new bytes.
+    std::fs::write(root.join("apps/scratch/main.py"), "print('tampered')\n").expect("tamper");
+    crate::provenance::verify::invalidate_cache();
+    let error = installed_app("scratch").expect_err("a tampered dev package is refused");
+    assert!(error.contains("scratch"), "unexpected: {error}");
+
+    crate::provenance::reload_trust();
+    match previous_apps {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_signed_package_keeps_its_privileged_audiences_end_to_end() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let previous_apps = std::env::var_os("COS_APPS_DIR");
+    let root = crate::test_env::secure_scratch_dir("clawd-signed-app");
+    let apps = root.join("apps");
+    let dir = apps.join("scratch");
+    std::fs::create_dir_all(&dir).expect("app dir");
+    std::fs::write(dir.join("app.json"), E2E_DEV_MANIFEST).expect("manifest");
+    std::fs::write(dir.join("main.py"), "print('hi')\n").expect("entrypoint");
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::App, "scratch");
+    std::env::set_var("COS_APPS_DIR", &apps);
+
+    let app = installed_app("scratch").expect("a signed App is installed");
+    let ceiling = app_ceiling(&app).expect("ceiling");
+    assert!(!ceiling.is_developer());
+    assert!(ceiling.allows_relay());
+
+    let delegation = omnipotent_delegation();
+    let plan = operation_plan(&app, "run", &[], &delegation, &ceiling).expect("plan");
+    let granted = authorize_plan(&delegation, plan, &ceiling, "scratch").expect("authorize");
+    for (verb, name) in FORBIDDEN_FOR_DEVELOPER {
+        assert!(
+            granted.iter().any(|cap| cap.verb == *verb),
+            "`{name}` must survive for signed content"
+        );
+    }
+
+    crate::provenance::reload_trust();
+    match previous_apps {
+        Some(value) => std::env::set_var("COS_APPS_DIR", value),
+        None => std::env::remove_var("COS_APPS_DIR"),
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+// ---------------------------------------------------------------------------
+// Relaying for a revoked package
+// ---------------------------------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn a_relay_refuses_a_session_whose_package_was_revoked() {
+    // The relay is the one route a sandboxed worker uses to reach a
+    // privileged provider, and the session grant behind it lives for
+    // `SESSION_GRANT_TTL`. Waiting for that to expire would leave
+    // revoked code driving `system.*` routes for minutes, so the gate
+    // runs per call.
+    let _lock = crate::caps::test_env_lock::env_lock();
+    let scratch = crate::test_env::secure_scratch_dir("relay-revoked");
+    let _proc =
+        crate::test_env::TestEnvVarGuard::set("COS_PROVENANCE_RUNTIME_DIR", &scratch);
+
+    let session_id = "app-relay-revoked";
+    let (pid, ticks) = this_process();
+    let client = ClientIdentity {
+        pid: Some(pid),
+        uid: Some(crate::provenance::fsec::effective_uid()),
+        gid: Some(0),
+        start_time_ticks: ticks,
+    };
+
+    // A relay grant names an App session, so the record *should* exist.
+    // Its absence means the one thing that could confirm the package is
+    // still trusted is gone, and that fails closed rather than relaying.
+    let missing = e2e_runtime()
+        .block_on(assert_relay_package_live(&client, session_id))
+        .expect_err("a relay with no running-instance record must fail closed");
+    assert!(
+        missing.contains("no longer trusted") && missing.contains("no running-instance record"),
+        "unexpected: {missing}"
+    );
+
+    // A recorded, un-revoked instance relays normally.
+    let owner = crate::provenance::fsec::effective_uid();
+    crate::provenance::runtime::register_operator_mcp(owner, session_id);
+    e2e_runtime()
+        .block_on(assert_relay_package_live(&client, session_id))
+        .expect("a recorded instance relays");
+
+    // Once it is marked, the very next relay is refused — no grant TTL,
+    // no notification, no restart.
+    crate::provenance::runtime::mark_for_shutdown(
+        crate::provenance::fsec::effective_uid(),
+        session_id,
+        "publisher key was revoked",
+    );
+    let error = e2e_runtime()
+        .block_on(assert_relay_package_live(&client, session_id))
+        .expect_err("a revoked session must not relay");
+    assert!(
+        error.contains("no longer trusted") && error.contains("publisher key was revoked"),
+        "unexpected: {error}"
+    );
+
+    crate::provenance::runtime::deregister(
+        crate::provenance::fsec::effective_uid(),
+        session_id,
+    );
+    let _ = std::fs::remove_dir_all(&scratch);
 }

@@ -51,6 +51,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
+| Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, and MCP/adapter packages | `core/src/provenance/` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
@@ -502,14 +503,45 @@ below the store boundary and cannot be imported by OAuth or CLI callers.
   -> normal tool trajectory, session logging, and Skill usage record
 ```
 
-Built-in Skills from the package-owned default root do not require third-party
-provenance approval. A `COS_SYSTEM_SKILLS_DIR` override is treated as local
-content rather than promoted to built-in trust. User-installed Skills continue
-through the existing non-vendor disclosure guard; signature policy remains
-enforced when bundles are installed. Metadata pages, instruction bodies, and
-child resources are size-bounded. Child resource reads accept only visible,
-regular UTF-8 files beneath the selected Skill directory; absolute paths,
-parent traversal, symlinks, hidden files, and oversized resources are rejected.
+Every Skill package is authenticated by `core/src/provenance/` before it is
+loaded. Skills under the root-owned package root inherit vendor trust with a
+pinned content digest; a `COS_SYSTEM_SKILLS_DIR` override is treated as local
+content rather than promoted to built-in trust. User-installed Skills require a
+valid signature from a trusted, non-revoked publisher key — there is no
+environment variable that relaxes this — and layered shadowing compares the
+verified publisher key id rather than directory precedence. User-installed
+Skills still pass the non-vendor disclosure guard. Metadata pages, instruction
+bodies, and child resources are size-bounded and read from the verified
+snapshot: a file changed after the catalogue was built fails disclosure instead
+of injecting new model text. Child resource reads accept only visible, regular
+UTF-8 files beneath the selected Skill directory; absolute paths, parent
+traversal, symlinks, hidden files, and oversized resources are rejected.
+
+### Extension provenance
+
+```text
+publisher key -> claw.provenance/v1 envelope (kind, id, version, manifest
+                 schema/path, entrypoints, resources, complete file tree,
+                 content digest)
+  -> trust roots: /usr/lib/cos/trust/publishers.d, /etc/cos/trust/publishers.d,
+     ~/.config/cos/trust/publishers.d, ~/.config/cos/trust/developer.d
+     (root/owner-owned, non-symlink, not group/world-writable; never
+     environment-derived)
+  -> install: bounded untrusted staging -> hostile-shape rejection -> signature
+     and digest verification -> content-addressed artifact retention ->
+     atomic activation
+  -> use: verified snapshot bound to an open directory descriptor; manifest,
+     executable, skill body/resources and MCP command all re-checked against
+     their signed digests before launch or disclosure
+```
+
+Apps, Skills and MCP/adapter packages share one envelope format, one trust
+store and one installer. An unverified manifest can never influence capability
+grants or package identity: discovery quarantines the package with an
+actionable diagnostic and every authority-bearing caller refuses it. Revoking a
+key or an artifact digest moves the trust store's generation, which invalidates
+cached verifications so later launches, disclosures and attachments stop
+immediately. See [`docs/extension-provenance.md`](docs/extension-provenance.md).
 
 ### App invocation
 
@@ -640,7 +672,8 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
 | Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |
-| App discovery | `core/src/apps.rs` | `app.json` loading and schema generation |
+| App discovery | `core/src/apps.rs` | Provenance-gated `app.json` loading and schema generation |
+| Extension provenance | `core/src/provenance/` | Package envelope, trust roots, verification, bounded install |
 | App runtime | `apps/<id>/main.py` | Bundled operation implementation |
 | Rootfs build | `rootfs/build.sh` | Feature composition |
 | Profile definitions | `scripts/lib/image-profiles.sh` | Target feature sets |

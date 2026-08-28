@@ -257,7 +257,12 @@ fn write_test_skill(
         format!("---\nname: {id}\ndescription: test\n{allowed}---\n# body\n"),
     )
     .unwrap();
+    // A skill only exists once its package authenticates, so the
+    // fixture signs itself with the process-wide test publisher key.
+    crate::test_env::sign_test_package(&sd, crate::provenance::PackageKind::Skill, id);
     let doc = crate::agent::skills::manifest::parse(&fs::read_to_string(&mp).unwrap()).unwrap();
+    let verified = crate::agent::skills::loader::verify_skill_dir(id, &sd)
+        .unwrap_or_else(|e| panic!("verify test skill {id}: {e}"));
     LoadedSkill {
         id: id.to_string(),
         dir: sd,
@@ -266,6 +271,7 @@ fn write_test_skill(
         body_bytes: doc.body.len(),
         body: doc.body,
         origin: crate::agent::skills::loader::SkillOrigin::Local,
+        provenance: verified,
     }
 }
 

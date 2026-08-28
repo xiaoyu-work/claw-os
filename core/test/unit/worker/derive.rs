@@ -315,6 +315,7 @@ fn no_network_grant_means_denied() {
 #[test]
 fn mcp_servers_get_no_egress_and_no_app_data() {
     let policy = mcp_server(McpServerInput {
+        pinned_entries: Vec::new(),
         name: "github",
         program: PathBuf::from("/usr/bin/true"),
         argv: vec!["--stdio".to_string()],

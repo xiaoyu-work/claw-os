@@ -12,6 +12,9 @@ Read only the documents relevant to the task:
 2. [`CONTRIBUTING.md`](CONTRIBUTING.md) — build commands and architecture rules.
 3. [`docs/app-development.md`](docs/app-development.md) — Python app manifest,
    capability, SDK, lint, and install contracts.
+   [`docs/extension-provenance.md`](docs/extension-provenance.md) — the
+   signing/trust/install contract every App, Skill and MCP package must
+   satisfy before it is trusted.
 4. [`docs/image-architecture.md`](docs/image-architecture.md) — rootfs features,
    image profiles, and target identity.
 5. [`packaging/README.md`](packaging/README.md) and
@@ -44,6 +47,7 @@ editing additional surfaces.
 | `clawd` RPC or privileged operation | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` | client RPC, caps, audit, the owning `clawd` module |
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
+| Extension package provenance (App/Skill/MCP signing, trust roots, revocation) | `core/src/provenance/`, `docs/extension-provenance.md` | `core/src/apps.rs`, `core/src/agent/skills/loader.rs`, `core/src/agent/tools/mcp/discover.rs`, `packaging/deb/build-debs.sh` |
 | Python app operation | `apps/<id>/app.json`, `apps/<id>/main.py` | `test_main.py`, `cos_runtime.policy`, app lint |
 | Adapter | `adapters/<id>/app.json`, `adapters/<id>/main.py` | adapter tests and external binary dependency |
 | App/SDK wire contract | `claw-os-sdk/wire/`, language SDK package | generated bindings, conformance tests, `publish-sdk-release.yml` |
@@ -99,6 +103,10 @@ test file after selecting the implementation, when confirming existing
 behavior, adding a regression, or diagnosing a failure.
 
 ```bash
+# Extension provenance (format, trust, verify, install, CLI)
+cargo test -p cos --lib provenance:: -- --test-threads=1
+cargo test -p cos --test extension_provenance_process -- --test-threads=1
+
 # One Rust test or module
 cargo test -p cos <test-filter> -- --test-threads=1
 
@@ -160,6 +168,24 @@ Trace the full chain: catalog/scope definition → enforcement/provider →
 consumer/tool or app manifest. Update policy-facing tests and audit behavior in
 the same change.
 
+### New or changed extension surface
+
+An App, Skill or MCP/adapter package is authenticated before its
+manifest, operations, capability needs, tool schemas or model-visible
+text are trusted. When adding a discovery root, an install path or a
+new package kind:
+
+1. Verify through `crate::provenance::verify` — never re-read a mutable
+   path after verification; read from the `VerifiedPackage` snapshot.
+2. Quarantine failures with an actionable diagnostic; never drop them
+   silently and never fall back to unverified content.
+3. Keep trust roots compiled in. No environment variable, manifest
+   field or model-reachable input may add a trust root or disable
+   verification.
+4. Add adversarial coverage under `core/test/unit/provenance/` and, for
+   filesystem/process behaviour,
+   `core/tests/extension_provenance_process.rs`.
+
 ### New or changed notification
 
 Trace the full path: deterministic producer -> durable Notification Service ->
@@ -220,4 +246,5 @@ Before completion:
 | App/manifest/SDK contract | `docs/app-development.md`, SDK README |
 | Image feature/profile/identity | `docs/image-architecture.md`, `rootfs/features/README.md` |
 | Package or installed update behavior | `packaging/README.md`, `docs/updating.md` |
+| Extension signing, trust roots, or package verification | `docs/extension-provenance.md`, `packaging/deb/claw-os-agent/trust/publishers.d/README.md` |
 | Desktop boundary or provenance | `desktop/README.md`, `desktop/PROVENANCE.md` |

@@ -158,9 +158,26 @@ pub struct Mount {
     pub target: PathBuf,
     pub mode: MountMode,
     pub class: MountClass,
+    /// `(st_dev, st_ino)` this source is required to have.
+    ///
+    /// Set for anything whose content has already been authenticated —
+    /// a verified package directory, a signed entrypoint. The provider
+    /// refuses to bind a different inode, so replacing the file between
+    /// verification and `execve` fails the launch instead of silently
+    /// running unverified bytes. `None` means "whatever the path
+    /// resolves to", which is correct for system trees the package
+    /// manager owns.
+    #[serde(skip)]
+    pub expect_identity: Option<(u64, u64)>,
 }
 
 impl Mount {
+    /// Require this mount to resolve to one exact inode.
+    pub fn expecting(mut self, identity: (u64, u64)) -> Self {
+        self.expect_identity = Some(identity);
+        self
+    }
+
     pub fn read_only(
         source: impl Into<PathBuf>,
         target: impl Into<PathBuf>,
@@ -171,6 +188,7 @@ impl Mount {
             target: target.into(),
             mode: MountMode::ReadOnly,
             class,
+            expect_identity: None,
         }
     }
 
@@ -184,6 +202,7 @@ impl Mount {
             target: target.into(),
             mode: MountMode::ReadWrite,
             class,
+            expect_identity: None,
         }
     }
 }

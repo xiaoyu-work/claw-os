@@ -75,6 +75,8 @@ pub fn catalog_page(load: &LoadResult, offset: usize, limit: usize) -> Vec<Value
                     .map(|value| truncate_field(value, MAX_TRIGGER_CHARS))
                     .collect::<Vec<_>>(),
                 "source": skill.origin.as_str(),
+                "trust": skill.trust_label(),
+                "content_digest": skill.content_digest(),
                 "instruction_bytes": skill.body_bytes,
                 "disclosable": instruction_disclosable(skill),
             })
@@ -94,15 +96,36 @@ pub fn disclose_instructions(skill: &LoadedSkill) -> Result<Value, String> {
         ));
     }
 
+    // Re-read the body from the verified snapshot at disclosure time.
+    // The catalog may have been built minutes ago; if SKILL.md changed
+    // since, this fails instead of injecting unverified text into the
+    // model's context.
+    let raw = skill
+        .provenance
+        .read_verified_text("SKILL.md")
+        .map_err(|e| format!("skill `{}` failed its disclosure integrity check: {e}", skill.id))?;
+    let doc = super::manifest::parse(&raw)
+        .map_err(|e| format!("skill `{}` manifest re-parse failed: {e}", skill.id))?;
+    if doc.body.len() > MAX_INSTRUCTION_BYTES {
+        return Err(format!(
+            "skill `{}` instructions are {} bytes; exceeds disclosure cap {}",
+            skill.id,
+            doc.body.len(),
+            MAX_INSTRUCTION_BYTES
+        ));
+    }
+
     let (resources, resources_truncated) = list_resources(&skill.dir)?;
     Ok(json!({
         "disclosure_level": "instructions",
         "id": skill.id,
-        "name": skill.manifest.name,
-        "description": skill.manifest.description,
+        "name": doc.manifest.name,
+        "description": doc.manifest.description,
         "source": skill.origin.as_str(),
-        "allowed_tools": skill.manifest.allowed_tools,
-        "instructions": skill.body,
+        "trust": skill.trust_label(),
+        "content_digest": skill.content_digest(),
+        "allowed_tools": doc.manifest.allowed_tools,
+        "instructions": doc.body,
         "resources": resources,
         "resources_truncated": resources_truncated,
     }))
@@ -115,12 +138,26 @@ pub fn instruction_disclosable(skill: &LoadedSkill) -> bool {
 /// Disclosure level 3: one explicitly selected child resource.
 pub fn disclose_resource(skill: &LoadedSkill, resource: &str) -> Result<Value, String> {
     ensure_disclosure_allowed(skill)?;
-    let (path, relative) = resolve_resource(skill, resource)?;
-    let content = read_bounded_text(&path)?;
+    let (_path, relative) = resolve_resource(skill, resource)?;
+    // Content comes from the verified snapshot by digest, never from a
+    // fresh path resolution: a resource swapped after the catalog was
+    // built must fail rather than reach the model.
+    let content = skill
+        .provenance
+        .read_verified_text(&relative)
+        .map_err(|e| format!("resource `{relative}` failed its integrity check: {e}"))?;
+    if content.len() as u64 > MAX_RESOURCE_BYTES {
+        return Err(format!(
+            "resource `{relative}` is {} bytes; exceeds disclosure cap {MAX_RESOURCE_BYTES}",
+            content.len()
+        ));
+    }
     Ok(json!({
         "disclosure_level": "resource",
         "id": skill.id,
         "source": skill.origin.as_str(),
+        "trust": skill.trust_label(),
+        "content_digest": skill.content_digest(),
         "path": relative,
         "bytes": content.len(),
         "content": content,

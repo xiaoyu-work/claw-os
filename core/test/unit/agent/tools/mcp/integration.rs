@@ -16,6 +16,7 @@ fn make_spec(name: &str) -> McpServerSpec {
         timeout_secs: 5,
         url: None,
         bearer_env: None,
+        provenance: None,
     }
 }
 
@@ -110,7 +111,7 @@ fn mcp_remote_tool_uses_prefix_and_remote_name_round_trip() {
         description: Some("run a query".to_string()),
         input_schema: json!({"type": "object", "properties": {"sql": {"type": "string"}}}),
     };
-    let tool = McpRemoteTool::new("postgres", descriptor, client, Duration::from_secs(5));
+    let tool = McpRemoteTool::new("postgres", descriptor, client, Duration::from_secs(5), None);
     assert_eq!(tool.name(), "mcp_postgres_query");
     assert_eq!(tool.description(), "run a query");
     assert_eq!(tool.remote_name, "query");
@@ -128,7 +129,7 @@ fn mcp_remote_tool_falls_back_for_missing_description() {
         description: None,
         input_schema: json!({"type": "object"}),
     };
-    let tool = McpRemoteTool::new("svc", descriptor, client, Duration::from_secs(5));
+    let tool = McpRemoteTool::new("svc", descriptor, client, Duration::from_secs(5), None);
     assert!(tool.description().contains("ping"));
     assert!(tool.description().contains("svc"));
 }
@@ -142,7 +143,7 @@ fn mcp_remote_tool_coerces_non_object_schema() {
         description: Some("trigger".into()),
         input_schema: Value::Null,
     };
-    let tool = McpRemoteTool::new("svc", descriptor, client, Duration::from_secs(5));
+    let tool = McpRemoteTool::new("svc", descriptor, client, Duration::from_secs(5), None);
     let schema = tool.input_schema();
     assert_eq!(schema["type"], "object");
     // additionalProperties on permissive fallback
@@ -225,7 +226,7 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
 
     let mut registry = ToolRegistry::new();
     let descriptor = list.tools.into_iter().next().unwrap();
-    let tool = McpRemoteTool::new("svc", descriptor, client.clone(), Duration::from_secs(5));
+    let tool = McpRemoteTool::new("svc", descriptor, client.clone(), Duration::from_secs(5), None);
     assert_eq!(tool.name(), "mcp_svc_say");
     registry.register(Arc::new(tool));
 

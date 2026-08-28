@@ -15,7 +15,9 @@ fn apps_dir() -> PathBuf {
 }
 
 pub(crate) fn show_overview() -> Result<Option<String>, String> {
-    let output = cli_catalog::overview(VERSION, apps::discover(&apps_dir()).len());
+    // The headline count means "Apps you can run". Quarantined installs
+    // are surfaced with their reason by `cos app`, not counted here.
+    let output = cli_catalog::overview(VERSION, apps::discover_verified(&apps_dir()).len());
     Ok(Some(output.to_string()))
 }
 
@@ -30,6 +32,10 @@ pub(crate) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
     }
 
     // Apps: render the same help as `cos app <name>`.
+    // Help and schema display only: `show_app_help` never executes App
+    // code, and a quarantined install must stay visible so the operator
+    // can see why it stopped working. Every execution path goes through
+    // `apps::find_verified` / `require_runnable` instead.
     let discovered = apps::discover(&apps_dir());
     if let Some(app) = discovered.get(topic) {
         return show_app_help(topic, app);
@@ -55,6 +61,7 @@ pub(crate) fn show_apps(
     discovered: &std::collections::BTreeMap<String, apps::App>,
 ) -> Result<Option<String>, String> {
     let mut app_list = Vec::new();
+    let mut quarantined = Vec::new();
     for (name, app) in discovered {
         let cmds: serde_json::Map<String, Value> = app
             .manifest
@@ -67,12 +74,19 @@ pub(crate) fn show_apps(
             "label": app.manifest.name.current(),
             "description": app.manifest.summary.current(),
             "commands": cmds,
+            "trust": app.trust_label(),
+            "runnable": app.is_verified(),
+            "quarantine_reason": app.quarantine_reason(),
         }));
+        if let Some(reason) = app.quarantine_reason() {
+            quarantined.push(json!({ "name": name, "reason": reason }));
+        }
     }
 
     let output = json!({
         "apps": app_list,
         "total": app_list.len(),
+        "quarantined": quarantined,
         "hint": "Run: cos app <name> for app details, cos app <name> <command> [args] to execute. Scaffold a new App with: cos app create <id> [--kind cli|desktop|both]. Install an App with: cos app install <source-dir>",
     });
     Ok(Some(output.to_string()))

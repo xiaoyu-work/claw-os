@@ -27,6 +27,9 @@ pub(super) fn dispatch_app(
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
     let apps_dir = apps_dir();
+    // Listing includes quarantined installs on purpose: an operator has
+    // to be able to see that an App exists and why it will not run.
+    // `require_runnable` gates every path that executes App code.
     let discovered = apps::discover(&apps_dir);
 
     // "cos app" with no further args (or with --help/help) → list apps.
@@ -102,6 +105,7 @@ pub(super) fn dispatch_app(
         let app = &discovered[app_name.as_str()];
         if let Some(desktop) = app.manifest.desktop.as_ref() {
             if args.len() >= 2 && args[1] == desktop.exec {
+                require_runnable(app)?;
                 let files: Vec<String> = args[2..].to_vec();
                 return launch_app_gui(app_name, desktop.exec.as_str(), &files, app);
             }
@@ -114,6 +118,8 @@ pub(super) fn dispatch_app(
 
     // Only the option region may request schema. After `--`, the same token
     // is ordinary App data and must reach the manifest binder unchanged.
+    // Schema introspection reads the manifest only and never runs App
+    // code, so a quarantined App can still describe itself.
     if schema_requested(&cmd_args) {
         return show_app_command_schema(app_name, command, app);
     }
@@ -126,7 +132,29 @@ pub(super) fn dispatch_app(
         ));
     }
 
+    require_runnable(app)?;
     run_app_command(app_name, command, &cmd_args, app, stdin_data)
+}
+
+/// Refuse to run a quarantined App, and re-assert the verified snapshot
+/// immediately before dispatch so a package replaced between discovery
+/// and launch is caught.
+fn require_runnable(app: &apps::App) -> Result<(), String> {
+    let verified = app.require_verified()?;
+    verified
+        .assert_current(&crate::provenance::trust_store())
+        .map_err(|e| {
+            crate::errors::error(
+                e.code(),
+                &format!(
+                    "App `{}` changed after verification and will not be launched: {e}",
+                    app.manifest.id
+                ),
+            )
+            .to_string()
+        })?;
+    crate::provenance::audit("provenance.app_launch", verified.audit_facts());
+    Ok(())
 }
 
 pub(super) fn schema_requested(args: &[String]) -> bool {
@@ -416,6 +444,11 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
     let auto_yes = args.iter().any(|a| a == "--yes");
     let no_consent = args.iter().any(|a| a == "--no-consent");
     let force = args.iter().any(|a| a == "--force");
+    // The only route that installs unsigned content. `record_dev_trust`
+    // demands an interactive, phrase-matched confirmation on a real
+    // terminal with no session active — `--yes` does not satisfy it,
+    // and neither does anything the model can reach.
+    let dev_trust = args.iter().any(|a| a == "--dev-trust");
 
     let source = PathBuf::from(&source_arg);
     if !source.is_dir() {
@@ -450,7 +483,13 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         .unwrap_or(false);
 
     if same_path {
-        manifest = validate_install_tree(&source, &manifest.id, "in-place app")?;
+        manifest = validate_install_tree(
+            &source,
+            &manifest.id,
+            "in-place app",
+            TreeTrust::Installed,
+            dev_trust,
+        )?;
         copied = false;
     } else {
         if path_entry_exists(&dest)
@@ -462,9 +501,19 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
                 dest.display()
             ));
         }
-        manifest = stage_app_install(&source, &dest, force, &manifest.id)?;
+        manifest = stage_app_install(&source, &dest, force, &manifest.id, dev_trust)?;
         copied = true;
     }
+
+    // Registration only happens after provenance succeeded, or after
+    // the operator's explicit developer decision has been persisted.
+    let provenance = if dev_trust {
+        record_dev_trust(&dest, &manifest.id)?
+    } else {
+        let verified = verify_app_tree(&dest, &manifest.id, TreeTrust::Installed)?;
+        crate::provenance::audit("provenance.app_installed", verified.audit_facts());
+        verified.audit_facts()
+    };
 
     let mut envelope = json!({
         "app": manifest.id,
@@ -473,6 +522,7 @@ pub(super) fn install_cmd(args: &[String]) -> Result<Option<String>, String> {
         "dest": dest.display().to_string(),
         "copied": copied,
         "in_place": same_path,
+        "provenance": provenance,
     });
 
     // If the app declares a `desktop` surface, emit a freedesktop
@@ -819,24 +869,118 @@ fn write_desktop_entry(manifest: &apps::AppManifest) -> Result<Option<String>, S
     Ok(Some(file.display().to_string()))
 }
 
+fn verify_app_tree(
+    dir: &Path,
+    expected_id: &str,
+    mode: TreeTrust,
+) -> Result<std::sync::Arc<crate::provenance::VerifiedPackage>, String> {
+    use crate::provenance::{PackageKind, VerifyOptions};
+    let trust = crate::provenance::trust_store();
+    let options = match mode {
+        // A staging directory is private scratch space: neither the
+        // vendor package root nor a developer grant applies there, so
+        // only a publisher signature can authenticate it.
+        TreeTrust::SignatureOnly => VerifyOptions::new(PackageKind::App)
+            .expect_id(expected_id)
+            .signature_only(),
+        TreeTrust::Installed => VerifyOptions::new(PackageKind::App).expect_id(expected_id),
+    };
+    crate::provenance::verify::verify_package(dir, &options, &trust)
+        .map(std::sync::Arc::new)
+        .map_err(|e| {
+            crate::errors::error(
+                e.code(),
+                &crate::provenance::quarantine_reason(PackageKind::App, expected_id, &e),
+            )
+            .to_string()
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TreeTrust {
+    /// Verify a private staging copy: signature required.
+    SignatureOnly,
+    /// Verify a tree in its installed location: vendor and developer
+    /// trust may apply.
+    Installed,
+}
+
+/// Persist an explicit developer trust decision for an unsigned App and
+/// re-verify the installed tree through it.
+///
+/// The grant is written to the segregated per-user developer root, is
+/// bound to the installed content digest, and is surfaced in the
+/// install envelope so the decision stays visible.
+fn record_dev_trust(dest: &Path, id: &str) -> Result<Value, String> {
+    let dir = dest
+        .canonicalize()
+        .map_err(|e| format!("resolve {}: {e}", dest.display()))?;
+    let args = vec![
+        "--kind".to_string(),
+        "app".to_string(),
+        "--id".to_string(),
+        id.to_string(),
+        "--path".to_string(),
+        dir.display().to_string(),
+        "--note".to_string(),
+        "cos app install --dev-trust".to_string(),
+    ];
+    // Routed through the same command an operator would run by hand, so
+    // there is exactly one implementation of the consent gate.
+    let grant = crate::provenance::cli::run("dev-trust", &args)?;
+    let verified = verify_app_tree(&dir, id, TreeTrust::Installed)?;
+    crate::provenance::audit("provenance.app_installed", verified.audit_facts());
+    let mut facts = verified.audit_facts();
+    if let Some(map) = facts.as_object_mut() {
+        map.insert("developer_grant".to_string(), grant);
+        map.insert(
+            "warning".to_string(),
+            json!(
+                "Unsigned developer install: restricted capability ceiling, no privileged routes. \
+                 Editing the installed tree invalidates the grant."
+            ),
+        );
+    }
+    Ok(facts)
+}
+
 fn validate_install_tree(
     dir: &Path,
     expected_id: &str,
     description: &str,
+    trust_mode: TreeTrust,
+    allow_unsigned: bool,
 ) -> Result<apps::AppManifest, String> {
-    let manifest_path = dir.join("app.json");
-    let body = fs::read_to_string(&manifest_path).map_err(|e| {
-        format!(
-            "read {description} manifest {}: {e}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest = apps::AppManifest::from_json(&body).map_err(|e| {
-        format!(
-            "parse {description} manifest {}: {e}",
-            manifest_path.display()
-        )
-    })?;
+    // Structural bounds run before anything is trusted: an untrusted
+    // bundle must not be able to smuggle symlinks, hardlinks, special
+    // files, traversal or case-colliding names into a live install.
+    crate::provenance::install::assert_safe_tree(dir, &crate::provenance::install::Limits::default())
+        .map_err(|e| format!("{description} bundle rejected: {e}"))?;
+
+    let provenance = match verify_app_tree(dir, expected_id, trust_mode) {
+        Ok(pkg) => Ok(pkg),
+        Err(reason) if allow_unsigned => Err(reason),
+        Err(reason) => return Err(reason),
+    };
+
+    // Capability-bearing manifest bytes come from the verified
+    // snapshot whenever one exists.
+    let body = match &provenance {
+        Ok(pkg) => pkg.manifest_text().map_err(|e| {
+            format!("read {description} manifest from verified snapshot: {e}")
+        })?,
+        Err(_) => {
+            let manifest_path = dir.join("app.json");
+            fs::read_to_string(&manifest_path).map_err(|e| {
+                format!(
+                    "read {description} manifest {}: {e}",
+                    manifest_path.display()
+                )
+            })?
+        }
+    };
+    let manifest = apps::AppManifest::from_json(&body)
+        .map_err(|e| format!("parse {description} manifest in {}: {e}", dir.display()))?;
     if manifest.id != expected_id {
         return Err(format!(
             "{description} manifest id changed during install: expected `{expected_id}`, got `{}`",
@@ -850,6 +994,7 @@ fn validate_install_tree(
     let app = apps::App {
         manifest: manifest.clone(),
         dir: dir.to_path_buf(),
+        provenance,
     };
     let violations = app_lint_violations(&app);
     if !violations.is_empty() {
@@ -873,12 +1018,14 @@ fn stage_app_install(
     dest: &Path,
     force: bool,
     expected_id: &str,
+    allow_unsigned: bool,
 ) -> Result<apps::AppManifest, String> {
     stage_app_install_with_ops(
         source,
         dest,
         force,
         expected_id,
+        allow_unsigned,
         |from, to| fs::rename(from, to),
         atomic_exchange,
     )
@@ -902,6 +1049,7 @@ where
         dest,
         force,
         expected_id,
+        true,
         rename,
         |_staging, _dest| Ok(false),
     )
@@ -912,6 +1060,7 @@ fn stage_app_install_with_ops<R, E>(
     dest: &Path,
     force: bool,
     expected_id: &str,
+    allow_unsigned: bool,
     mut rename: R,
     mut exchange: E,
 ) -> Result<apps::AppManifest, String>
@@ -932,7 +1081,13 @@ where
 
     copy_dir_recursive(source, &staging)
         .map_err(|e| format!("copy {} -> {}: {e}", source.display(), staging.display()))?;
-    let manifest = validate_install_tree(&staging, expected_id, "staged app")?;
+    let manifest = validate_install_tree(
+        &staging,
+        expected_id,
+        "staged app",
+        TreeTrust::SignatureOnly,
+        allow_unsigned,
+    )?;
     sync_install_tree(&staging)
         .map_err(|e| format!("fsync staged app {}: {e}", staging.display()))?;
 

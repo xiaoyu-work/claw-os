@@ -126,6 +126,11 @@ pub(super) fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                         timeout_secs: s.timeout_secs,
                         url: None,
                         bearer_env: None,
+                        // Operator configuration, not an installed
+                        // package: the machine owner wrote this into
+                        // config.json, so there is no publisher to
+                        // authenticate.
+                        provenance: None,
                     };
                     let mut throwaway_registry =
                         crate::agent::tools::registry::ToolRegistry::new();

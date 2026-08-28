@@ -35,6 +35,14 @@ pub struct BrokerAuthority {
     pub session_id: String,
     pub app_id: Option<String>,
     pub base_caps: CapSet,
+    /// The verified package this launch came from, captured from the
+    /// snapshot at launch time.
+    ///
+    /// Held here rather than looked up from a request field: the worker
+    /// is the untrusted party in this exchange and gets no say in which
+    /// package it is checked against. `None` for launches with no
+    /// package behind them, which get the runtime-record check alone.
+    package: Option<crate::provenance::runtime::PackageRef>,
     relay: RelayHandle,
 }
 
@@ -64,7 +72,65 @@ impl BrokerAuthority {
             session_id: session_id.into(),
             app_id,
             base_caps,
+            package: None,
             relay,
+        }
+    }
+
+    /// Bind this endpoint to the package the launch verified.
+    pub fn with_package(mut self, package: Option<crate::provenance::runtime::PackageRef>) -> Self {
+        self.package = package;
+        self
+    }
+
+    /// Re-check the launch's provenance against the *current* trust
+    /// store, before this endpoint answers anything.
+    ///
+    /// Two independent inputs, both trusted, neither supplied by the
+    /// worker:
+    ///
+    ///   * the [`crate::provenance::runtime::PackageRef`] captured from
+    ///     the verified snapshot when the launch was prepared;
+    ///   * the runtime record for this session, which a sweep in
+    ///     another process may already have marked.
+    ///
+    /// Resolving the trust store re-stats the durable generation and
+    /// rebuilds it when it moved, so a revocation written by `cos
+    /// provenance trust revoke` in a different process is visible here
+    /// on the very next request. A failure marks the instance for
+    /// bounded shutdown and denies; there is no local fallback and no
+    /// path that answers "allow" from a check that predates the
+    /// revocation.
+    pub fn assert_live(&self) -> Result<(), String> {
+        let owner = crate::provenance::runtime::current_owner();
+        let trust = crate::provenance::trust_store();
+        if let Some(package) = &self.package {
+            if let Err(reason) = package.is_live(&trust) {
+                crate::provenance::runtime::mark_for_shutdown(owner, &self.session_id, &reason);
+                crate::provenance::audit(
+                    "provenance.revoked_instance_denied",
+                    serde_json::json!({
+                        "session": self.session_id,
+                        "app": self.app_id,
+                        "surface": "worker-broker",
+                        "package_kind": package.kind.as_str(),
+                        "package_id": package.id,
+                        "content_digest": package.content_digest,
+                        "publisher_key_id": package.publisher_key_id,
+                        "reason": reason,
+                    }),
+                );
+                return Err(reason);
+            }
+        }
+        // The launch is package-backed whenever the snapshot gave us
+        // a reference, so a missing record for it is a denial rather
+        // than a pass.
+        match &self.package {
+            Some(_) => {
+                crate::provenance::runtime::assert_live_instance(owner, &self.session_id, &trust)
+            }
+            None => crate::provenance::runtime::assert_live(owner, &self.session_id, &trust),
         }
     }
 

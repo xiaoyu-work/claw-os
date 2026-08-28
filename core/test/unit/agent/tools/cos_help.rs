@@ -80,6 +80,9 @@ async fn discovers_namespaced_app_operation() {
         }"#,
     )
     .unwrap();
+    // `cos_help` is a model-visible surface, so it only advertises Apps
+    // whose provenance authenticated.
+    crate::test_env::sign_test_package(&app, crate::provenance::PackageKind::App, "notes");
     let _apps_dir = crate::test_env::TestEnvVarGuard::set("COS_APPS_DIR", apps.path());
 
     let result = parse(

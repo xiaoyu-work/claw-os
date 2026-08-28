@@ -26,10 +26,11 @@ library API exported by `core/src/lib.rs`.
 | `clawd/` | Privileged broker services |
 | `caps/` | Capability model and enforcement |
 | `credential/` | Encrypted store, crypto/master-key boundary, authorization, OAuth, lifecycle, and CLI facade; see [`credential/MODULE.md`](credential/MODULE.md) |
+| `provenance/` | Extension package signing, trust roots, verification, install |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `notifications/` | Durable owner-scoped notification model, store, policy, and external delivery adapters |
-| `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |
+| `apps.rs`, `bridge.rs` | App discovery (provenance-gated) and subprocess bridge |
 | `service.rs`, `../test/unit/service.rs` | Managed service lifecycle and regressions |
 
 ## Dependencies

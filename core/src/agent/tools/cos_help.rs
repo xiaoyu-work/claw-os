@@ -112,7 +112,7 @@ fn discover(path: &[String]) -> Value {
             let root = apps_root();
             crate::cli_catalog::overview(
                 env!("CARGO_PKG_VERSION"),
-                crate::apps::discover(&root).len(),
+                crate::apps::discover_verified(&root).len(),
             )
         }
         [namespace, command] if namespace == "agent" && command == "dev" => discover_agent_dev(),
@@ -191,7 +191,7 @@ fn discover_builtin_command(namespace: &str, command: &str, path: &[String]) -> 
 }
 
 fn discover_apps() -> Value {
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     let entries: Vec<Value> = apps
         .values()
         .map(|app| {
@@ -231,7 +231,7 @@ fn discover_app(app_id: &str) -> Value {
             "model_tool": Value::Null,
         });
     }
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     let Some(app) = apps.get(app_id) else {
         return json!({
             "found": false,
@@ -280,7 +280,7 @@ fn discover_app_command(app_id: &str, command: &str) -> Value {
             "model_tool": Value::Null,
         });
     }
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     let Some(app) = apps.get(app_id) else {
         return json!({
             "found": false,

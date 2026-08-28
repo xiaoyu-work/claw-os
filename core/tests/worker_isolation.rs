@@ -612,6 +612,7 @@ fn output_is_bounded_and_reported_as_truncated() {
 fn an_mcp_server_gets_the_same_isolation_as_an_app_operation() {
     require_sandbox!();
     let policy = cos::worker::derive::mcp_server(McpServerInput {
+        pinned_entries: Vec::new(),
         name: "parity",
         program: PathBuf::from("/bin/sh"),
         argv: vec![
@@ -680,6 +681,9 @@ fn a_legitimate_app_operation_reads_and_writes_only_its_declared_resources() {
         forbidden = forbidden.to_string_lossy(),
     );
     let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id: "fixture",
         app_dir: package.path(),
         operation: "transform",
@@ -766,6 +770,9 @@ fn run_with_egress(script: &str, endpoints: Vec<cos::worker::Endpoint>) -> Worke
             .collect::<Vec<_>>(),
     );
     let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id: "egress-fixture",
         app_dir: dir.path(),
         operation: "fetch",
@@ -961,6 +968,9 @@ fn a_segment_glob_exposes_the_matches_and_not_their_children() {
             .to_string_lossy(),
     );
     let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id: "glob-fixture",
         app_dir: package.path(),
         operation: "read",
@@ -1082,6 +1092,9 @@ print('apps_root', sorted(os.listdir(os.path.join({owner_root:?}, 'apps'))))
         Cap::new(Verb::MEMORY_READ, Scope::self_ref("memory-fixture")),
     ]);
     let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id: "memory-fixture",
         app_dir: package.path(),
         operation: "remember",
@@ -1194,6 +1207,9 @@ print('partition', sorted(p.name for p in data.iterdir()))
 
     let caps = CapSet::new();
     let policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id: "calendar",
         app_dir: package.path(),
         operation: "list",
@@ -1468,6 +1484,9 @@ fn run_shipped_app(
     );
 
     let mut policy = cos::worker::derive::app_operation(cos::worker::derive::AppOperationInput {
+        package_identity: None,
+        pinned_entries: Vec::new(),
+        developer: false,
         app_id,
         app_dir: &apps_root.join(app_id),
         operation,
@@ -1738,6 +1757,7 @@ fn missing_isolation_facilities_fail_closed() {
 #[test]
 fn the_trusted_native_tier_is_never_launched_through_the_sandbox() {
     let mut policy = cos::worker::derive::mcp_server(McpServerInput {
+        pinned_entries: Vec::new(),
         name: "native",
         program: PathBuf::from("/bin/sh"),
         argv: Vec::new(),

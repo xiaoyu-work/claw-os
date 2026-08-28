@@ -49,12 +49,19 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use super::manifest::{self, SkillManifest};
+use crate::provenance::{self, PackageKind, VerifiedPackage, VerifyOptions};
 
-/// One loaded skill: directory id, parsed manifest, file paths.
-#[derive(Debug, Clone, PartialEq)]
+/// One loaded skill: directory id, parsed manifest, file paths, and
+/// the verified package snapshot every disclosure is bound to.
+///
+/// A `LoadedSkill` only exists when its package authenticated. The
+/// snapshot is what `disclosure` reads the body and child resources
+/// from, so a file changed after the catalog was built fails the
+/// disclosure instead of injecting new text into the model.
+#[derive(Debug, Clone)]
 pub struct LoadedSkill {
     pub id: String,
     pub dir: PathBuf,
@@ -63,6 +70,41 @@ pub struct LoadedSkill {
     pub body: String,
     pub body_bytes: usize,
     pub origin: SkillOrigin,
+    pub provenance: Arc<VerifiedPackage>,
+}
+
+impl PartialEq for LoadedSkill {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.dir == other.dir
+            && self.manifest_path == other.manifest_path
+            && self.manifest == other.manifest
+            && self.body == other.body
+            && self.body_bytes == other.body_bytes
+            && self.origin == other.origin
+            && self.provenance.content_digest() == other.provenance.content_digest()
+    }
+}
+
+impl LoadedSkill {
+    /// `vendor` / `publisher` / `developer`. Surfaced to the operator
+    /// and, as a source label, to the model alongside the content.
+    pub fn trust_label(&self) -> &'static str {
+        self.provenance.source().as_str()
+    }
+
+    pub fn content_digest(&self) -> &str {
+        self.provenance.content_digest()
+    }
+
+    /// Publisher key id when the skill was signed. Layered shadowing
+    /// compares this rather than trusting directory precedence alone.
+    pub fn publisher_key_id(&self) -> Option<&str> {
+        match self.provenance.source() {
+            provenance::TrustSource::Publisher { key_id } => Some(key_id.as_str()),
+            _ => None,
+        }
+    }
 }
 
 /// Trust/source layer from which a skill was discovered.
@@ -229,13 +271,41 @@ pub(crate) fn load_layered_with_origin(
     let user = load_dir_with_origin(user_root, opts, SkillOrigin::User);
 
     for (id, skill) in user.skills {
-        if contains_id(&out, &id) {
-            out.errors.insert(
-                format!("{id} (user shadow)"),
-                format!("user skill `{id}` cannot shadow a built-in skill with the same id"),
-            );
-        } else {
-            out.skills.insert(id, skill);
+        // Shadowing is decided on verified identity, not on which root
+        // happened to be scanned first. A user-installed skill may
+        // replace a built-in only when both packages authenticated to
+        // the same publisher key; otherwise the built-in stands and the
+        // attempt is reported.
+        match out.skills.get(&id) {
+            Some(existing) => {
+                let same_publisher = existing
+                    .publisher_key_id()
+                    .zip(skill.publisher_key_id())
+                    .map(|(a, b)| a == b)
+                    .unwrap_or(false);
+                if same_publisher {
+                    out.skills.insert(id, skill);
+                } else {
+                    out.errors.insert(
+                        format!("{id} (user shadow)"),
+                        format!(
+                            "user skill `{id}` cannot shadow the built-in skill: \
+                             it is signed by a different publisher (built-in {}, user {})",
+                            existing.publisher_key_id().unwrap_or("vendor"),
+                            skill.publisher_key_id().unwrap_or("unsigned"),
+                        ),
+                    );
+                }
+            }
+            None if contains_id(&out, &id) => {
+                out.errors.insert(
+                    format!("{id} (user shadow)"),
+                    format!("user skill `{id}` collides with a built-in skill id"),
+                );
+            }
+            None => {
+                out.skills.insert(id, skill);
+            }
         }
     }
     merge_diagnostics(&mut out.disabled, user.disabled, "user");
@@ -330,6 +400,9 @@ fn load_dir_with_origin(
                 out.skills.insert(id, skill);
             }
             Err(err) => {
+                // Quarantine with the reason rather than dropping the
+                // skill silently: an operator has to be able to see why
+                // an installed skill stopped being offered.
                 out.errors.insert(id, err);
             }
         }
@@ -338,23 +411,32 @@ fn load_dir_with_origin(
     out
 }
 
+/// Authenticate one skill package. Signature (or vendor/developer
+/// trust) is required — there is no environment variable that turns
+/// this off.
+pub fn verify_skill_dir(id: &str, dir: &Path) -> Result<Arc<VerifiedPackage>, String> {
+    let trust = provenance::trust_store();
+    let options = VerifyOptions::new(PackageKind::Skill).expect_id(id);
+    provenance::verify::verify_package_cached(dir, &options, &trust)
+        .map_err(|e| provenance::quarantine_reason(PackageKind::Skill, id, &e))
+}
+
 fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, String> {
     let manifest_path = dir.join("SKILL.md");
-    let metadata =
-        fs::symlink_metadata(&manifest_path).map_err(|e| format!("SKILL.md not readable: {e}"))?;
-    if !metadata.is_file() {
-        return Err("SKILL.md is not a regular file".to_string());
-    }
-    if metadata.len() > opts.max_manifest_bytes {
+    let verified = verify_skill_dir(id, dir)?;
+
+    // The manifest and body come out of the verified snapshot, so the
+    // metadata offered to the model is the metadata that was signed.
+    let raw = verified
+        .read_verified_text("SKILL.md")
+        .map_err(|e| format!("verified SKILL.md read failed: {e}"))?;
+    if raw.len() as u64 > opts.max_manifest_bytes {
         return Err(format!(
             "SKILL.md is {} bytes; exceeds max {} bytes",
-            metadata.len(),
+            raw.len(),
             opts.max_manifest_bytes
         ));
     }
-
-    let raw =
-        fs::read_to_string(&manifest_path).map_err(|e| format!("failed to read SKILL.md: {e}"))?;
     let doc = manifest::parse(&raw).map_err(|e| format!("manifest parse error: {e}"))?;
 
     let body_bytes = doc.body.len();
@@ -370,6 +452,7 @@ fn load_one(id: &str, dir: &Path, opts: &LoadOptions) -> Result<LoadedSkill, Str
         },
         body_bytes,
         origin: SkillOrigin::Local,
+        provenance: verified,
     })
 }
 

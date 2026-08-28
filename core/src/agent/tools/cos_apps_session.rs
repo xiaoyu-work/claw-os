@@ -86,6 +86,14 @@ struct ActiveSession {
     call_lock: Arc<Mutex<()>>,
     child_pid: u32,
     poisoned: Arc<AtomicBool>,
+    /// The verified snapshot this server is running, with descriptors
+    /// on the manifest and the session entry still open.
+    ///
+    /// Held for the whole life of the session, not dropped after
+    /// `spawn`: a cached session is reused many times, and every reuse
+    /// re-asserts the pinned inodes against it rather than trusting
+    /// that a check at open time still describes what is on disk.
+    bound: Arc<SessionBinding>,
 }
 
 impl Drop for ActiveSession {
@@ -188,21 +196,20 @@ fn session_key(app_id: &str, apps_root: &Path) -> Result<SessionKey, String> {
 /// code and should see only what the operator explicitly grants
 /// (`COS_*` config and the small set of locale/PATH/HOME vars in
 /// [`safe_session_env_allowlist`]).
-async fn bring_up_app(
-    app_id: &str,
-    app_dir: &Path,
-    apps_dir: &Path,
-    manifest: &Manifest,
-    timeout_dur: Duration,
-) -> Result<
-    (
-        Arc<McpClient>,
-        Child,
-        usize,
-        crate::bridge::AppIdentitySession,
-    ),
-    String,
-> {
+/// Resolve the session entry an App declares, as a *signed* entrypoint.
+///
+/// The name comes from the verified manifest — the explicit
+/// `session.entry`, or the runtime's default — and must then appear in
+/// the envelope's declared entrypoints. A file that happens to sit in
+/// the package and happens to be covered by the file tree is still not
+/// something the publisher said may be executed, and running it would
+/// let a signed package become an arbitrary-code launcher for anything
+/// shipped alongside it.
+fn declared_session_entry(
+    launch: &crate::bridge::AppLaunch,
+) -> Result<String, String> {
+    let app_id = launch.app_id();
+    let manifest = launch.manifest();
     let session = manifest
         .session
         .as_ref()
@@ -216,44 +223,187 @@ async fn bring_up_app(
         .entry
         .clone()
         .unwrap_or_else(|| manifest.runtime.default_session_entry().to_string());
-    // Reject obvious traversal up front (the canonicalise step below
-    // catches the deep version, but rejecting `..` early is cheaper
-    // and gives a clearer error).
-    if entry_rel.contains("..") {
+    // Traversal, absolute paths and alternate separators are refused by
+    // the envelope's own path rules, but saying so here gives a clearer
+    // error than "not a declared entrypoint".
+    if entry_rel.contains("..") || entry_rel.starts_with('/') || entry_rel.contains('\\') {
         return Err(format!(
-            "app `{app_id}`: session entry `{entry_rel}` contains parent-traversal `..`"
+            "app `{app_id}`: session entry `{entry_rel}` is not a plain package-relative path"
         ));
     }
-    let entry_abs = app_dir.join(&entry_rel);
-    if !entry_abs.is_file() {
+    if !launch
+        .package()
+        .entrypoints()
+        .iter()
+        .any(|declared| declared == &entry_rel)
+    {
         return Err(format!(
-            "app `{app_id}`: session entry `{}` not found at {}",
+            "app `{app_id}`: session entry `{entry_rel}` is not a declared, signed entrypoint; \
+             add it to the package's signed entrypoints"
+        ));
+    }
+    Ok(entry_rel)
+}
+
+/// Everything one App session holds open for as long as it runs.
+///
+/// The binding is the point. It owns descriptors on the exact inodes
+/// that were digest-verified — the manifest and the session entry — and
+/// it is kept for the whole life of the session rather than dropped
+/// after `spawn`, so "which bytes is this server running?" has an
+/// answer that survives the launch. Every later call re-asserts against
+/// it instead of re-reading a mutable path.
+///
+/// # Scope
+///
+/// Provenance only. This answers *which bytes run*; it does not
+/// isolate them. The App-session stdio child on this path is spawned
+/// directly, outside the worker sandbox — no mount namespace, no
+/// egress policy, no seccomp filter — and that predates this binding.
+/// Adding the binding does not make the path sandboxed and must not be
+/// read as saying it is.
+pub(crate) struct SessionBinding {
+    binding: crate::bridge::LaunchBindingRef,
+    entry_rel: String,
+    entry_path: PathBuf,
+    package_identity: Option<(u64, u64)>,
+    pinned_entries: Vec<(PathBuf, (u64, u64))>,
+}
+
+impl SessionBinding {
+    fn new(
+        binding: crate::bridge::LaunchBindingRef,
+        entry_rel: String,
+        entry_path: PathBuf,
+    ) -> Self {
+        let package_identity = binding.dir_identity();
+        let pinned_entries = binding.entries();
+        Self {
+            binding,
             entry_rel,
-            entry_abs.display()
-        ));
+            entry_path,
+            package_identity,
+            pinned_entries,
+        }
     }
-    // Realpath defence: confirm the resolved entry lives under the
-    // resolved app_dir. Catches symlink escapes that the lexical
-    // `..` check above would miss.
-    let canon_app = std::fs::canonicalize(app_dir).map_err(|e| {
-        format!(
-            "app `{app_id}`: canonicalize app_dir {}: {e}",
-            app_dir.display()
-        )
-    })?;
-    let canon_entry = std::fs::canonicalize(&entry_abs).map_err(|e| {
-        format!(
-            "app `{app_id}`: canonicalize entry {}: {e}",
-            entry_abs.display()
-        )
-    })?;
-    if !canon_entry.starts_with(&canon_app) {
-        return Err(format!(
-            "app `{app_id}`: session entry resolves to {} which escapes app dir {}",
-            canon_entry.display(),
-            canon_app.display()
-        ));
+
+    /// The absolute path of the pinned session entry.
+    fn entry_path(&self) -> &Path {
+        &self.entry_path
     }
+
+    /// Audit-safe projection of what this launch is pinned to.
+    ///
+    /// These are the same `(dev, ino)` identities a sandbox policy
+    /// binds through `AppOperationInput::package_identity` and
+    /// `pinned_entries`. This path does not build such a policy: the
+    /// App-session stdio child is spawned directly rather than through
+    /// `worker::prepare`. That is a pre-existing property of this code
+    /// path, not a consequence of anything here, and it is not a
+    /// design justification — `worker::derive` already supports
+    /// `StdioPlan::Streamed`, which is what the MCP/adapter attach path
+    /// uses for exactly this shape of child. Moving this launch onto it
+    /// is tracked separately.
+    ///
+    /// Until then the identities are enforced by this binding alone:
+    /// the descriptors stay open, and every spawn, cache reuse and tool
+    /// call re-asserts them. That is a provenance guarantee — the bytes
+    /// executing are the bytes that were signed — and nothing more. It
+    /// is not isolation, and it does not substitute for the sandbox
+    /// this path is missing. Recording the identities makes the pinned
+    /// set reconstructable from the audit log either way.
+    fn audit_facts(&self) -> serde_json::Value {
+        json!({
+            "entry": self.entry_rel,
+            "package_identity": self
+                .package_identity
+                .map(|(dev, ino)| json!({ "dev": dev, "ino": ino })),
+            "pinned_entries": self
+                .pinned_entries
+                .iter()
+                .map(|(path, (dev, ino))| {
+                    json!({ "path": path.display().to_string(), "dev": dev, "ino": ino })
+                })
+                .collect::<Vec<_>>(),
+        })
+    }
+
+    /// Re-assert that every pinned file is still the verified inode.
+    ///
+    /// Called immediately before `spawn` and again on every reuse of a
+    /// cached session, so a warm cache can never be the reason a
+    /// replaced script goes unnoticed. Comparing the inode identity is
+    /// what makes this a check rather than a re-read: the descriptors
+    /// this binding holds name the files that were hashed, and a
+    /// replacement necessarily produces a different `(dev, ino)`.
+    fn assert_pinned(&self) -> Result<(), String> {
+        for (path, expected) in &self.pinned_entries {
+            let meta = std::fs::metadata(path).map_err(|e| {
+                format!("pinned session file {} is unreadable: {e}", path.display())
+            })?;
+            if current_identity(&meta) != *expected {
+                return Err(format!(
+                    "pinned session file {} was replaced after verification",
+                    path.display()
+                ));
+            }
+        }
+        if let Some(expected) = self.package_identity {
+            let meta = std::fs::metadata(self.binding.dir()).map_err(|e| {
+                format!(
+                    "pinned package directory {} is unreadable: {e}",
+                    self.binding.dir().display()
+                )
+            })?;
+            if current_identity(&meta) != expected {
+                return Err(format!(
+                    "pinned package directory {} was replaced after verification",
+                    self.binding.dir().display()
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn current_identity(meta: &std::fs::Metadata) -> (u64, u64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.dev(), meta.ino())
+}
+
+#[cfg(not(unix))]
+fn current_identity(_meta: &std::fs::Metadata) -> (u64, u64) {
+    (0, 0)
+}
+
+async fn bring_up_app(
+    launch: &crate::bridge::AppLaunch,
+    apps_dir: &Path,
+    timeout_dur: Duration,
+) -> Result<
+    (
+        Arc<McpClient>,
+        Child,
+        usize,
+        crate::bridge::AppIdentitySession,
+        SessionBinding,
+    ),
+    String,
+> {
+    let app_id = launch.app_id().to_string();
+    let app_id = app_id.as_str();
+    let manifest = launch.manifest();
+    let entry_rel = declared_session_entry(launch)?;
+
+    // Re-assert the snapshot against the current trust store and open
+    // the manifest and the session entry by descriptor. The binding
+    // holds those descriptors for the life of the session, so the
+    // inode that was hashed is the inode that is executed — there is
+    // no `app_dir.join(entry)` re-resolution anywhere below.
+    let binding = launch.bind(std::slice::from_ref(&entry_rel))?;
+    let entry_path = launch.dir().join(&entry_rel);
+    let bound = SessionBinding::new(binding, entry_rel.clone(), entry_path);
 
     let apps_dir_str = apps_dir.to_string_lossy().to_string();
     let data_dir = data_dir_string();
@@ -273,7 +423,10 @@ async fn bring_up_app(
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
-    let mut command = build_command(manifest.runtime, &entry_abs);
+    // The interpreter selection comes from the same verified manifest
+    // as the entry, so the runtime that executes the signed bytes and
+    // the bytes themselves cannot be decided by two different reads.
+    let mut command = build_command(manifest.runtime, bound.entry_path());
     let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
@@ -320,6 +473,22 @@ async fn bring_up_app(
     }
     crate::bridge::apply_routed_identity(command.as_std_mut())?;
 
+    // The last thing before `spawn`, with the descriptors still open:
+    // is every pinned file still the inode that was verified? A tree
+    // swapped between `bind` and here fails the launch instead of
+    // running whatever now sits at the path.
+    bound.assert_pinned()?;
+    crate::provenance::audit(
+        "provenance.app_session_bound",
+        {
+            let mut facts = bound.audit_facts();
+            if let Some(object) = facts.as_object_mut() {
+                object.insert("package_id".to_string(), json!(app_id));
+                object.insert("session".to_string(), json!(app_session.id()));
+            }
+            facts
+        },
+    );
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{app_id}` session: {e}"))?;
@@ -417,7 +586,7 @@ async fn bring_up_app(
         }
     };
 
-    Ok((client, child, listed_count, app_session))
+    Ok((client, child, listed_count, app_session, bound))
 }
 
 /// Best-effort kill + detached reap of a child process. Used on
@@ -490,7 +659,7 @@ async fn get_or_open(
     let stale = {
         let mut table = manager().lock().await;
         if let Some(s) = table.get(&key) {
-            if !s.poisoned.load(Ordering::SeqCst) {
+            if !s.poisoned.load(Ordering::SeqCst) && reusable(s) {
                 return Ok(s.client.clone());
             }
         }
@@ -500,6 +669,36 @@ async fn get_or_open(
     open_session_at(app_id, app_dir, apps_root, manifest)
         .await
         .map(|(c, _)| c)
+}
+
+/// May this cached session be handed out again?
+///
+/// A warm cache is exactly where a replaced script would otherwise go
+/// unnoticed, so the answer is never "yes, it is in the table". The
+/// pinned inodes are re-asserted and the package's provenance is
+/// re-checked against the current trust store; either failing drops the
+/// entry and forces a fresh, fully verified bring-up.
+fn reusable(session: &ActiveSession) -> bool {
+    if let Err(error) = session.bound.assert_pinned() {
+        tracing::warn!(
+            target: "provenance",
+            %error,
+            "dropping a cached App session whose signed files changed"
+        );
+        return false;
+    }
+    if let Err(error) = crate::provenance::runtime::assert_live_instance_now(
+        crate::provenance::runtime::current_owner(),
+        session.identity.id(),
+    ) {
+        tracing::warn!(
+            target: "provenance",
+            %error,
+            "dropping a cached App session whose package is no longer trusted"
+        );
+        return false;
+    }
+    true
 }
 
 struct ActiveCallGuard {
@@ -544,7 +743,7 @@ async fn begin_active_session_call(
     caps: &[crate::caps::Cap],
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id, apps_root)?;
-    let (control, child_pid, call_lock, poisoned) = {
+    let (control, child_pid, call_lock, poisoned, session_id, bound) = {
         let table = manager().lock().await;
         let session = table
             .get(&key)
@@ -554,8 +753,42 @@ async fn begin_active_session_call(
             session.child_pid,
             session.call_lock.clone(),
             session.poisoned.clone(),
+            session.identity.id().to_string(),
+            Arc::clone(&session.bound),
         )
     };
+    // Per call, against the pinned snapshot. A session that has been
+    // open for hours is exactly the case where the tree may have moved
+    // underneath it.
+    if let Err(error) = bound.assert_pinned() {
+        poisoned.store(true, Ordering::SeqCst);
+        close_session_at(app_id, apps_root).await;
+        return Err(format!(
+            "App session `{app_id}` no longer runs the verified package: {error}"
+        ));
+    }
+    // Per call, against a freshly resolved trust store. A revocation
+    // that landed since the session opened ends the session here — the
+    // child's process group is signalled and the entry dropped — rather
+    // than merely declining this one call and leaving revoked code
+    // holding an open channel to the agent.
+    let owner = crate::provenance::runtime::current_owner();
+    if let Err(reason) = crate::provenance::runtime::assert_live_instance_now(owner, &session_id) {
+        poisoned.store(true, Ordering::SeqCst);
+        close_session_at(app_id, apps_root).await;
+        let doomed = session_id.clone();
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::provenance::runtime::terminate(
+                owner,
+                &doomed,
+                crate::provenance::runtime::SHUTDOWN_GRACE,
+            )
+        })
+        .await;
+        return Err(format!(
+            "App session `{app_id}` is no longer trusted and was shut down: {reason}"
+        ));
+    }
     let lock = call_lock.lock_owned().await;
     if let Err(error) = control.set_transient_call(Some(crate::bridge::TransientCall {
         tool,
@@ -605,22 +838,55 @@ async fn open_session_at(
     let _open_guard = lock.lock().await;
 
     // Re-probe under the per-app lock — another racer may have just
-    // finished the spawn we were blocked on.
+    // finished the spawn we were blocked on. Same rule as the warm
+    // path: a cached entry is only reused if its signed files are
+    // still the ones that were verified.
     let stale = {
         let mut table = manager().lock().await;
         if let Some(s) = table.get(&key) {
-            if !s.poisoned.load(Ordering::SeqCst) {
+            if !s.poisoned.load(Ordering::SeqCst) && reusable(s) {
                 return Ok((s.client.clone(), s.tool_count));
             }
         }
         table.remove(&key)
     };
     drop(stale);
-    let (client, child, listed, identity) =
-        bring_up_app(app_id, app_dir, apps_root, manifest, DEFAULT_TIMEOUT).await?;
+
+    // Registration happened earlier and the tool schemas the model saw
+    // came from that snapshot; the server is spawned now. Re-verify
+    // before bring-up so a package revoked, replaced or tampered with
+    // in between cannot be what actually starts.
+    //
+    // One `AppLaunch` from one `VerifiedPackage` is what the rest of
+    // this function uses: the manifest, the runtime selection, the
+    // session block, the capability ceiling and the executed entry all
+    // come out of the same parse of the same signed bytes.
+    let installed = crate::apps::find_verified(apps_root, app_id)?;
+    let verified = installed.require_verified()?;
+    verified
+        .assert_current(&crate::provenance::trust_store())
+        .map_err(|e| format!("App `{app_id}` changed after verification: {e}"))?;
+    if installed.dir != app_dir {
+        return Err(format!(
+            "App `{app_id}` now resolves to {}, not the registered {}",
+            installed.dir.display(),
+            app_dir.display()
+        ));
+    }
+    let launch = crate::bridge::AppLaunch::new(std::sync::Arc::clone(verified))?;
+    let _ = manifest;
+    let (client, child, listed, identity, bound) =
+        bring_up_app(&launch, apps_root, DEFAULT_TIMEOUT).await?;
     let child_pid = child
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
+    // The App-session MCP child is a verified package holding a live
+    // stdio channel to the agent. Record which artifact it came from
+    // and which exact process it is, so a later revocation can both
+    // deny it and stop it.
+    let owner = crate::provenance::runtime::current_owner();
+    crate::provenance::runtime::register_mcp_package(owner, identity.id(), verified);
+    crate::provenance::runtime::bind_process(owner, identity.id(), child_pid);
     let mut table = manager().lock().await;
     table.insert(
         key,
@@ -632,6 +898,7 @@ async fn open_session_at(
             call_lock: Arc::new(Mutex::new(())),
             child_pid,
             poisoned: Arc::new(AtomicBool::new(false)),
+            bound: Arc::new(bound),
         },
     );
     Ok((client, listed))
@@ -655,6 +922,12 @@ async fn close_session_at(app_id: &str, apps_root: &Path) -> bool {
         table.remove(&key)
     };
     let was_present = removed.is_some();
+    if let Some(session) = removed.as_ref() {
+        crate::provenance::runtime::deregister(
+            crate::provenance::runtime::current_owner(),
+            session.identity.id(),
+        );
+    }
     // Explicit drop here to make the lifetime obvious — the Drop
     // impl does the async reap.
     drop(removed);
@@ -1201,21 +1474,20 @@ impl Tool for CosAppSessionOpen {
         ) {
             return ToolResult::err(denial.to_string());
         }
-        let Some(app) = crate::apps::find(&self.apps_root, &app_id) else {
-            return ToolResult::err(format!("App `{app_id}` is not installed"));
+        // The verified lookup: a quarantined install is not something
+        // the model may open a session against.
+        let app = match crate::apps::find_verified(&self.apps_root, &app_id) {
+            Ok(app) => app,
+            Err(error) => return ToolResult::err(error),
         };
-        match open_session_at(
-            &app_id,
-            &app.dir,
-            &self.apps_root,
-            &app.manifest,
-        )
-        .await
-        {
+        match open_session_at(&app_id, &app.dir, &self.apps_root, &app.manifest).await {
             Ok((_client, count)) => {
                 // Surface what's now callable so the model knows which
                 // names to use without a follow-up discovery call.
-                let tool_names = manifest_tool_names(&app.manifest);
+                let tool_names = match manifest_tool_names(&self.apps_root, &app_id) {
+                    Ok(names) => names,
+                    Err(error) => return ToolResult::err(error),
+                };
                 let body = json!({
                     "app": app_id,
                     "tools_registered_from_manifest": tool_names,
@@ -1284,12 +1556,23 @@ impl Tool for CosAppSessionClose {
     }
 }
 
-fn manifest_tool_names(manifest: &Manifest) -> Vec<String> {
-    manifest
+/// Tool names disclosed to the model for one App.
+///
+/// Read from the verified snapshot, never from a fresh path read: the
+/// names the model is told to call have to be the names that were
+/// signed.
+fn manifest_tool_names(apps_root: &Path, app_id: &str) -> Result<Vec<String>, String> {
+    let installed = crate::apps::find_verified(apps_root, app_id)?;
+    let text = installed
+        .require_verified()?
+        .manifest_text()
+        .map_err(|e| format!("read verified manifest: {e}"))?;
+    let manifest = Manifest::from_json(&text).map_err(|e| format!("parse manifest: {e}"))?;
+    Ok(manifest
         .session
         .as_ref()
         .map(|s| s.tools.iter().map(|t| t.name.clone()).collect())
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 #[cfg(test)]
@@ -1320,6 +1603,10 @@ pub(crate) struct RegisteredAppSession {
 /// meta-tools. The MCP servers themselves are *not* started here —
 /// they come up lazily on first call (or explicitly via
 /// `cos_app_session_open`).
+///
+/// `apps` must come from a *verified* discovery: the manifests handed
+/// in here become tool schemas the model reads and calls, so a
+/// quarantined install must never reach this list.
 pub(crate) fn register_manifests(
     registry: &mut ToolRegistry,
     apps_root: &Path,
@@ -1347,7 +1634,10 @@ pub(crate) fn register_manifests(
 /// the process-default App root.
 pub fn register_all(registry: &mut ToolRegistry) {
     let root = apps_root();
-    let apps = crate::apps::discover(&root)
+    // Verified discovery: these manifests become model-visible tool
+    // schemas, so a quarantined install is skipped rather than
+    // registered with a warning label.
+    let apps = crate::apps::discover_verified(&root)
         .values()
         .map(|app| RegisteredAppSession {
             manifest: Arc::new(app.manifest.clone()),

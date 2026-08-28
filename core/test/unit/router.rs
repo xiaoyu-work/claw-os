@@ -622,6 +622,7 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
         apps::App {
             manifest,
             dir: tmp.join("does-not-matter"),
+            provenance: Err("test fixture is not an installed package".to_string()),
         },
     );
 
@@ -663,6 +664,24 @@ fn write_min_app(dir: &std::path::Path, id: &str, body: &str) {
     std::fs::create_dir_all(dir).unwrap();
     std::fs::write(dir.join("app.json"), body).unwrap();
     // A tiny main.py so the copy step has something to move.
+    std::fs::write(dir.join("main.py"), format!("# stub for {id}\n")).unwrap();
+    // `cos app install` verifies provenance before registration, so the
+    // source tree has to be a signed package.
+    crate::test_env::sign_test_package(dir, crate::provenance::PackageKind::App, id);
+}
+
+/// Re-sign a package after a test mutates its tree. Every file in an
+/// installed package is covered by the signature, so adding or editing
+/// one invalidates it — which is the property under test elsewhere.
+fn reseal_app(dir: &std::path::Path, id: &str) {
+    let _ = std::fs::remove_file(dir.join(crate::provenance::envelope::ENVELOPE_FILE));
+    crate::test_env::sign_test_package(dir, crate::provenance::PackageKind::App, id);
+}
+
+/// Same shape, deliberately unsigned — for the fail-closed paths.
+fn write_unsigned_app(dir: &std::path::Path, id: &str, body: &str) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("app.json"), body).unwrap();
     std::fs::write(dir.join("main.py"), format!("# stub for {id}\n")).unwrap();
 }
 
@@ -1179,12 +1198,14 @@ fn install_force_lint_failure_preserves_existing_install() {
         r#"{"id":"atomic","version":"0.0.1","name":"Atomic"}"#,
     );
     std::fs::write(installed.join("old-state"), b"still usable").unwrap();
+    reseal_app(&installed, "atomic");
     write_min_app(
         &src,
         "atomic",
         r#"{"id":"atomic","version":"0.0.2","name":"Atomic"}"#,
     );
     std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
+    reseal_app(&src, "atomic");
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
@@ -1228,6 +1249,7 @@ fn install_recovers_backup_left_by_interrupted_forced_install() {
         r#"{"id":"recover","version":"0.0.1","name":"Recover"}"#,
     );
     std::fs::write(backup.join("old-state"), b"recovered").unwrap();
+    reseal_app(&backup, "recover");
     write_min_app(
         &staging,
         "recover",
@@ -1239,6 +1261,7 @@ fn install_recovers_backup_left_by_interrupted_forced_install() {
         r#"{"id":"recover","version":"0.0.3","name":"Recover"}"#,
     );
     std::fs::write(src.join("main.py"), b"import openai\n").unwrap();
+    reseal_app(&src, "recover");
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &dst);
@@ -1328,6 +1351,7 @@ fn install_same_path_keeps_development_tree_in_place() {
         r#"{"id":"devapp","version":"0.0.1","name":"Dev App"}"#,
     );
     std::fs::write(source.join("working-copy"), b"preserve me").unwrap();
+    reseal_app(&source, "devapp");
 
     let prev_apps = std::env::var_os("COS_APPS_DIR");
     std::env::set_var("COS_APPS_DIR", &root);
@@ -1415,6 +1439,14 @@ fn write_runtime_test_executable(path: &std::path::Path, body: &str) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+/// Write an App entrypoint and re-seal the package: the executable is
+/// part of the signed tree, so it must exist before the envelope does.
+#[cfg(unix)]
+fn write_runtime_app_entry(app_dir: &std::path::Path, id: &str, entry_file: &str, body: &str) {
+    write_runtime_test_executable(&app_dir.join(entry_file), body);
+    reseal_app(app_dir, id);
+}
+
 #[cfg(unix)]
 fn with_runtime_app_test_env(
     test: impl FnOnce(&std::path::Path, &std::path::Path, &std::path::Path),
@@ -1494,6 +1526,7 @@ fn write_runtime_app_manifest(
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .unwrap();
+    reseal_app(&app_dir, id);
     app_dir
 }
 
@@ -1566,10 +1599,7 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
 
         for (id, runtime, declared_entry, entry_file) in cases {
             let app_dir = write_runtime_app_manifest(apps, id, runtime, declared_entry, false);
-            write_runtime_test_executable(
-                &app_dir.join(entry_file),
-                &runtime_test_entry_source(runtime),
-            );
+            write_runtime_app_entry(&app_dir, id, entry_file, &runtime_test_entry_source(runtime));
 
             let ran_marker = data.join("apps").join(id).join(format!("{id}.ran"));
             let schema = dispatch(&["app".to_string(), id.to_string(), "--schema".to_string()])
@@ -1665,6 +1695,8 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
 #[test]
 fn polyglot_app_operations_report_missing_and_invalid_entries() {
     with_runtime_app_test_env(|apps, data, _| {
+        // The declared entry is deliberately absent; the package still
+        // has to authenticate before dispatch reports the missing file.
         write_runtime_app_manifest(apps, "missing-node", "node", Some("missing.js"), false);
         let missing = dispatch(&[
             "app".to_string(),
@@ -1681,8 +1713,10 @@ fn polyglot_app_operations_report_missing_and_invalid_entries() {
 
         let invalid =
             write_runtime_app_manifest(apps, "invalid-python", "python", Some("alt.py"), false);
-        write_runtime_test_executable(
-            &invalid.join("alt.py"),
+        write_runtime_app_entry(
+            &invalid,
+            "invalid-python",
+            "alt.py",
             &runtime_test_entry_source("python"),
         );
         let invalid = dispatch(&[
@@ -1709,7 +1743,12 @@ fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
     with_runtime_app_test_env(|apps, data, _| {
         let app_dir =
             write_runtime_app_manifest(apps, "desktop-shell", "shell", Some("gui.sh"), true);
-        write_runtime_test_executable(&app_dir.join("gui.sh"), &runtime_test_entry_source("shell"));
+        write_runtime_app_entry(
+            &app_dir,
+            "desktop-shell",
+            "gui.sh",
+            &runtime_test_entry_source("shell"),
+        );
 
         let output = dispatch(&[
             "app".to_string(),

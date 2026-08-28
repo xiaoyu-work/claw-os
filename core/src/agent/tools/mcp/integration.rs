@@ -71,6 +71,15 @@ pub struct McpServerSpec {
     /// authenticated remote server. Kept as a var name (not the token)
     /// so secrets never sit in a manifest on disk.
     pub bearer_env: Option<String>,
+    /// Verified package this spec came from.
+    ///
+    /// `Some` for discovered agent-API packages: the manifest, the
+    /// command, the scripts it points at and every other file in the
+    /// package authenticated before the spec was built, and the same
+    /// snapshot is re-checked immediately before spawn. `None` only for
+    /// specs written directly into `config.json` by the machine owner,
+    /// which are operator configuration rather than installed packages.
+    pub provenance: Option<Arc<crate::provenance::VerifiedPackage>>,
 }
 
 impl McpServerSpec {
@@ -80,6 +89,117 @@ impl McpServerSpec {
         } else {
             Duration::from_secs(self.timeout_secs)
         }
+    }
+}
+
+/// The revocable identity of one attached MCP server.
+///
+/// Shared by every [`McpRemoteTool`] registered from that server and by
+/// the [`McpServerHandle`] that owns the child, so a revocation noticed
+/// during a tool call can close the transport and stop the process
+/// rather than only refusing that one call. A server whose package has
+/// been revoked is hostile code with a live stdio channel to the agent;
+/// leaving it running and merely declining to talk to it would keep it
+/// holding its sandbox, its cgroup and whatever it has already opened.
+pub(crate) struct McpInstance {
+    /// The session id the runtime record is keyed by. Synthetic
+    /// (`mcp:<name>`) when the server runs without a proc session.
+    session_id: String,
+    name: String,
+    class: crate::provenance::runtime::InstanceClass,
+    /// `None` for operator-configured servers, which have no package
+    /// and therefore nothing a revocation can name.
+    package: Option<crate::provenance::runtime::PackageRef>,
+    /// The owner this server's record belongs to, captured when it was
+    /// attached rather than re-derived per call.
+    owner: u32,
+    closed: std::sync::atomic::AtomicBool,
+}
+
+impl McpInstance {
+    fn new(
+        session_id: String,
+        name: String,
+        package: Option<crate::provenance::runtime::PackageRef>,
+    ) -> Self {
+        let class = match package {
+            Some(_) => crate::provenance::runtime::InstanceClass::McpPackage,
+            None => crate::provenance::runtime::InstanceClass::McpOperatorConfig,
+        };
+        Self {
+            session_id,
+            name,
+            class,
+            package,
+            owner: crate::provenance::runtime::current_owner(),
+            closed: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    /// Is this server still allowed to be talked to?
+    ///
+    /// Checked before every request, against a freshly resolved trust
+    /// store — the resolver re-stats the durable generation and rebuilds
+    /// when another process moved it, so a revocation lands here with no
+    /// notification and no restart.
+    fn assert_live(&self) -> Result<(), String> {
+        if self.closed.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(format!(
+                "MCP server `{}` was shut down after its package was revoked",
+                self.name
+            ));
+        }
+        let trust = crate::provenance::trust_store();
+        if let Some(package) = &self.package {
+            package.is_live(&trust).inspect_err(|reason| {
+                crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+            })?;
+            // Package-backed: a missing record is a denial.
+            return crate::provenance::runtime::assert_live_instance(
+                self.owner,
+                &self.session_id,
+                &trust,
+            );
+        }
+        crate::provenance::runtime::assert_live(self.owner, &self.session_id, &trust)
+    }
+
+    /// Close this server for good: mark it, kill its process group and
+    /// clear its runtime record.
+    ///
+    /// Idempotent, and safe to call from an async context — the bounded
+    /// wait for the group to exit runs on a blocking thread.
+    async fn shut_down(&self, reason: &str) {
+        if self.closed.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        crate::provenance::runtime::mark_for_shutdown(self.owner, &self.session_id, reason);
+        crate::provenance::audit(
+            "provenance.revoked_instance_denied",
+            json!({
+                "session": self.session_id,
+                "surface": "mcp-tool-call",
+                "class": self.class.as_str(),
+                "server": self.name,
+                "package_id": self.package.as_ref().map(|p| p.id.clone()),
+                "content_digest": self.package.as_ref().map(|p| p.content_digest.clone()),
+                "reason": reason,
+            }),
+        );
+        let session = self.session_id.clone();
+        let owner = self.owner;
+        let _ = tokio::task::spawn_blocking(move || {
+            crate::provenance::runtime::terminate(
+                owner,
+                &session,
+                crate::provenance::runtime::SHUTDOWN_GRACE,
+            )
+        })
+        .await;
     }
 }
 
@@ -102,6 +222,8 @@ pub struct McpServerHandle {
     /// this server's sandbox. Dropped with the handle, which is what
     /// stops a torn-down server from keeping any authority alive.
     _sandbox: Option<crate::worker::LaunchResources>,
+    /// Shared with every tool registered from this server.
+    instance: Option<Arc<McpInstance>>,
 }
 
 impl McpServerHandle {
@@ -127,6 +249,12 @@ impl McpServerHandle {
 
 impl Drop for McpServerHandle {
     fn drop(&mut self) {
+        // The runtime record describes something that is running. This
+        // server is not, so it is dropped rather than left for a
+        // lifecycle pass to reason about.
+        if let Some(instance) = self.instance.as_ref() {
+            crate::provenance::runtime::deregister(instance.owner, instance.session_id());
+        }
         // Releasing this Arc lets the McpClient::Drop fire (if no
         // tool still holds a clone), which signals the reader task
         // to exit. Then we best-effort kill + reap the child.
@@ -161,6 +289,8 @@ pub struct McpRemoteTool {
     remote_name: String,
     client: Arc<McpClient>,
     timeout: Duration,
+    /// The server this tool belongs to, re-checked before every call.
+    instance: Option<Arc<McpInstance>>,
 }
 
 impl McpRemoteTool {
@@ -169,6 +299,7 @@ impl McpRemoteTool {
         descriptor: ToolDescriptor,
         client: Arc<McpClient>,
         timeout: Duration,
+        instance: Option<Arc<McpInstance>>,
     ) -> Self {
         let name = format!("mcp_{prefix}_{}", descriptor.name);
         let description = descriptor.description.unwrap_or_else(|| {
@@ -192,6 +323,7 @@ impl McpRemoteTool {
             remote_name: descriptor.name,
             client,
             timeout,
+            instance,
         }
     }
 }
@@ -211,6 +343,20 @@ impl Tool for McpRemoteTool {
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
+        // Provenance before protocol. A server that was verified when
+        // it was attached may have been revoked since; the check runs
+        // per call, and a failure ends the server rather than just this
+        // call — the transport closes and the child's process group is
+        // signalled, so no further tool call can reach it either.
+        if let Some(instance) = self.instance.as_ref() {
+            if let Err(reason) = instance.assert_live() {
+                instance.shut_down(&reason).await;
+                return ToolResult::err(format!(
+                    "MCP `{}` is no longer trusted and was shut down: {reason}",
+                    self.name
+                ));
+            }
+        }
         // MCP's `arguments` is `Option<Value>`. Treat empty/null
         // input as None so servers that pattern-match on absence
         // (vs. empty object) work correctly.
@@ -354,9 +500,53 @@ pub async fn attach_server(
         ),
         (None, _) => None,
     };
+    // Re-assert the package immediately before spawn. Discovery may
+    // have run minutes ago; a package directory replaced since then, a
+    // revoked publisher key, or a mutated script must stop the launch
+    // rather than be executed.
+    let mut pinned_entries: Vec<(std::path::PathBuf, (u64, u64))> = Vec::new();
+    // Descriptors on the verified files this server executes. They stay
+    // open until the child has been spawned: the sandbox binds those
+    // exact inodes, so replacing a script between resolution and
+    // `execve` is refused rather than silently honoured.
+    let _binding;
+    let program = match spec.provenance.as_ref() {
+        Some(pkg) => {
+            let trust = crate::provenance::trust_store();
+            pkg.assert_current(&trust).map_err(|e| {
+                format!("MCP package `{}` failed its pre-spawn check: {e}", spec.name)
+            })?;
+            // Unsigned developer content is refused an MCP attach
+            // outright: a running server holding a live broker endpoint
+            // is a standing attack surface even with no capabilities.
+            if !pkg.ceiling().allows_mcp_attach() {
+                return Err(format!(
+                    "MCP package `{}` is developer-trusted and may not be attached; \
+                     sign it, or run it outside Claw OS",
+                    spec.name
+                ));
+            }
+            let required = package_relative_entries(pkg, spec)?;
+            let binding = pkg
+                .bind_for_launch(&required)
+                .map_err(|e| format!("bind MCP package `{}`: {e}", spec.name))?;
+            pinned_entries = binding.entries();
+            let program = resolve_verified_program(pkg, &spec.command, &binding)?;
+            _binding = Some(binding);
+            program
+        }
+        None => {
+            _binding = None;
+            resolve_mcp_program(&spec.command)?
+        }
+    };
+    if let Some(pkg) = spec.provenance.as_ref() {
+        crate::provenance::audit("provenance.mcp_attach", pkg.audit_facts());
+    }
     let policy = crate::worker::derive::mcp_server(crate::worker::derive::McpServerInput {
+        pinned_entries,
         name: &spec.name,
-        program: resolve_mcp_program(&spec.command)?,
+        program,
         argv: spec.args.clone(),
         cwd,
         extra_env,
@@ -371,6 +561,34 @@ pub async fn attach_server(
             error,
         );
     })?;
+    // The revocable identity of this server, keyed by the session the
+    // runtime record uses. A server without a proc session still gets a
+    // stable synthetic key so it is recorded, classified and sweepable
+    // rather than invisible.
+    let instance_session = proc_session
+        .as_ref()
+        .map(|session| session.id().to_string())
+        .unwrap_or_else(|| format!("mcp:{}", spec.name));
+    let package_ref = spec
+        .provenance
+        .as_ref()
+        .map(|pkg| crate::provenance::runtime::PackageRef::of(pkg));
+    let owner = crate::provenance::runtime::current_owner();
+    match spec.provenance.as_ref() {
+        Some(pkg) => {
+            crate::provenance::runtime::register_mcp_package(owner, &instance_session, pkg)
+        }
+        // Operator configuration, not an installed package: classified
+        // explicitly so `cos provenance` can say what is running under
+        // which policy instead of leaving a gap in the records.
+        None => crate::provenance::runtime::register_operator_mcp(owner, &instance_session),
+    }
+    let instance = Arc::new(McpInstance::new(
+        instance_session.clone(),
+        spec.name.clone(),
+        package_ref.clone(),
+    ));
+
     let mut launch = crate::worker::WorkerLaunch::new(policy);
     if let Some(session) = proc_session.as_ref() {
         // An MCP server holds no standing capabilities. Its authority
@@ -379,7 +597,7 @@ pub async fn attach_server(
         // call's transient set only while that call is in flight. The
         // endpoint reads it live and relays under the launcher's grant,
         // so clearing the transient set removes it immediately.
-        launch = launch.with_authority(session.broker_authority());
+        launch = launch.with_authority(session.broker_authority().with_package(package_ref));
     }
     let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
         crate::worker::audit::refused(
@@ -403,12 +621,18 @@ pub async fn attach_server(
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
+    let Some(child_pid) = child.id() else {
+        crate::provenance::runtime::deregister(owner, &instance_session);
+        kill_and_reap(child);
+        return Err("spawned MCP server has no pid".to_string());
+    };
+    // Recorded while the child is still unreaped, so the identity read
+    // here belongs to this process and cannot already have been
+    // recycled onto something else.
+    crate::provenance::runtime::bind_process(owner, &instance_session, child_pid);
     if let Some(session) = proc_session.as_ref() {
-        let Some(pid) = child.id() else {
-            kill_and_reap(child);
-            return Err("spawned MCP server has no pid".to_string());
-        };
-        if let Err(error) = session.bind_process(pid) {
+        if let Err(error) = session.bind_process(child_pid) {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("bind MCP child session: {error}"));
         }
@@ -456,10 +680,12 @@ pub async fn attach_server(
     let init = match timeout(timeout_dur, init_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("initialize: {}", render_client_err(e)));
         }
         Err(_) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!(
                 "initialize timed out after {}s",
@@ -487,10 +713,12 @@ pub async fn attach_server(
     let tools = match timeout(timeout_dur, list_fut).await {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!("tools/list: {}", render_client_err(e)));
         }
         Err(_) => {
+            crate::provenance::runtime::deregister(owner, &instance_session);
             kill_and_reap(child);
             return Err(format!(
                 "tools/list timed out after {}s",
@@ -501,7 +729,13 @@ pub async fn attach_server(
 
     let mut registered = 0usize;
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
+        let tool = McpRemoteTool::new(
+            &spec.name,
+            descriptor,
+            client.clone(),
+            timeout_dur,
+            Some(Arc::clone(&instance)),
+        );
         registry.register(Arc::new(tool));
         registered += 1;
     }
@@ -513,6 +747,7 @@ pub async fn attach_server(
         tool_count: registered,
         _proc_session: proc_session,
         _sandbox: Some(resources),
+        instance: Some(instance),
     })
 }
 
@@ -577,7 +812,10 @@ pub async fn attach_http_server(
 
     let mut registered = 0usize;
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
+        // A remote server is an endpoint the owner configured, not a
+        // package and not a process: there is nothing for provenance to
+        // revoke and nothing to signal, so no instance is attached.
+        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur, None);
         registry.register(Arc::new(tool));
         registered += 1;
     }
@@ -589,6 +827,7 @@ pub async fn attach_http_server(
         tool_count: registered,
         _proc_session: None,
         _sandbox: None,
+        instance: None,
     })
 }
 
@@ -637,6 +876,123 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
 /// Resolution happens in the launcher, against the launcher's `PATH`,
 /// because inside the sandbox `PATH` is a fixed policy value and the
 /// server has no say in which binary runs.
+/// Resolve the program for a *verified package*.
+///
+/// Two cases, and only two:
+///
+///   * the command names a file inside the package — it must be a
+///     signed entrypoint, and its digest is re-checked from the pinned
+///     directory descriptor before the path is handed to the sandbox;
+///   * the command names a system interpreter — it is resolved on
+///     `PATH` and then required to be a root-owned, non-symlink,
+///     non-group/world-writable binary under an approved system root.
+///
+/// A writable interpreter earlier on `PATH`, or a script outside the
+/// package, is refused. Provenance would be worthless if the signed
+/// bytes were then run through an attacker-controlled `python3`.
+fn resolve_verified_program(
+    pkg: &crate::provenance::VerifiedPackage,
+    command: &str,
+    binding: &crate::provenance::verify::LaunchBinding,
+) -> Result<std::path::PathBuf, String> {
+    if let Some(rel) = package_relative(pkg, command) {
+        // A package-relative program must be a *declared* entrypoint,
+        // already bound by inode above. Re-resolving the path here
+        // would reopen the TOCTOU the binding exists to close.
+        let path = pkg.dir().join(&rel);
+        if binding.identity_for(&path).is_none() {
+            return Err(format!(
+                "MCP command `{rel}` is not a declared, signed entrypoint of package `{}`",
+                pkg.id()
+            ));
+        }
+        return Ok(path);
+    }
+    let resolved = resolve_mcp_program(command)?;
+    require_system_interpreter(&resolved)?;
+    Ok(resolved)
+}
+
+/// Every package-relative path this spec will execute or read.
+///
+/// The program itself when it lives in the package, plus any argv entry
+/// or env value pointing inside it. Each must be a declared entrypoint
+/// in the envelope, so a package cannot run a helper script it never
+/// declared.
+fn package_relative_entries(
+    pkg: &crate::provenance::VerifiedPackage,
+    spec: &McpServerSpec,
+) -> Result<Vec<String>, String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut consider = |value: &str, what: &str| -> Result<(), String> {
+        if let Some(rel) = package_relative(pkg, value) {
+            if !pkg.entrypoints().iter().any(|e| e == &rel) {
+                return Err(format!(
+                    "MCP {what} `{rel}` is not a declared entrypoint of package `{}`; \
+                     add it to the package's signed entrypoints",
+                    pkg.id()
+                ));
+            }
+            if !out.contains(&rel) {
+                out.push(rel);
+            }
+        }
+        Ok(())
+    };
+    consider(&spec.command, "command")?;
+    for arg in &spec.args {
+        consider(arg, "argument")?;
+    }
+    for value in spec.env.values() {
+        consider(value, "environment path")?;
+    }
+    Ok(out)
+}
+
+/// Approved roots for a system interpreter or binary. These are
+/// package-manager territory: writable only by root.
+const SYSTEM_BINARY_ROOTS: &[&str] = &["/usr", "/bin", "/sbin", "/lib", "/lib64", "/opt"];
+
+fn require_system_interpreter(path: &std::path::Path) -> Result<(), String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| format!("resolve MCP interpreter {}: {e}", path.display()))?;
+    if !SYSTEM_BINARY_ROOTS
+        .iter()
+        .any(|root| canonical.starts_with(root))
+    {
+        return Err(format!(
+            "MCP interpreter {} is outside the approved system roots {SYSTEM_BINARY_ROOTS:?}; \
+             a package may only run a distribution-installed interpreter or its own signed entrypoint",
+            canonical.display()
+        ));
+    }
+    crate::provenance::fsec::require_secure_location(&canonical, &[0])
+        .map_err(|e| format!("MCP interpreter rejected: {e}"))?;
+    Ok(())
+}
+
+/// Map an absolute path back to its package-relative form, or `None`
+/// when it lies outside the package.
+fn package_relative(
+    pkg: &crate::provenance::VerifiedPackage,
+    value: &str,
+) -> Option<String> {
+    let candidate = std::path::Path::new(value);
+    if !candidate.is_absolute() {
+        return None;
+    }
+    let root = pkg.dir().canonicalize().ok()?;
+    let resolved = candidate.canonicalize().ok()?;
+    let rel = resolved.strip_prefix(&root).ok()?;
+    let rel = rel.to_str()?.replace('\\', "/");
+    if rel.is_empty() {
+        None
+    } else {
+        Some(rel)
+    }
+}
+
 fn resolve_mcp_program(command: &str) -> Result<std::path::PathBuf, String> {
     let candidate = std::path::Path::new(command);
     if candidate.components().count() > 1 || candidate.is_absolute() {

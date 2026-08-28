@@ -106,10 +106,31 @@ pub struct AppOperationInput<'a> {
     /// GUI surfaces run in the desktop tier and receive a display
     /// transport; headless operations never do.
     pub desktop: bool,
+    /// `(st_dev, st_ino)` of the verified package directory.
+    ///
+    /// The provider refuses to bind a different inode, so a package
+    /// directory swapped between verification and `execve` fails the
+    /// launch instead of running unverified bytes.
+    pub package_identity: Option<(u64, u64)>,
+    /// Absolute path plus required inode for each signed entrypoint.
+    /// Each is bound over the package mount so the exact verified file
+    /// is what runs, whatever the path holds by then.
+    pub pinned_entries: Vec<(PathBuf, (u64, u64))>,
+    /// True when nobody signed this package and it runs only because
+    /// the owner granted it developer trust.
+    ///
+    /// The capability set was already clamped by the daemon, but the
+    /// filesystem shape is decided here: developer content sees its own
+    /// package read-only and its own App data partition, and no host
+    /// path a capability would otherwise have mounted.
+    pub developer: bool,
 }
 
 /// Everything the kernel knows about one MCP / adapter server launch.
 pub struct McpServerInput<'a> {
+    /// Absolute path plus required inode for each verified file the
+    /// server executes or reads at startup.
+    pub pinned_entries: Vec<(PathBuf, (u64, u64))>,
     pub name: &'a str,
     pub program: PathBuf,
     pub argv: Vec<String>,
@@ -147,14 +168,35 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
     // other App's or owner's store is in the sandbox at all.
     let data_dir = app_partition(Path::new(input.data_dir), input.app_id)?;
 
+    let package_mount = match input.package_identity {
+        Some(identity) => {
+            Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package)
+                .expecting(identity)
+        }
+        None => Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package),
+    };
     let mut mounts = vec![
-        Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package),
+        package_mount,
         Mount::read_write(data_dir.clone(), data_dir.clone(), MountClass::AppData),
     ];
+    // Bind each signed entrypoint over the package mount by inode. The
+    // package directory mount alone would still let a file inside it be
+    // replaced after verification; pinning the entries closes that.
+    for (path, identity) in &input.pinned_entries {
+        if path == &app_dir {
+            continue;
+        }
+        mounts.push(
+            Mount::read_only(path.clone(), path.clone(), MountClass::Package)
+                .expecting(*identity),
+        );
+    }
     mounts.extend(runtime_mounts());
     mounts.extend(shared_library_mounts(&app_dir, Path::new(input.apps_dir)));
     mounts.extend(program_mount(&input.program));
-    mounts.extend(granted_path_mounts(input.caps)?);
+    if !input.developer {
+        mounts.extend(granted_path_mounts(input.caps)?);
+    }
     let mut env = base_env(&data_dir);
     if input.desktop {
         let (display_mounts, display_env) = desktop_transports();
@@ -207,6 +249,12 @@ pub fn app_operation(input: AppOperationInput<'_>) -> Result<LaunchPolicy, Strin
 pub fn mcp_server(input: McpServerInput<'_>) -> Result<LaunchPolicy, String> {
     let mut mounts = runtime_mounts();
     mounts.extend(program_mount(&input.program));
+    for (path, identity) in &input.pinned_entries {
+        mounts.push(
+            Mount::read_only(path.clone(), path.clone(), MountClass::Package)
+                .expecting(*identity),
+        );
+    }
     let workdir = match &input.cwd {
         Some(cwd) => {
             let cwd = canonical_dir(cwd, "MCP working directory")?;

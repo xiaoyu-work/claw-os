@@ -238,8 +238,14 @@ impl Tool for CosAppTool {
         }
 
         let app_name = self.app.to_string();
-        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
-            Some(app) => app.dir,
+        let app_launch = match crate::apps::find_verified(&apps_root(), &app_name)
+            .ok()
+            .and_then(|app| {
+                app.require_verified()
+                    .ok()
+                    .and_then(|pkg| crate::bridge::AppLaunch::new(std::sync::Arc::clone(pkg)).ok())
+            }) {
+            Some(launch) => launch,
             None => {
                 return ToolResult::err(format!(
                     "no app named `{app_name}` installed. Try `cos_app_catalog list`."
@@ -247,10 +253,9 @@ impl Tool for CosAppTool {
             }
         };
         if command == "__schema__" {
-            return match manifest_schema_at(&app_dir) {
-                Ok(schema) => ToolResult::ok(schema),
-                Err(error) => ToolResult::err(error),
-            };
+            return ToolResult::ok(
+                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
+            );
         }
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
@@ -259,7 +264,7 @@ impl Tool for CosAppTool {
             || crate::paths::current_owner_uid_override().is_some()
         {
             return match tokio::task::block_in_place(|| {
-                crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+                crate::bridge::run_python_app(&app_launch, &command, &args, &data, &apps)
             }) {
                 Ok(Some(text)) => ToolResult::ok(text),
                 Ok(None) => ToolResult::ok(String::new()),
@@ -267,7 +272,7 @@ impl Tool for CosAppTool {
             };
         }
         let join = tokio::task::spawn_blocking(move || {
-            crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
+            crate::bridge::run_python_app(&app_launch, &command, &args, &data, &apps)
         })
         .await;
 
@@ -382,7 +387,7 @@ impl Tool for CosAppCatalog {
             .unwrap_or_default();
 
         let apps_dir = apps_root();
-        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover(&apps_dir)).await
+        let apps = match tokio::task::spawn_blocking(move || crate::apps::discover_verified(&apps_dir)).await
         {
             Ok(map) => map,
             Err(join_err) => {
@@ -657,8 +662,14 @@ impl Tool for CosAppRun {
             ));
         }
 
-        let app_dir = match crate::apps::find(&apps_root(), &app_name) {
-            Some(app) => app.dir,
+        let app_launch = match crate::apps::find_verified(&apps_root(), &app_name)
+            .ok()
+            .and_then(|app| {
+                app.require_verified()
+                    .ok()
+                    .and_then(|pkg| crate::bridge::AppLaunch::new(std::sync::Arc::clone(pkg)).ok())
+            }) {
+            Some(launch) => launch,
             None => {
                 return ToolResult::err(format!(
                     "no app named `{app_name}` installed. Try `cos_app_catalog list`."
@@ -667,10 +678,9 @@ impl Tool for CosAppRun {
         };
 
         if command == "__schema__" {
-            return match manifest_schema_at(&app_dir) {
-                Ok(schema) => ToolResult::ok(schema),
-                Err(error) => ToolResult::err(error),
-            };
+            return ToolResult::ok(
+                crate::apps::manifest_schema(app_launch.manifest()).to_string(),
+            );
         }
 
         if let Err(denial) = crate::caps::require(
@@ -682,13 +692,13 @@ impl Tool for CosAppRun {
 
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
-        let app_dir_clone = app_dir.clone();
+        let launch_clone = app_launch.clone();
         let cmd = command.clone();
         if crate::paths::is_routed_job()
             || crate::paths::current_owner_uid_override().is_some()
         {
             return match tokio::task::block_in_place(|| {
-                crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+                crate::bridge::run_python_app(&launch_clone, &cmd, &args, &data, &apps)
             }) {
                 Ok(Some(text)) => ToolResult::ok(text),
                 Ok(None) => ToolResult::ok(String::new()),
@@ -696,7 +706,7 @@ impl Tool for CosAppRun {
             };
         }
         let join = tokio::task::spawn_blocking(move || {
-            crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
+            crate::bridge::run_python_app(&launch_clone, &cmd, &args, &data, &apps)
         })
         .await;
 
@@ -738,7 +748,7 @@ pub fn register_default_with_root(registry: &mut ToolRegistry, apps_root: PathBu
 /// construction uses [`register_default`] to avoid paying for every manifest
 /// on every provider request.
 pub fn register_all(registry: &mut ToolRegistry) {
-    let apps = crate::apps::discover(&apps_root());
+    let apps = crate::apps::discover_verified(&apps_root());
     for app in apps.values() {
         registry.register(Arc::new(CosAppTool::from_manifest(&app.manifest)));
     }

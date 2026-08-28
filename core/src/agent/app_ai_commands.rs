@@ -126,7 +126,7 @@ pub(super) fn override_cmd(args: &[String]) -> Result<Value, String> {
             let apps_dir = std::env::var("COS_APPS_DIR")
                 .map(std::path::PathBuf::from)
                 .unwrap_or_else(|_| std::path::PathBuf::from("/usr/lib/cos/apps"));
-            let installed = apps::discover(&apps_dir)
+            let installed = apps::discover_verified(&apps_dir)
                 .get(app)
                 .cloned()
                 .ok_or_else(|| format!("unknown app `{app}`"))?;

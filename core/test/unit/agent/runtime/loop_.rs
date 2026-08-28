@@ -2885,6 +2885,7 @@ fn spec(name: &str, cmd: &str) -> crate::agent::tools::mcp::integration::McpServ
         timeout_secs: 30,
         url: None,
         bearer_env: None,
+        provenance: None,
     }
 }
 

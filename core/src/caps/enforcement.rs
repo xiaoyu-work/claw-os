@@ -528,6 +528,30 @@ fn authorize_session_caps(
     transient_caps: Option<&CapSet>,
     is_app: bool,
 ) -> Result<(), Denial> {
+    // Provenance re-check on the authority path. An App or MCP session
+    // that was verified at launch keeps running for as long as its work
+    // takes; if the operator revoked its publisher key or its artifact
+    // digest in the meantime, it must stop receiving authority now
+    // rather than on the strength of a check that predates the
+    // revocation. The session is also marked for bounded shutdown so
+    // the supervisor stops the process itself.
+    let owner = crate::provenance::runtime::current_owner();
+    let trust = crate::provenance::trust_store();
+    // An App session is package-backed by construction, so a missing or
+    // unreadable record is a denial rather than "not an extension".
+    // Non-App sessions — the operator's shell, a daemon task — have no
+    // record to lose and pass through.
+    let liveness = if is_app {
+        crate::provenance::runtime::assert_live_instance(owner, session_id, &trust)
+    } else {
+        crate::provenance::runtime::assert_live(owner, session_id, &trust)
+    };
+    if let Err(reason) = liveness {
+        return Err(Denial::verb_not_granted(verb, scope).with_hint(format!(
+            "the package backing session `{session_id}` is no longer trusted: {reason}"
+        )));
+    }
+
     let requested = Cap::new(verb, scope.clone());
     let mut caps = match caps {
         Some(c) => c.clone(),

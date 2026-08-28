@@ -6,6 +6,16 @@ fn write_skill(root: &Path, id: &str, contents: &str) {
     let dir = root.join(id);
     fs::create_dir_all(&dir).unwrap();
     fs::write(dir.join("SKILL.md"), contents).unwrap();
+    // Loading is provenance-gated, so a fixture has to be a signed
+    // package like any real installed skill.
+    crate::test_env::sign_test_package(&dir, crate::provenance::PackageKind::Skill, id);
+}
+
+/// Fixture that deliberately skips signing, for the quarantine paths.
+fn write_unsigned_skill(root: &Path, id: &str, contents: &str) {
+    let dir = root.join(id);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("SKILL.md"), contents).unwrap();
 }
 
 fn minimal(id: &str) -> String {
@@ -75,8 +85,11 @@ fn missing_skill_md_recorded_in_errors() {
     let r = load_dir(tmp.path(), &LoadOptions::default());
     assert_eq!(r.loaded_count(), 0);
     assert!(r.errors.contains_key("orphan"));
+    // A directory with no SKILL.md is not a package either, so the
+    // provenance gate reports it first. Either way it is quarantined
+    // with a reason rather than dropped.
     let msg = &r.errors["orphan"];
-    assert!(msg.contains("SKILL.md"), "got: {msg}");
+    assert!(msg.contains("quarantined"), "got: {msg}");
 }
 
 #[test]
@@ -115,7 +128,10 @@ fn yuanbao_disabled_by_default() {
 #[test]
 fn deny_match_is_case_insensitive() {
     let tmp = tempdir().unwrap();
-    write_skill(tmp.path(), "Godmode", &minimal("Godmode"));
+    // Deny-listing happens before authentication, so an unsigned tree
+    // is enough to exercise it — and a mixed-case directory name is not
+    // a legal package id anyway.
+    write_unsigned_skill(tmp.path(), "Godmode", &minimal("Godmode"));
     let r = load_dir(tmp.path(), &LoadOptions::default());
     assert!(r.disabled.contains_key("Godmode"));
 }
@@ -185,7 +201,7 @@ fn skill_md_as_directory_errors_out() {
     fs::create_dir_all(dir.join("SKILL.md")).unwrap();
     let r = load_dir(tmp.path(), &LoadOptions::default());
     let msg = r.errors.get("weird").expect("error");
-    assert!(msg.contains("not a regular file"), "got: {msg}");
+    assert!(msg.contains("quarantined"), "got: {msg}");
 }
 
 #[cfg(unix)]
@@ -202,7 +218,14 @@ fn symlinked_skill_md_is_rejected() {
 
     let result = load_dir(tmp.path(), &LoadOptions::default());
 
-    assert!(result.errors["linked"].contains("not a regular file"));
+    // A symlinked SKILL.md never reaches the parser: the package is
+    // quarantined before the manifest is read.
+    assert!(!result.skills.contains_key("linked"));
+    assert!(
+        result.errors["linked"].contains("quarantined"),
+        "got: {}",
+        result.errors["linked"]
+    );
 }
 
 #[test]
@@ -251,7 +274,9 @@ fn layered_load_includes_builtin_and_user_skills() {
 }
 
 #[test]
-fn layered_load_prevents_user_shadowing_builtin_skill() {
+fn layered_shadowing_follows_verified_publisher_not_path_order() {
+    // Same publisher on both layers: the user copy is an update of the
+    // same package, so it may replace the built-in.
     let system = tempdir().unwrap();
     let user = tempdir().unwrap();
     write_skill(system.path(), "claw-os", &minimal("vendor-claw-os"));
@@ -260,9 +285,47 @@ fn layered_load_prevents_user_shadowing_builtin_skill() {
     let result = load_layered(system.path(), user.path(), &LoadOptions::default());
 
     assert_eq!(result.loaded_count(), 1);
+    assert_eq!(result.skills["claw-os"].manifest.name, "user-claw-os");
+    assert_eq!(result.skills["claw-os"].origin, SkillOrigin::User);
+}
+
+#[test]
+fn layered_load_refuses_shadowing_by_a_different_publisher() {
+    let system = tempdir().unwrap();
+    let user = tempdir().unwrap();
+    write_skill(system.path(), "claw-os", &minimal("vendor-claw-os"));
+
+    // A second publisher signs a same-id skill into the user root.
+    let stranger = crate::provenance::sign::SigningKeyFile::generate(None).unwrap();
+    let dir = user.path().join("claw-os");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("SKILL.md"), minimal("user-claw-os")).unwrap();
+    crate::provenance::sign::sign_directory(
+        &dir,
+        &crate::provenance::sign::SignRequest {
+            kind: crate::provenance::PackageKind::Skill,
+            id: "claw-os".to_string(),
+            version: "0.0.0-test".to_string(),
+            manifest_schema: "test".to_string(),
+            manifest_path: "SKILL.md".to_string(),
+            entrypoints: vec![],
+            resources: vec![],
+        },
+        &stranger,
+    )
+    .unwrap();
+
+    let result = load_layered(system.path(), user.path(), &LoadOptions::default());
+
+    assert_eq!(result.loaded_count(), 1);
     assert_eq!(result.skills["claw-os"].manifest.name, "vendor-claw-os");
     assert_eq!(result.skills["claw-os"].origin, SkillOrigin::BuiltIn);
-    assert!(result.errors.contains_key("claw-os (user shadow)"));
+    // The stranger's package does not even verify, so it is quarantined
+    // rather than silently shadowing the built-in.
+    assert!(result
+        .errors
+        .keys()
+        .any(|k| k.starts_with("claw-os")));
 }
 
 #[test]

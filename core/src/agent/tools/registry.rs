@@ -139,7 +139,10 @@ impl RegistryDeps {
                 None
             }
         };
-        let app_sessions = crate::apps::discover(&paths.apps_dir)
+        // Verified discovery: every manifest here becomes a tool
+        // schema the model reads and may call, so an unverified or
+        // quarantined install must not reach the registry at all.
+        let app_sessions = crate::apps::discover_verified(&paths.apps_dir)
             .values()
             .filter(|app| app.manifest.session.is_some())
             .map(|app| super::cos_apps_session::RegisteredAppSession {

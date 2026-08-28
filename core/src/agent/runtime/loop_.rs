@@ -1373,6 +1373,11 @@ fn configured_specs(
             timeout_secs: s.timeout_secs,
             url: None,
             bearer_env: None,
+            // Operator configuration, not an installed package: the
+            // machine owner wrote this into config.json themselves, so
+            // there is no publisher to authenticate. Package provenance
+            // applies to discovered agent-API packages.
+            provenance: None,
         })
         .collect()
 }

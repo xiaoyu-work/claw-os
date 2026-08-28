@@ -256,6 +256,22 @@ fn serve(
         return Outcome::Denied;
     };
 
+    // Provenance first, before any command is even classified. The
+    // sandbox has no session registry of its own, so *this* endpoint is
+    // where a sandboxed worker's capability decisions come from: a
+    // liveness check anywhere later would let a revoked package still
+    // receive an "allow" for the request already in flight. The
+    // identity checked is the launch's, held on this side of the
+    // socket; nothing in the request influences it.
+    if let Err(reason) = authority.assert_live() {
+        respond_denied(
+            &mut stream,
+            &id,
+            &format!("the package backing this launch is no longer trusted: {reason}"),
+        );
+        return Outcome::Denied;
+    }
+
     if name == POLICY_CHECK_COMMAND {
         let result = policy_check(authority, envelope.get("params").unwrap_or(&Value::Null));
         respond_ok(&mut stream, &id, result);
@@ -634,6 +650,14 @@ fn ask_sandbox_broker(verb: Verb, scope: &Scope) -> Result<Result<(), String>, S
         POLICY_CHECK_COMMAND,
         serde_json::json!({ "verb": verb.as_str(), "scope": scope }),
     )?;
+    // A refusal carries the endpoint's own message — including "this
+    // package is no longer trusted", which is a different fact from
+    // "you were not granted this" and is worth the App seeing. Absence
+    // of an explicit `allow` is a denial, so a malformed or truncated
+    // answer fails closed rather than falling through to anything else.
+    if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
+        return Ok(Err(message.to_string()));
+    }
     let decision = value
         .pointer("/result/decision")
         .and_then(Value::as_str)

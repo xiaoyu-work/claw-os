@@ -25,6 +25,20 @@ transports, discovery, and tool-registry integration.
 | `integration.rs` | Process/URL attachment and registry adapters |
 | `discover.rs` | XDG agent-API sidecar discovery |
 
+## Provenance
+
+Presence in an XDG search path is not authority to execute. A discovered
+agent-API package must be a directory carrying a `claw.provenance/v1`
+envelope signed by a trusted publisher, root-owned content under an
+approved system package root, or covered by an explicit developer grant.
+Loose `*.json` manifests are honoured only under an approved,
+root-owned package root. The manifest is read from the verified
+snapshot, and the command, its arguments and any package-relative env
+paths are re-verified immediately before spawn; a package may otherwise
+run only a root-owned distribution interpreter, never a writable one
+found earlier on `PATH`. Tool names, descriptions and results stay
+untrusted model input even when the package is signed.
+
 ## Dependencies
 
 MCP attachment is optional and must not prevent the agent from starting.

@@ -64,10 +64,12 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
 use super::integration::McpServerSpec;
+use crate::provenance::{self, PackageKind, VerifyOptions};
 
 const SCHEMA: &str = "claw.agent-api/v1";
 
@@ -224,6 +226,8 @@ pub enum ManifestError {
         field: &'static str,
         detail: String,
     },
+    #[error("{path}: {detail}")]
+    Provenance { path: PathBuf, detail: String },
 }
 
 /// Characters that have shell-grammar meaning. Even though we
@@ -259,13 +263,56 @@ fn validate_no_shell_metachars(
     Ok(())
 }
 
-/// Read one manifest file → [`McpServerSpec`]. The returned spec is
-/// already path-substituted and ready to hand to `attach_server`.
+/// Authenticate an agent-API package directory and load the manifest
+/// out of the verified snapshot.
 ///
-/// `None` means the manifest parsed cleanly but is disabled
-/// (`enabled: false` or `ai.callable_by_ai: false`); callers should
-/// treat it as "not attached" rather than an error.
+/// Presence in an XDG search path is not authority to execute. A
+/// package directory must carry a `claw.provenance/v1` envelope signed
+/// by a trusted publisher, or be root-owned content under an approved
+/// system package root, or carry an explicit developer grant.
+pub fn load_package(dir: &Path) -> Result<Option<McpServerSpec>, ManifestError> {
+    let id = dir
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let trust = provenance::trust_store();
+    let options = VerifyOptions::new(PackageKind::Mcp).expect_id(&id);
+    let verified = provenance::verify::verify_package_cached(dir, &options, &trust).map_err(
+        |source| ManifestError::Provenance {
+            path: dir.to_path_buf(),
+            detail: provenance::quarantine_reason(PackageKind::Mcp, &id, &source),
+        },
+    )?;
+    let manifest_rel = verified.manifest_path().to_string();
+    let body = verified
+        .read_verified_text(&manifest_rel)
+        .map_err(|source| ManifestError::Provenance {
+            path: dir.to_path_buf(),
+            detail: source.to_string(),
+        })?;
+    let manifest_path = dir.join(&manifest_rel);
+    let m: AgentApiManifest =
+        serde_json::from_str(&body).map_err(|source| ManifestError::Parse {
+            path: manifest_path.clone(),
+            source,
+        })?;
+    let spec = spec_from_manifest(&manifest_path, m)?;
+    Ok(spec.map(|mut spec| {
+        spec.provenance = Some(Arc::clone(&verified));
+        spec
+    }))
+}
+
+/// Read one loose `*.json` manifest.
+///
+/// Loose manifests are the distribution layout: a packaged adapter
+/// drops a single sidecar next to its binary. They are accepted only
+/// when the file *and its whole ancestry* are root-owned, non-symlink
+/// and free of group/world write bits, which is the same trust the
+/// package manager already has. A user-writable drop-in is refused.
 pub fn load_manifest(path: &Path) -> Result<Option<McpServerSpec>, ManifestError> {
+    require_vendor_manifest(path)?;
     let body = std::fs::read_to_string(path).map_err(|source| ManifestError::Io {
         path: path.to_path_buf(),
         source,
@@ -276,6 +323,32 @@ pub fn load_manifest(path: &Path) -> Result<Option<McpServerSpec>, ManifestError
             source,
         })?;
     spec_from_manifest(path, m)
+}
+
+fn require_vendor_manifest(path: &Path) -> Result<(), ManifestError> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|source| ManifestError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    if !provenance::verify::is_vendor_root_path(&canonical) {
+        return Err(ManifestError::Provenance {
+            path: path.to_path_buf(),
+            detail: format!(
+                "loose agent-API manifests are only honoured under an approved system \
+                 package root ({:?}); install a signed package directory instead",
+                provenance::verify::VENDOR_PACKAGE_ROOTS
+            ),
+        });
+    }
+    provenance::fsec::require_secure_location(&canonical, &[0]).map_err(|e| {
+        ManifestError::Provenance {
+            path: path.to_path_buf(),
+            detail: format!("manifest is not root-owned package content: {e}"),
+        }
+    })?;
+    Ok(())
 }
 
 /// Pure helper exposed for unit tests.
@@ -372,6 +445,7 @@ fn spec_from_manifest(
     };
 
     Ok(Some(McpServerSpec {
+        provenance: None,
         name: m.name,
         command: cmd,
         args,
@@ -455,19 +529,75 @@ pub fn discover_in(dirs: &[PathBuf]) -> Vec<(McpServerSpec, PathBuf)> {
             }
         };
 
-        let mut files: Vec<PathBuf> = entries
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| {
-                p.extension().and_then(|x| x.to_str()) == Some("json")
-                    && p.file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| !n.starts_with('.'))
-                        .unwrap_or(false)
-            })
-            .collect();
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut packages: Vec<PathBuf> = Vec::new();
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                tracing::warn!(
+                    "agent-api: ignoring symlinked entry {}",
+                    path.display()
+                );
+                continue;
+            }
+            if file_type.is_dir() {
+                packages.push(path);
+            } else if path.extension().and_then(|x| x.to_str()) == Some("json") {
+                files.push(path);
+            }
+        }
         // Stable order per directory so tests + logs are deterministic.
         files.sort();
+        packages.sort();
+
+        // Signed package directories take priority over loose vendor
+        // manifests with the same id.
+        for dir in packages {
+            match load_package(&dir) {
+                Ok(Some(spec)) => {
+                    let id = dir
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                        .to_string();
+                    if let Some(prev) = seen_ids.get(&id) {
+                        tracing::info!(
+                            "agent-api: ignoring duplicate package {} (id {id} already loaded from {})",
+                            dir.display(),
+                            prev.display()
+                        );
+                        continue;
+                    }
+                    if let Some(prev) = seen_names.get(&spec.name) {
+                        tracing::info!(
+                            "agent-api: ignoring package {} (name {} collides with {})",
+                            dir.display(),
+                            spec.name,
+                            prev.display()
+                        );
+                        continue;
+                    }
+                    seen_ids.insert(id, dir.clone());
+                    seen_names.insert(spec.name.clone(), dir.clone());
+                    out.push((spec, dir));
+                }
+                Ok(None) => {
+                    tracing::debug!("agent-api: package {} disabled; skipped", dir.display());
+                }
+                Err(e) => {
+                    // Quarantine loudly: an operator has to be able to
+                    // see why an installed adapter stopped attaching.
+                    tracing::warn!("agent-api: {e}");
+                }
+            }
+        }
 
         for path in files {
             // Re-parse to grab `id` for dedup *before* converting to

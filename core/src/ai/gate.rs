@@ -1063,7 +1063,7 @@ fn lookup_app(app_id: &str) -> Result<apps::App, AiError> {
     // long enough to swap the new entry in; concurrent calls may
     // each re-discover once, which is benign (the second result
     // overwrites the first with identical data).
-    let discovered = apps::discover(&apps_dir);
+    let discovered = apps::discover_verified(&apps_dir);
     let result = discovered
         .get(app_id)
         .cloned()
