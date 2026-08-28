@@ -305,10 +305,10 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
         match &error {
             llm::LlmError::CredentialStore {
                 credential,
-                message,
+                source,
             } => {
                 assert_eq!(credential, &credential_name);
-                assert!(message.contains("parse"));
+                assert!(source.to_string().contains("parse"));
             }
             other => panic!("expected typed credential-store error, got {other:?}"),
         }
@@ -453,10 +453,10 @@ fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
         match &error {
             llm::LlmError::CredentialStore {
                 credential,
-                message,
+                source,
             } => {
                 assert_eq!(credential, &credential_name);
-                assert!(message.contains("parse"));
+                assert!(source.to_string().contains("parse"));
             }
             other => panic!("expected typed credential-store error, got {other:?}"),
         }

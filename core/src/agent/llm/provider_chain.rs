@@ -297,9 +297,10 @@ fn fallback_class(error: &LlmError) -> Option<&'static str> {
         LlmError::Parse(_) | LlmError::UpstreamMalformed(_) | LlmError::Stream(_) => {
             Some("upstream-malformed")
         }
-        LlmError::CredentialStore { .. } | LlmError::InvalidRequest(_) | LlmError::Internal(_) => {
-            None
-        }
+        LlmError::CredentialStore { .. }
+        | LlmError::Infrastructure(_)
+        | LlmError::InvalidRequest(_)
+        | LlmError::Internal(_) => None,
     }
 }
 

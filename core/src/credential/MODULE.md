@@ -19,6 +19,7 @@ material internals.
 | `lifecycle.rs` | Refresh-command execution policy and TTL preservation |
 | `oauth.rs`, `oauth_login.rs` | Google and Microsoft transports and token lifecycle through `CredentialStore`; request bodies stay on stdin and never enter process argv |
 | `cli.rs` | Stable command/flag parsing and JSON or fd presentation; it coordinates typed operations and never receives encryption keys |
+| `error.rs` | `CredentialError` categories plus operation/source context and secret-safe formatting |
 
 ## Persistent Compatibility
 
@@ -34,6 +35,22 @@ material internals.
   refresh-then-write order.
 - Scheduled reads reject symlinks, non-regular files, wrong ownership, home
   escapes, and records larger than 1 MiB.
+- Randomness, keyring syscalls, root-key persistence, credential atomic writes,
+  lock acquisition, rename, file fsync, and parent-directory fsync return
+  `CredentialError` with an operation and source. The optional Linux keyring is
+  an explicit cache: a typed cache failure is logged before durable key sources
+  are tried.
+
+## Error Boundaries
+
+- `CredentialStore`, `run_typed`, and `try_load_typed` are the typed ownership
+  boundaries. Provider composition consumes `try_load_typed`.
+- `run` and `try_load` retain their historical `Result<_, String>` signatures
+  for Rust/CLI compatibility and stringify exactly once.
+- CLI argument parsing, OAuth presentation, and legacy rollback adapters still
+  use strings internally. They do not own randomness, key material, files,
+  locks, or keyring state; those operations have already crossed the typed
+  boundary before these adapters render a public message.
 
 ## Change Together
 

@@ -95,10 +95,7 @@ impl std::fmt::Debug for GeminiConfig {
 }
 
 impl GeminiConfig {
-    pub fn try_from_agent_config(
-        model: &str,
-        agent: &AgentConfig,
-    ) -> Result<Self> {
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
         crate::agent::llm::registry::gemini_config(model, agent, &ProcessCredentialSource)
     }
 
@@ -162,17 +159,14 @@ impl Provider for GeminiProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
         let body = wire::build_request_body(&request, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -201,10 +195,10 @@ impl Provider for GeminiProvider {
             Ok(r) => r,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    )?;
                 }
                 return Err(LlmError::Transport(e));
             }
@@ -232,7 +226,7 @@ impl Provider for GeminiProvider {
                         }
                         _ => crate::agent::llm::error_classifier::classify_network_error(),
                     };
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(e);
             }
@@ -243,7 +237,7 @@ impl Provider for GeminiProvider {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                 let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+                pool.try_report_failure(l, cls)?;
             }
             return Err(err);
         }
@@ -257,21 +251,19 @@ impl Provider for GeminiProvider {
                 // and surface as UpstreamMalformed so callers can
                 // distinguish from caller-side bugs.
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::credential_pool::FailureClass::Transient,
-                    );
+                    )?;
                 }
-                return Err(LlmError::UpstreamMalformed(format!(
-                    "gemini response: {e}"
-                )));
+                return Err(LlmError::UpstreamMalformed(format!("gemini response: {e}")));
             }
         };
 
         let result = wire::response_to_chat(parsed, &self.cfg.model);
         if result.is_ok() {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_success(l);
+                pool.try_report_success(l)?;
             }
         }
         result

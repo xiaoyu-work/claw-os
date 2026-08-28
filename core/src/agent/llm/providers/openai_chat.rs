@@ -857,7 +857,9 @@ impl OpenAiStream {
         }
         self.accounted = true;
         if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
-            p.report_failure(l, cls);
+            if let Err(error) = p.try_report_failure(l, cls) {
+                tracing::error!(error = %error, "failed to account OpenAI stream failure");
+            }
         }
     }
 
@@ -867,7 +869,9 @@ impl OpenAiStream {
         }
         self.accounted = true;
         if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
-            p.report_success(l);
+            if let Err(error) = p.try_report_success(l) {
+                tracing::error!(error = %error, "failed to account OpenAI stream success");
+            }
         }
     }
 }

@@ -366,3 +366,18 @@ fn lease_index_reflects_pool_position() {
     let l2 = pool.acquire().unwrap();
     assert_eq!(l2.index(), 1);
 }
+
+#[test]
+fn poisoned_pool_state_surfaces_typed_unavailability() {
+    let pool = pool(&[("A", "kA")], SelectionStrategy::Sticky);
+    pool.poison_for_test();
+
+    assert!(matches!(
+        pool.acquire(),
+        Err(PoolError::StatePoisoned { name }) if name == "test"
+    ));
+    assert!(matches!(
+        pool.try_stats(),
+        Err(PoolError::StatePoisoned { name }) if name == "test"
+    ));
+}

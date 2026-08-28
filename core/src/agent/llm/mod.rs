@@ -25,11 +25,11 @@ pub mod sse;
 pub mod types;
 pub mod usage;
 
+pub use provider_chain::{ProviderFallbackState, ProviderSwitch};
 pub use types::{
     ChatRequest, ChatResponse, ContentBlock, EngineInfo, FinishReason, Message, Role, StreamEvent,
     Tool, ToolCall, ToolChoice, Usage,
 };
-pub use provider_chain::{ProviderFallbackState, ProviderSwitch};
 
 use async_trait::async_trait;
 use futures_util::stream::BoxStream;
@@ -55,14 +55,18 @@ pub enum LlmError {
     Auth,
 
     #[error(
-        "credential store error for `{credential}` in namespace `agent`: {message}. \
+        "credential store error for `{credential}` in namespace `agent`: {source}. \
          Repair or replace it with `cos credential revoke {credential} --namespace agent`, \
          then configure the credential again"
     )]
     CredentialStore {
         credential: String,
-        message: String,
+        #[source]
+        source: crate::credential::CredentialError,
     },
+
+    #[error(transparent)]
+    Infrastructure(#[from] ProviderInfrastructureError),
 
     #[error("response could not be parsed: {0}")]
     Parse(String),
@@ -82,6 +86,29 @@ pub enum LlmError {
 }
 
 pub type Result<T> = std::result::Result<T, LlmError>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum ProviderInfrastructureError {
+    #[error("failed to build provider HTTP transport")]
+    HttpTransport {
+        #[source]
+        source: reqwest::Error,
+    },
+
+    #[error(transparent)]
+    CredentialPool(#[from] credential_pool::PoolError),
+
+    #[error(
+        "provider infrastructure state '{component}' is unavailable because its lock was poisoned"
+    )]
+    StatePoisoned { component: &'static str },
+}
+
+impl From<credential_pool::PoolError> for LlmError {
+    fn from(error: credential_pool::PoolError) -> Self {
+        ProviderInfrastructureError::from(error).into()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Cross-cutting hardening utilities.
@@ -104,10 +131,7 @@ pub const MAX_STREAM_TOTAL_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 ///
 /// Lives in the LLM module so every provider can call it without
 /// reaching into the kernel; see also `MAX_NONSTREAM_BODY_BYTES`.
-pub async fn read_body_capped(
-    resp: reqwest::Response,
-    max_bytes: usize,
-) -> Result<bytes::Bytes> {
+pub async fn read_body_capped(resp: reqwest::Response, max_bytes: usize) -> Result<bytes::Bytes> {
     // If the upstream advertised a Content-Length, refuse early to
     // avoid even starting the download.
     if let Some(cl) = resp.content_length() {
@@ -177,7 +201,16 @@ fn mask_bearer_like(s: &str) -> String {
         if current.len() >= 24 {
             out.push_str(&current.chars().take(4).collect::<String>());
             out.push_str("***");
-            out.push_str(&current.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>());
+            out.push_str(
+                &current
+                    .chars()
+                    .rev()
+                    .take(4)
+                    .collect::<String>()
+                    .chars()
+                    .rev()
+                    .collect::<String>(),
+            );
         } else {
             out.push_str(&current);
         }
@@ -187,7 +220,16 @@ fn mask_bearer_like(s: &str) -> String {
     if current.len() >= 24 {
         out.push_str(&current.chars().take(4).collect::<String>());
         out.push_str("***");
-        out.push_str(&current.chars().rev().take(4).collect::<String>().chars().rev().collect::<String>());
+        out.push_str(
+            &current
+                .chars()
+                .rev()
+                .take(4)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect::<String>(),
+        );
     } else {
         out.push_str(&current);
     }

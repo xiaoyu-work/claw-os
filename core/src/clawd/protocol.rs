@@ -140,11 +140,29 @@ impl From<String> for BrokerError {
     }
 }
 
+impl From<super::state::StateError> for BrokerError {
+    fn from(error: super::state::StateError) -> Self {
+        use super::state::StateErrorKind;
+
+        match error.kind() {
+            StateErrorKind::Unavailable | StateErrorKind::Corrupt => {
+                Self::unavailable(error.to_string()).classified(error.operation())
+            }
+            StateErrorKind::NotAuthorized => Self::authorization(error.to_string()),
+            StateErrorKind::Conflict | StateErrorKind::NotFound => {
+                Self::execution(error.to_string())
+            }
+        }
+    }
+}
+
 impl std::fmt::Display for BrokerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&self.message)
     }
 }
+
+impl std::error::Error for BrokerError {}
 
 impl Request {
     /// Build a request for a route this crate names at compile time.

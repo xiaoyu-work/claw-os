@@ -427,14 +427,16 @@ fn store_token(
     ttl: Option<u64>,
     refresh_cmd: Option<String>,
 ) -> Result<(), String> {
-    let id = super::CredentialId::parse(namespace, name)?;
-    store.store(super::StoreRequest {
-        id: &id,
-        value,
-        min_tier,
-        ttl,
-        refresh_cmd,
-    })?;
+    let id = super::CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store
+        .store(super::StoreRequest {
+            id: &id,
+            value,
+            min_tier,
+            ttl,
+            refresh_cmd,
+        })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -557,15 +559,19 @@ fn client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    let id = super::CredentialId::parse(namespace, credential_name)?;
+    let id = super::CredentialId::parse(namespace, credential_name)
+        .map_err(|error| error.to_string())?;
     super::require_secret(
         Verb::SECRET_READ,
         super::credential_scope(id.namespace(), id.name())?,
     )?;
-    if !store.contains(&id)? {
+    if !store.contains(&id).map_err(|error| error.to_string())? {
         return Ok(None);
     }
-    store.load(&id, true).map(Some)
+    store
+        .load(&id, true)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 /// Read OAuth client configuration inside the credential refresh broker.
@@ -586,11 +592,15 @@ fn daemon_client_setting(
             return Ok(Some(value.to_string()));
         }
     }
-    let id = super::CredentialId::parse(namespace, credential_name)?;
-    if !store.contains(&id)? {
+    let id = super::CredentialId::parse(namespace, credential_name)
+        .map_err(|error| error.to_string())?;
+    if !store.contains(&id).map_err(|error| error.to_string())? {
         return Ok(None);
     }
-    store.load(&id, false).map(Some)
+    store
+        .load(&id, false)
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn pkce_pair() -> Result<(String, String), String> {

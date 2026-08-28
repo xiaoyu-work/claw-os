@@ -4,11 +4,12 @@ pub(super) fn load_credential(
     store: &FileCredentialStore,
     id: &CredentialId,
 ) -> Result<LoadedCredential, String> {
-    if !store.contains(id)? {
+    if !store.contains(id).map_err(|error| error.to_string())? {
         return Err(format!("credential not found: {}", id.name()));
     }
     let credential = store
-        .read_record(id)?
+        .read_record(id)
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("credential not found: {}", id.name()))?;
     let current_tier = effective_session_tier();
     require_credential_access(&credential, id.namespace(), id.name(), current_tier)?;
@@ -25,7 +26,8 @@ pub(super) fn load_credential(
 
         return store.with_refresh(id, || {
             let fresh = store
-                .read_record(id)?
+                .read_record(id)
+                .map_err(|error| error.to_string())?
                 .ok_or_else(|| format!("credential '{}' disappeared during refresh", id.name()))?;
             require_credential_access(&fresh, id.namespace(), id.name(), current_tier)?;
             if !is_expired(&fresh.expires_at) {
@@ -76,7 +78,7 @@ pub(super) fn load_credential(
                 })?),
             };
 
-            if let Some(after) = store.read_record(id)? {
+            if let Some(after) = store.read_record(id).map_err(|error| error.to_string())? {
                 require_credential_access(&after, id.namespace(), id.name(), current_tier)?;
                 if after.value_b64 != fresh.value_b64
                     || after.nonce_b64 != fresh.nonce_b64
@@ -93,7 +95,8 @@ pub(super) fn load_credential(
                 )
             })?;
             let ttl = compute_original_ttl(&fresh);
-            let (value_b64, nonce_b64) = encrypt_value(new_value.trim().as_bytes())?;
+            let (value_b64, nonce_b64) =
+                encrypt_value(new_value.trim().as_bytes()).map_err(|error| error.to_string())?;
             let now = chrono::Utc::now();
             let expires_at = ttl.map(|seconds| {
                 (now + chrono::Duration::seconds(seconds))
@@ -129,7 +132,7 @@ fn loaded(
     credential: &StoredCredential,
     refreshed: Option<bool>,
 ) -> Result<LoadedCredential, String> {
-    let value = String::from_utf8(decrypt_value(credential)?)
+    let value = String::from_utf8(decrypt_value(credential).map_err(|error| error.to_string())?)
         .map_err(|error| format!("credential is not valid UTF-8: {error}"))?;
     Ok(LoadedCredential {
         name: id.name().to_string(),
@@ -152,7 +155,7 @@ pub(super) fn load_bundle(
         let id = match CredentialId::parse(&manifest.namespace, name) {
             Ok(id) => id,
             Err(error) => {
-                errors.insert(name.clone(), error);
+                errors.insert(name.clone(), error.to_string());
                 continue;
             }
         };
@@ -188,9 +191,11 @@ pub(super) fn load_bundle(
             errors.insert(name.clone(), "credential has expired".to_string());
             continue;
         }
-        match decrypt_value(&credential).and_then(|bytes| {
-            String::from_utf8(bytes).map_err(|error| format!("not valid UTF-8: {error}"))
-        }) {
+        match decrypt_value(&credential)
+            .map_err(|error| error.to_string())
+            .and_then(|bytes| {
+                String::from_utf8(bytes).map_err(|error| format!("not valid UTF-8: {error}"))
+            }) {
             Ok(value) => {
                 credentials.insert(name.clone(), value);
             }

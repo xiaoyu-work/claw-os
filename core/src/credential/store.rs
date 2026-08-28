@@ -12,21 +12,38 @@ impl FileCredentialStore {
     pub(super) fn read_record(
         &self,
         id: &CredentialId,
-    ) -> Result<Option<StoredCredential>, String> {
-        let Some(data) = crate::filelock::read_locked(&self.path(id)).map_err(|e| e.to_string())?
+    ) -> CredentialResult<Option<StoredCredential>> {
+        let path = self.path(id);
+        let Some(data) = crate::filelock::read_locked(&path).map_err(|message| {
+            CredentialError::unavailable(
+                "credential.read",
+                format!("failed to read credential {}: {message}", path.display()),
+            )
+        })?
         else {
             return Ok(None);
         };
-        serde_json::from_str(&data)
-            .map(Some)
-            .map_err(|e| e.to_string())
+        serde_json::from_str(&data).map(Some).map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::Corrupt,
+                "credential.parse",
+                format!("failed to parse credential {}", path.display()),
+                source,
+            )
+        })
     }
 
-    pub(super) fn write_record(&self, record: &StoredCredential) -> Result<(), String> {
+    pub(super) fn write_record(&self, record: &StoredCredential) -> CredentialResult<()> {
         let id = CredentialId::parse(&record.namespace, &record.name)?;
-        let data = serde_json::to_string_pretty(record)
-            .map_err(|e| format!("failed to serialize: {e}"))?;
-        write_credential_atomic(&self.path(&id), &data)
+        let data = serde_json::to_string_pretty(record).map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::Corrupt,
+                "credential.serialize",
+                "failed to serialize credential record",
+                source,
+            )
+        })?;
+        write_credential_atomic_typed(&self.path(&id), &data)
     }
 
     pub(super) fn with_refresh<T>(
@@ -42,19 +59,40 @@ impl FileCredentialStore {
         namespace: &NamespaceId,
         name: &str,
         keys: Vec<String>,
-    ) -> Result<BundleManifest, String> {
+    ) -> CredentialResult<BundleManifest> {
         let dir = bundles_dir(namespace.as_str());
-        fs::create_dir_all(&dir).map_err(|e| format!("failed to create bundles dir: {e}"))?;
+        fs::create_dir_all(&dir).map_err(|source| {
+            CredentialError::io_at(
+                "bundle.write",
+                "failed to create bundles directory",
+                &dir,
+                source,
+            )
+        })?;
         let manifest = BundleManifest {
             name: name.to_string(),
             namespace: namespace.as_str().to_string(),
             keys,
             created_at: chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string(),
         };
-        let data = serde_json::to_string_pretty(&manifest)
-            .map_err(|e| format!("failed to serialize bundle: {e}"))?;
-        crate::filelock::write_locked(&dir.join(format!("{name}.json")), &data)
-            .map_err(|e| format!("failed to write bundle: {e}"))?;
+        let data = serde_json::to_string_pretty(&manifest).map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::Corrupt,
+                "bundle.serialize",
+                "failed to serialize credential bundle",
+                source,
+            )
+        })?;
+        let path = dir.join(format!("{name}.json"));
+        crate::filelock::write_locked(&path, &data).map_err(|message| {
+            CredentialError::unavailable(
+                "bundle.write",
+                format!(
+                    "failed to write credential bundle {}: {message}",
+                    path.display()
+                ),
+            )
+        })?;
         Ok(manifest)
     }
 
@@ -62,33 +100,57 @@ impl FileCredentialStore {
         &self,
         namespace: &NamespaceId,
         name: &str,
-    ) -> Result<Option<BundleManifest>, String> {
+    ) -> CredentialResult<Option<BundleManifest>> {
         let path = bundles_dir(namespace.as_str()).join(format!("{name}.json"));
-        let Some(data) = crate::filelock::read_locked(&path)
-            .map_err(|e| format!("failed to read bundle: {e}"))?
+        let Some(data) = crate::filelock::read_locked(&path).map_err(|message| {
+            CredentialError::unavailable(
+                "bundle.read",
+                format!(
+                    "failed to read credential bundle {}: {message}",
+                    path.display()
+                ),
+            )
+        })?
         else {
             return Ok(None);
         };
-        serde_json::from_str(&data)
-            .map(Some)
-            .map_err(|e| format!("failed to parse bundle: {e}"))
+        serde_json::from_str(&data).map(Some).map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::Corrupt,
+                "bundle.parse",
+                format!("failed to parse credential bundle {}", path.display()),
+                source,
+            )
+        })
     }
 }
 
 impl CredentialStore for FileCredentialStore {
-    fn contains(&self, id: &CredentialId) -> Result<bool, String> {
-        Ok(self.path(id).is_file())
+    fn contains(&self, id: &CredentialId) -> CredentialResult<bool> {
+        let path = self.path(id);
+        match fs::symlink_metadata(&path) {
+            Ok(metadata) => Ok(metadata.file_type().is_file()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(source) => Err(CredentialError::io_at(
+                "credential.inspect",
+                "failed to inspect",
+                &path,
+                source,
+            )),
+        }
     }
 
-    fn load(&self, id: &CredentialId, enforce_tier: bool) -> Result<String, String> {
+    fn load(&self, id: &CredentialId, enforce_tier: bool) -> CredentialResult<String> {
         read_credential_value(id.name(), id.namespace(), enforce_tier)
+            .map_err(|message| CredentialError::external("credential.load", message))
     }
 
-    fn minimum_tier(&self, id: &CredentialId) -> Result<Option<u8>, String> {
+    fn minimum_tier(&self, id: &CredentialId) -> CredentialResult<Option<u8>> {
         credential_min_tier_if_present(id.name(), id.namespace())
+            .map_err(|message| CredentialError::external("credential.metadata", message))
     }
 
-    fn store(&self, request: StoreRequest<'_>) -> Result<StoreResult, String> {
+    fn store(&self, request: StoreRequest<'_>) -> CredentialResult<StoreResult> {
         store_credential_record(
             request.id.name(),
             request.value,
@@ -97,6 +159,7 @@ impl CredentialStore for FileCredentialStore {
             request.ttl,
             request.refresh_cmd,
         )
+        .map_err(|message| CredentialError::external("credential.store", message))
     }
 }
 
@@ -163,6 +226,7 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
+
     let lock_path = refresh_sentinel_path(path);
     let lock_file = OpenOptions::new()
         .write(true)
@@ -189,8 +253,19 @@ where
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
-        unsafe {
-            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if result.is_ok() {
+                return Err(format!(
+                    "flock LOCK_UN {}: {error}",
+                    lock_path.display()
+                ));
+            }
+            tracing::error!(
+                path = %lock_path.display(),
+                error = %error,
+                "credential refresh operation and lock release both failed"
+            );
         }
     }
     drop(lock_file);
@@ -209,6 +284,7 @@ where
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
     }
+
     let lock_path = lock_sentinel_path(path);
     let lock_file = OpenOptions::new()
         .write(true)
@@ -235,11 +311,104 @@ where
     #[cfg(unix)]
     {
         use std::os::unix::io::AsRawFd;
-        unsafe {
-            libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN);
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            let error = std::io::Error::last_os_error();
+            if result.is_ok() {
+                return Err(format!(
+                    "flock LOCK_UN {}: {error}",
+                    lock_path.display()
+                ));
+            }
+            tracing::error!(
+                path = %lock_path.display(),
+                error = %error,
+                "credential write operation and lock release both failed"
+            );
         }
     }
     drop(lock_file);
+    result
+}
+
+fn with_refresh_lock_typed<F, T>(path: &Path, f: F) -> CredentialResult<T>
+where
+    F: FnOnce() -> CredentialResult<T>,
+{
+    with_lock_typed(
+        path,
+        refresh_sentinel_path(path),
+        "credential.refresh_lock",
+        f,
+    )
+}
+
+fn with_write_lock_typed<F, T>(path: &Path, f: F) -> CredentialResult<T>
+where
+    F: FnOnce() -> CredentialResult<T>,
+{
+    with_lock_typed(path, lock_sentinel_path(path), "credential.write_lock", f)
+}
+
+fn with_lock_typed<F, T>(
+    path: &Path,
+    lock_path: PathBuf,
+    operation: &'static str,
+    f: F,
+) -> CredentialResult<T>
+where
+    F: FnOnce() -> CredentialResult<T>,
+{
+    use std::fs::OpenOptions;
+
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| {
+            CredentialError::io_at(operation, "failed to create", parent, source)
+        })?;
+    }
+    let lock_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map_err(|source| {
+            CredentialError::io_at(operation, "failed to open", &lock_path, source)
+        })?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX) } != 0 {
+            return Err(CredentialError::io_at(
+                operation,
+                "failed to lock",
+                &lock_path,
+                std::io::Error::last_os_error(),
+            ));
+        }
+    }
+
+    let result = f();
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        if unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) } != 0 {
+            let source = std::io::Error::last_os_error();
+            if result.is_ok() {
+                return Err(CredentialError::io_at(
+                    operation,
+                    "failed to unlock",
+                    &lock_path,
+                    source,
+                ));
+            }
+            tracing::error!(
+                path = %lock_path.display(),
+                error = %source,
+                "typed credential operation and lock release both failed"
+            );
+        }
+    }
     result
 }
 
@@ -256,7 +425,11 @@ where
 ///   5. `rename(tmp, path)` — atomic on same filesystem.
 ///   6. `fsync` the parent directory so the rename hits disk.
 pub(super) fn write_credential_atomic(path: &Path, data: &str) -> Result<(), String> {
-    with_write_lock(path, || write_credential_atomic_unlocked(path, data))
+    write_credential_atomic_typed(path, data).map_err(|error| error.to_string())
+}
+
+fn write_credential_atomic_typed(path: &Path, data: &str) -> CredentialResult<()> {
+    with_write_lock_typed(path, || write_credential_atomic_unlocked_typed(path, data))
 }
 
 /// Remove a credential while excluding both refreshers and atomic writers.
@@ -285,16 +458,36 @@ pub(super) fn remove_credential_atomic(path: &Path) -> Result<bool, String> {
 /// does NOT acquire the per-credential write lock. Caller is responsible for
 /// synchronization.
 fn write_credential_atomic_unlocked(path: &Path, data: &str) -> Result<(), String> {
+    write_credential_atomic_unlocked_typed(path, data).map_err(|error| error.to_string())
+}
+
+fn write_credential_atomic_unlocked_typed(path: &Path, data: &str) -> CredentialResult<()> {
     use std::fs::OpenOptions;
     use std::io::Write;
 
-    let parent = path
-        .parent()
-        .ok_or_else(|| format!("credential path has no parent: {}", path.display()))?;
-    fs::create_dir_all(parent).map_err(|e| format!("mkdir {}: {e}", parent.display()))?;
+    let parent = path.parent().ok_or_else(|| {
+        CredentialError::invalid(
+            "credential.persist",
+            format!("credential path has no parent: {}", path.display()),
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|source| {
+        CredentialError::io_at("credential.persist", "failed to create", parent, source)
+    })?;
 
     let tmp_path = path.with_extension("tmp");
-    let _ = fs::remove_file(&tmp_path);
+    match fs::remove_file(&tmp_path) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(source) => {
+            return Err(CredentialError::io_at(
+                "credential.persist",
+                "failed to remove stale temporary credential",
+                &tmp_path,
+                source,
+            ))
+        }
+    }
 
     let mut opts = OpenOptions::new();
     opts.write(true).create_new(true);
@@ -303,23 +496,55 @@ fn write_credential_atomic_unlocked(path: &Path, data: &str) -> Result<(), Strin
         use std::os::unix::fs::OpenOptionsExt;
         opts.mode(0o600);
     }
-    let mut tmp_file = opts
-        .open(&tmp_path)
-        .map_err(|e| format!("open {}: {e}", tmp_path.display()))?;
+    let mut tmp_file = opts.open(&tmp_path).map_err(|source| {
+        CredentialError::io_at(
+            "credential.persist",
+            "failed to open temporary credential",
+            &tmp_path,
+            source,
+        )
+    })?;
 
-    tmp_file
-        .write_all(data.as_bytes())
-        .map_err(|e| format!("write {}: {e}", tmp_path.display()))?;
-    tmp_file
-        .sync_all()
-        .map_err(|e| format!("fsync {}: {e}", tmp_path.display()))?;
+    tmp_file.write_all(data.as_bytes()).map_err(|source| {
+        CredentialError::io_at(
+            "credential.persist",
+            "failed to write temporary credential",
+            &tmp_path,
+            source,
+        )
+    })?;
+    tmp_file.sync_all().map_err(|source| {
+        CredentialError::io_at(
+            "credential.persist",
+            "failed to fsync temporary credential",
+            &tmp_path,
+            source,
+        )
+    })?;
     drop(tmp_file);
 
-    fs::rename(&tmp_path, path).map_err(|e| format!("rename {}: {e}", path.display()))?;
+    fs::rename(&tmp_path, path).map_err(|source| {
+        CredentialError::io(
+            "credential.persist",
+            format!(
+                "failed to rename temporary credential {} to {}",
+                tmp_path.display(),
+                path.display()
+            ),
+            source,
+        )
+    })?;
 
-    if let Ok(dir) = std::fs::File::open(parent) {
-        let _ = dir.sync_all();
-    }
+    std::fs::File::open(parent)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|source| {
+            CredentialError::io_at(
+                "credential.persist",
+                "failed to fsync credential directory",
+                parent,
+                source,
+            )
+        })?;
     Ok(())
 }
 
@@ -335,7 +560,8 @@ pub(super) fn store_credential_record(
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
 
     // Encrypt with AES-256-GCM
-    let (value_b64, nonce_b64) = encrypt_value(value.as_bytes())?;
+    let (value_b64, nonce_b64) =
+        encrypt_value(value.as_bytes()).map_err(|error| error.to_string())?;
 
     let session = crate::proc::current_session_id();
     let now = chrono::Utc::now();
@@ -386,7 +612,8 @@ pub(super) fn store_credential_record(
 pub fn rollback_restore(namespace: &str, name: &str, value: &str) -> Result<(), String> {
     let dir = namespace_dir(namespace);
     fs::create_dir_all(&dir).map_err(|e| format!("failed to create credentials dir: {e}"))?;
-    let (value_b64, nonce_b64) = encrypt_value(value.as_bytes())?;
+    let (value_b64, nonce_b64) =
+        encrypt_value(value.as_bytes()).map_err(|error| error.to_string())?;
     let stored_at = chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ").to_string();
     let cred = StoredCredential {
         name: name.to_string(),
@@ -546,7 +773,7 @@ pub(super) fn read_credential_value(
 
     match decrypt_value(&cred) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|e| format!("not valid UTF-8: {e}")),
-        Err(e) => Err(e),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -560,8 +787,13 @@ pub(super) fn read_credential_value(
 /// fall back to environment variables or other lookup paths without
 /// converting a not-found into a hard error.
 pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
+    try_load_typed(name, namespace).map_err(|error| error.to_string())
+}
+
+pub fn try_load_typed(name: &str, namespace: &str) -> CredentialResult<Option<String>> {
     let id = CredentialId::parse(namespace, name)?;
-    credential_scope(id.namespace(), id.name())?;
+    credential_scope(id.namespace(), id.name())
+        .map_err(|message| CredentialError::unauthorized("credential.load", message))?;
     if !FILE_STORE.contains(&id)? {
         return Ok(None);
     }
@@ -625,7 +857,7 @@ pub fn load_for_scheduler(
     if is_expired(&credential.expires_at) {
         return Err(format!("credential '{name}' has expired"));
     }
-    String::from_utf8(decrypt_value(&credential)?)
+    String::from_utf8(decrypt_value(&credential).map_err(|error| error.to_string())?)
         .map_err(|error| format!("credential is not valid UTF-8: {error}"))
 }
 

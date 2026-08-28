@@ -14,12 +14,12 @@ pub(super) fn validate_credential_component(kind: &str, value: &str) -> Result<(
 }
 
 pub(super) fn credential_scope(namespace: &str, name: &str) -> Result<Scope, String> {
-    let id = CredentialId::parse(namespace, name)?;
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
     Ok(Scope::name(format!("{}/{}", id.namespace(), id.name())))
 }
 
 pub(super) fn namespace_scope(namespace: &str) -> Result<Scope, String> {
-    let namespace = NamespaceId::parse(namespace)?;
+    let namespace = NamespaceId::parse(namespace).map_err(|error| error.to_string())?;
     Ok(Scope::name(format!("{}/*", namespace.as_str())))
 }
 

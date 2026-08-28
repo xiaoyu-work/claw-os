@@ -720,11 +720,51 @@ fn malformed_persistent_root_key_is_not_silently_replaced() {
     fs::write(&key_path, b"too-short").unwrap();
 
     let error = load_persistent_root_key_at(&key_path).unwrap_err();
-    assert!(error.contains("invalid length"));
+    assert!(error.to_string().contains("invalid length"));
     assert_eq!(fs::read(&key_path).unwrap(), b"too-short");
 
     fs::remove_file(&key_path).unwrap();
     fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn random_failure_is_typed_and_preserves_its_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-random-failure-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let error = inject_root_key_random_failure(&dir.join("credential-root.key"));
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert_eq!(error.operation(), "root_key.random");
+    assert!(std::error::Error::source(&error).is_some());
+    assert!(!dir.join("credential-root.key").exists());
+
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn credential_error_debug_and_external_display_redact_token_like_values() {
+    const SECRET: &str = "sk-this-is-a-long-secret-token-value";
+    let error = CredentialError::external(
+        "credential.test",
+        format!("provider rejected token {SECRET}"),
+    );
+
+    assert!(!error.to_string().contains(SECRET));
+    assert!(!format!("{error:?}").contains(SECRET));
+    assert!(error.to_string().contains("***"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn keyring_failure_is_typed_and_preserves_its_source() {
+    let error = inject_keyring_failure();
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert_eq!(error.operation(), "keyring.read");
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]

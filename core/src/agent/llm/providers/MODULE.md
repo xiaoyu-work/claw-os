@@ -12,6 +12,9 @@ provider-neutral agent types and provider-specific HTTP/event protocols.
 - Apply provider-specific authentication headers and error classification.
 - Preserve tool IDs, opaque state, usage, and retry/fallback semantics.
 - Consume resolved credentials and the shared transport supplied by `llm/`.
+- Surface provider-construction and shared-state failures through
+  `ProviderInfrastructureError`; never continue through poisoned credential,
+  Copilot cache, or mock-provider state.
 
 ## Key Files
 
@@ -38,6 +41,13 @@ remain as explicit compatibility boundaries, while `llm::registry` supplies prov
 transport, and provider-specific headers or state do not leak into unrelated
 wire formats. Setup/model discovery changes stay consistent with runtime
 routing.
+
+Provider constructors used by production composition are fallible. Legacy
+infallible constructors remain source-compatible, log deferred initialization
+failures, and produce an unconfigured provider rather than panicking or
+inventing credentials. Credential-pool observer methods likewise retain their
+old signatures for source compatibility; production request/accounting paths
+use `try_*` methods so poison becomes a typed infrastructure error.
 
 ## Tests
 

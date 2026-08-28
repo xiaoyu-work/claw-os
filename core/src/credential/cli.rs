@@ -27,6 +27,10 @@ pub(super) fn parse_namespace_flag(args: &[String]) -> (Option<String>, Vec<Stri
 // ===========================================================================
 
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
+    run_typed(command, args).map_err(|error| error.to_string())
+}
+
+pub fn run_typed(command: &str, args: &[String]) -> CredentialResult<Value> {
     match command {
         "store" => cmd_store(args),
         "load" => cmd_load(args),
@@ -36,8 +40,14 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "load-bundle" => cmd_load_bundle(args),
         "oauth-login" => oauth_login::cmd_oauth_login(&FILE_STORE, args),
         "oauth-refresh" => cmd_oauth_refresh(&FILE_STORE, args),
-        _ => Err(format!("unknown credential command: {command}")),
+        _ => {
+            return Err(CredentialError::invalid(
+                "credential.command",
+                format!("unknown credential command: {command}"),
+            ))
+        }
     }
+    .map_err(|message| CredentialError::external("credential.command", message))
 }
 
 pub(crate) fn run_agent_oauth_login(args: &[String]) -> Result<Value, String> {
@@ -108,17 +118,19 @@ pub(super) fn cmd_store(args: &[String]) -> Result<Value, String> {
     let name = &positional[0];
     let value = &positional[1];
 
-    let id = CredentialId::parse(&namespace, name)?;
+    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
     let scope = credential_scope(id.namespace(), id.name())?;
     require_secret(Verb::SECRET_WRITE, scope)?;
 
-    let stored = FILE_STORE.store(StoreRequest {
-        id: &id,
-        value,
-        min_tier,
-        ttl,
-        refresh_cmd,
-    })?;
+    let stored = FILE_STORE
+        .store(StoreRequest {
+            id: &id,
+            value,
+            min_tier,
+            ttl,
+            refresh_cmd,
+        })
+        .map_err(|error| error.to_string())?;
     let mut result = json!({
         "stored": id.name(),
         "namespace": id.namespace(),
@@ -135,7 +147,7 @@ pub(super) fn cmd_revoke(args: &[String]) -> Result<Value, String> {
     let (namespace, rest) = parse_namespace_flag(args);
     let namespace = namespace.unwrap_or_else(|| "default".into());
     let name = rest.first().ok_or("usage: cos credential revoke <name>")?;
-    let id = CredentialId::parse(&namespace, name)?;
+    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
     require_secret(
         Verb::SECRET_WRITE,
         credential_scope(id.namespace(), id.name())?,
@@ -156,7 +168,7 @@ pub(super) fn cmd_list(args: &[String]) -> Result<Value, String> {
     match namespace {
         Some(namespace) => {
             require_secret(Verb::SECRET_READ, namespace_scope(&namespace)?)?;
-            let namespace = NamespaceId::parse(&namespace)?;
+            let namespace = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
             let credentials = list_namespace(&namespace)?
                 .into_iter()
                 .map(|credential| {
@@ -237,7 +249,7 @@ pub(super) fn cmd_load(args: &[String]) -> Result<Value, String> {
     let name = positional
         .first()
         .ok_or("usage: cos credential load <name>")?;
-    let id = CredentialId::parse(&namespace, name)?;
+    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
     require_secret(
         Verb::SECRET_READ,
         credential_scope(id.namespace(), id.name())?,
@@ -355,8 +367,10 @@ pub(super) fn cmd_bundle(args: &[String]) -> Result<Value, String> {
         require_secret(Verb::SECRET_GRANT, credential_scope(&namespace, key)?)?;
     }
 
-    let namespace_id = NamespaceId::parse(&namespace)?;
-    let manifest = FILE_STORE.write_bundle(&namespace_id, bundle_name, key_list)?;
+    let namespace_id = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
+    let manifest = FILE_STORE
+        .write_bundle(&namespace_id, bundle_name, key_list)
+        .map_err(|error| error.to_string())?;
 
     Ok(json!({
         "bundle": manifest.name,
@@ -376,12 +390,13 @@ pub(super) fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
     let bundle_name = rest
         .first()
         .ok_or("usage: cos credential load-bundle <name> [--namespace NS]")?;
-    let namespace_id = NamespaceId::parse(&namespace)?;
+    let namespace_id = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
     validate_credential_component("bundle name", bundle_name)?;
     require_secret(Verb::SECRET_READ, bundle_scope(&namespace, bundle_name)?)?;
 
     let manifest = FILE_STORE
-        .read_bundle(&namespace_id, bundle_name)?
+        .read_bundle(&namespace_id, bundle_name)
+        .map_err(|error| error.to_string())?
         .ok_or_else(|| format!("bundle not found: {bundle_name}"))?;
     if manifest.name != *bundle_name || manifest.namespace != namespace {
         return Err("bundle metadata does not match its storage path".to_string());

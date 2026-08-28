@@ -9,8 +9,8 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use std::sync::Mutex;
 
 use crate::agent::llm::{
-    ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
-    StreamEvent, ToolCall, Usage,
+    ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider,
+    ProviderInfrastructureError, Result, Role, StreamEvent, ToolCall, Usage,
 };
 use crate::config::AgentConfig;
 
@@ -57,7 +57,11 @@ impl MockProvider {
 
     /// Queue a scripted response. Tests use this to drive specific loop paths.
     pub fn push_response(&self, response: MockResponse) {
-        self.script.lock().unwrap().push(response);
+        if let Ok(mut script) = self.script.lock() {
+            script.push(response);
+        } else {
+            tracing::error!("mock provider script state is poisoned");
+        }
     }
 
     /// Override `Provider::supports_prompt_cache` for cache-marker tests.
@@ -70,26 +74,44 @@ impl MockProvider {
     /// Used by tests that exercise token-usage plumbing through the
     /// runtime / hooks.
     pub fn set_usage(&self, usage: Usage) {
-        *self.usage.lock().unwrap() = usage;
+        if let Ok(mut current) = self.usage.lock() {
+            *current = usage;
+        } else {
+            tracing::error!("mock provider usage state is poisoned");
+        }
     }
 
     /// Snapshot of the most recent `ChatRequest` the mock saw, or `None`
     /// if `chat`/`chat_stream` has not been called yet.
     pub fn last_request(&self) -> Option<ChatRequest> {
-        self.last_request.lock().unwrap().clone()
+        self.last_request
+            .lock()
+            .map(|request| request.clone())
+            .unwrap_or_else(|_| {
+                tracing::error!("mock provider request state is poisoned");
+                None
+            })
     }
 
-    fn next_scripted(&self) -> Option<MockResponse> {
-        let mut q = self.script.lock().unwrap();
+    fn next_scripted(&self) -> Result<Option<MockResponse>> {
+        let mut q = self.script.lock().map_err(|_| {
+            LlmError::from(ProviderInfrastructureError::StatePoisoned {
+                component: "mock.script",
+            })
+        })?;
         if q.is_empty() {
-            None
+            Ok(None)
         } else {
-            Some(q.remove(0))
+            Ok(Some(q.remove(0)))
         }
     }
 
-    fn current_usage(&self) -> Usage {
-        self.usage.lock().unwrap().clone()
+    fn current_usage(&self) -> Result<Usage> {
+        self.usage.lock().map(|usage| usage.clone()).map_err(|_| {
+            LlmError::from(ProviderInfrastructureError::StatePoisoned {
+                component: "mock.usage",
+            })
+        })
     }
 }
 
@@ -126,9 +148,13 @@ impl Provider for MockProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        *self.last_request.lock().unwrap() = Some(request.clone());
+        *self.last_request.lock().map_err(|_| {
+            LlmError::from(ProviderInfrastructureError::StatePoisoned {
+                component: "mock.last_request",
+            })
+        })? = Some(request.clone());
 
-        let response_kind = self.next_scripted().unwrap_or_else(|| {
+        let response_kind = self.next_scripted()?.unwrap_or_else(|| {
             MockResponse::Text(format!("[mock] {}", extract_last_user_text(&request)))
         });
 
@@ -138,7 +164,7 @@ impl Provider for MockProvider {
                 content: vec![ContentBlock::Text { text }],
                 tool_calls: Vec::new(),
                 finish_reason: FinishReason::Stop,
-                usage: self.current_usage(),
+                usage: self.current_usage()?,
             }),
             MockResponse::ToolUse(calls) => {
                 let blocks = calls
@@ -154,7 +180,7 @@ impl Provider for MockProvider {
                     content: blocks,
                     tool_calls: calls,
                     finish_reason: FinishReason::ToolUse,
-                    usage: self.current_usage(),
+                    usage: self.current_usage()?,
                 })
             }
             MockResponse::Error(err) => Err(err),

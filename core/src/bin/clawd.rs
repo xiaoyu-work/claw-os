@@ -103,10 +103,16 @@ fn main() {
         std::process::exit(1);
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
-        .expect("failed to create tokio runtime");
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            eprintln!("clawd: failed to initialize async runtime: {error}");
+            std::process::exit(1);
+        }
+    };
 
     if let Err(err) = runtime.block_on(server::run(options)) {
         eprintln!("clawd: {err}");

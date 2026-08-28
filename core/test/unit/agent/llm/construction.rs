@@ -4,13 +4,20 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 struct FakeCredentialSource {
-    stored: HashMap<String, std::result::Result<Option<String>, String>>,
+    stored: HashMap<String, crate::credential::CredentialResult<Option<String>>>,
     environment: HashMap<String, String>,
 }
 
 impl CredentialSource for FakeCredentialSource {
-    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
-        self.stored.get(name).cloned().unwrap_or(Ok(None))
+    fn load_stored(&self, name: &str) -> crate::credential::CredentialResult<Option<String>> {
+        match self.stored.get(name) {
+            Some(Ok(value)) => Ok(value.clone()),
+            Some(Err(error)) => Err(crate::credential::CredentialError::external(
+                error.operation(),
+                error.to_string(),
+            )),
+            None => Ok(None),
+        }
     }
 
     fn load_environment(&self, name: &str) -> Option<String> {
@@ -45,7 +52,13 @@ fn blank_stored_credential_falls_through_to_environment() {
 #[test]
 fn stored_credential_failure_remains_typed() {
     let source = FakeCredentialSource {
-        stored: HashMap::from([("broken".into(), Err("corrupt record".into()))]),
+        stored: HashMap::from([(
+            "broken".into(),
+            Err(crate::credential::CredentialError::external(
+                "test.credential",
+                "corrupt record",
+            )),
+        )]),
         environment: HashMap::from([("API_KEY".into(), "must-not-rescue".into())]),
     };
 
@@ -118,17 +131,44 @@ fn aws_resolution_uses_stored_then_configured_then_default_environment() {
     };
 
     assert_eq!(
-        resolve_aws_value(Some("stored"), Some("CONFIGURED"), "DEFAULT", &source).as_deref(),
+        resolve_aws_value(Some("stored"), Some("CONFIGURED"), "DEFAULT", &source)
+            .unwrap()
+            .as_deref(),
         Some("stored-value")
     );
     assert_eq!(
-        resolve_aws_value(Some("missing"), Some("CONFIGURED"), "DEFAULT", &source).as_deref(),
+        resolve_aws_value(Some("missing"), Some("CONFIGURED"), "DEFAULT", &source)
+            .unwrap()
+            .as_deref(),
         Some("configured-value")
     );
     assert_eq!(
-        resolve_aws_value(Some("missing"), None, "DEFAULT", &source).as_deref(),
+        resolve_aws_value(Some("missing"), None, "DEFAULT", &source)
+            .unwrap()
+            .as_deref(),
         Some("default-value")
     );
+}
+
+#[test]
+fn aws_stored_credential_failure_is_not_rescued_by_environment() {
+    let source = FakeCredentialSource {
+        stored: HashMap::from([(
+            "broken".into(),
+            Err(crate::credential::CredentialError::external(
+                "test.credential",
+                "corrupt record",
+            )),
+        )]),
+        environment: HashMap::from([("DEFAULT".into(), "must-not-rescue".into())]),
+    };
+
+    let error = resolve_aws_value(Some("broken"), None, "DEFAULT", &source).unwrap_err();
+    assert!(matches!(
+        &error,
+        LlmError::CredentialStore { credential, .. } if credential == "broken"
+    ));
+    assert!(!error.to_string().contains("must-not-rescue"));
 }
 
 #[test]

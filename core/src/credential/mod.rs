@@ -16,6 +16,7 @@ mod authorization;
 mod cli;
 mod crypto;
 mod domain;
+mod error;
 mod keyring;
 mod lifecycle;
 mod master_key;
@@ -33,6 +34,8 @@ use domain::{
     BundleManifest, CredentialId, CredentialMetadata, CredentialStore, LoadedBundle,
     LoadedCredential, NamespaceId, NamespaceSummary, StoreRequest, StoreResult, StoredCredential,
 };
+pub use error::CredentialResult;
+pub use error::{CredentialError, CredentialErrorKind};
 use keyring::{cache_master_key, read_master_key};
 use lifecycle::{load_bundle, load_credential};
 use master_key::{derive_key, generate_nonce, legacy_xor};
@@ -48,19 +51,22 @@ use {
     keyring::MASTER_KEY_LABEL,
     lifecycle::{compute_original_ttl, execute_refresh},
     master_key::{
-        generate_and_persist_root_key_at, legacy_obfuscation_key, load_persistent_root_key_at,
+        generate_and_persist_root_key_at, inject_root_key_random_failure, legacy_obfuscation_key,
+        load_persistent_root_key_at,
     },
     oauth::build_curl_post,
     store::{namespace_dir, refresh_sentinel_path, with_refresh_lock, write_credential_atomic},
 };
+#[cfg(all(test, target_os = "linux"))]
+use keyring::inject_keyring_failure;
 
-pub use cli::run;
 pub(crate) use cli::run_agent_oauth_login;
+pub use cli::{run, run_typed};
 pub(crate) use master_key::os_random_bytes;
 pub(crate) use store::load_for_broker;
 pub use store::{
     is_configured, load_for_scheduler, load_optional_for_scheduler, rollback_delete,
-    rollback_restore, try_load,
+    rollback_restore, try_load, try_load_typed,
 };
 
 pub(crate) fn broker_refresh_access_token(name: &str, namespace: &str) -> Result<Value, String> {

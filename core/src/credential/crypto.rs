@@ -619,7 +619,7 @@ pub(super) fn from_b64(s: &str) -> Result<Vec<u8>, String> {
 
 /// Encrypt a plaintext value with AES-256-GCM.
 /// Returns `(value_b64, nonce_b64)`.
-pub(super) fn encrypt_value(plaintext: &[u8]) -> Result<(String, String), String> {
+pub(super) fn encrypt_value(plaintext: &[u8]) -> CredentialResult<(String, String)> {
     let key = derive_key()?;
     let nonce = generate_nonce()?;
     let ct_and_tag = aes_gcm::encrypt(&key, &nonce, plaintext);
@@ -627,21 +627,33 @@ pub(super) fn encrypt_value(plaintext: &[u8]) -> Result<(String, String), String
 }
 
 /// Decrypt a stored credential. Handles both AES-256-GCM and legacy XOR.
-pub(super) fn decrypt_value(cred: &StoredCredential) -> Result<Vec<u8>, String> {
-    let raw =
-        from_b64(&cred.value_b64).map_err(|e| format!("failed to decode credential value: {e}"))?;
+pub(super) fn decrypt_value(cred: &StoredCredential) -> CredentialResult<Vec<u8>> {
+    let raw = from_b64(&cred.value_b64).map_err(|error| {
+        CredentialError::corrupt(
+            "credential.decrypt",
+            format!("failed to decode credential value: {error}"),
+        )
+    })?;
 
     match &cred.nonce_b64 {
         Some(nonce_b64) => {
-            let nonce_bytes =
-                from_b64(nonce_b64).map_err(|e| format!("failed to decode nonce: {e}"))?;
+            let nonce_bytes = from_b64(nonce_b64).map_err(|error| {
+                CredentialError::corrupt(
+                    "credential.decrypt",
+                    format!("failed to decode nonce: {error}"),
+                )
+            })?;
             if nonce_bytes.len() != 12 {
-                return Err("invalid nonce length (expected 12 bytes)".into());
+                return Err(CredentialError::corrupt(
+                    "credential.decrypt",
+                    "invalid nonce length (expected 12 bytes)",
+                ));
             }
             let mut nonce = [0u8; 12];
             nonce.copy_from_slice(&nonce_bytes);
             let key = derive_key()?;
             aes_gcm::decrypt(&key, &nonce, &raw)
+                .map_err(|message| CredentialError::corrupt("credential.decrypt", message))
         }
         None => legacy_xor(&raw),
     }

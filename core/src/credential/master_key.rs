@@ -95,7 +95,7 @@ pub(crate) fn os_random_bytes(buf: &mut [u8]) -> Result<(), std::io::Error> {
 /// Read the persistent on-disk root key, returning its bytes if present and
 /// well-formed (exactly 32 bytes). Only absence returns `None`; malformed keys
 /// and filesystem failures propagate so callers never generate over damage.
-fn load_persistent_root_key() -> Result<Option<[u8; 32]>, String> {
+fn load_persistent_root_key() -> CredentialResult<Option<[u8; 32]>> {
     load_persistent_root_key_at(&credential_root_key_path())
 }
 
@@ -103,22 +103,27 @@ fn load_persistent_root_key() -> Result<Option<[u8; 32]>, String> {
 /// caller-supplied path. Exists so unit tests can exercise the persistence
 /// helpers against a per-test scratch path without mutating process-global
 /// env vars (which races other tests).
-pub(super) fn load_persistent_root_key_at(path: &Path) -> Result<Option<[u8; 32]>, String> {
+pub(super) fn load_persistent_root_key_at(path: &Path) -> CredentialResult<Option<[u8; 32]>> {
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
-            return Err(format!(
-                "failed to read credential root key {}: {error}",
-                path.display()
+            return Err(CredentialError::io_at(
+                "root_key.load",
+                "failed to read credential root key",
+                path,
+                error,
             ))
         }
     };
     if bytes.len() != 32 {
-        return Err(format!(
-            "credential root key {} has invalid length {} (expected 32)",
-            path.display(),
-            bytes.len()
+        return Err(CredentialError::corrupt(
+            "root_key.load",
+            format!(
+                "credential root key {} has invalid length {} (expected 32)",
+                path.display(),
+                bytes.len()
+            ),
         ));
     }
     let mut out = [0u8; 32];
@@ -134,22 +139,35 @@ pub(super) fn load_persistent_root_key_at(path: &Path) -> Result<Option<[u8; 32]
 /// file exists with restrictive permissions from the very first byte written
 /// (no post-write `chmod` race). If a sibling process raced us to create the
 /// file, we honor whatever they wrote and return that instead.
-fn generate_and_persist_root_key() -> Result<[u8; 32], String> {
+fn generate_and_persist_root_key() -> CredentialResult<[u8; 32]> {
     generate_and_persist_root_key_at(&credential_root_key_path())
 }
 
 /// Inner of [`generate_and_persist_root_key`] — writes to a caller-supplied
 /// path. Exists so unit tests can exercise the generator without mutating
 /// process-global env vars.
-pub(super) fn generate_and_persist_root_key_at(path: &Path) -> Result<[u8; 32], String> {
+pub(super) fn generate_and_persist_root_key_at(path: &Path) -> CredentialResult<[u8; 32]> {
+    generate_and_persist_root_key_at_with(path, os_random_bytes)
+}
+
+fn generate_and_persist_root_key_at_with(
+    path: &Path,
+    random: impl FnOnce(&mut [u8]) -> Result<(), std::io::Error>,
+) -> CredentialResult<[u8; 32]> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            CredentialError::io_at("root_key.persist", "failed to create", parent, error)
+        })?;
     }
 
     let mut key = [0u8; 32];
-    os_random_bytes(&mut key)
-        .map_err(|error| format!("OS CSPRNG failed; refusing predictable key material: {error}"))?;
+    random(&mut key).map_err(|error| {
+        CredentialError::io(
+            "root_key.random",
+            "OS CSPRNG failed; refusing predictable key material",
+            error,
+        )
+    })?;
 
     // Atomic: O_CREAT|O_EXCL with mode 0o600 *at create time*.
     #[cfg(unix)]
@@ -170,17 +188,29 @@ pub(super) fn generate_and_persist_root_key_at(path: &Path) -> Result<[u8; 32], 
     match open_result {
         Ok(mut f) => {
             use std::io::Write;
-            f.write_all(&key)
-                .map_err(|error| format!("failed to write credential root key: {error}"))?;
-            f.sync_all()
-                .map_err(|error| format!("failed to fsync credential root key: {error}"))?;
+            f.write_all(&key).map_err(|error| {
+                CredentialError::io(
+                    "root_key.persist",
+                    "failed to write credential root key",
+                    error,
+                )
+            })?;
+            f.sync_all().map_err(|error| {
+                CredentialError::io(
+                    "root_key.persist",
+                    "failed to fsync credential root key",
+                    error,
+                )
+            })?;
             if let Some(parent) = path.parent() {
                 std::fs::File::open(parent)
                     .and_then(|directory| directory.sync_all())
                     .map_err(|error| {
-                        format!(
-                            "failed to fsync root key directory {}: {error}",
-                            parent.display()
+                        CredentialError::io_at(
+                            "root_key.persist",
+                            "failed to fsync root key directory",
+                            parent,
+                            error,
                         )
                     })?;
             }
@@ -189,14 +219,27 @@ pub(super) fn generate_and_persist_root_key_at(path: &Path) -> Result<[u8; 32], 
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             // Race: another process wrote the key. Read what they wrote.
             load_persistent_root_key_at(path)?.ok_or_else(|| {
-                "credential root key exists but disappeared before it could be read".to_string()
+                CredentialError::unavailable(
+                    "root_key.persist",
+                    "credential root key exists but disappeared before it could be read",
+                )
             })
         }
-        Err(e) => Err(format!(
-            "failed to create credential root key at {}: {e}",
-            path.display()
+        Err(error) => Err(CredentialError::io_at(
+            "root_key.persist",
+            "failed to create credential root key at",
+            path,
+            error,
         )),
     }
+}
+
+#[cfg(test)]
+pub(super) fn inject_root_key_random_failure(path: &Path) -> CredentialError {
+    generate_and_persist_root_key_at_with(path, |_| {
+        Err(std::io::Error::other("injected random failure"))
+    })
+    .expect_err("injected random source must fail")
 }
 
 /// Derive a 256-bit encryption key.
@@ -212,12 +255,20 @@ pub(super) fn generate_and_persist_root_key_at(path: &Path) -> Result<[u8; 32], 
 /// universally known key that decrypted every credential store offline. We
 /// either find / derive a per-install secret or we generate a fresh random one
 /// and persist it. Recoverable key-source failures are returned to the caller.
-pub(super) fn derive_key() -> Result<[u8; 32], String> {
+pub(super) fn derive_key() -> CredentialResult<[u8; 32]> {
     #[cfg(target_os = "linux")]
     {
         // 1. Kernel keyring cache (zero-cost when populated).
-        if let Some(key) = read_master_key() {
-            return Ok(key);
+        match read_master_key() {
+            Ok(Some(key)) => return Ok(key),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(
+                    operation = error.operation(),
+                    error = %error,
+                    "credential keyring cache unavailable; trying durable key sources"
+                );
+            }
         }
 
         // 2. Machine-id (per-install identifier).
@@ -225,7 +276,13 @@ pub(super) fn derive_key() -> Result<[u8; 32], String> {
             let trimmed = id.trim();
             if !trimmed.is_empty() {
                 let derived = sha256::hash(trimmed.as_bytes());
-                cache_master_key(&derived);
+                if let Err(error) = cache_master_key(&derived) {
+                    tracing::warn!(
+                        operation = error.operation(),
+                        error = %error,
+                        "credential key derived but could not be cached in the session keyring"
+                    );
+                }
                 return Ok(derived);
             }
         }
@@ -237,7 +294,13 @@ pub(super) fn derive_key() -> Result<[u8; 32], String> {
         None => generate_and_persist_root_key()?,
     };
 
-    cache_master_key(&key);
+    if let Err(error) = cache_master_key(&key) {
+        tracing::warn!(
+            operation = error.operation(),
+            error = %error,
+            "credential key loaded but could not be cached in the session keyring"
+        );
+    }
 
     Ok(key)
 }
@@ -249,10 +312,15 @@ pub(super) fn derive_key() -> Result<[u8; 32], String> {
 /// pair is reused, and the legacy fallback path (`now_nanos || counter`)
 /// trivially collided across process restarts and across cooperating
 /// processes. Failing loudly is the correct behaviour.
-pub(super) fn generate_nonce() -> Result<[u8; 12], String> {
+pub(super) fn generate_nonce() -> CredentialResult<[u8; 12]> {
     let mut nonce = [0u8; 12];
-    os_random_bytes(&mut nonce)
-        .map_err(|error| format!("OS CSPRNG failed; refusing predictable nonce: {error}"))?;
+    os_random_bytes(&mut nonce).map_err(|error| {
+        CredentialError::io(
+            "nonce.random",
+            "OS CSPRNG failed; refusing predictable nonce",
+            error,
+        )
+    })?;
     Ok(nonce)
 }
 
@@ -269,7 +337,7 @@ pub(super) fn generate_nonce() -> Result<[u8; 12], String> {
 /// hard-coded fallback has been removed: callers now derive the same per-
 /// install secret used by AES-GCM, so the legacy XOR scheme is at least no
 /// weaker than `derive_key()` itself.
-pub(super) fn legacy_obfuscation_key() -> Result<Vec<u8>, String> {
+pub(super) fn legacy_obfuscation_key() -> CredentialResult<Vec<u8>> {
     #[cfg(target_os = "linux")]
     {
         if let Ok(id) = fs::read_to_string(machine_id_path()) {
@@ -288,7 +356,7 @@ pub(super) fn legacy_obfuscation_key() -> Result<Vec<u8>, String> {
 }
 
 /// XOR-based deobfuscation (symmetric — same function encrypts and decrypts).
-pub(super) fn legacy_xor(data: &[u8]) -> Result<Vec<u8>, String> {
+pub(super) fn legacy_xor(data: &[u8]) -> CredentialResult<Vec<u8>> {
     let key = legacy_obfuscation_key()?;
     Ok(data
         .iter()

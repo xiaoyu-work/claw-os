@@ -1739,3 +1739,12 @@ fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
         assert_eq!(audit[0]["status"], "ok");
     });
 }
+#[test]
+fn credential_dispatch_exposes_a_typed_command_error() {
+    let error = dispatch_typed(&["credential".into(), "bogus".into()]).unwrap_err();
+
+    assert_eq!(error.kind(), CommandErrorKind::InvalidInput);
+    assert_eq!(error.command(), "bogus");
+    assert!(std::error::Error::source(&error).is_some());
+    assert_eq!(error.to_string(), "unknown credential command: bogus");
+}

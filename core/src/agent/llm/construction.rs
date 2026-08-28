@@ -8,14 +8,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::llm::credential_pool::{Pool, PoolEntry, SelectionStrategy};
-use crate::agent::llm::{LlmError, Result};
+use crate::agent::llm::{LlmError, ProviderInfrastructureError, Result};
+use crate::credential::CredentialResult;
 
 /// Read-only secret source used by provider composition.
 ///
 /// Implementations return owned values so providers never retain a handle to
 /// credential persistence or process environment state.
 pub trait CredentialSource: Send + Sync {
-    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String>;
+    fn load_stored(&self, name: &str) -> CredentialResult<Option<String>>;
     fn load_environment(&self, name: &str) -> Option<String>;
 }
 
@@ -23,8 +24,8 @@ pub trait CredentialSource: Send + Sync {
 pub struct ProcessCredentialSource;
 
 impl CredentialSource for ProcessCredentialSource {
-    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
-        crate::credential::try_load(name, "agent")
+    fn load_stored(&self, name: &str) -> CredentialResult<Option<String>> {
+        crate::credential::try_load_typed(name, "agent")
     }
 
     fn load_environment(&self, name: &str) -> Option<String> {
@@ -42,9 +43,7 @@ impl HttpTransport {
     pub fn new() -> Result<Self> {
         build_http_client()
             .map(|client| Self { client })
-            .map_err(|error| {
-                LlmError::Internal(format!("failed to build provider HTTP transport: {error}"))
-            })
+            .map_err(|source| ProviderInfrastructureError::HttpTransport { source }.into())
     }
 
     /// Infallible compatibility boundary for legacy constructors whose return
@@ -178,9 +177,9 @@ pub fn resolve_api_credentials(
         for credential in cfg.pool_credentials {
             match source
                 .load_stored(credential)
-                .map_err(|message| LlmError::CredentialStore {
+                .map_err(|source| LlmError::CredentialStore {
                     credential: credential.clone(),
-                    message,
+                    source,
                 })? {
                 Some(value) if !value.trim().is_empty() => entries.push(
                     PoolEntry::from_credential(credential.clone(), value.trim().to_string()),
@@ -220,11 +219,7 @@ pub fn resolve_api_credentials(
     }
 
     Ok(ResolvedApiCredentials {
-        api_key: resolve_single_api_key(
-            cfg.credential_name,
-            cfg.environment_name,
-            source,
-        )?,
+        api_key: resolve_single_api_key(cfg.credential_name, cfg.environment_name, source)?,
         pool: None,
     })
 }
@@ -237,9 +232,9 @@ pub fn resolve_single_api_key(
     if let Some(name) = credential_name {
         match source
             .load_stored(name)
-            .map_err(|message| LlmError::CredentialStore {
+            .map_err(|source| LlmError::CredentialStore {
                 credential: name.to_string(),
-                message,
+                source,
             })? {
             Some(value) if !value.trim().is_empty() => {
                 return Ok(Some(value.trim().to_string()));
@@ -271,17 +266,22 @@ pub fn resolve_aws_value(
     environment_name: Option<&str>,
     default_environment_name: &str,
     source: &dyn CredentialSource,
-) -> Option<String> {
+) -> Result<Option<String>> {
     if let Some(name) = credential_name {
-        if let Ok(Some(value)) = source.load_stored(name) {
-            if !value.is_empty() {
-                return Some(value);
+        match source.load_stored(name) {
+            Ok(Some(value)) if !value.is_empty() => return Ok(Some(value)),
+            Ok(_) => {}
+            Err(source) => {
+                return Err(LlmError::CredentialStore {
+                    credential: name.to_string(),
+                    source,
+                })
             }
         }
     }
-    source
+    Ok(source
         .load_environment(environment_name.unwrap_or(default_environment_name))
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.is_empty()))
 }
 
 #[cfg(test)]

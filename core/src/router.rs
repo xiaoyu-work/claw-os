@@ -14,8 +14,8 @@ use crate::audit;
 use crate::bridge;
 use crate::caps;
 use crate::checkpoint;
-use crate::cli_help::{self, builtin_apps, show_help_for, show_overview};
 use crate::clawd::routes::Command;
+use crate::cli_help::{self, builtin_apps, show_help_for, show_overview};
 use crate::credential;
 use crate::cron;
 use crate::engine_pkg;
@@ -28,6 +28,88 @@ use crate::triggers;
 use app_commands::dispatch_app;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CommandErrorKind {
+    InvalidInput,
+    NotAuthorized,
+    Unavailable,
+    Execution,
+}
+
+pub struct CommandError {
+    kind: CommandErrorKind,
+    command: String,
+    message: String,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl CommandError {
+    pub fn kind(&self) -> CommandErrorKind {
+        self.kind
+    }
+
+    pub fn command(&self) -> &str {
+        &self.command
+    }
+
+    fn execution(command: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            kind: CommandErrorKind::Execution,
+            command: command.into(),
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    fn credential(
+        command: impl Into<String>,
+        message: String,
+        source: credential::CredentialError,
+    ) -> Self {
+        let kind = match source.kind() {
+            credential::CredentialErrorKind::InvalidInput => CommandErrorKind::InvalidInput,
+            credential::CredentialErrorKind::NotAuthorized => CommandErrorKind::NotAuthorized,
+            credential::CredentialErrorKind::Unavailable
+            | credential::CredentialErrorKind::Corrupt => CommandErrorKind::Unavailable,
+            credential::CredentialErrorKind::NotFound
+            | credential::CredentialErrorKind::External => CommandErrorKind::Execution,
+        };
+        Self {
+            kind,
+            command: command.into(),
+            message,
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+impl std::fmt::Debug for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CommandError")
+            .field("kind", &self.kind)
+            .field("command", &self.command)
+            .field("message", &self.message)
+            .field("has_source", &self.source.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for CommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for CommandError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
+
+pub type CommandResult<T> = Result<T, CommandError>;
 
 fn apps_dir() -> PathBuf {
     PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
@@ -234,7 +316,11 @@ fn audit_path() -> PathBuf {
 
 /// Main dispatch: parse CLI args and route to the appropriate handler.
 pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
-    dispatch_with_stdin(args, None)
+    dispatch_typed(args).map_err(|error| error.to_string())
+}
+
+pub fn dispatch_typed(args: &[String]) -> CommandResult<Option<String>> {
+    dispatch_with_stdin_typed(args, None)
 }
 
 /// Dispatch a top-level CLI invocation with explicitly supplied stdin bytes.
@@ -242,6 +328,89 @@ pub fn dispatch(args: &[String]) -> Result<Option<String>, String> {
 /// Internal callers use [`dispatch`] and therefore cannot accidentally pass a
 /// control pipe or service stdin through to an App.
 pub fn dispatch_with_stdin(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> Result<Option<String>, String> {
+    dispatch_with_stdin_typed(args, stdin_data).map_err(|error| error.to_string())
+}
+
+pub fn dispatch_with_stdin_typed(
+    args: &[String],
+    stdin_data: Option<Vec<u8>>,
+) -> CommandResult<Option<String>> {
+    if args.first().map(String::as_str) == Some("credential") {
+        return dispatch_credential_typed(args);
+    }
+    let command = args.first().cloned().unwrap_or_else(|| "help".to_string());
+    dispatch_with_stdin_impl(args, stdin_data)
+        .map_err(|message| CommandError::execution(command, message))
+}
+
+fn dispatch_credential_typed(args: &[String]) -> CommandResult<Option<String>> {
+    let app_name = "credential";
+    let help_only = args.len() == 1
+        || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
+    if help_only {
+        let output = crate::cli_catalog::namespace_help(app_name).ok_or_else(|| {
+            CommandError::execution(
+                app_name,
+                format!("no public help catalogue for: cos {app_name}"),
+            )
+        })?;
+        return Ok(Some(output.to_string()));
+    }
+    if args.len() == 2 && args[1] == "--schema" {
+        return cli_help::show_builtin_schema(app_name)
+            .map_err(|message| CommandError::execution(app_name, message));
+    }
+
+    let command = &args[1];
+    let cmd_args = args[2..].to_vec();
+    if cmd_args.contains(&"--schema".to_string()) {
+        return cli_help::show_command_schema(app_name, command)
+            .map_err(|message| CommandError::execution(command, message));
+    }
+
+    let start = std::time::Instant::now();
+    let audit_p = audit_path();
+    match credential::run_typed(command, &cmd_args) {
+        Ok(value) => {
+            audit::log_entry(&audit_p, app_name, command, &cmd_args, start, "ok", None);
+            if value.is_null() {
+                Ok(None)
+            } else {
+                Ok(Some(value.to_string()))
+            }
+        }
+        Err(error) => {
+            let raw = error.to_string();
+            audit::log_entry(
+                &audit_p,
+                app_name,
+                command,
+                &cmd_args,
+                start,
+                "error",
+                Some(&raw),
+            );
+            let message = if let Some(recovery) = recovery_hint(&raw) {
+                let mut output = json!({
+                    "error": raw,
+                    "recovery": recovery,
+                });
+                if let Some(code) = error_code_from_hint(&raw) {
+                    output["code"] = json!(code);
+                }
+                output.to_string()
+            } else {
+                raw
+            };
+            Err(CommandError::credential(command, message, error))
+        }
+    }
+}
+
+fn dispatch_with_stdin_impl(
     args: &[String],
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
@@ -1373,8 +1542,7 @@ fn run_app_command(
         }
     }
 
-    let result =
-        bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
+    let result = bridge::run_app_with_stdin(&app.dir, command, args, &data, &apps, stdin_data);
 
     match result {
         Ok(output) => {

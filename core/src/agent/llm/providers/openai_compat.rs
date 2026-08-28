@@ -180,17 +180,8 @@ impl std::fmt::Debug for OpenAICompatConfig {
 }
 
 impl OpenAICompatConfig {
-    pub fn try_from_agent_config(
-        alias: &str,
-        model: &str,
-        agent: &AgentConfig,
-    ) -> Result<Self> {
-        crate::agent::llm::registry::openai_config(
-            alias,
-            model,
-            agent,
-            &ProcessCredentialSource,
-        )
+    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
+        crate::agent::llm::registry::openai_config(alias, model, agent, &ProcessCredentialSource)
     }
 
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
@@ -298,12 +289,7 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         token: &super::copilot_auth::CopilotToken,
         model: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi> {
-        super::copilot_auth::wire_api_for_model_with_transport(
-            token,
-            model,
-            &self.transport,
-        )
-        .await
+        super::copilot_auth::wire_api_for_model_with_transport(token, model, &self.transport).await
     }
 }
 
@@ -339,17 +325,11 @@ impl OpenAICompatProvider {
         Self {
             cfg,
             transport: transport.clone(),
-            copilot_auth: Arc::new(LiveCopilotAuthSource::with_endpoints(
-                transport, endpoints,
-            )),
+            copilot_auth: Arc::new(LiveCopilotAuthSource::with_endpoints(transport, endpoints)),
         }
     }
 
-    pub fn try_from_agent_config(
-        alias: &str,
-        model: &str,
-        agent: &AgentConfig,
-    ) -> Result<Self> {
+    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
         Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
             alias, model, agent,
         )?))
@@ -523,6 +503,11 @@ fn map_copilot_error(error: super::copilot_auth::CopilotAuthError) -> LlmError {
         }
         CopilotAuthError::UnexpectedBody(message) => LlmError::UpstreamMalformed(message),
         CopilotAuthError::NotAuthorized(message) => LlmError::NotConfigured(message),
+        CopilotAuthError::StateUnavailable { resource } => LlmError::from(
+            crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                component: resource,
+            },
+        ),
     }
 }
 
@@ -653,7 +638,7 @@ impl Provider for OpenAICompatProvider {
             return false;
         }
         self.cfg.api_key.is_some()
-            || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+            || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
             || alias_is_local_default(&self.cfg.alias)
     }
 
@@ -673,10 +658,7 @@ impl Provider for OpenAICompatProvider {
         // A declared pool is authoritative. Its lease snapshots the value so
         // concurrent cooldown updates do not invalidate this call.
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -687,7 +669,7 @@ impl Provider for OpenAICompatProvider {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+                    pool.try_report_failure(lease, pool_failure_class(&error))?;
                 }
                 return Err(error);
             }
@@ -704,7 +686,7 @@ impl Provider for OpenAICompatProvider {
                 Ok(body) => body,
                 Err(error) => {
                     if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(lease, pool_failure_class(&error));
+                        pool.try_report_failure(lease, pool_failure_class(&error))?;
                     }
                     return Err(error);
                 }
@@ -738,10 +720,10 @@ impl Provider for OpenAICompatProvider {
                 Ok(r) => r,
                 Err(e) => {
                     if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(
+                        pool.try_report_failure(
                             l,
                             crate::agent::llm::error_classifier::classify_network_error(),
-                        );
+                        )?;
                     }
                     return Err(LlmError::Transport(e));
                 }
@@ -764,7 +746,7 @@ impl Provider for OpenAICompatProvider {
                     Ok(None) => {}
                     Err(error) => {
                         if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                            pool.report_failure(l, pool_failure_class(&error));
+                            pool.try_report_failure(l, pool_failure_class(&error))?;
                         }
                         return Err(error);
                     }
@@ -784,7 +766,7 @@ impl Provider for OpenAICompatProvider {
                             }
                             _ => crate::agent::llm::error_classifier::classify_network_error(),
                         };
-                        pool.report_failure(l, cls);
+                        pool.try_report_failure(l, cls)?;
                     }
                     return Err(e);
                 }
@@ -796,7 +778,7 @@ impl Provider for OpenAICompatProvider {
                     let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                     let cls =
                         crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(err);
             }
@@ -813,7 +795,7 @@ impl Provider for OpenAICompatProvider {
             };
             if result.is_ok() {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_success(l);
+                    pool.try_report_success(l)?;
                 }
             }
             return result;
@@ -837,10 +819,7 @@ impl Provider for OpenAICompatProvider {
             ));
         }
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -851,7 +830,7 @@ impl Provider for OpenAICompatProvider {
             Ok(target) => target,
             Err(error) => {
                 if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(lease, pool_failure_class(&error));
+                    pool.try_report_failure(lease, pool_failure_class(&error))?;
                 }
                 return Err(error);
             }
@@ -868,7 +847,7 @@ impl Provider for OpenAICompatProvider {
                 Ok(body) => body,
                 Err(error) => {
                     if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(lease, pool_failure_class(&error));
+                        pool.try_report_failure(lease, pool_failure_class(&error))?;
                     }
                     return Err(error);
                 }
@@ -899,10 +878,10 @@ impl Provider for OpenAICompatProvider {
                 Ok(r) => r,
                 Err(e) => {
                     if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                        pool.report_failure(
+                        pool.try_report_failure(
                             l,
                             crate::agent::llm::error_classifier::classify_network_error(),
-                        );
+                        )?;
                     }
                     return Err(LlmError::Transport(e));
                 }
@@ -927,7 +906,7 @@ impl Provider for OpenAICompatProvider {
                         Ok(None) => {}
                         Err(error) => {
                             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                                pool.report_failure(l, pool_failure_class(&error));
+                                pool.try_report_failure(l, pool_failure_class(&error))?;
                             }
                             return Err(error);
                         }
@@ -938,7 +917,7 @@ impl Provider for OpenAICompatProvider {
                     let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                     let cls =
                         crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(err);
             }

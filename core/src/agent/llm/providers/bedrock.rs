@@ -118,6 +118,27 @@ impl std::fmt::Debug for BedrockConfig {
 
 impl BedrockConfig {
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(
+                error = %error,
+                "legacy Bedrock constructor deferred provider infrastructure failure"
+            );
+            Self {
+                region: agent
+                    .aws_region
+                    .clone()
+                    .filter(|value| !value.is_empty())
+                    .unwrap_or_else(|| DEFAULT_REGION.to_string()),
+                base_url: agent.base_url.clone().filter(|value| !value.is_empty()),
+                model: model.to_string(),
+                credentials: None,
+                extra_headers: agent.extra_headers.clone(),
+                request_timeout: Duration::from_secs(agent.request_timeout),
+            }
+        })
+    }
+
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
         crate::agent::llm::registry::bedrock_config(model, agent, &ProcessCredentialSource)
     }
 
@@ -300,11 +321,9 @@ impl Provider for BedrockProvider {
             .or_else(|| resp.headers().get("X-Amzn-Errortype"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let bytes = crate::agent::llm::read_body_capped(
-            resp,
-            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-        )
-        .await?;
+        let bytes =
+            crate::agent::llm::read_body_capped(resp, crate::agent::llm::MAX_NONSTREAM_BODY_BYTES)
+                .await?;
 
         if !status.is_success() {
             return Err(classify_bedrock_error(

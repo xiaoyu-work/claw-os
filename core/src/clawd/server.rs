@@ -56,14 +56,72 @@ pub struct ServerOptions {
     pub socket_mode: u32,
 }
 
-pub async fn run(options: ServerOptions) -> Result<(), String> {
-    prepare_socket(&options.socket_path).await?;
-    let listener = UnixListener::bind(&options.socket_path)
-        .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
+#[derive(Debug, thiserror::Error)]
+pub enum DaemonError {
+    #[error(transparent)]
+    State(#[from] super::state::StateError),
+
+    #[error("{operation} {}: {source}", path.display())]
+    Socket {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("{message}")]
+    Startup {
+        operation: &'static str,
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl DaemonError {
+    pub fn operation(&self) -> &'static str {
+        match self {
+            Self::State(error) => error.operation(),
+            Self::Socket { operation, .. } | Self::Startup { operation, .. } => operation,
+        }
+    }
+
+    fn startup(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::Startup {
+            operation,
+            message: message.into(),
+            source: None,
+        }
+    }
+
+    fn startup_source<E>(operation: &'static str, message: impl Into<String>, source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Startup {
+            operation,
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
+    prepare_socket(&options.socket_path)
+        .await
+        .map_err(|message| DaemonError::startup("socket.prepare", message))?;
+    let listener =
+        UnixListener::bind(&options.socket_path).map_err(|source| DaemonError::Socket {
+            operation: "socket.bind",
+            path: options.socket_path.clone(),
+            source,
+        })?;
     // Before the first `accept`, so no connection is ever served
     // without the kernel stamping credentials onto its messages.
-    enable_credential_passing(&listener)?;
-    set_socket_permissions(&options.socket_path, options.socket_mode)?;
+    enable_credential_passing(&listener)
+        .map_err(|message| DaemonError::startup("socket.credentials", message))?;
+    set_socket_permissions(&options.socket_path, options.socket_mode)
+        .map_err(|message| DaemonError::startup("socket.permissions", message))?;
     let state = DaemonState::try_new()?;
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
@@ -84,7 +142,13 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     // before the first request is served, so a mutation a crash left
     // open is marked orphaned rather than silently replayed.
     recover_journal();
-    context::refresh_builtin_sources(&state);
+    context::refresh_builtin_sources(&state).map_err(|error| {
+        DaemonError::startup_source(
+            "context.initialize",
+            format!("failed to initialize daemon context: {error}"),
+            error,
+        )
+    })?;
     spawn_authority_sweep();
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     // Agent work runs in unprivileged `claw-agentd` processes. The
@@ -98,10 +162,15 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let admission = Admission::new(Limits::default());
     let serve = async move {
         loop {
-            let (stream, _addr) = listener
-                .accept()
-                .await
-                .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+            let (stream, _addr) =
+                listener
+                    .accept()
+                    .await
+                    .map_err(|source| DaemonError::Socket {
+                        operation: "socket.accept",
+                        path: options.socket_path.clone(),
+                        source,
+                    })?;
             let bucket = accounting_bucket(&stream);
             let Some(permit) = admission.accept_connection(bucket) else {
                 tracing::warn!(
@@ -118,7 +187,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
             });
         }
         #[allow(unreachable_code)]
-        Ok::<(), String>(())
+        Ok::<(), DaemonError>(())
     };
     serve.await
 }

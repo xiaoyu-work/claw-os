@@ -95,15 +95,8 @@ impl std::fmt::Debug for AnthropicConfig {
 }
 
 impl AnthropicConfig {
-    pub fn try_from_agent_config(
-        model: &str,
-        agent: &AgentConfig,
-    ) -> Result<Self> {
-        crate::agent::llm::registry::anthropic_config(
-            model,
-            agent,
-            &ProcessCredentialSource,
-        )
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
+        crate::agent::llm::registry::anthropic_config(model, agent, &ProcessCredentialSource)
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
@@ -153,7 +146,7 @@ impl Provider for AnthropicProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
     }
 
     fn supports_prompt_cache(&self) -> bool {
@@ -164,10 +157,7 @@ impl Provider for AnthropicProvider {
         let body = wire::build_request_body(&request, &self.cfg.model, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -195,10 +185,10 @@ impl Provider for AnthropicProvider {
             Ok(r) => r,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    )?;
                 }
                 return Err(LlmError::Transport(e));
             }
@@ -225,7 +215,7 @@ impl Provider for AnthropicProvider {
                         }
                         _ => crate::agent::llm::error_classifier::classify_network_error(),
                     };
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(e);
             }
@@ -236,7 +226,7 @@ impl Provider for AnthropicProvider {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                 let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+                pool.try_report_failure(l, cls)?;
             }
             return Err(err);
         }
@@ -245,10 +235,10 @@ impl Provider for AnthropicProvider {
             Ok(p) => p,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::credential_pool::FailureClass::CallerError,
-                    );
+                    )?;
                 }
                 return Err(LlmError::Parse(e.to_string()));
             }
@@ -257,7 +247,7 @@ impl Provider for AnthropicProvider {
         let result = wire::response_to_chat(parsed, &self.cfg.model);
         if result.is_ok() {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_success(l);
+                pool.try_report_success(l)?;
             }
         }
         result
@@ -275,10 +265,7 @@ impl Provider for AnthropicProvider {
         let body = wire::build_request_body(&request, &self.cfg.model, true);
 
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -302,15 +289,18 @@ impl Provider for AnthropicProvider {
             http = http.header(k.as_str(), v.as_str());
         }
 
-        let resp = http.send().await.map_err(|e| {
-            if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_failure(
-                    l,
-                    crate::agent::llm::error_classifier::classify_network_error(),
-                );
+        let resp = match http.send().await {
+            Ok(response) => response,
+            Err(error) => {
+                if let (Some(pool), Some(lease)) = (&self.cfg.pool, &lease) {
+                    pool.try_report_failure(
+                        lease,
+                        crate::agent::llm::error_classifier::classify_network_error(),
+                    )?;
+                }
+                return Err(LlmError::Transport(error));
             }
-            LlmError::Transport(e)
-        })?;
+        };
 
         let status = resp.status();
         let retry_after_secs = resp
@@ -330,7 +320,7 @@ impl Provider for AnthropicProvider {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                 let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+                pool.try_report_failure(l, cls)?;
             }
             return Err(err);
         }
@@ -343,12 +333,7 @@ impl Provider for AnthropicProvider {
         // failure, charges the lease).
         let bytes_stream = resp.bytes_stream();
         let model = self.cfg.model.clone();
-        let stream = wire::AnthropicStream::new(
-            bytes_stream,
-            &model,
-            self.cfg.pool.clone(),
-            lease,
-        );
+        let stream = wire::AnthropicStream::new(bytes_stream, &model, self.cfg.pool.clone(), lease);
         Ok(stream.boxed())
     }
 }
@@ -1040,7 +1025,6 @@ pub(crate) mod wire {
                 usage: self.usage.clone(),
             }
         }
-
     }
 
     #[cfg(test)]
@@ -1106,13 +1090,12 @@ pub(crate) mod wire {
         /// Once called, the byte source is considered drained so the
         /// stream terminates after this single error.
         fn surface_sse_overflow(&mut self, e: crate::agent::llm::sse::SseOverflow) {
-            self.pending.push_back(Err(LlmError::UpstreamMalformed(
-                format!("anthropic stream: {e}"),
-            )));
+            self.pending
+                .push_back(Err(LlmError::UpstreamMalformed(format!(
+                    "anthropic stream: {e}"
+                ))));
             self.bytes_done = true;
-            self.report_failure_once(
-                crate::agent::llm::credential_pool::FailureClass::Transient,
-            );
+            self.report_failure_once(crate::agent::llm::credential_pool::FailureClass::Transient);
         }
 
         fn report_success_once(&mut self) {
@@ -1121,20 +1104,21 @@ pub(crate) mod wire {
             }
             self.accounted = true;
             if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
-                p.report_success(l);
+                if let Err(error) = p.try_report_success(l) {
+                    tracing::error!(error = %error, "failed to account Anthropic stream success");
+                }
             }
         }
 
-        fn report_failure_once(
-            &mut self,
-            cls: crate::agent::llm::credential_pool::FailureClass,
-        ) {
+        fn report_failure_once(&mut self, cls: crate::agent::llm::credential_pool::FailureClass) {
             if self.accounted {
                 return;
             }
             self.accounted = true;
             if let (Some(p), Some(l)) = (&self.pool, &self.lease) {
-                p.report_failure(l, cls);
+                if let Err(error) = p.try_report_failure(l, cls) {
+                    tracing::error!(error = %error, "failed to account Anthropic stream failure");
+                }
             }
         }
     }
@@ -1185,15 +1169,13 @@ pub(crate) mod wire {
                         continue;
                     }
                     Poll::Ready(Some(Ok(chunk))) => {
-                        self.total_bytes =
-                            self.total_bytes.saturating_add(chunk.len());
+                        self.total_bytes = self.total_bytes.saturating_add(chunk.len());
                         if self.total_bytes > crate::agent::llm::MAX_STREAM_TOTAL_BYTES {
-                            self.pending.push_back(Err(LlmError::UpstreamMalformed(
-                                format!(
+                            self.pending
+                                .push_back(Err(LlmError::UpstreamMalformed(format!(
                                     "anthropic stream exceeded {} bytes",
                                     crate::agent::llm::MAX_STREAM_TOTAL_BYTES
-                                ),
-                            )));
+                                ))));
                             self.bytes_done = true;
                             self.report_failure_once(
                                 crate::agent::llm::credential_pool::FailureClass::Transient,

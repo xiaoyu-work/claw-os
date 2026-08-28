@@ -274,9 +274,9 @@ fn load_authorized_oauth_credential(
     name: &str,
     namespace: &str,
 ) -> Result<String, String> {
-    let id = CredentialId::parse(namespace, name)?;
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
     require_secret(Verb::SECRET_READ, credential_scope(namespace, name)?)?;
-    store.load(&id, true)
+    store.load(&id, true).map_err(|error| error.to_string())
 }
 
 /// Load refresh material inside clawd after the credential OAuth route has
@@ -286,8 +286,8 @@ fn load_broker_oauth_credential(
     name: &str,
     namespace: &str,
 ) -> Result<String, String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.load(&id, false)
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store.load(&id, false).map_err(|error| error.to_string())
 }
 
 fn minimum_tier(store: &dyn CredentialStore, name: &str, namespace: &str) -> Result<u8, String> {
@@ -300,8 +300,8 @@ fn optional_minimum_tier(
     name: &str,
     namespace: &str,
 ) -> Result<Option<u8>, String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.minimum_tier(&id)
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store.minimum_tier(&id).map_err(|error| error.to_string())
 }
 
 fn store_token(
@@ -313,14 +313,16 @@ fn store_token(
     ttl: Option<u64>,
     refresh_cmd: Option<String>,
 ) -> Result<(), String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.store(StoreRequest {
-        id: &id,
-        value,
-        min_tier,
-        ttl,
-        refresh_cmd,
-    })?;
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store
+        .store(StoreRequest {
+            id: &id,
+            value,
+            min_tier,
+            ttl,
+            refresh_cmd,
+        })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
