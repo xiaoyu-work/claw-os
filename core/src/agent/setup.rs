@@ -342,7 +342,7 @@ impl Modality {
     }
 }
 
-fn help_doc() -> Value {
+pub(crate) fn help_doc() -> Value {
     json!({
         "command": "cos agent setup <MODALITY> [SUBCOMMAND]",
         "summary": "Per-modality config wizard: pick a provider, a model, store an API key, and verify it works.",

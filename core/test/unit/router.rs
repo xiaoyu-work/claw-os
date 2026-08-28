@@ -1,6 +1,6 @@
 use super::app_commands::{consent_cmd, create_cmd, install_cmd, stage_app_install_with_rename};
-use super::help::{command_schemas, show_builtin_schema, show_command_schema};
 use super::*;
+use crate::cli_help::{command_schemas, show_builtin_schema, show_command_schema};
 
 #[test]
 fn app_stdin_opt_in_resolves_only_installed_manifest_operations() {
@@ -316,14 +316,14 @@ fn show_command_schema_has_param_details() {
 
 #[test]
 fn show_builtin_schema_all_primitives() {
-    // Every primitive that has a schema should produce valid output
-    let primitives = ["checkpoint", "credential", "cron", "service", "sys"];
-    for name in &primitives {
+    // Every public primitive is discoverable even when a command has only
+    // summary metadata and no detailed parameter schema yet.
+    for name in crate::cli_catalog::namespace_names() {
         let result = show_builtin_schema(name);
         assert!(result.is_ok(), "Failed for primitive: {name}");
         let output = result.unwrap().unwrap();
         let v: Value = serde_json::from_str(&output).unwrap();
-        assert_eq!(v["app"], *name);
+        assert_eq!(v["app"], name);
         assert!(v["description"].is_string());
         assert!(v["commands"].is_array());
         assert!(
@@ -331,6 +331,39 @@ fn show_builtin_schema_all_primitives() {
             "No commands for: {name}"
         );
     }
+}
+
+#[test]
+fn every_public_router_namespace_has_machine_readable_help() {
+    for name in crate::cli_catalog::namespace_names() {
+        let output = dispatch(&[name.to_string(), "--help".to_string()])
+            .unwrap_or_else(|error| panic!("cos {name} --help failed: {error}"));
+        let value = parse(output);
+        assert_eq!(value["app"], name);
+        assert!(value["commands"].is_object());
+    }
+}
+
+#[test]
+fn agent_usage_is_publicly_discoverable() {
+    let help = parse(dispatch(&["agent".into(), "--help".into()]).unwrap());
+    assert!(help["commands"].get("usage").is_some());
+    assert_eq!(help["model_tools"]["usage"], "cos_usage");
+
+    let leaf = parse(
+        dispatch(&["agent".into(), "usage".into(), "--schema".into()]).unwrap(),
+    );
+    assert_eq!(leaf["command"], "cos agent usage");
+    assert_eq!(leaf["schema_available"], true);
+    assert!(leaf["parameters"].is_array());
+}
+
+#[test]
+fn bare_agent_usage_returns_progressive_help() {
+    let help = parse(dispatch(&["agent".into(), "usage".into()]).unwrap());
+    assert_eq!(help["command"], "cos agent usage");
+    assert_eq!(help["model_tool"], "cos_usage");
+    assert!(help["scopes"].get("provider <name>").is_some());
 }
 
 #[test]

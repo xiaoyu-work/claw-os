@@ -1,11 +1,9 @@
 use super::*;
 use serde_json::json;
 
-/// The route surface as it stood before the registry existed.
-///
-/// Kept verbatim so the migration to a declarative table is proved to
-/// have preserved the allowlist rather than quietly widened it.
-const HISTORICAL_USER_COMMANDS: &[&str] = &[
+/// Expected non-root route surface. Changes here are intentional API and
+/// authority changes rather than incidental registry drift.
+const EXPECTED_USER_COMMANDS: &[&str] = &[
     "daemon.health",
     "daemon.status",
     "task.submit",
@@ -18,6 +16,7 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "task.count",
     "memory.history",
     "memory.sessions",
+    "agent.usage",
     "credential.oauth-refresh",
     "system.audio.control",
     "system.accessibility.control",
@@ -94,7 +93,7 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
 /// `journal.mutation.resolve` joins them because recording what
 /// happened to an unresolved privileged mutation is an administrative
 /// statement, and it is what ends that operation's replay refusal.
-const HISTORICAL_ROOT_COMMANDS: &[&str] = &[
+const EXPECTED_ROOT_COMMANDS: &[&str] = &[
     "context.update",
     "journal.mutation.resolve",
     "permission.revoke",
@@ -129,12 +128,12 @@ fn the_access_allowlist_is_exactly_what_it_was() {
     let root: std::collections::BTreeSet<_> = root_commands().collect();
     assert_eq!(
         user,
-        HISTORICAL_USER_COMMANDS.iter().copied().collect(),
+        EXPECTED_USER_COMMANDS.iter().copied().collect(),
         "the set of routes a non-root peer may reach changed"
     );
     assert_eq!(
         root,
-        HISTORICAL_ROOT_COMMANDS.iter().copied().collect(),
+        EXPECTED_ROOT_COMMANDS.iter().copied().collect(),
         "the set of root-only routes changed"
     );
 }
@@ -217,7 +216,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         gid: Some(0),
         start_time_ticks: Some(1),
     };
-    for command in HISTORICAL_ROOT_COMMANDS {
+    for command in EXPECTED_ROOT_COMMANDS {
         let route = Command::parse(command).unwrap().route();
         assert_eq!(
             route.authorize(&user),
@@ -287,6 +286,7 @@ fn read_only_routes_are_classified_as_queries() {
         "task.get",
         "task.result",
         "memory.history",
+        "agent.usage",
         "context.snapshot",
         "context.event.query",
         "permission.status",

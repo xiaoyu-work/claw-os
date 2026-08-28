@@ -20,6 +20,7 @@ which tool calls are exposed and executed.
 | --- | --- |
 | `registry.rs` | Tool registration, filtering, lookup |
 | `guardrails.rs` | Tool exposure/dispatch policy |
+| `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
 | `cos_apps.rs`, `cos_apps_session.rs` | Compact app catalog/run gateways and active session calls |

@@ -90,6 +90,27 @@ fn build_child_registry_keeps_progressive_skill_disclosure() {
 }
 
 #[test]
+fn build_child_registry_keeps_progressive_cli_discovery() {
+    let mut source = ToolRegistry::new();
+    source.register(Arc::new(super::super::cos_help::CosHelp));
+
+    let child = build_child_registry(None, None, source, &[]);
+
+    assert!(child.get("cos_help").is_some());
+}
+
+#[test]
+fn build_child_registry_respects_parent_help_denial() {
+    let mut source = ToolRegistry::new();
+    source.register(Arc::new(super::super::cos_help::CosHelp));
+    let guardrails = Guardrails::default().deny_tool("cos_help");
+
+    let child = build_child_registry(Some(&guardrails), None, source, &[]);
+
+    assert!(child.get_unfiltered("cos_help").is_none());
+}
+
+#[test]
 fn build_child_registry_respects_parent_skill_denial() {
     let mut source = ToolRegistry::new();
     source.register(Arc::new(super::super::skills::SkillDisclosure::new()));

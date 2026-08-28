@@ -1,5 +1,4 @@
 mod app_commands;
-mod help;
 
 use std::env;
 use std::io::Read;
@@ -15,6 +14,7 @@ use crate::audit;
 use crate::bridge;
 use crate::caps;
 use crate::checkpoint;
+use crate::cli_help::{self, builtin_apps, show_help_for, show_overview};
 use crate::clawd::routes::Command;
 use crate::credential;
 use crate::cron;
@@ -26,7 +26,6 @@ use crate::service;
 use crate::sysinfo;
 use crate::triggers;
 use app_commands::dispatch_app;
-use help::{builtin_apps, show_help_for, show_overview};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -1582,25 +1581,14 @@ fn dispatch_builtin(
     let help_only = args.len() == 1
         || (args.len() == 2 && matches!(args[1].as_str(), "--help" | "-h" | "help"));
     if help_only {
-        let apps = builtin_apps();
-        let app = apps.iter().find(|(n, _, _)| *n == app_name).unwrap();
-        let cmds: serde_json::Map<String, Value> = app
-            .2
-            .iter()
-            .map(|(k, v)| (k.to_string(), json!(v)))
-            .collect();
-        let output = json!({
-            "app": app_name,
-            "description": app.1,
-            "commands": cmds,
-            "hint": format!("Run: cos {app_name} <command> [args]"),
-        });
+        let output = crate::cli_catalog::namespace_help(app_name)
+            .ok_or_else(|| format!("no public help catalogue for: cos {app_name}"))?;
         return Ok(Some(output.to_string()));
     }
 
     // cos <primitive> --schema → show all command schemas for this primitive
     if args.len() == 2 && args[1] == "--schema" {
-        return help::show_builtin_schema(app_name);
+        return cli_help::show_builtin_schema(app_name);
     }
 
     let command = &args[1];
@@ -1608,7 +1596,7 @@ fn dispatch_builtin(
 
     // If --schema is in args, return schema instead of executing
     if cmd_args.contains(&"--schema".to_string()) {
-        return help::show_command_schema(app_name, command);
+        return cli_help::show_command_schema(app_name, command);
     }
 
     let start = std::time::Instant::now();

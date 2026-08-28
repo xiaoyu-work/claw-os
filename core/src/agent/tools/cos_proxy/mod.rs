@@ -12,11 +12,11 @@
 //! function pointer per primitive — no hand-written wrappers, no per-tool
 //! IPC.
 //!
-//! The agent therefore inherits the **full** kernel surface: anything
-//! callable from the cos CLI is callable by the model, with the same
-//! command/args shape. This is the "agent-native OS" promise: the
-//! agent is a kernel resident with native access, not a bolt-on
-//! layer.
+//! The Agent discovers the full public CLI through `cos_help`, then uses the
+//! typed tools registered here for operations admitted to the model. Keeping
+//! discovery separate from execution preserves per-tool guardrails, approval,
+//! and audit classification instead of hiding every action behind one generic
+//! shell-shaped tool.
 //!
 //! Beyond the uniform-contract proxies, this module also hosts higher-level
 //! tools backed by agent subsystems (e.g. `cos_memory` over
@@ -402,6 +402,17 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::agent::doctor_cli::doctor_primitive,
         commands: &["run"],
         // Diagnostics-only; no writes outside ephemeral status fields.
+        parallel_safe: true,
+    },
+    PrimitiveSpec {
+        name: "cos_usage",
+        description: "Read the current user's AI token usage. This is the \
+                      model-facing equivalent of `cos agent usage`. Choose \
+                      overall, provider, model, session, app, or verb as the \
+                      command; pass the selected value and optional --since, \
+                      --until, --ok, --error, --app, or --verb filters in args.",
+        primitive: crate::agent::usage_primitive,
+        commands: &["overall", "provider", "model", "session", "app", "verb"],
         parallel_safe: true,
     },
     PrimitiveSpec {

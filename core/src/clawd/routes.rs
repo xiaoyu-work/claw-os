@@ -13,11 +13,11 @@
 //! compile. Audit field rules live in those same rows, so there is no
 //! second command-name table to synchronize.
 //!
-//! Access classes are the historical allowlist, unchanged:
-//! `context.update` is root-only and everything else is reachable by an
-//! authenticated non-root peer. Reaching a route is not the same as
-//! being allowed to act: the route still derives identity, session and
-//! capability from the peer the kernel named.
+//! Access classes are an explicit allowlist: `context.update` is root-only
+//! and the remaining registered routes are reachable by an authenticated
+//! non-root peer. Reaching a route is not the same as being allowed to act:
+//! each route still derives identity, session and capability from the peer
+//! the kernel named.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -41,7 +41,7 @@ use super::{
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
-    tasks, transactions, usb_guard, users,
+    tasks, transactions, usb_guard, usage, users,
 };
 
 /// Who may reach a route at all.
@@ -113,6 +113,14 @@ impl Budget {
     const fn query() -> Self {
         Self {
             max_in_flight: 32,
+            deadline: Deadline::Interruptible(Duration::from_secs(120)),
+        }
+    }
+
+    /// Bounded scans that may still parse several MiB before returning.
+    const fn log_query() -> Self {
+        Self {
+            max_in_flight: 2,
             deadline: Deadline::Interruptible(Duration::from_secs(120)),
         }
     }
@@ -575,6 +583,16 @@ routes! {
         body: body::MemorySessions,
         audit: &[("limit", FieldRule::Count)],
         run: |c| memory::sessions(c.params, c.client).map_err(BrokerError::from),
+    }
+    AgentUsage {
+        name: "agent.usage",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::log_query(),
+        authority: peer(Audience::Context),
+        body: body::AgentUsage,
+        audit: &[("args", FieldRule::Size)],
+        run: |c| usage::query(c.params, c.client).await.map_err(BrokerError::from),
     }
     ContextSnapshot {
         name: "context.snapshot",

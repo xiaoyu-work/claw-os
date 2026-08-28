@@ -50,5 +50,6 @@ pub mod tasks;
 pub mod transactions;
 pub mod transport;
 pub mod usb_guard;
+pub mod usage;
 pub mod users;
 pub mod wire;

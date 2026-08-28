@@ -83,6 +83,7 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("task.") => Audience::Task,
             name if name.starts_with("memory.")
                 || name.starts_with("context.")
+                || name == "agent.usage"
                 || name == "system.operations" =>
             {
                 Audience::Context

@@ -864,6 +864,21 @@ fn usage_since_rejects_non_iso_timestamp() {
 }
 
 #[test]
+fn usage_filters_work_without_explicit_overall_scope() {
+    let errors = usage_cmd(&["--error".into()]).expect("usage --error");
+    assert_eq!(errors["scope"], "overall");
+    assert_eq!(errors["filter"]["status_ok"], false);
+
+    let since = usage_cmd(&[
+        "--since".into(),
+        "2026-08-01T00:00:00Z".into(),
+    ])
+    .expect("usage --since");
+    assert_eq!(since["scope"], "overall");
+    assert_eq!(since["filter"]["since"], "2026-08-01T00:00:00+00:00");
+}
+
+#[test]
 fn usage_provider_filter_records_in_response() {
     let v = usage_cmd(&["provider".into(), "anthropic".into()]).expect("usage provider ok");
     assert_eq!(

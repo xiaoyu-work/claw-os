@@ -29,6 +29,7 @@ and agent tasks.
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
+| `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |

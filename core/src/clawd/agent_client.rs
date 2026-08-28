@@ -11,6 +11,10 @@ pub fn daemon_status() -> Result<Value, String> {
     send(Command::DaemonStatus, Value::Null)
 }
 
+pub fn usage(args: &[String]) -> Result<Value, String> {
+    send(Command::AgentUsage, json!({ "args": args }))
+}
+
 pub fn ask(prompt: &str) -> Result<Value, String> {
     ask_in_session(prompt, None)
 }

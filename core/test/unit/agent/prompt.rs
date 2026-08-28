@@ -62,6 +62,15 @@ fn scaffold_explains_progressive_app_disclosure() {
 }
 
 #[test]
+fn scaffold_requires_recursive_cli_discovery_before_claiming_unsupported() {
+    let prompt = build_system_prompt(None);
+    assert!(prompt.contains("call `cos_help` with `path=[]`"));
+    assert!(prompt.contains("one level at a time"));
+    assert!(prompt.contains("Never claim that a Claw capability is unsupported"));
+    assert!(prompt.contains("never executes them"));
+}
+
+#[test]
 fn scaffold_requires_runtime_evidence_citations() {
     let prompt = build_system_prompt(None);
     assert!(prompt.contains("[evidence:<tool_call_id>"));

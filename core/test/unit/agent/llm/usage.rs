@@ -8,6 +8,25 @@ fn write(path: &Path, recs: &[LlmRunRecord]) {
     }
 }
 
+#[test]
+fn streaming_snapshot_preserves_log_and_insight_metrics() {
+    let first = serde_json::to_string(&rec("anthropic", "sonnet", 10, 2, Some("s1"))).unwrap();
+    let second = serde_json::to_string(&rec("anthropic", "sonnet", 5, 1, Some("s1"))).unwrap();
+    let body = format!("{first}\nnot-json\n{second}\n");
+    let summary = aggregate_reader_filtered(
+        std::io::Cursor::new(body.as_bytes()),
+        &UsageQuery::default(),
+        MAX_QUERY_BYTES,
+    )
+    .unwrap();
+
+    assert_eq!(summary.log_lines, 3);
+    assert_eq!(summary.log_bytes, body.len() as u64);
+    assert_eq!(summary.parse_errors, 1);
+    assert_eq!(summary.total.finish_reasons["stop"], 2);
+    assert_eq!(summary.total.errors, 0);
+}
+
 fn rec(
     provider: &str,
     model: &str,
@@ -41,6 +60,24 @@ fn empty_path_returns_zero_summary() {
     assert_eq!(s.total.calls, 0);
     assert!(s.by_provider.is_empty());
     assert_eq!(s.parse_errors, 0);
+}
+
+#[test]
+fn bounded_reader_refuses_more_than_the_declared_limit() {
+    let error = read_records_bounded(std::io::Cursor::new(b"123456789"), 8).unwrap_err();
+    assert!(error.contains("8 byte query limit"));
+}
+
+#[test]
+fn streaming_aggregation_caps_record_count() {
+    let data = "{}\n".repeat(MAX_QUERY_RECORDS + 1);
+    let error = aggregate_reader_filtered(
+        std::io::Cursor::new(data),
+        &UsageQuery::default(),
+        MAX_QUERY_BYTES,
+    )
+    .unwrap_err();
+    assert!(error.contains("record query limit"));
 }
 
 #[test]
@@ -102,6 +139,9 @@ fn separates_success_and_error_counts() {
     assert_eq!(s.total.calls, 2);
     assert_eq!(s.total.success, 1);
     assert_eq!(s.total.error, 1);
+    assert_eq!(s.total.errors, 1);
+    assert_eq!(s.total.finish_reasons["stop"], 1);
+    assert_eq!(s.total.finish_reasons["error"], 1);
 }
 
 #[test]
@@ -275,6 +315,60 @@ fn duration_ms_summed() {
     write(&p, &[a, b]);
     let s = aggregate_path(&p);
     assert_eq!(s.total.total_duration_ms, 350);
+}
+
+#[test]
+fn breakdowns_are_capped_without_losing_total_usage() {
+    let records: Vec<LlmRunRecord> = (0..1500)
+        .map(|index| {
+            rec(
+                "anthropic",
+                "sonnet",
+                1,
+                1,
+                Some(&format!("session-{index:04}")),
+            )
+        })
+        .collect();
+    let summary = aggregate(&records);
+
+    assert_eq!(summary.total.calls, 1500);
+    assert_eq!(summary.by_session.len(), MAX_BREAKDOWN_BUCKETS);
+    assert!(summary.breakdown_truncated);
+    assert!(
+        serde_json::to_vec(&summary).unwrap().len()
+            < crate::clawd::wire::MAX_RESPONSE_BYTES
+    );
+}
+
+#[test]
+fn capped_summary_fits_broker_response_with_escape_heavy_keys() {
+    fn key(prefix: &str, index: usize) -> String {
+        format!("{prefix}-{index:04}-{}", "\u{0001}".repeat(110))
+    }
+
+    let records: Vec<LlmRunRecord> = (0..MAX_BREAKDOWN_BUCKETS)
+        .map(|index| {
+            let provider = key("p", index);
+            let model = key("m", index);
+            let session = key("s", index);
+            let mut record = rec(&provider, &model, 1, 1, Some(&session));
+            record.app_id = Some(key("a", index));
+            record.verb = Some(key("v", index));
+            record.finish_reason = "\\".repeat(64);
+            record
+        })
+        .collect();
+    let summary = aggregate(&records);
+    let encoded = serde_json::to_vec(&summary).unwrap();
+
+    assert_eq!(summary.by_session.len(), MAX_BREAKDOWN_BUCKETS);
+    assert_eq!(summary.total.finish_reasons["other"], MAX_BREAKDOWN_BUCKETS as u64);
+    assert!(
+        encoded.len() < crate::clawd::wire::MAX_RESPONSE_BYTES,
+        "bounded summary is {} bytes",
+        encoded.len()
+    );
 }
 
 #[test]

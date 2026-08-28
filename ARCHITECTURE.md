@@ -137,7 +137,8 @@ and where results become persistent or externally visible.
 ```text
 core/src/main.rs
   -> router::dispatch
-  -> primitive module or clawd client
+  -> cli_catalog + cli_help definitions (help/schema)
+     OR primitive module or clawd client (execution)
   -> capability/policy check
   -> structured JSON result
   -> requested output formatter
@@ -145,6 +146,29 @@ core/src/main.rs
 
 Hidden router bridges such as `__policy`, `__memory`, `__package`, and
 `__systemd` are internal protocol surfaces used by bundled apps and services.
+
+The same public command catalogue drives progressive model discovery:
+
+```text
+model
+  -> cos_help with path=[]
+  -> one public namespace
+  -> one public command
+  -> the named model tool
+  -> normal guardrail, approval, capability, and audit path
+```
+
+`cos_help` is structural and read-only: its path contains command names, never
+flags or operands, and it cannot dispatch a CLI operation or address hidden
+`__*` routes. Command discovery therefore does not become a generic shell or a
+way around per-tool policy. Installed Apps use the parallel
+`cos_app_catalog`/`cos_app_run` path.
+
+Token usage follows the same owner boundary as Agent execution. A model call to
+`cos_usage` reads the current routed owner's log. A direct
+`cos agent usage ...` client calls the typed `agent.usage` broker route; clawd
+derives the owner UID from kernel peer credentials and selects that UID's log,
+so neither path accepts a caller-supplied owner identifier.
 
 ### Broker request admission
 
@@ -400,6 +424,7 @@ packages or entered through model chat.
   -> metadata-only catalogue captured and recorded when a session freezes its
      canonical system prompt
   -> cos_skill read: disclose one matching SKILL.md instruction body
+  -> cos_help: disclose one level of the public CLI command tree
   -> cos_skill resource: disclose one explicitly requested child resource
   -> normal tool trajectory, session logging, and Skill usage record
 ```

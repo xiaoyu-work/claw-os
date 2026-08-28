@@ -10,7 +10,8 @@
 //!   * **Blast radius**: parent picks the subset of action tools the child can
 //!     use (e.g. only `echo` + `cos_sysinfo`), so an over-eager child can't
 //!     touch credentials or the sandbox unless explicitly allowed. Read-only
-//!     `cos_skill` remains available unless parent guardrails deny it.
+//!     `cos_skill` and read-only `cos_help` remain available unless parent
+//!     guardrails deny them.
 //!   * **Context isolation**: the child has a fresh trajectory, so its
 //!     turns don't pollute the parent's prompt window. Useful for
 //!     long-running research / extraction tasks the parent only needs the
@@ -161,7 +162,7 @@ impl Tool for Delegate {
                 "allowed_tools": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Action-tool names the child may call. Empty leaves only read-only cos_skill when parent guardrails permit it. cos_delegate is always filtered out to prevent recursion."
+                    "description": "Action-tool names the child may call. Empty leaves only read-only cos_skill and cos_help when parent guardrails permit them. cos_delegate is always filtered out to prevent recursion."
                 },
                 "provider": {
                     "type": "string",
@@ -337,19 +338,21 @@ fn build_child_registry(
         child.set_approval(a.clone());
     }
 
-    if parent_guardrails
-        .map(|guardrails| guardrails.permits("cos_skill"))
-        .unwrap_or(true)
-    {
-        if let Some(tool) = source.get_unfiltered("cos_skill") {
-            child.register(tool);
+    for discovery_tool in ["cos_skill", "cos_help"] {
+        if parent_guardrails
+            .map(|guardrails| guardrails.permits(discovery_tool))
+            .unwrap_or(true)
+        {
+            if let Some(tool) = source.get_unfiltered(discovery_tool) {
+                child.register(tool);
+            }
         }
     }
 
     for name in allowed {
         if matches!(
             name.as_str(),
-            "cos_delegate" | "cos_skill" | "cos_oauth_login"
+            "cos_delegate" | "cos_skill" | "cos_help" | "cos_oauth_login"
         ) {
             continue;
         }

@@ -12,7 +12,7 @@
 //!
 //! - `cos agent dev providers`         → per-provider config matrix
 //! - `cos agent dev provider-doctor`   → live ping (with `--probe-network`)
-//! - `cos agent dev usage`             → token totals
+//! - `cos agent usage`                 → token totals
 //! - `cos agent dev insights`          → run-log overall summary
 //! - `cos agent dev audit summary`     → audit log by-kind summary
 //!
@@ -124,20 +124,20 @@ pub fn doctor_cmd(args: &[String]) -> Result<Value, String> {
     } else {
         check_audit(&paths::agent_audit_log_path())
     };
-    let run_log = if quick {
-        json!({"status": "skipped", "reason": "--quick"})
-    } else {
-        check_log_file(&paths::ai_run_log_path(), "run_log")
-    };
     let usage = if quick {
         json!({"status": "skipped", "reason": "--quick"})
     } else {
         check_usage()
     };
+    let run_log = if quick {
+        json!({"status": "skipped", "reason": "--quick"})
+    } else {
+        check_run_log_from_usage(&usage)
+    };
     let insights = if quick {
         json!({"status": "skipped", "reason": "--quick"})
     } else {
-        check_insights()
+        check_insights_from_usage(&usage)
     };
     let skills = check_skills();
     let hooks = check_hooks();
@@ -563,10 +563,10 @@ fn check_audit(path: &Path) -> Value {
 }
 
 /// Run-log usage totals: tokens / requests / errors, last 7 days.
-/// Wraps `usage_cmd(["overall", "--since", <7d ago>])` so doctor
-/// and the dev command agree. Window is 7 days because that's the
+/// Uses the same owner-scoped query path as `cos agent usage` so doctor and
+/// the public command agree. Window is 7 days because that's the
 /// most useful "is anything happening on this box?" signal; users
-/// who want all-time can run `cos agent dev usage overall`.
+/// who want all-time can run `cos agent usage overall`.
 fn check_usage() -> Value {
     use chrono::Utc;
     let since = Utc::now() - chrono::Duration::days(7);
@@ -575,22 +575,37 @@ fn check_usage() -> Value {
         "--since".into(),
         since.to_rfc3339(),
     ];
-    match super::usage_cmd(&args) {
+    match super::usage_for_current_context(&args) {
         Ok(v) => {
             let parse_errors = v
                 .get("parse_errors")
                 .and_then(|n| n.as_u64())
                 .unwrap_or(0);
+            let breakdown_truncated = v
+                .get("breakdown_truncated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             // Parse errors mean we have a corrupt or partially-flushed
             // log; surface them but don't fail the whole report.
-            let status = if parse_errors > 0 { "warn" } else { "ok" };
+            let status = if parse_errors > 0 || breakdown_truncated {
+                "warn"
+            } else {
+                "ok"
+            };
             json!({
                 "status": status,
                 "scope": "overall",
                 "since": since.to_rfc3339(),
                 "log": v.get("log").cloned().unwrap_or(Value::Null),
                 "total": v.get("total").cloned().unwrap_or(Value::Null),
+                "by_provider": v.get("by_provider").cloned().unwrap_or(Value::Null),
+                "by_model": v.get("by_model").cloned().unwrap_or(Value::Null),
+                "by_app": v.get("by_app").cloned().unwrap_or(Value::Null),
+                "by_verb": v.get("by_verb").cloned().unwrap_or(Value::Null),
                 "parse_errors": parse_errors,
+                "log_lines": v.get("log_lines").cloned().unwrap_or(json!(0)),
+                "log_bytes": v.get("log_bytes").cloned().unwrap_or(json!(0)),
+                "breakdown_truncated": breakdown_truncated,
             })
         }
         Err(e) => json!({
@@ -600,37 +615,64 @@ fn check_usage() -> Value {
     }
 }
 
-/// Run-log insights overview: requests by provider/model, last 7
-/// days. Wraps `insights_cmd(["overall", "--since", <7d ago>])`.
-fn check_insights() -> Value {
-    use chrono::Utc;
-    let since = Utc::now() - chrono::Duration::days(7);
-    let args: Vec<String> = vec![
-        "overall".into(),
-        "--since".into(),
-        since.to_rfc3339(),
-    ];
-    match super::insights_cmd(&args) {
-        Ok(v) => {
-            let per_provider_count = v
-                .get("per_provider")
-                .and_then(|p| p.as_object())
-                .map(|o| o.len() as u64)
-                .unwrap_or(0);
-            json!({
-                "status": "ok",
-                "scope": "overall",
-                "since": since.to_rfc3339(),
-                "log": v.get("log").cloned().unwrap_or(Value::Null),
-                "overall": v.get("overall").cloned().unwrap_or(Value::Null),
-                "providers_seen": per_provider_count,
-            })
-        }
-        Err(e) => json!({
+fn check_run_log_from_usage(usage: &Value) -> Value {
+    let status = usage
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("fail");
+    if status == "fail" {
+        return json!({
             "status": "fail",
-            "error": e,
-        }),
+            "label": "run_log",
+            "error": usage.get("error").cloned().unwrap_or_else(|| json!("usage query failed")),
+        });
     }
+    let records = usage
+        .pointer("/total/calls")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    json!({
+        "status": status,
+        "label": "run_log",
+        "path": usage.get("log").cloned().unwrap_or(Value::Null),
+        "lines": usage.get("log_lines").cloned().unwrap_or(json!(0)),
+        "bytes": usage.get("log_bytes").cloned().unwrap_or(json!(0)),
+        "records": records,
+        "parse_errors": usage.get("parse_errors").cloned().unwrap_or(json!(0)),
+        "note": if records == 0 {
+            Value::String("AI run log has no records in the selected window".to_string())
+        } else {
+            Value::Null
+        },
+    })
+}
+
+fn check_insights_from_usage(usage: &Value) -> Value {
+    let status = usage
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("fail");
+    if status == "fail" {
+        return json!({
+            "status": "fail",
+            "error": usage.get("error").cloned().unwrap_or_else(|| json!("usage query failed")),
+        });
+    }
+    let providers_seen = usage
+        .get("by_provider")
+        .and_then(Value::as_object)
+        .map(|providers| providers.len() as u64)
+        .unwrap_or(0);
+    json!({
+        "status": status,
+        "scope": usage.get("scope").cloned().unwrap_or_else(|| json!("overall")),
+        "since": usage.get("since").cloned().unwrap_or(Value::Null),
+        "log": usage.get("log").cloned().unwrap_or(Value::Null),
+        "overall": usage.get("total").cloned().unwrap_or(Value::Null),
+        "per_provider": usage.get("by_provider").cloned().unwrap_or(Value::Null),
+        "per_model": usage.get("by_model").cloned().unwrap_or(Value::Null),
+        "providers_seen": providers_seen,
+    })
 }
 
 fn check_skills() -> Value {

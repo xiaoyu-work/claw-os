@@ -213,6 +213,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "serve" => web::serve(args),
         "budget" => budget_cmd(args),
         "override" => override_cmd(args),
+        "usage" => usage_public_cmd(args),
         "status" => {
             let cfg = &crate::config::get().agent;
             let daemon = agent_client::daemon_status()?;
@@ -297,7 +298,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "diagnose" => diagnose::diagnose_cmd(args),
         "dev" => dev_dispatch(args),
         other => Err(format!(
-            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | status | sessions | recall | service | notes | memory | skills | todo | mcp | doctor | diagnose | dev | ls | show | stop | undo | resume"
+            "unknown command: {other}. try: setup | ask | chat | serve | budget | override | usage | status | sessions | recall | service | notes | memory | skills | todo | mcp | doctor | diagnose | dev | ls | show | stop | undo | resume"
         )),
     }
 }
@@ -312,22 +313,9 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
     let sub = args.first().map(|s| s.as_str()).unwrap_or("");
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     match sub {
-        "" | "list" | "--help" | "-h" => Ok(json!({
-            "namespace": "cos agent dev",
-            "summary": "Internal building blocks and power-user diagnostics. Not part of the stable user-facing surface.",
-            "subcommands": [
-                "insights", "usage", "audit", "replay", "run-log",
-                "providers", "provider-doctor", "llm",
-                "prompt", "tools", "guardrails", "approval",
-                "redact", "think-scrub", "tokens", "title", "summarise", "classify",
-                "display", "binary-ext", "file-safety", "context",
-                "compress", "aux", "retry", "vision", "osv",
-                "curator", "nudge", "shell-hooks", "media",
-                "semantic", "interrupt", "learn", "hooks",
-            ],
-        })),
+        "" | "list" | "--help" | "-h" => Ok(dev_help()),
         "insights" => insights_cmd(&rest),
-        "usage" => usage_cmd(&rest),
+        "usage" => usage_for_current_context(&rest),
         "audit" => audit_cli::audit_cmd(&rest),
         "replay" => replay_cli::replay_cmd(&rest),
         "run-log" | "run_log" => run_log_cli::run_log_cmd(&rest),
@@ -365,6 +353,23 @@ fn dev_dispatch(args: &[String]) -> Result<Value, String> {
             "unknown dev subcommand: {other}. run `cos agent dev` for the list."
         )),
     }
+}
+
+pub(crate) fn dev_help() -> Value {
+    json!({
+        "namespace": "cos agent dev",
+        "summary": "Internal building blocks and power-user diagnostics. Not part of the stable user-facing surface.",
+        "subcommands": [
+            "insights", "usage", "audit", "replay", "run-log",
+            "providers", "provider-doctor", "llm",
+            "prompt", "tools", "guardrails", "approval",
+            "redact", "think-scrub", "tokens", "title", "summarise", "classify",
+            "display", "binary-ext", "file-safety", "context",
+            "compress", "aux", "retry", "vision", "osv",
+            "curator", "nudge", "shell-hooks", "media",
+            "semantic", "interrupt", "learn", "hooks",
+        ],
+    })
 }
 
 /// `cos agent interrupt <subcmd>` — signal a running agent session
@@ -7549,17 +7554,174 @@ async fn spawn_mcp_child(
     Ok((transport, child))
 }
 
+fn usage_public_cmd(args: &[String]) -> Result<Value, String> {
+    if args.is_empty()
+        || args
+            .first()
+            .is_some_and(|arg| matches!(arg.as_str(), "help" | "--help" | "-h"))
+    {
+        return Ok(usage_help());
+    }
+    usage_for_current_context(args)
+}
+
+fn usage_help() -> Value {
+    json!({
+        "command": "cos agent usage",
+        "description": "Aggregate token usage from the current user's AI run log.",
+        "scopes": {
+            "overall": "All matching calls",
+            "provider <name>": "One provider",
+            "model <name>": "One model",
+            "session <id>": "One Agent session",
+            "app <id>": "One App",
+            "verb <name>": "One AI capability verb",
+        },
+        "filters": {
+            "--since <RFC3339>": "Inclusive lower timestamp bound",
+            "--until <RFC3339>": "Exclusive upper timestamp bound",
+            "--ok": "Successful calls only",
+            "--error": "Failed calls only",
+            "--app <id>": "Combine with an App filter",
+            "--verb <name>": "Combine with an AI verb filter",
+        },
+        "examples": [
+            "cos agent usage overall",
+            "cos agent usage provider anthropic",
+            "cos agent usage session <session-id>",
+        ],
+        "model_tool": "cos_usage",
+    })
+}
+
+pub(crate) fn usage_primitive(command: &str, args: &[String]) -> Result<Value, String> {
+    let mut invocation = Vec::with_capacity(args.len() + 1);
+    invocation.push(command.to_string());
+    invocation.extend_from_slice(args);
+    usage_for_current_context(&invocation)
+}
+
 /// `cos agent usage [overall|provider <name>|model <name>|session <id>|app <id>|verb <name>]`
 /// `[--since <ISO>] [--until <ISO>] [--ok|--error] [--app <id>] [--verb <name>]`
 /// — filtered aggregation over `ai.jsonl`. Mirrors `agent insights
 /// overall` for the unfiltered case but adds the AND-combined filter
 /// set from [`crate::agent::llm::usage::UsageQuery`].
 fn usage_cmd(args: &[String]) -> Result<Value, String> {
-    use crate::agent::llm::usage::{aggregate_path_filtered, default_log_path, UsageQuery};
+    let path = crate::agent::llm::usage::default_log_path();
+    usage_cmd_at(args, &path)
+}
+
+pub(crate) fn usage_for_current_context(args: &[String]) -> Result<Value, String> {
+    #[cfg(any(test, not(unix)))]
+    {
+        usage_cmd(args)
+    }
+    #[cfg(all(unix, not(test)))]
+    {
+        if crate::paths::current_owner_uid_override().is_some() {
+            usage_cmd(args)
+        } else {
+            agent_client::usage(args)
+        }
+    }
+}
+
+pub(crate) fn usage_cmd_at(args: &[String], path: &std::path::Path) -> Result<Value, String> {
+    use std::fs::OpenOptions;
+
+    let parsed = parse_usage_query(args)?;
+    let log_label = path.display().to_string();
+    let mut options = OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+    }
+    let file = match options.open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return usage_from_parsed_reader(
+                parsed,
+                log_label,
+                std::io::empty(),
+                crate::agent::llm::usage::MAX_QUERY_BYTES,
+            )
+        }
+        #[cfg(test)]
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            return usage_from_parsed_reader(
+                parsed,
+                log_label,
+                std::io::empty(),
+                crate::agent::llm::usage::MAX_QUERY_BYTES,
+            )
+        }
+        Err(error) => return Err(format!("open AI usage log: {error}")),
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| format!("inspect AI usage log: {error}"))?;
+    if !metadata.is_file() {
+        return Err("AI usage log is not a regular file".to_string());
+    }
+    if metadata.len() > crate::agent::llm::usage::MAX_QUERY_BYTES {
+        return Err(format!(
+            "AI usage log exceeds the {} byte query limit",
+            crate::agent::llm::usage::MAX_QUERY_BYTES
+        ));
+    }
+    usage_from_parsed_reader(
+        parsed,
+        log_label,
+        file,
+        crate::agent::llm::usage::MAX_QUERY_BYTES,
+    )
+}
+
+pub(crate) fn usage_cmd_from_reader(
+    args: &[String],
+    log_label: String,
+    reader: impl std::io::Read,
+    max_bytes: u64,
+) -> Result<Value, String> {
+    let parsed = parse_usage_query(args)?;
+    usage_from_parsed_reader(parsed, log_label, reader, max_bytes)
+}
+
+fn usage_from_parsed_reader(
+    parsed: ParsedUsageQuery,
+    log_label: String,
+    reader: impl std::io::Read,
+    max_bytes: u64,
+) -> Result<Value, String> {
+    let summary = crate::agent::llm::usage::aggregate_reader_filtered(
+        reader,
+        &parsed.query,
+        max_bytes,
+    )?;
+    Ok(usage_output(log_label, parsed, summary))
+}
+
+struct ParsedUsageQuery {
+    scope: String,
+    query: crate::agent::llm::usage::UsageQuery,
+}
+
+fn parse_usage_query(args: &[String]) -> Result<ParsedUsageQuery, String> {
+    use crate::agent::llm::usage::UsageQuery;
     use chrono::DateTime;
     let mut query = UsageQuery::default();
-    let scope = args.first().map(|s| s.as_str()).unwrap_or("overall");
-    let mut i = match scope {
+    let scope_omitted = args
+        .first()
+        .is_none_or(|scope| scope.starts_with("--"));
+    let scope = args
+        .first()
+        .cloned()
+        .filter(|scope| !scope.is_empty() && !scope.starts_with("--"))
+        .unwrap_or_else(|| "overall".to_string());
+    let mut i = match scope.as_str() {
+        "overall" | "" if scope_omitted => 0,
         "overall" | "" => 1,
         "provider" => {
             query.provider = Some(
@@ -7665,11 +7827,18 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
             other => return Err(format!("unknown flag: {other}")),
         }
     }
-    let path = default_log_path();
-    let summary = aggregate_path_filtered(&path, &query);
-    Ok(json!({
-        "log": path.display().to_string(),
-        "scope": scope,
+    Ok(ParsedUsageQuery { scope, query })
+}
+
+fn usage_output(
+    log: String,
+    parsed: ParsedUsageQuery,
+    summary: crate::agent::llm::usage::UsageSummary,
+) -> Value {
+    let query = parsed.query;
+    json!({
+        "log": log,
+        "scope": parsed.scope,
         "filter": {
             "provider": query.provider,
             "model": query.model,
@@ -7687,7 +7856,10 @@ fn usage_cmd(args: &[String]) -> Result<Value, String> {
         "by_app": summary.by_app,
         "by_verb": summary.by_verb,
         "parse_errors": summary.parse_errors,
-    }))
+        "log_lines": summary.log_lines,
+        "log_bytes": summary.log_bytes,
+        "breakdown_truncated": summary.breakdown_truncated,
+    })
 }
 
 /// `cos agent curator propose <session_id> [--accept] [--limit <n>]`

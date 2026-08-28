@@ -99,6 +99,12 @@ pub struct MemorySessions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AgentUsage {
+    pub args: TextList<16, 256>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SystemOperations {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,

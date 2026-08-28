@@ -20,6 +20,8 @@ pub mod bridge;
 pub mod browser;
 pub mod caps;
 pub mod checkpoint;
+pub(crate) mod cli_catalog;
+pub(crate) mod cli_help;
 pub mod clawd;
 pub mod config;
 pub mod credential;

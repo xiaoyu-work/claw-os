@@ -1,62 +1,32 @@
-//! User-facing help catalogs and command schema rendering for the router.
+//! Shared help and command-schema rendering for terminal and model discovery.
+
+use std::env;
+use std::path::PathBuf;
 
 use serde_json::{json, Value};
 
-use super::{apps_dir, VERSION};
 use crate::apps;
+use crate::cli_catalog;
 
-pub(super) fn show_overview() -> Result<Option<String>, String> {
-    let mut primitives = Vec::new();
-    for (name, desc, cmds) in builtin_apps() {
-        let cmd_map: serde_json::Map<String, Value> = cmds
-            .iter()
-            .map(|(k, v)| (k.to_string(), json!(v)))
-            .collect();
-        primitives.push(json!({
-            "name": name,
-            "description": desc,
-            "commands": cmd_map,
-        }));
-    }
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-    // Count available apps without listing them
-    let apps_dir = apps_dir();
-    let discovered = apps::discover(&apps_dir);
-    let app_count = discovered.len();
-    let total_primitives = primitives.len();
+fn apps_dir() -> PathBuf {
+    PathBuf::from(env::var("COS_APPS_DIR").unwrap_or_else(|_| "/usr/lib/cos/apps".into()))
+}
 
-    let output = json!({
-        "name": "cos",
-        "version": VERSION,
-        "description": "Claw OS — agent-native operating system. All commands return structured JSON.",
-        "primitives": primitives,
-        "total_primitives": total_primitives,
-        "apps_available": app_count,
-        "hint": "Run: cos <primitive> <command> for OS operations. cos help <primitive> for one. cos app to see available apps.",
-    });
+pub(crate) fn show_overview() -> Result<Option<String>, String> {
+    let output = cli_catalog::overview(VERSION, apps::discover(&apps_dir()).len());
     Ok(Some(output.to_string()))
 }
 
 /// `cos help <topic>` — focused help for one primitive or app. Falls
 /// back to the global overview when the topic is unknown so the user
 /// always sees something useful (and the available names).
-pub(super) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
+pub(crate) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
     // Built-in primitives use the same shape as `cos <primitive>`
     // (no args).
-    if let Some((name, desc, cmds)) = builtin_apps().into_iter().find(|(n, _, _)| *n == topic) {
-        let cmd_map: serde_json::Map<String, Value> = cmds
-            .iter()
-            .map(|(k, v)| (k.to_string(), json!(v)))
-            .collect();
-        return Ok(Some(
-            json!({
-                "app": name,
-                "description": desc,
-                "commands": cmd_map,
-                "hint": format!("Run: cos {name} <command> [args]"),
-            })
-            .to_string(),
-        ));
+    if let Some(help) = cli_catalog::namespace_help(topic) {
+        return Ok(Some(help.to_string()));
     }
 
     // Apps: render the same help as `cos app <name>`.
@@ -81,7 +51,7 @@ pub(super) fn show_help_for(topic: &str) -> Result<Option<String>, String> {
     Ok(Some(overview.to_string()))
 }
 
-pub(super) fn show_apps(
+pub(crate) fn show_apps(
     discovered: &std::collections::BTreeMap<String, apps::App>,
 ) -> Result<Option<String>, String> {
     let mut app_list = Vec::new();
@@ -108,7 +78,7 @@ pub(super) fn show_apps(
     Ok(Some(output.to_string()))
 }
 
-pub(super) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String>, String> {
+pub(crate) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String>, String> {
     let cmds: serde_json::Map<String, Value> = app
         .manifest
         .operations
@@ -126,117 +96,12 @@ pub(super) fn show_app_help(name: &str, app: &apps::App) -> Result<Option<String
     Ok(Some(output.to_string()))
 }
 
-pub(super) fn builtin_apps() -> Vec<(
+pub(crate) fn builtin_apps() -> Vec<(
     &'static str,
     &'static str,
     Vec<(&'static str, &'static str)>,
 )> {
-    vec![
-        ("sys", "System information — hardware, OS, environment, resources, structured /proc", vec![
-            ("info", "Get OS, architecture, hostname, and version info"),
-            ("env", "List environment variables, optionally filter by pattern"),
-            ("resources", "Show disk, memory, and CPU usage"),
-            ("uptime", "Show system uptime"),
-            ("proc", "List all processes with PID, name, state, CPU, memory (structured /proc/*/stat)"),
-            ("mounts", "List all mount points with filesystem type and options (structured /proc/mounts)"),
-            ("net", "Show network interfaces and TCP connections (structured /proc/net/*)"),
-            ("cgroup", "Show cgroup v2 limits and usage — memory, CPU, PIDs (/sys/fs/cgroup/)"),
-        ]),
-        ("service", "Generic service manager — lifecycle hooks, graceful shutdown, dependency ordering", vec![
-            ("start", "Start a service (pre_start hook → credential injection → spawn → health check → post_start)"),
-            ("stop", "Graceful stop: checkpoint → pre_stop → drain → SIGTERM → wait → SIGKILL → post_stop"),
-            ("stop-all", "Stop all services in reverse dependency order with graceful shutdown"),
-            ("restart", "Restart a service (graceful stop then start)"),
-            ("status", "Check service running/healthy state with log tail"),
-            ("health", "Run health check, optionally auto-restart (--no-restart to skip)"),
-            ("list", "List all discovered services with status"),
-            ("logs", "View service log output (--tail N)"),
-            ("register", "Register a new service (--name, --command, --credentials KEY1,KEY2, --pre-stop, --post-stop, --drain-timeout, --stop-timeout, --checkpoint-cmd)"),
-        ]),
-        ("checkpoint", "OverlayFS checkpoint system — snapshot, diff, rollback, quota, namespaces", vec![
-            ("create", "Freeze current changes into a named checkpoint and start fresh"),
-            ("diff", "Show created, modified, and deleted files in the current upper layer"),
-            ("rollback", "Restore a checkpoint or reset to base (wipe current changes)"),
-            ("list", "List all saved checkpoints with metadata"),
-            ("status", "Show overlay mount state, pending changes, and disk usage"),
-            ("quota-set", "Set filesystem quota for the upper layer (e.g. 2G, 512M)"),
-            ("quota-status", "Show current quota usage, limit, and whether exceeded"),
-            ("namespaces", "Manage isolated overlay namespaces (--create, --destroy, --status <name>)"),
-        ]),
-        ("credential", "Encrypted credential store — secure secret storage with tier-based access, namespaces, TTL, auto-refresh, and bundles", vec![
-            ("store", "Store a credential (--tier N, --namespace NS, --ttl SECS, --refresh-cmd CMD)"),
-            ("load", "Load a credential value (tier check + expiry enforced, auto-refresh if configured)"),
-            ("revoke", "Delete a stored credential"),
-            ("list", "List credentials, optionally filtered by --namespace"),
-            ("bundle", "Create a credential bundle (--keys key1,key2,key3)"),
-            ("load-bundle", "Load all credentials in a bundle as a JSON object"),
-            ("oauth-login", "Complete Google PKCE or Microsoft device-code login"),
-            ("oauth-refresh", "Refresh OAuth token (google or microsoft) using stored refresh token"),
-        ]),
-        ("cron", "Agent-native job scheduler — cron with execution context, result capture, and overlap protection", vec![
-            ("add", "Register a cron job (--schedule, --command, --tier, --scope, --credentials, --overlap, --timeout)"),
-            ("remove", "Remove a cron job by ID"),
-            ("list", "List all cron jobs with status and next run time"),
-            ("status", "Detailed status of a specific job"),
-            ("enable", "Enable a disabled job"),
-            ("disable", "Disable a job without removing it"),
-            ("logs", "View execution history for a job (--limit N)"),
-            ("run", "Manually trigger a job immediately"),
-            ("tick", "Process all due jobs (called by scheduler every minute)"),
-        ]),
-        ("ai", "App-facing AI gate — single-shot LLM / embedding / image / audio / video calls scoped to one installed App. Distinct from `cos agent`: this is the App-developer-facing primitive, not the kernel Agent product.", vec![
-            ("chat", "Stable one-shot App-gated text chat: cos ai chat --app <id> [--prompt <text>|--prompt-file <p>] [--origin trusted|user-input|external-content] [--max-units N] [--system <text>|--system-file <p>]. external-content selects ai.chat.untrusted. Embed/image/vision/audio/video selectors are experimental and currently return unsupported."),
-            ("tool", "Invoke one App-facing Tool by name: cos ai tool <name> --app <id> [--args <json>|--args-file <p>]. The kernel checks the App's caps grants, runs the Tool, and writes one audit row per call. List tools with `cos ai tools`."),
-            ("tools", "Print the catalog of App-facing Tools (name, summary, verb, stability, JSON-Schema for args and return). Used by App authors and LLM function-call spec generators."),
-        ]),
-        ("agent", "OS-native agent subsystem — clawd-backed runtime, memory, skills, LLM providers, tools, and tasks", vec![
-            ("setup", "Per-modality config wizard: cos agent setup <text|tts|stt|imagegen|embed|all> [--status|--reset|--verify-only|--no-verify]. Bare `cos agent setup` opens an interactive modality picker."),
-            ("ask", "Single-shot prompt with full tool/memory loop: cos agent ask \"<prompt>\" [--full] [--session <id>] [--timeout-secs <n>]. Default prints just the model's plain-text answer; add --full for the JSON envelope, --session to continue an existing task conversation, or a timeout to cancel an overlong clawd task."),
-            ("chat", "Interactive REPL for the system agent: cos agent chat [--session <id>] [--no-stream] [--no-memory] [--show-tools] [--max-turns N] (slash commands: /quit /help /session /clear /history [N] /tools). For one-shot App-gated calls use `cos ai chat --app <id>` — `cos agent chat` is the kernel Agent's own surface and is not an App entry point."),
-            ("serve", "Boot the built-in web UI on http://127.0.0.1:7878 (override with --bind / --port). Chat streams over Server-Sent Events; tasks / approvals / inbox / sysinfo are JSON endpoints. Access is token-gated (persisted at $COS_DATA_DIR/agent/web/serve.token). Add --open to launch a browser. Designed for WSL and headless-Linux hosts where the terminal can't render the same surface."),
-            ("budget", "Inspect or reset an app's monthly AI budget: cos agent budget show|reset|history <app>. The system agent reports under the pseudo-app id `system.agent`."),
-            ("status", "Short live verdict: provider/model/key source, ready/not-ready, most-recent session. Use `cos agent doctor` for the full provider matrix, tool list, skills, usage."),
-            ("sessions", "Inspect / manage conversation sessions in the memory DB: cos agent sessions [list [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes]"),
-            ("recall", "FTS5 search across recorded conversations: cos agent recall \"<query>\" [limit]"),
-            ("service", "Daemon-backed task queue: cos agent service {submit \"<prompt>\" | list | status <id> | result <id> | cancel <id>}. Requires clawd."),
-            ("notes", "Manage agent markdown notes (MEMORY.md / USER.md / custom): cos agent notes [list|read <n>|write <n> <content>|append <n> <line>|delete <n>]"),
-            ("memory", "Inspect or redact app-emitted memory rows: cos agent memory [list [--source <id>] [--limit N] | show <row_id> | search \"<query>\" [--source <id>] [--limit N] | forget {--row <id> | --source <id>} [--yes]]. Apps push rows via the `memory.write` capability."),
-            ("skills", "Inspect or install skill bundles: cos agent skills [list|info <id>|install <archive.zip>|hub <list|show|install> <owner/repo>|...]"),
-            ("todo", "Manage per-session agent todo lists: cos agent todo [list <session_id>|add <session_id> <id> <title>|set-status ...|remove ...|clear ...]"),
-            ("mcp", "MCP (Model Context Protocol) bridge — server exposes the cos agent tool catalogue; client probes/invokes a remote MCP subprocess"),
-            ("doctor", "Aggregate diagnostic — provider config matrix, engines, memory, skills, hooks, audit/run-log + last 7d usage & insights. Add --probe-network for a live provider ping."),
-            ("diagnose", "System Doctor: cos agent diagnose [--quick] [--domain <general|performance|network|storage|service|crash|thermal|security>] [--path <path>] \"<symptom>\". Collects structured evidence and returns confidence-linked findings without requiring an LLM."),
-            ("ls", "List active / paused / failed agent tasks (durable sessions on disk). Columns: id, purpose, status, current lease holder."),
-            ("show", "Show one task in detail: cos agent show <task-id> — purpose, status, lease, turn count, mutation breakdown by kind, stop-requested flag."),
-            ("stop", "Politely stop a running task: cos agent stop <task-id> — drops a stop sentinel for the live runtime to notice; if no runtime is attached, flips status to paused immediately."),
-            ("undo", "Replay the inverse mutation log to roll a task's filesystem changes back: cos agent undo <task-id> [--dry-run]."),
-            ("resume", "Mark a paused task as ready for re-attachment: cos agent resume <task-id>. Does not itself spawn a runtime — `cos agent chat --session <id>` (or another runtime) takes it from there."),
-            ("dev", "Power-user / internal namespace — exposes building blocks (token estimator, redactor, scrubbers, classifier, diagnostics dumps). Run `cos agent dev` for the list. Not a stable surface."),
-        ]),
-        ("model", "Local model registry + inference daemon (ort for STT/TTS/embed/vision/imagegen, llama.cpp for LLM)", vec![
-            ("list", "List registered models from /var/lib/cos/models/"),
-            ("import", "Register a local ONNX/GGUF file: cos model import <path> --as <name> [--version <v>] [--task llm|stt|tts|embed|vision|imagegen] [--engine ort|llama] [--format onnx|gguf] [--device <id>] [--move] [--force]"),
-            ("rm", "Remove a registered model: cos model rm <name>@<version>"),
-            ("check", "Check engine compatibility for a model: cos model check <name>@<version>"),
-            ("load", "Load a registered model into the runtime daemon"),
-            ("unload", "Unload a model from the runtime"),
-            ("infer", "Run inference (routed via IPC to model-runtime daemon)"),
-            ("status", "Runtime status — loaded models, RAM, devices, linked engines"),
-            ("bench", "Benchmark a model"),
-        ]),
-        ("engine", "Native inference engine package manager — install / activate / rollback llama.cpp, ort, ort-genai versions side-by-side", vec![
-            ("list", "List installed engines and their active versions"),
-            ("info", "Detailed info for one engine: cos engine info <name>"),
-            ("install", "Install from a local archive: cos engine install <name>@<version> --from <path.zip> [--no-activate]"),
-            ("activate", "Switch active version: cos engine activate <name>@<version>"),
-            ("rollback", "Swap active <-> previous: cos engine rollback <name>"),
-            ("update", "Fetch + install from GitHub Releases: cos engine update <name> [--check] [--to <tag>] [--force] [--accelerator cpu|cuda|vulkan|...] [--no-activate]"),
-            ("pin", "Lock active version against auto-update: cos engine pin <name>[@<version>]"),
-            ("unpin", "Remove pin: cos engine unpin <name>"),
-            ("gc", "Delete old installed versions, keep last N (default 3): cos engine gc <name> [--keep N]"),
-            ("uninstall", "Remove a specific installed version: cos engine uninstall <name>@<version>"),
-        ]),
-    ]
+    cli_catalog::builtin_namespaces()
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +155,7 @@ impl Param {
     }
 }
 
-pub(super) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
+pub(crate) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandSchema>)> {
     vec![
         (
             "checkpoint",
@@ -613,17 +478,64 @@ pub(super) fn command_schemas() -> Vec<(&'static str, &'static str, Vec<CommandS
                 },
             ],
         ),
+        (
+            "agent",
+            "OS-native agent runtime",
+            vec![CommandSchema {
+                command: "usage",
+                description: "Aggregate token usage with optional provider, model, session, App, verb, time, and status filters",
+                params: vec![
+                    Param::positional(
+                        "scope",
+                        "enum:overall|provider|model|session|app|verb",
+                        false,
+                        "Aggregation scope (default: overall)",
+                    ),
+                    Param::positional(
+                        "value",
+                        "string",
+                        false,
+                        "Required after provider, model, session, app, or verb",
+                    ),
+                    Param::flag(
+                        "--since",
+                        "RFC3339 timestamp",
+                        false,
+                        "Inclusive lower timestamp bound",
+                    ),
+                    Param::flag(
+                        "--until",
+                        "RFC3339 timestamp",
+                        false,
+                        "Exclusive upper timestamp bound",
+                    ),
+                    Param::flag("--ok", "bool", false, "Include only successful calls"),
+                    Param::flag("--error", "bool", false, "Include only failed calls"),
+                    Param::flag("--app", "string", false, "Filter by App id"),
+                    Param::flag("--verb", "string", false, "Filter by AI verb"),
+                ],
+                example: "cos agent usage overall --since 2026-08-01T00:00:00Z",
+            }],
+        ),
     ]
 }
 
-pub(super) fn show_command_schema(app_name: &str, command: &str) -> Result<Option<String>, String> {
-    let schemas = command_schemas();
-    let app = schemas.iter().find(|(n, _, _)| *n == app_name);
-    let app = app.ok_or_else(|| format!("no schema for: {app_name}"))?;
-
-    let cmd = app.2.iter().find(|c| c.command == command);
-    let cmd = cmd.ok_or_else(|| format!("no schema for: {app_name} {command}"))?;
-
+fn command_schema_value(app_name: &str, command: &str) -> Result<Value, String> {
+    let mut output = cli_catalog::command_help(app_name, command)
+        .ok_or_else(|| format!("unknown command: cos {app_name} {command}"))?;
+    let detailed = command_schemas()
+        .into_iter()
+        .find(|(name, _, _)| *name == app_name)
+        .and_then(|(_, _, commands)| commands.into_iter().find(|entry| entry.command == command));
+    let Some(object) = output.as_object_mut() else {
+        return Err("command catalogue produced a non-object entry".to_string());
+    };
+    let Some(cmd) = detailed else {
+        object.insert("schema_available".into(), json!(false));
+        object.insert("parameters".into(), Value::Null);
+        object.insert("example".into(), Value::Null);
+        return Ok(output);
+    };
     let params: Vec<Value> = cmd
         .params
         .iter()
@@ -637,56 +549,37 @@ pub(super) fn show_command_schema(app_name: &str, command: &str) -> Result<Optio
             })
         })
         .collect();
-
-    let output = json!({
-        "command": format!("cos {app_name} {}", cmd.command),
-        "description": cmd.description,
-        "parameters": params,
-        "example": cmd.example,
-    });
-    Ok(Some(output.to_string()))
+    object.insert("description".into(), json!(cmd.description));
+    object.insert("schema_available".into(), json!(true));
+    object.insert("parameters".into(), json!(params));
+    object.insert("example".into(), json!(cmd.example));
+    Ok(output)
 }
 
-pub(super) fn show_builtin_schema(app_name: &str) -> Result<Option<String>, String> {
-    let schemas = command_schemas();
-    let app = schemas.iter().find(|(n, _, _)| *n == app_name);
-    let app = app.ok_or_else(|| format!("no schema for: {app_name}"))?;
+pub(crate) fn show_command_schema(app_name: &str, command: &str) -> Result<Option<String>, String> {
+    Ok(Some(command_schema_value(app_name, command)?.to_string()))
+}
 
-    let commands: Vec<Value> = app
-        .2
-        .iter()
-        .map(|cmd| {
-            let params: Vec<Value> = cmd
-                .params
-                .iter()
-                .map(|p| {
-                    json!({
-                        "name": p.name,
-                        "type": p.param_type,
-                        "required": p.required,
-                        "description": p.description,
-                        "kind": p.kind,
-                    })
-                })
-                .collect();
-            json!({
-                "command": cmd.command,
-                "description": cmd.description,
-                "parameters": params,
-                "example": cmd.example,
-            })
-        })
-        .collect();
+pub(crate) fn show_builtin_schema(app_name: &str) -> Result<Option<String>, String> {
+    let names =
+        cli_catalog::command_names(app_name).ok_or_else(|| format!("no schema for: {app_name}"))?;
+    let commands: Vec<Value> = names
+        .into_iter()
+        .map(|command| command_schema_value(app_name, command))
+        .collect::<Result<_, _>>()?;
+    let description = cli_catalog::namespace_help(app_name)
+        .and_then(|value| value.get("description").cloned())
+        .unwrap_or(Value::Null);
 
     let output = json!({
         "app": app_name,
-        "description": app.1,
+        "description": description,
         "commands": commands,
     });
     Ok(Some(output.to_string()))
 }
 
-pub(super) fn show_app_command_schema(
+pub(crate) fn show_app_command_schema(
     app_name: &str,
     command: &str,
     app: &apps::App,
@@ -708,7 +601,7 @@ pub(super) fn show_app_command_schema(
     ))
 }
 
-pub(super) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
+pub(crate) fn show_app_schema(app_name: &str, app: &apps::App) -> Result<Option<String>, String> {
     let mut commands = Vec::new();
     for (cmd_name, op) in &app.manifest.operations {
         let schema = apps::operation_schema(op);

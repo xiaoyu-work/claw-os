@@ -39,6 +39,7 @@ fn register_all_adds_all_primitives() {
     assert!(r.get("cos_sandbox").is_some());
     assert!(r.get("cos_proc").is_some());
     assert!(r.get("cos_sysinfo").is_some());
+    assert!(r.get("cos_usage").is_some());
     assert!(r.get("cos_memory").is_some());
     assert!(r.get("cos_oauth_login").is_some());
 }
@@ -112,7 +113,68 @@ fn registered_sysinfo_is_parallel_safe() {
         "cos_sysinfo (read-only telemetry) should opt into parallel dispatch"
     );
     assert!(
+        r.is_parallel_safe("cos_usage"),
+        "cos_usage (read-only aggregation) should opt into parallel dispatch"
+    );
+    assert!(
         !r.is_parallel_safe("cos_sandbox"),
         "cos_sandbox (arbitrary command exec) must stay serial"
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn registered_usage_tool_reads_token_totals() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _log_dir = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", dir.path());
+    std::fs::write(
+        dir.path().join("ai.jsonl"),
+        format!(
+            "{}\n",
+            json!({
+                "timestamp": "2026-08-27T12:00:00Z",
+                "provider": "anthropic",
+                "model": "claude-sonnet",
+                "duration_ms": 12,
+                "input_tokens": 120,
+                "output_tokens": 30,
+                "finish_reason": "stop",
+                "status": "ok"
+            })
+        ),
+    )
+    .unwrap();
+
+    let mut registry = ToolRegistry::new();
+    register_all(&mut registry);
+    let result = registry
+        .get("cos_usage")
+        .unwrap()
+        .exec(json!({"command": "overall"}))
+        .await;
+    assert!(!result.is_error, "usage tool failed: {result:?}");
+    let output: Value = serde_json::from_str(&result.content).unwrap();
+    assert_eq!(output["total"]["input_tokens"], 120);
+    assert_eq!(output["total"]["output_tokens"], 30);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn registered_usage_tool_rejects_oversized_logs() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let _log_dir = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", dir.path());
+    std::fs::File::create(dir.path().join("ai.jsonl"))
+        .unwrap()
+        .set_len(crate::agent::llm::usage::MAX_QUERY_BYTES + 1)
+        .unwrap();
+
+    let mut registry = ToolRegistry::new();
+    register_all(&mut registry);
+    let result = registry
+        .get("cos_usage")
+        .unwrap()
+        .exec(json!({"command": "overall"}))
+        .await;
+    assert!(result.is_error);
+    assert!(result.content.contains("query limit"));
 }

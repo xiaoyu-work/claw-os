@@ -416,7 +416,10 @@ fn looks_like_live_system_request(prompt: &str) -> bool {
 }
 
 fn tool_requires_binding(name: &str, input: &serde_json::Value) -> bool {
-    if matches!(name, "cos_diagnose" | "cos_sysinfo" | "cos_doctor") {
+    if matches!(
+        name,
+        "cos_diagnose" | "cos_sysinfo" | "cos_doctor" | "cos_usage"
+    ) {
         return true;
     }
     let command = input
