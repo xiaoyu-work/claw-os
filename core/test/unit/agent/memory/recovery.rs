@@ -35,6 +35,19 @@ fn create_live_wal(path: &Path) -> Connection {
     conn
 }
 
+struct StandaloneFailpointGuard;
+
+impl Drop for StandaloneFailpointGuard {
+    fn drop(&mut self) {
+        STANDALONE_RECOVERY_FAILPOINT.with(|value| value.set(None));
+    }
+}
+
+fn fail_standalone_recovery_at(stage: StandaloneRecoveryStage) -> StandaloneFailpointGuard {
+    STANDALONE_RECOVERY_FAILPOINT.with(|value| value.set(Some(stage)));
+    StandaloneFailpointGuard
+}
+
 #[test]
 fn clean_database_reports_separate_health_checks() {
     let (_directory, path) = database_path();
@@ -494,6 +507,60 @@ fn readable_message_scan_failure_does_not_install_empty_replacement() {
 }
 
 #[test]
+fn operational_standalone_failures_do_not_install_empty_replacements() {
+    for (index, stage) in [
+        StandaloneRecoveryStage::Copy,
+        StandaloneRecoveryStage::Open,
+        StandaloneRecoveryStage::Configure,
+        StandaloneRecoveryStage::SchemaRead,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (_directory, path) = database_path();
+        let db = MemoryDb::open(&path).expect("open memory db");
+        db.record_message("session", "user", "must remain in quarantine")
+            .expect("record");
+        db.freeze_system_prompt("session", "trusted prompt", 1)
+            .expect("freeze");
+        {
+            let conn = db.lock_conn().expect("connection");
+            conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+                .expect("force quarantine");
+        }
+        drop(db);
+
+        let _failpoint = fail_standalone_recovery_at(stage);
+        let error = repair(
+            &path,
+            RepairOptions {
+                allow_quarantine: true,
+                ..RepairOptions::default()
+            },
+        )
+        .expect_err("operational failure must abort");
+        let expected = match stage {
+            StandaloneRecoveryStage::Copy => "No space left on device",
+            StandaloneRecoveryStage::Open => "Too many open files",
+            StandaloneRecoveryStage::Configure => "interrupted",
+            StandaloneRecoveryStage::SchemaRead => "temporary I/O failure",
+        };
+        assert!(
+            error.to_string().contains(expected),
+            "stage {index} returned unexpected error: {error}"
+        );
+        let log = read_repair_log(&path).expect("repair log");
+        let failed = log.last_applied.expect("failed repair");
+        let quarantine = PathBuf::from(failed.quarantine_path.expect("quarantine path"));
+        assert!(quarantine.exists(), "quarantined source must survive");
+        assert!(
+            !path.exists(),
+            "operational failure must not install an empty active database"
+        );
+    }
+}
+
+#[test]
 fn malformed_wal_is_quarantined_without_trusting_its_contents() {
     let (_directory, path) = database_path();
     create_message_database(&path, "base row");
@@ -723,6 +790,55 @@ fn create_quarantine_required_writer(path: &Path) -> Connection {
     writer
 }
 
+fn materialize_valid_wal_family(path: &Path) -> (Vec<u8>, Vec<u8>) {
+    let writer = create_quarantine_required_writer(path);
+    let checkpointed_main = fs::read(path).expect("checkpointed main");
+    writer
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('session', 'user', 'committed wal-only row', 3)",
+            [],
+        )
+        .expect("commit wal-only row");
+    let wal = fs::read(wal_path(path)).expect("valid wal");
+    let shm = fs::read(shm_path(path)).expect("valid shm");
+    drop(writer);
+
+    fs::write(path, checkpointed_main).expect("restore checkpointed main");
+    fs::write(wal_path(path), &wal).expect("restore wal");
+    fs::write(shm_path(path), &shm).expect("restore shm");
+    inspect_wal(&wal_path(path), path)
+        .expect("validate restored wal")
+        .expect("wal");
+    (wal, shm)
+}
+
+fn append_interrupted_quarantine(
+    path: &Path,
+    attempt_id: &str,
+    checkpoint_source: bool,
+) -> PathBuf {
+    let quarantine = quarantine_base(path, attempt_id);
+    append_repair_event(
+        path,
+        &RepairEvent {
+            version: REPAIR_LOG_VERSION,
+            attempt_id: attempt_id.to_string(),
+            ts_ms: current_ts_ms(),
+            phase: RepairPhase::Started,
+            mode: RepairMode::Quarantine,
+            planned_actions: vec!["quarantine_and_initialize_replacement".to_string()],
+            quarantine_path: Some(quarantine.display().to_string()),
+            checkpoint_source,
+            recovered: RecoveredRecords::default(),
+            recovery_warning: None,
+            error: None,
+        },
+    )
+    .expect("record interrupted quarantine");
+    quarantine
+}
+
 fn assert_failed_quarantine_did_not_move_database(path: &Path) {
     assert!(path.exists(), "live database must remain in place");
     let log = read_repair_log(path).expect("repair log");
@@ -734,6 +850,64 @@ fn assert_failed_quarantine_did_not_move_database(path: &Path) {
         !quarantine.exists(),
         "checkpoint failure must happen before quarantine rename"
     );
+}
+
+#[test]
+fn retry_recomputes_valid_wal_that_became_malformed() {
+    let (_directory, path) = database_path();
+    let (mut wal, _shm) = materialize_valid_wal_family(&path);
+    let quarantine = append_interrupted_quarantine(&path, "valid-to-malformed", true);
+    wal[24] ^= 1;
+    fs::write(wal_path(&path), &wal).expect("corrupt current wal");
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("repair");
+    assert_eq!(report.recovered.messages, 1);
+    assert_eq!(
+        fs::read(wal_path(&quarantine)).expect("quarantined wal"),
+        wal
+    );
+    let log = read_repair_log(&path).expect("repair log");
+    assert!(!log.last_applied.expect("completed event").checkpoint_source);
+    let replacement = MemoryDb::open(&path).expect("replacement");
+    assert_eq!(replacement.count_total().expect("count"), 1);
+    assert!(replacement
+        .search("wal-only", 10)
+        .expect("search")
+        .is_empty());
+}
+
+#[test]
+fn retry_recomputes_malformed_wal_that_became_valid() {
+    let (_directory, path) = database_path();
+    let (wal, shm) = materialize_valid_wal_family(&path);
+    let quarantine = append_interrupted_quarantine(&path, "malformed-to-valid", false);
+    fs::write(wal_path(&path), [0_u8; 32]).expect("temporary malformed wal");
+    fs::remove_file(shm_path(&path)).expect("remove stale shm");
+
+    fs::write(wal_path(&path), &wal).expect("restore valid wal");
+    fs::write(shm_path(&path), &shm).expect("restore valid shm");
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("repair");
+    assert_eq!(report.recovered.messages, 2);
+    assert!(quarantine.exists());
+    let log = read_repair_log(&path).expect("repair log");
+    assert!(log.last_applied.expect("completed event").checkpoint_source);
+    let replacement = MemoryDb::open(&path).expect("replacement");
+    assert_eq!(replacement.count_total().expect("count"), 2);
+    assert_eq!(replacement.search("committed", 10).expect("search").len(), 1);
 }
 
 #[test]

@@ -85,6 +85,11 @@ copied in separate transactions. Corruption in an optional projection can
 therefore omit that projection with an explicit warning, but cannot roll back
 readable conversation messages. A failure while scanning or committing
 readable messages aborts recovery instead of installing an empty replacement.
+Operational failures while copying, opening, configuring, or inspecting the
+standalone source likewise fail the repair and leave quarantine intact. An
+empty replacement is allowed only when SQLite conclusively rejects that
+standalone main database or its authoritative `messages` schema is absent or
+incompatible.
 
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains

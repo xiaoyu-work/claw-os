@@ -43,6 +43,12 @@ const EXPECTED_TABLES: &[(&str, &[&str])] = &[
 const EXPECTED_INDEXES: &[&str] = &["messages_session_ts", "messages_ts"];
 const EXPECTED_TRIGGERS: &[&str] = &["messages_ai", "messages_ad", "messages_au"];
 
+#[cfg(test)]
+thread_local! {
+    static STANDALONE_RECOVERY_FAILPOINT: std::cell::Cell<Option<StandaloneRecoveryStage>> =
+        const { std::cell::Cell::new(None) };
+}
+
 #[derive(Debug)]
 pub(super) struct MemoryLifecycleLock {
     file: File,
@@ -425,7 +431,15 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
 
     let checkpoint_source =
         before.sqlite.status == "ok" && before.wal.status != "fail" && path.exists();
-    let attempt = if let Some(event) = interrupted {
+    let attempt = if let Some(mut event) = interrupted {
+        event.ts_ms = current_ts_ms();
+        event.phase = RepairPhase::Started;
+        event.planned_actions = actions.clone();
+        event.checkpoint_source = checkpoint_source;
+        event.recovered = RecoveredRecords::default();
+        event.recovery_warning = None;
+        event.error = None;
+        append_repair_event(path, &event)?;
         event
     } else {
         let attempt_id = failed_quarantine
@@ -451,10 +465,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
             mode,
             planned_actions: actions.clone(),
             quarantine_path: quarantine.map(|value| value.display().to_string()),
-            checkpoint_source: failed_quarantine
-                .as_ref()
-                .is_some_and(|event| event.checkpoint_source)
-                || checkpoint_source,
+            checkpoint_source,
             recovered: RecoveredRecords::default(),
             recovery_warning: None,
             error: None,
@@ -2364,39 +2375,35 @@ fn recover_from_standalone_main(
 ) -> Result<StandaloneRecoveryResult, MemoryError> {
     let standalone_path = suffix_path(quarantine, &format!(".main-only-{attempt_id}"));
     remove_replacement_scratch(&standalone_path)?;
-    if let Err(error) = copy_snapshot_file(quarantine, &standalone_path) {
-        rebuild_target_projections(target)?;
-        return Ok(unreadable_standalone(format!(
-            "could not copy quarantined main database: {error}"
-        )));
-    }
+    maybe_fail_standalone_recovery(StandaloneRecoveryStage::Copy)?;
+    copy_snapshot_file(quarantine, &standalone_path)?;
     let standalone = StandaloneMainCopy {
         path: standalone_path,
     };
 
+    maybe_fail_standalone_recovery(StandaloneRecoveryStage::Open)?;
     let source =
         match Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
             Ok(source) => source,
             Err(error) => {
-                rebuild_target_projections(target)?;
-                return Ok(unreadable_standalone(format!(
-                    "standalone main database could not be opened: {error}"
-                )));
+                return conclusive_standalone_failure(
+                    MemoryError::Sqlite(error),
+                    "standalone main database could not be opened",
+                    target,
+                );
             }
         };
-    if let Err(error) = source.busy_timeout(Duration::from_secs(5)) {
-        rebuild_target_projections(target)?;
-        return Ok(unreadable_standalone(format!(
-            "standalone main database could not be configured: {error}"
-        )));
-    }
+    maybe_fail_standalone_recovery(StandaloneRecoveryStage::Configure)?;
+    source.busy_timeout(Duration::from_secs(5))?;
+    maybe_fail_standalone_recovery(StandaloneRecoveryStage::SchemaRead)?;
     let messages_compatible = match table_has_columns(&source, "messages", EXPECTED_TABLES[0].1) {
         Ok(compatible) => compatible,
         Err(error) => {
-            rebuild_target_projections(target)?;
-            return Ok(unreadable_standalone(format!(
-                "standalone main database schema could not be read: {error}"
-            )));
+            return conclusive_standalone_failure(
+                error,
+                "standalone main database schema could not be read",
+                target,
+            );
         }
     };
     if !messages_compatible {
@@ -2444,6 +2451,58 @@ fn unreadable_standalone(error: String) -> StandaloneRecoveryResult {
             "standalone main-database recovery failed; replacement is empty: {error}"
         )],
     }
+}
+
+fn conclusive_standalone_failure(
+    error: MemoryError,
+    context: &str,
+    target: &mut Connection,
+) -> Result<StandaloneRecoveryResult, MemoryError> {
+    if !error.is_integrity_failure() {
+        return Err(error);
+    }
+    rebuild_target_projections(target)?;
+    Ok(unreadable_standalone(format!("{context}: {error}")))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StandaloneRecoveryStage {
+    Copy,
+    Open,
+    Configure,
+    SchemaRead,
+}
+
+#[cfg(not(test))]
+fn maybe_fail_standalone_recovery(_stage: StandaloneRecoveryStage) -> Result<(), MemoryError> {
+    Ok(())
+}
+
+#[cfg(test)]
+fn maybe_fail_standalone_recovery(stage: StandaloneRecoveryStage) -> Result<(), MemoryError> {
+    let should_fail = STANDALONE_RECOVERY_FAILPOINT.with(|value| value.get() == Some(stage));
+    if !should_fail {
+        return Ok(());
+    }
+    let (kind, message) = match stage {
+        StandaloneRecoveryStage::Copy => (
+            std::io::ErrorKind::Other,
+            "No space left on device while copying standalone database",
+        ),
+        StandaloneRecoveryStage::Open => (
+            std::io::ErrorKind::Other,
+            "Too many open files while opening standalone database",
+        ),
+        StandaloneRecoveryStage::Configure => (
+            std::io::ErrorKind::Interrupted,
+            "interrupted while configuring standalone database",
+        ),
+        StandaloneRecoveryStage::SchemaRead => (
+            std::io::ErrorKind::WouldBlock,
+            "temporary I/O failure while reading standalone schema",
+        ),
+    };
+    Err(MemoryError::Io(std::io::Error::new(kind, message)))
 }
 
 fn write_replacement_marker(
