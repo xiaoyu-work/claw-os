@@ -98,7 +98,20 @@ pub async fn ask_with(
     user_prompt: &str,
     tools: &ToolRegistry,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, None, None, Vec::new()).await
+    ask_inner(LifecycleRequest {
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        recorder: None,
+        compressor: None,
+        initial_messages: Vec::new(),
+        transient_context: None,
+        output: LifecycleOutput::Buffered,
+        progress: progress::null_progress(),
+        interrupt_scope: None,
+    })
+    .await
 }
 
 /// Same as [`ask_with`] but records every message into `db` under
@@ -112,15 +125,19 @@ pub async fn ask_with_memory(
     db: &MemoryDb,
     session_id: &str,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(
+    ask_inner(LifecycleRequest {
         provider,
         cfg,
         user_prompt,
         tools,
-        Some((db, session_id)),
-        None,
-        Vec::new(),
-    )
+        recorder: Some((db, session_id)),
+        compressor: None,
+        initial_messages: Vec::new(),
+        transient_context: None,
+        output: LifecycleOutput::Buffered,
+        progress: progress::null_progress(),
+        interrupt_scope: None,
+    })
     .await
 }
 
@@ -138,15 +155,19 @@ pub async fn ask_with_memory_continuation(
 ) -> Result<AskResult, AgentError> {
     let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
-    ask_inner(
+    ask_inner(LifecycleRequest {
         provider,
         cfg,
         user_prompt,
         tools,
-        Some((db, session_id)),
+        recorder: Some((db, session_id)),
         compressor,
-        prior,
-    )
+        initial_messages: prior,
+        transient_context: None,
+        output: LifecycleOutput::Buffered,
+        progress: progress::null_progress(),
+        interrupt_scope: None,
+    })
     .await
 }
 
@@ -162,15 +183,19 @@ pub async fn ask_with_compressor(
     db: Option<(&MemoryDb, &str)>,
     compressor: Arc<dyn Compressor>,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(
+    ask_inner(LifecycleRequest {
         provider,
         cfg,
         user_prompt,
         tools,
-        db,
-        Some(compressor),
-        Vec::new(),
-    )
+        recorder: db,
+        compressor: Some(compressor),
+        initial_messages: Vec::new(),
+        transient_context: None,
+        output: LifecycleOutput::Buffered,
+        progress: progress::null_progress(),
+        interrupt_scope: None,
+    })
     .await
 }
 
@@ -555,15 +580,57 @@ fn build_request_user_message(
     Message::user_text(content)
 }
 
-async fn ask_inner(
+/// The provider-response adapter for the shared ask lifecycle. All recording,
+/// hooks, compression, evidence, and terminal transitions stay in
+/// [`ask_inner`].
+enum LifecycleOutput {
+    Buffered,
+    Streaming { sink: Arc<dyn StreamSink> },
+}
+
+impl LifecycleOutput {
+    fn emit_fallback(&self, answer: &str) {
+        if let Self::Streaming { sink } = self {
+            sink.on_event(&llm::StreamEvent::TextDelta {
+                text: answer.to_string(),
+            });
+        }
+    }
+}
+
+struct LifecycleRequest<'a> {
     provider: Arc<dyn Provider>,
-    cfg: &AgentConfig,
-    user_prompt: &str,
-    tools: &ToolRegistry,
-    recorder: Option<(&MemoryDb, &str)>,
+    cfg: &'a AgentConfig,
+    user_prompt: &'a str,
+    tools: &'a ToolRegistry,
+    recorder: Option<(&'a MemoryDb, &'a str)>,
     compressor: Option<Arc<dyn Compressor>>,
     initial_messages: Vec<Message>,
-) -> Result<AskResult, AgentError> {
+    transient_context: Option<&'a str>,
+    output: LifecycleOutput,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: Option<&'a str>,
+}
+
+/// Shared lifecycle state machine for buffered and streaming asks.
+///
+/// The only mode-specific operation is provider response delivery through
+/// [`LifecycleOutput`]. Preparation, turn boundaries, persistence,
+/// finalization, and terminal-state rules are owned here.
+async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentError> {
+    let LifecycleRequest {
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        recorder,
+        compressor,
+        initial_messages,
+        transient_context,
+        output,
+        progress,
+        interrupt_scope,
+    } = request;
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
     } else {
@@ -602,7 +669,11 @@ async fn ask_inner(
     let system = resolve_system_prompt(cfg, user_prompt, recorder);
 
     let mut messages = initial_messages;
-    messages.push(build_request_user_message(user_prompt, None, recorder));
+    messages.push(build_request_user_message(
+        user_prompt,
+        transient_context,
+        recorder,
+    ));
     let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
@@ -610,7 +681,9 @@ async fn ask_inner(
     // session id is empty (no memory recording) we fall back to a
     // freshly-minted UUID so concurrent unrecorded sessions still get
     // independent interrupt scopes. Handle's `Drop` cleans up.
-    let interrupt_handle = if session_id.is_empty() {
+    let interrupt_handle = if let Some(scope) = interrupt_scope {
+        interrupt::register(scope)
+    } else if session_id.is_empty() {
         interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
     } else {
         interrupt::register(session_id.clone())
@@ -635,9 +708,8 @@ async fn ask_inner(
     let turn_limit = cfg.max_turns.max(1);
     for turn in 1..=turn_limit {
         let force_finalize = turn == turn_limit;
-        let finalization_system = force_finalize.then(|| {
-            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
-        });
+        let finalization_system =
+            force_finalize.then(|| format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}"));
         let turn_system = finalization_system.as_deref().unwrap_or(&system);
 
         if interrupt_handle.check() {
@@ -709,41 +781,79 @@ async fn ask_inner(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let retry_policy = retry_policy_from_cfg(cfg);
-        let outcome_result = if force_finalize {
-            super::turn::run_final_turn_interruptible(
-                provider.clone(),
-                &cfg.model,
-                turn_system,
-                &mut messages,
-                tools,
-                &llm_tools,
-                cfg.max_tokens,
-                cfg.temperature,
-                recorder.map(|(_, sid)| sid),
-                retry_policy,
-                Some(&hook_ctx),
-                progress::null_progress(),
-                &interrupt_handle,
-            )
-            .await
-        } else {
-            super::turn::run_turn_interruptible(
-                provider.clone(),
-                &cfg.model,
-                turn_system,
-                &mut messages,
-                tools,
-                &llm_tools,
-                cfg.max_tokens,
-                cfg.temperature,
-                recorder.map(|(_, sid)| sid),
-                retry_policy,
-                Some(&hook_ctx),
-                progress::null_progress(),
-                &interrupt_handle,
-            )
-            .await
+        let outcome_result = match (&output, force_finalize) {
+            (LifecycleOutput::Buffered, true) => {
+                super::turn::run_final_turn_interruptible(
+                    provider.clone(),
+                    &cfg.model,
+                    turn_system,
+                    &mut messages,
+                    tools,
+                    &llm_tools,
+                    cfg.max_tokens,
+                    cfg.temperature,
+                    recorder.map(|(_, sid)| sid),
+                    retry_policy_from_cfg(cfg),
+                    Some(&hook_ctx),
+                    progress.clone(),
+                    &interrupt_handle,
+                )
+                .await
+            }
+            (LifecycleOutput::Buffered, false) => {
+                super::turn::run_turn_interruptible(
+                    provider.clone(),
+                    &cfg.model,
+                    turn_system,
+                    &mut messages,
+                    tools,
+                    &llm_tools,
+                    cfg.max_tokens,
+                    cfg.temperature,
+                    recorder.map(|(_, sid)| sid),
+                    retry_policy_from_cfg(cfg),
+                    Some(&hook_ctx),
+                    progress.clone(),
+                    &interrupt_handle,
+                )
+                .await
+            }
+            (LifecycleOutput::Streaming { sink }, true) => {
+                super::turn::run_final_turn_streaming_interruptible(
+                    provider.clone(),
+                    &cfg.model,
+                    turn_system,
+                    &mut messages,
+                    tools,
+                    &llm_tools,
+                    cfg.max_tokens,
+                    cfg.temperature,
+                    recorder.map(|(_, sid)| sid),
+                    sink.clone(),
+                    Some(&hook_ctx),
+                    progress.clone(),
+                    &interrupt_handle,
+                )
+                .await
+            }
+            (LifecycleOutput::Streaming { sink }, false) => {
+                super::turn::run_turn_streaming_interruptible(
+                    provider.clone(),
+                    &cfg.model,
+                    turn_system,
+                    &mut messages,
+                    tools,
+                    &llm_tools,
+                    cfg.max_tokens,
+                    cfg.temperature,
+                    recorder.map(|(_, sid)| sid),
+                    sink.clone(),
+                    Some(&hook_ctx),
+                    progress.clone(),
+                    &interrupt_handle,
+                )
+                .await
+            }
         };
 
         let now_ms = std::time::SystemTime::now()
@@ -809,7 +919,9 @@ async fn ask_inner(
                 }
                 if force_finalize {
                     tracing::warn!("turn-limit finalization failed; using fallback: {e}");
-                    super::turn::TurnOutcome::Final(append_turn_limit_fallback(&mut messages))
+                    let answer = append_turn_limit_fallback(&mut messages);
+                    output.emit_fallback(&answer);
+                    super::turn::TurnOutcome::Final(answer)
                 } else {
                     return Err(e);
                 }
@@ -824,7 +936,9 @@ async fn ask_inner(
             super::turn::TurnOutcome::Final(answer)
                 if force_finalize && answer.trim().is_empty() =>
             {
-                super::turn::TurnOutcome::Final(append_turn_limit_fallback(&mut messages))
+                let answer = append_turn_limit_fallback(&mut messages);
+                output.emit_fallback(&answer);
+                super::turn::TurnOutcome::Final(answer)
             }
             other => other,
         };
@@ -914,10 +1028,9 @@ async fn ask_inner(
     Err(AgentError::MaxTurnsExceeded(turn_limit))
 }
 
-/// Streaming twin of [`ask_inner`]. Identical behaviour except each
-/// turn calls [`super::turn::run_turn_streaming`] instead of
-/// [`super::turn::run_turn`], so events flow through `sink` as they
-/// stream from the provider.
+/// Streaming adapter for [`ask_inner`]. It projects the full runtime events
+/// into the public presentation contract, then delegates every lifecycle
+/// transition to the shared owner.
 async fn ask_inner_streaming(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
@@ -933,320 +1046,20 @@ async fn ask_inner_streaming(
 ) -> Result<AskResult, AgentError> {
     let sink = super::presentation::user_visible_stream_sink(sink);
     let progress = super::presentation::user_visible_progress_sink(progress);
-    let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
-        Some(Redactor::default_set())
-    } else {
-        None
-    };
-
-    // Streaming twins of ask_inner's auto-memory plumbing. See
-    // `ask_inner` for the per-field rationale.
-    let semantic_indexer = if recorder.is_some() {
-        SemanticIndexer::from_default_logged()
-    } else {
-        None
-    };
-    let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
-
-    if let Some((db, sid)) = recorder {
-        let to_record = redactor
-            .as_ref()
-            .map(|r| r.redact(user_prompt))
-            .unwrap_or_else(|| user_prompt.to_string());
-        match db.record_message(sid, "user", &to_record) {
-            Ok(msg_id) => {
-                if let Some(ix) = &semantic_indexer {
-                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record);
-                }
-            }
-            Err(e) => tracing::warn!("memory: failed to record user prompt: {e}"),
-        }
-    }
-
-    let system = resolve_system_prompt(cfg, user_prompt, recorder);
-
-    let mut messages: Vec<Message> = {
-        let mut v = initial_messages;
-        v.push(build_request_user_message(
-            user_prompt,
-            transient_context,
-            recorder,
-        ));
-        v
-    };
-    let llm_tools = tools.as_llm_tools();
-    let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
-
-    let interrupt_handle = if let Some(scope) = interrupt_scope {
-        interrupt::register(scope)
-    } else if session_id.is_empty() {
-        interrupt::register(format!("ephemeral-{}", uuid::Uuid::new_v4().simple()))
-    } else {
-        interrupt::register(session_id.clone())
-    };
-
-    // Mirror ask_inner: process-wide hook registry. Empty by default
-    // → zero-cost when no observers registered. Streaming and
-    // non-streaming surfaces share the same hooks. Auto-loaded
-    // hooks are scoped to this single invocation via the guard.
-    let hook_registry = hooks::global_registry();
-    let _hooks_auto_guard =
-        hooks_config::load_and_register(&crate::paths::agent_hooks_path(), hook_registry.clone());
-    let hook_session_id = if session_id.is_empty() {
-        interrupt_handle.session_id().to_string()
-    } else {
-        session_id.clone()
-    };
-    let mut evidence_ledger = super::evidence::EvidenceLedger::default();
-
-    let turn_limit = cfg.max_turns.max(1);
-    for turn in 1..=turn_limit {
-        let force_finalize = turn == turn_limit;
-        let finalization_system = force_finalize.then(|| {
-            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
-        });
-        let turn_system = finalization_system.as_deref().unwrap_or(&system);
-
-        if interrupt_handle.check() {
-            return Err(AgentError::Interrupted(
-                interrupt_handle.session_id().to_string(),
-            ));
-        }
-
-        let hook_ctx = hooks::HookContext::new(
-            hook_session_id.clone(),
-            provider.effective_provider_name(),
-            provider.effective_model_name(&cfg.model),
-        )
-        .with_turn_index(turn);
-        if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
-            return Err(AgentError::Interrupted(format!(
-                "hook stop (pre_turn): {reason}"
-            )));
-        }
-        if force_finalize {
-            if let Some((db, sid)) = recorder {
-                if let Err(e) = db.record_injected(
-                    sid,
-                    "turn_limit_finalization",
-                    TURN_LIMIT_FINALIZATION_PROMPT,
-                ) {
-                    tracing::warn!("memory: failed to record turn-limit finalization: {e}");
-                }
-            }
-        }
-
-        if cfg.think_scrub_enabled {
-            let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
-            messages = new_msgs;
-        }
-
-        if let Some(c) = compressor.as_ref() {
-            if c.should_compress(Some(turn_system), &messages) {
-                messages = c
-                    .compress(Some(turn_system), std::mem::take(&mut messages))
-                    .await;
-            }
-        }
-
-        let len_before = messages.len();
-        let turn_started_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let outcome_result = if force_finalize {
-            super::turn::run_final_turn_streaming_interruptible(
-                provider.clone(),
-                &cfg.model,
-                turn_system,
-                &mut messages,
-                tools,
-                &llm_tools,
-                cfg.max_tokens,
-                cfg.temperature,
-                recorder.map(|(_, sid)| sid),
-                sink.clone(),
-                Some(&hook_ctx),
-                progress.clone(),
-                &interrupt_handle,
-            )
-            .await
-        } else {
-            super::turn::run_turn_streaming_interruptible(
-                provider.clone(),
-                &cfg.model,
-                turn_system,
-                &mut messages,
-                tools,
-                &llm_tools,
-                cfg.max_tokens,
-                cfg.temperature,
-                recorder.map(|(_, sid)| sid),
-                sink.clone(),
-                Some(&hook_ctx),
-                progress.clone(),
-                &interrupt_handle,
-            )
-            .await
-        };
-
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
-        let latency_ms = now_ms.saturating_sub(turn_started_ms);
-
-        let outcome = match outcome_result {
-            Ok(report) => {
-                let o = report.outcome;
-                let summary = hooks::TurnSummary {
-                    success: true,
-                    latency_ms,
-                    input_tokens: report.usage.input_tokens,
-                    output_tokens: report.usage.output_tokens,
-                    cache_read_tokens: report.usage.cache_read_tokens,
-                    cache_write_tokens: report.usage.cache_write_tokens,
-                    stop_reason: match &o {
-                        super::turn::TurnOutcome::Final(_) => "Final".into(),
-                        super::turn::TurnOutcome::ContinueWithTools => "ContinueWithTools".into(),
-                    },
-                    tool_calls_made: messages[len_before..]
-                        .iter()
-                        .filter(|m| {
-                            m.content.iter().any(|b| {
-                                matches!(b, crate::agent::llm::ContentBlock::ToolUse { .. })
-                            })
-                        })
-                        .count() as u32,
-                    error: None,
-                };
-                let mut post_hook_ctx = hook_ctx.clone();
-                post_hook_ctx.provider = provider.effective_provider_name();
-                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
-                if let hooks::HookOutcome::Stop(reason) =
-                    hook_registry.dispatch_post_turn(&post_hook_ctx, &summary)
-                {
-                    return Err(AgentError::Interrupted(format!(
-                        "hook stop (post_turn): {reason}"
-                    )));
-                }
-                o
-            }
-            Err(e) => {
-                let summary = hooks::TurnSummary {
-                    success: false,
-                    latency_ms,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    cache_read_tokens: 0,
-                    cache_write_tokens: 0,
-                    stop_reason: "Error".into(),
-                    tool_calls_made: 0,
-                    error: Some(e.to_string()),
-                };
-                let mut post_hook_ctx = hook_ctx.clone();
-                post_hook_ctx.provider = provider.effective_provider_name();
-                post_hook_ctx.model = provider.effective_model_name(&cfg.model);
-                let _ = hook_registry.dispatch_post_turn(&post_hook_ctx, &summary);
-                if matches!(&e, AgentError::Interrupted(_)) {
-                    return Err(e);
-                }
-                if force_finalize {
-                    tracing::warn!("turn-limit finalization failed; using fallback: {e}");
-                    let answer = append_turn_limit_fallback(&mut messages);
-                    sink.on_event(&llm::StreamEvent::TextDelta {
-                        text: answer.clone(),
-                    });
-                    super::turn::TurnOutcome::Final(answer)
-                } else {
-                    return Err(e);
-                }
-            }
-        };
-        if interrupt_handle.check() {
-            return Err(AgentError::Interrupted(
-                interrupt_handle.session_id().to_string(),
-            ));
-        }
-        let outcome = match outcome {
-            super::turn::TurnOutcome::Final(answer)
-                if force_finalize && answer.trim().is_empty() =>
-            {
-                let answer = append_turn_limit_fallback(&mut messages);
-                sink.on_event(&llm::StreamEvent::TextDelta {
-                    text: answer.clone(),
-                });
-                super::turn::TurnOutcome::Final(answer)
-            }
-            other => other,
-        };
-        evidence_ledger.observe(&messages[len_before..]);
-
-        if let Some((db, sid)) = recorder {
-            for new_msg in &messages[len_before..] {
-                let role = sqlite_fts::role_str(new_msg.role);
-                let content = sqlite_fts::render_message_content(new_msg);
-                let content = if role == "assistant" {
-                    super::evidence::strip_markers(&content)
-                } else {
-                    content
-                };
-                if content.is_empty() {
-                    continue;
-                }
-                let to_record = redactor
-                    .as_ref()
-                    .map(|r| r.redact(&content))
-                    .unwrap_or(content);
-                match db.record_message(sid, role, &to_record) {
-                    Ok(msg_id) => {
-                        if let Some(ix) = &semantic_indexer {
-                            ix.spawn_index(sid.to_string(), role, msg_id, to_record);
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("memory: failed to record {role} message: {e}");
-                    }
-                }
-            }
-        }
-
-        if let super::turn::TurnOutcome::Final(answer) = outcome {
-            let evidence = evidence_ledger.verify(user_prompt, &answer);
-            let answer = super::evidence::strip_markers(&answer);
-            let fallback = provider.fallback_state();
-            if let Some((db, sid)) = recorder {
-                if matches!(db.title_for(sid), Ok(None)) {
-                    let aux = match auxiliary_from_cfg(cfg) {
-                        Ok(a) => a,
-                        Err(e) => {
-                            tracing::warn!("title: auxiliary build failed: {e}; using heuristic");
-                            None
-                        }
-                    };
-                    let title =
-                        crate::agent::title::generate_title(aux.as_ref(), user_prompt).await;
-                    if let Err(e) = db.set_title(sid, &title) {
-                        tracing::warn!("title: failed to record session title: {e}");
-                    }
-                }
-            }
-            if let Some(c) = &auto_curator {
-                c.spawn_curate(session_id.clone());
-            }
-            return Ok(AskResult {
-                answer,
-                evidence,
-                fallback,
-                turns: turn,
-                provider: provider.effective_provider_name(),
-                model: provider.effective_model_name(&cfg.model),
-                session_id,
-            });
-        }
-    }
-
-    Err(AgentError::MaxTurnsExceeded(turn_limit))
+    ask_inner(LifecycleRequest {
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        recorder,
+        compressor,
+        initial_messages,
+        transient_context,
+        output: LifecycleOutput::Streaming { sink },
+        progress,
+        interrupt_scope,
+    })
+    .await
 }
 
 /// Convenience: read `cfg` from global config, build the default tool
@@ -1273,30 +1086,38 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
 
     match MemoryDb::open_default() {
         Ok(db) => {
-            ask_inner(
+            ask_inner(LifecycleRequest {
                 provider,
                 cfg,
                 user_prompt,
-                &tools,
-                Some((&db, session_id.as_str())),
+                tools: &tools,
+                recorder: Some((&db, session_id.as_str())),
                 compressor,
-                Vec::new(),
-            )
+                initial_messages: Vec::new(),
+                transient_context: None,
+                output: LifecycleOutput::Buffered,
+                progress: progress::null_progress(),
+                interrupt_scope: None,
+            })
             .await
         }
         Err(e) => {
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"
             );
-            ask_inner(
+            ask_inner(LifecycleRequest {
                 provider,
                 cfg,
                 user_prompt,
-                &tools,
-                None,
+                tools: &tools,
+                recorder: None,
                 compressor,
-                Vec::new(),
-            )
+                initial_messages: Vec::new(),
+                transient_context: None,
+                output: LifecycleOutput::Buffered,
+                progress: progress::null_progress(),
+                interrupt_scope: None,
+            })
             .await
         }
     }

@@ -40,6 +40,35 @@ pub struct TurnReport {
     pub usage: Usage,
 }
 
+/// Provider delivery is the only per-mode variation in a turn. Request
+/// construction, run logging, message transitions, tool dispatch, and outcome
+/// selection are shared below in [`run_turn_inner`].
+enum ProviderDelivery {
+    Buffered {
+        retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
+    },
+    Streaming {
+        sink: Arc<dyn StreamSink>,
+    },
+}
+
+struct TurnRequest<'a> {
+    provider: Arc<dyn crate::agent::llm::Provider>,
+    model: &'a str,
+    system: &'a str,
+    messages: &'a mut Vec<Message>,
+    tools: &'a ToolRegistry,
+    llm_tools: &'a [LlmTool],
+    max_tokens: u32,
+    temperature: f32,
+    session_id: Option<&'a str>,
+    hook_ctx: Option<&'a HookContext>,
+    progress: Arc<dyn ProgressSink>,
+    allow_tools: bool,
+    delivery: ProviderDelivery,
+    interrupt: Option<&'a interrupt::Handle>,
+}
+
 fn interrupted(handle: &interrupt::Handle) -> super::loop_::AgentError {
     super::loop_::AgentError::Interrupted(handle.session_id().to_string())
 }
@@ -99,7 +128,7 @@ pub async fn run_turn(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
-    run_turn_inner(
+    run_turn_inner(TurnRequest {
         provider,
         model,
         system,
@@ -109,12 +138,12 @@ pub async fn run_turn(
         max_tokens,
         temperature,
         session_id,
-        retry_policy,
         hook_ctx,
         progress,
-        true,
-        None,
-    )
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy },
+        interrupt: None,
+    })
     .await
 }
 
@@ -134,7 +163,7 @@ pub(crate) async fn run_turn_interruptible(
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
 ) -> Result<TurnReport, super::loop_::AgentError> {
-    run_turn_inner(
+    run_turn_inner(TurnRequest {
         provider,
         model,
         system,
@@ -144,12 +173,12 @@ pub(crate) async fn run_turn_interruptible(
         max_tokens,
         temperature,
         session_id,
-        retry_policy,
         hook_ctx,
         progress,
-        true,
-        Some(interrupt),
-    )
+        allow_tools: true,
+        delivery: ProviderDelivery::Buffered { retry_policy },
+        interrupt: Some(interrupt),
+    })
     .await
 }
 
@@ -171,7 +200,7 @@ pub async fn run_final_turn(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
-    run_turn_inner(
+    run_turn_inner(TurnRequest {
         provider,
         model,
         system,
@@ -181,12 +210,12 @@ pub async fn run_final_turn(
         max_tokens,
         temperature,
         session_id,
-        retry_policy,
         hook_ctx,
         progress,
-        false,
-        None,
-    )
+        allow_tools: false,
+        delivery: ProviderDelivery::Buffered { retry_policy },
+        interrupt: None,
+    })
     .await
 }
 
@@ -206,7 +235,7 @@ pub(crate) async fn run_final_turn_interruptible(
     progress: Arc<dyn ProgressSink>,
     interrupt: &interrupt::Handle,
 ) -> Result<TurnReport, super::loop_::AgentError> {
-    run_turn_inner(
+    run_turn_inner(TurnRequest {
         provider,
         model,
         system,
@@ -216,32 +245,32 @@ pub(crate) async fn run_final_turn_interruptible(
         max_tokens,
         temperature,
         session_id,
-        retry_policy,
         hook_ctx,
         progress,
-        false,
-        Some(interrupt),
-    )
+        allow_tools: false,
+        delivery: ProviderDelivery::Buffered { retry_policy },
+        interrupt: Some(interrupt),
+    })
     .await
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_turn_inner(
-    provider: Arc<dyn crate::agent::llm::Provider>,
-    model: &str,
-    system: &str,
-    messages: &mut Vec<Message>,
-    tools: &ToolRegistry,
-    llm_tools: &[LlmTool],
-    max_tokens: u32,
-    temperature: f32,
-    session_id: Option<&str>,
-    retry_policy: Option<crate::agent::llm::rate_limit::RetryPolicy>,
-    hook_ctx: Option<&HookContext>,
-    progress: Arc<dyn ProgressSink>,
-    allow_tools: bool,
-    interrupt: Option<&interrupt::Handle>,
-) -> Result<TurnReport, super::loop_::AgentError> {
+async fn run_turn_inner(request: TurnRequest<'_>) -> Result<TurnReport, super::loop_::AgentError> {
+    let TurnRequest {
+        provider,
+        model,
+        system,
+        messages,
+        tools,
+        llm_tools,
+        max_tokens,
+        temperature,
+        session_id,
+        hook_ctx,
+        progress,
+        allow_tools,
+        delivery,
+        interrupt,
+    } = request;
     check_interrupted(interrupt)?;
     let mut request = ChatRequest {
         model: model.to_string(),
@@ -281,20 +310,26 @@ async fn run_turn_inner(
 
     let start = Instant::now();
     let chat_result = await_interruptible(interrupt, async {
-        match retry_policy {
-            Some(policy) => {
-                // Clone the request per attempt: providers may consume
-                // owned `extra` fields, and the retry helper needs a
-                // fresh future each call.
-                let provider_for_retry = provider.clone();
-                crate::agent::llm::rate_limit::retry_with_backoff(policy, move || {
-                    let p = provider_for_retry.clone();
-                    let req = request.clone();
-                    async move { p.chat(req).await }
-                })
-                .await
-            }
-            None => provider.chat(request).await,
+        match delivery {
+            ProviderDelivery::Buffered { retry_policy } => match retry_policy {
+                Some(policy) => {
+                    // Clone the request per attempt: providers may consume
+                    // owned `extra` fields, and the retry helper needs a
+                    // fresh future each call.
+                    let provider_for_retry = provider.clone();
+                    crate::agent::llm::rate_limit::retry_with_backoff(policy, move || {
+                        let p = provider_for_retry.clone();
+                        let req = request.clone();
+                        async move { p.chat(req).await }
+                    })
+                    .await
+                }
+                None => provider.chat(request).await,
+            },
+            ProviderDelivery::Streaming { sink } => match provider.chat_stream(request).await {
+                Ok(stream) => accumulate_stream(stream, sink, model).await,
+                Err(error) => Err(error),
+            },
         }
     })
     .await?;
@@ -578,124 +613,23 @@ async fn run_turn_streaming_inner(
     allow_tools: bool,
     interrupt: Option<&interrupt::Handle>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
-    check_interrupted(interrupt)?;
-    let mut request = ChatRequest {
-        model: model.to_string(),
-        messages: messages.clone(),
-        system: Some(system.to_string()),
-        tools: if allow_tools {
-            llm_tools.to_vec()
-        } else {
-            Vec::new()
-        },
-        tool_choice: if allow_tools {
-            ToolChoice::Auto
-        } else {
-            ToolChoice::None
-        },
-        max_tokens: Some(max_tokens),
-        temperature: Some(temperature),
-        top_p: None,
-        stop_sequences: vec![],
-        extra: serde_json::Value::Null,
-    };
-
-    if provider.supports_prompt_cache() {
-        crate::agent::prompt::caching::mark_system_cached(&mut request);
-        if !request.tools.is_empty() {
-            crate::agent::prompt::caching::mark_tools_cached(&mut request);
-        }
-    }
-
-    let start = Instant::now();
-    let chat_result: crate::agent::llm::Result<ChatResponse> =
-        await_interruptible(interrupt, async {
-            match provider.chat_stream(request).await {
-                Ok(stream) => accumulate_stream(stream, sink.clone(), model).await,
-                Err(e) => Err(e),
-            }
-        })
-        .await?;
-    check_interrupted(interrupt)?;
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    let engine = provider.engine_info();
-    let provider_name = provider.effective_provider_name();
-    let effective_model = provider.effective_model_name(model);
-
-    let response = match chat_result {
-        Ok(resp) => {
-            let rec = LlmRunRecord::from_success(
-                &provider_name,
-                &effective_model,
-                engine,
-                resp.finish_reason,
-                &resp.usage,
-                duration_ms,
-                session_id,
-            );
-            run_log::record(&rec);
-            resp
-        }
-        Err(e) => {
-            let rec = LlmRunRecord::from_error(
-                &provider_name,
-                &effective_model,
-                engine,
-                &format!("{e}"),
-                duration_ms,
-                session_id,
-            );
-            run_log::record(&rec);
-            return Err(super::loop_::AgentError::Llm(e));
-        }
-    };
-
-    messages.push(Message {
-        role: Role::Assistant,
-        content: response.content.clone(),
-    });
-
-    let usage = response.usage.clone();
-    let tool_calls = collect_tool_calls(&response);
-
-    if tool_calls.is_empty() || !allow_tools {
-        let text = extract_text(&response);
-        return Ok(TurnReport {
-            outcome: TurnOutcome::Final(text),
-            usage,
-        });
-    }
-
-    let (result_blocks, pending_stop) = dispatch_calls(
+    run_turn_inner(TurnRequest {
+        provider,
+        model,
+        system,
+        messages,
         tools,
-        hook_ctx,
-        &tool_calls,
+        llm_tools,
+        max_tokens,
+        temperature,
         session_id,
-        progress.as_ref(),
+        hook_ctx,
+        progress,
+        allow_tools,
+        delivery: ProviderDelivery::Streaming { sink },
         interrupt,
-    )
-    .await?;
-    messages.push(Message {
-        role: Role::User,
-        content: result_blocks,
-    });
-
-    if let Some(reason) = pending_stop {
-        return Err(super::loop_::AgentError::Interrupted(format!(
-            "hook stop (post_tool): {reason}"
-        )));
-    }
-
-    let outcome = match response.finish_reason {
-        FinishReason::Stop
-        | FinishReason::Length
-        | FinishReason::Refusal
-        | FinishReason::ContentFilter
-        | FinishReason::Other => TurnOutcome::Final(extract_text(&response)),
-        FinishReason::ToolUse => TurnOutcome::ContinueWithTools,
-    };
-    Ok(TurnReport { outcome, usage })
+    })
+    .await
 }
 
 fn collect_tool_calls(response: &ChatResponse) -> Vec<ToolCall> {
