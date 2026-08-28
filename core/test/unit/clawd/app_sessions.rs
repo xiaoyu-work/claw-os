@@ -1895,3 +1895,350 @@ fn swapping_a_call_scope_returns_the_exact_previous_set() {
         None => std::env::remove_var("COS_DATA_DIR"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Relay authority
+// ---------------------------------------------------------------------------
+
+#[test]
+fn only_session_scoped_system_service_routes_may_be_relayed() {
+    for command in Command::ALL.iter().copied() {
+        let route = command.route();
+        let allowed = route.access == Access::User
+            && route.authority.subject == authority::SubjectSource::Session
+            && route.authority.audience == authority::Audience::SystemService
+            && command != Command::AppSessionRelay;
+        match relayable_route(command) {
+            Ok(resolved) => {
+                assert!(allowed, "{} should not be relayable", route.name);
+                assert_eq!(resolved.name, route.name);
+            }
+            Err(error) => {
+                assert!(!allowed, "{} should be relayable: {error}", route.name);
+                assert!(error.contains(route.name), "{error}");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_relay_route_cannot_relay_itself() {
+    let error = match relayable_route(Command::AppSessionRelay) {
+        Ok(route) => panic!("{} was relayable through itself", route.name),
+        Err(error) => error,
+    };
+    assert!(error.contains("through itself"), "{error}");
+}
+
+#[test]
+fn root_peer_and_handle_routes_are_never_relayable() {
+    for command in Command::ALL.iter().copied() {
+        let route = command.route();
+        let refusable = route.access != Access::User
+            || route.authority.subject != authority::SubjectSource::Session
+            || route.authority.audience != authority::Audience::SystemService;
+        if refusable {
+            assert!(
+                relayable_route(command).is_err(),
+                "{} was relayable",
+                route.name
+            );
+        }
+    }
+}
+
+#[test]
+fn a_relay_grant_is_bound_to_the_launcher_and_carries_no_capabilities() {
+    if !e2e_is_root() {
+        eprintln!("skipping: relay grant issuance needs the routed registry");
+        return;
+    }
+    let mut harness = transient_harness();
+    let session_id = "app-relay-issue";
+    let child_pid = e2e_spawn_child(&mut harness);
+    e2e_install_row(e2e_row(session_id, child_pid, None));
+    let launch = e2e_install_grants(session_id, child_pid);
+
+    let (launcher_pid, _) = this_process();
+    let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
+        .expect("relay grant");
+
+    // Resolvable by this process, for this audience, with nothing in it.
+    let view = authority::authority()
+        .resolve(
+            &relay,
+            &authority::Presentation::new(
+                E2E_UID,
+                launcher_pid,
+                crate::proc::read_start_time_ticks_pub(launcher_pid),
+                authority::Audience::AppRelay,
+                "test",
+            ),
+        )
+        .expect("relay resolves for the launcher");
+    assert_eq!(view.subject.session_id.as_deref(), Some(session_id));
+    assert!(view.caps.is_empty(), "a relay grant carries no capabilities");
+
+    // Inert for another audience: it authorizes presenting, never acting.
+    assert!(authority::authority()
+        .resolve(
+            &relay,
+            &authority::Presentation::new(
+                E2E_UID,
+                launcher_pid,
+                crate::proc::read_start_time_ticks_pub(launcher_pid),
+                authority::Audience::SystemService,
+                "test",
+            ),
+        )
+        .is_err());
+
+    // Inert in another process: a same-uid sibling or a process that
+    // received the handle over a socket cannot use it.
+    assert!(authority::authority()
+        .resolve(
+            &relay,
+            &authority::Presentation::new(
+                E2E_UID,
+                child_pid,
+                crate::proc::read_start_time_ticks_pub(child_pid),
+                authority::Audience::AppRelay,
+                "test",
+            ),
+        )
+        .is_err());
+}
+
+#[test]
+fn a_relayed_decision_carries_the_exact_live_session_authority() {
+    if !e2e_is_root() {
+        eprintln!("skipping: relayed authorization needs the routed registry");
+        return;
+    }
+    let mut harness = transient_harness();
+    let session_id = "app-relay-live";
+    let child_pid = e2e_spawn_child(&mut harness);
+    e2e_install_row(e2e_row(session_id, child_pid, None));
+    let launch = e2e_install_grants(session_id, child_pid);
+    let (launcher_pid, _) = this_process();
+    let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
+        .expect("relay grant");
+
+    let route = Command::SystemNetworkControl.route();
+    let params = json!({"session": session_id, "action": "status"});
+    let decide = |handle: &str, session: &str| {
+        e2e_runtime().block_on(authority::authorize_relayed(
+            handle,
+            session,
+            route.name,
+            &route.authority,
+            &params,
+            &e2e_client(),
+        ))
+    };
+
+    // The launcher, holding the relay grant, presents the App session's
+    // own authority — not its own.
+    let decision = decide(&relay, session_id)
+        .expect("relayed authorization")
+        .expect("a session-scoped route resolves a grant");
+    assert_eq!(decision.session_id(), Some(session_id));
+    assert_eq!(decision.app_id(), Some("fs"));
+    assert!(decision
+        .caps()
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/root/a.txt"))));
+    // Base authority only: the call scope has not been installed.
+    assert!(!decision
+        .caps()
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/x"))));
+    // And it spends against that session, not the launcher.
+    let _authorized = decision
+        .require(Cap::new(Verb::FS_READ, Scope::path("/root/a.txt")))
+        .expect("exact capability spend");
+    assert!(decision
+        .require(Cap::new(Verb::FS_WRITE, Scope::path("/root/a.txt")))
+        .is_err());
+
+    // A transient call scope appears while it is installed …
+    e2e_install_row(e2e_row(session_id, child_pid, Some(e2e_call_caps())));
+    reissue_session_grant(
+        &launch,
+        session_id,
+        Some("fs"),
+        E2E_UID,
+        child_pid,
+        &{
+            let mut caps = e2e_app_caps();
+            caps.extend(e2e_call_caps().iter().cloned());
+            caps
+        },
+    )
+    .expect("reissue with call scope");
+    let widened = decide(&relay, session_id)
+        .expect("relayed authorization")
+        .expect("decision");
+    assert!(widened
+        .caps()
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/x"))));
+
+    // … and disappears the moment it is cleared.
+    e2e_install_row(e2e_row(session_id, child_pid, None));
+    reissue_session_grant(&launch, session_id, Some("fs"), E2E_UID, child_pid, &e2e_app_caps())
+        .expect("clear call scope");
+    let narrowed = decide(&relay, session_id)
+        .expect("relayed authorization")
+        .expect("decision");
+    assert!(!narrowed
+        .caps()
+        .covers(&Cap::new(Verb::FS_READ, Scope::path("/srv/scratch/x"))));
+}
+
+#[test]
+fn a_relay_is_refused_without_the_exact_handle_and_session() {
+    if !e2e_is_root() {
+        eprintln!("skipping: relayed authorization needs the routed registry");
+        return;
+    }
+    let mut harness = transient_harness();
+    let session_id = "app-relay-refuse";
+    let other_id = "app-relay-other";
+    let child_pid = e2e_spawn_child(&mut harness);
+    let other_pid = e2e_spawn_child(&mut harness);
+    e2e_install_row(e2e_row(session_id, child_pid, None));
+    e2e_install_row(e2e_row(other_id, other_pid, None));
+    let launch = e2e_install_grants(session_id, child_pid);
+    let other_launch = e2e_install_grants(other_id, other_pid);
+    let (launcher_pid, _) = this_process();
+    let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
+        .expect("relay grant");
+    let other_relay =
+        issue_relay_grant(&other_launch, other_id, Some("fs"), E2E_UID, launcher_pid)
+            .expect("relay grant");
+
+    let route = Command::SystemNetworkControl.route();
+    let decide = |handle: &str, session: &str| {
+        let params = json!({"session": session, "action": "status"});
+        e2e_runtime().block_on(authority::authorize_relayed(
+            handle,
+            session,
+            route.name,
+            &route.authority,
+            &params,
+            &e2e_client(),
+        ))
+    };
+
+    // No handle, a made-up handle, and a handle for a different session
+    // are all refused; so is naming another session with a valid one.
+    assert!(decide("", session_id).is_err());
+    assert!(decide("deadbeef", session_id).is_err());
+    assert!(decide(&other_relay, session_id).is_err());
+    assert!(decide(&relay, other_id).is_err());
+
+    // A revoked launch — the shape `deregister` produces — takes the
+    // relay with it.
+    decide(&relay, session_id).expect("relay works before teardown");
+    authority::authority().revoke_session(session_id);
+    crate::clawd::authority::revoke_session(session_id);
+    assert!(
+        decide(&relay, session_id).is_err(),
+        "a relay outlived its session"
+    );
+}
+#[test]
+fn a_relay_proof_skips_only_the_cgroup_comparison() {
+    if !e2e_is_root() {
+        eprintln!("skipping: relay presentation needs the routed registry");
+        return;
+    }
+    let mut harness = transient_harness();
+    let session_id = "app-relay-audience";
+    let child_pid = e2e_spawn_child(&mut harness);
+    e2e_install_row(e2e_row(session_id, child_pid, None));
+    let launch = e2e_install_grants(session_id, child_pid);
+    let (launcher_pid, _) = this_process();
+    let relay = issue_relay_grant(&launch, session_id, Some("fs"), E2E_UID, launcher_pid)
+        .expect("relay grant");
+
+    // The session grant carries SystemService and Credential. A relay
+    // proof lets the launcher *present* it; it does not add an audience
+    // the grant never had, and it does not let another session's id
+    // ride along.
+    let route = Command::SystemNetworkControl.route();
+    let params = json!({"session": session_id, "action": "status"});
+    e2e_runtime()
+        .block_on(authority::authorize_relayed(
+            &relay,
+            session_id,
+            route.name,
+            &route.authority,
+            &params,
+            &e2e_client(),
+        ))
+        .expect("system-service audience is inside the session grant");
+
+    // Re-declaring the inner route in an audience the session grant
+    // does not carry must fail even though the relay proof is valid and
+    // the outer AppRelay filter already passed.
+    static SCHEDULER_AUDIENCE: authority::RouteAuthority = authority::RouteAuthority {
+        audience: authority::Audience::Scheduler,
+        subject: authority::SubjectSource::Session,
+        requirement: authority::route_derived,
+        approval: authority::Approval::Ineligible,
+        transient: authority::TransientCaps::Excluded,
+    };
+    let masked = e2e_runtime().block_on(authority::authorize_relayed(
+        &relay,
+        session_id,
+        route.name,
+        &SCHEDULER_AUDIENCE,
+        &params,
+        &e2e_client(),
+    ));
+    assert!(
+        masked.is_err(),
+        "an inner audience outside the session grant was masked by the relay"
+    );
+
+    // Presenting the relay for a session the grant does not name is
+    // refused by the store's subject check, not only by the route.
+    let proof_for_other = authority::authority().resolve_session(
+        session_id,
+        &authority::Presentation {
+            uid: E2E_UID,
+            pid: launcher_pid,
+            start_time_ticks: crate::proc::read_start_time_ticks_pub(launcher_pid),
+            audience: authority::Audience::SystemService,
+            route: "test",
+            session_id: Some("app-somebody-else".to_string()),
+        },
+    );
+    assert!(
+        proof_for_other.is_err(),
+        "a mismatched subject was accepted"
+    );
+}
+
+#[test]
+fn the_outer_relay_audience_is_distinct_from_the_inner_one() {
+    // The relay route is reached with AppRelay; every route it may
+    // forward is decided with SystemService. Collapsing the two would
+    // let a relay grant act directly on a provider.
+    let relay_route = Command::AppSessionRelay.route();
+    assert_eq!(relay_route.authority.audience, authority::Audience::AppRelay);
+    assert_eq!(
+        relay_route.authority.subject,
+        authority::SubjectSource::Handle
+    );
+    for command in Command::ALL.iter().copied() {
+        if let Ok(route) = relayable_route(command) {
+            assert_eq!(
+                route.authority.audience,
+                authority::Audience::SystemService,
+                "{} is relayable in the wrong audience",
+                route.name
+            );
+            assert_ne!(route.authority.audience, authority::Audience::AppRelay);
+        }
+    }
+}

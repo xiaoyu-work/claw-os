@@ -91,7 +91,15 @@ fn route_audiences_match_their_families() {
             name if name.starts_with("permission.") => Audience::Permission,
             name if name.starts_with("transaction.") => Audience::Transaction,
             name if name.starts_with("app_session.") || name.starts_with("mcp_session.") => {
-                Audience::AppLaunch
+                // The relay is the one exception: it is addressed by a
+                // launcher-held grant that authorizes *presenting* an
+                // App session, not launching one, so it has its own
+                // audience and reaches nothing directly.
+                if name == "app_session.relay" {
+                    Audience::AppRelay
+                } else {
+                    Audience::AppLaunch
+                }
             }
             name if name.starts_with("scheduler.") => Audience::Scheduler,
             name if name.starts_with("credential.") => Audience::Credential,

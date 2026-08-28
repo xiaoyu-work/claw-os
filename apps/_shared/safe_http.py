@@ -8,7 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from cos_runtime import policy
+from cos_runtime import egress, policy
 
 try:
     import idna
@@ -174,6 +174,16 @@ def parse_url(url):
 
 
 def resolve_public(parsed):
+    """Resolve and screen the addresses this request may reach.
+
+    Inside a worker sandbox there is nothing to resolve *here*: the
+    process has no route to a resolver and no permission to open an
+    ``AF_INET`` socket, and the egress broker resolves the name and
+    screens every answer itself before it connects. Returning ``None``
+    tells the transport below to ask the broker instead of dialling.
+    """
+    if egress.available():
+        return None
     host = _socket_host(parsed)
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     addresses = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -193,17 +203,27 @@ def validate_and_authorize(url):
     return parsed, addresses
 
 
+def _connect(host, port, timeout, pinned_ip):
+    """Open the transport for one hop.
+
+    Brokered when the operation holds a brokered-egress endpoint, which
+    is the only transport a sandboxed worker has; otherwise the legacy
+    pinned-address dial, unchanged, for code running outside a sandbox.
+    There is no third path: a brokered refusal is raised, never retried
+    directly.
+    """
+    if egress.available():
+        return egress.create_connection(host, port, timeout)
+    return socket.create_connection((pinned_ip, port), timeout)
+
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
     def __init__(self, host, *, pinned_ip, **kwargs):
         self._pinned_ip = pinned_ip
         super().__init__(host, **kwargs)
 
     def connect(self):
-        self.sock = socket.create_connection(
-            (self._pinned_ip, self.port),
-            self.timeout,
-            self.source_address,
-        )
+        self.sock = _connect(self.host, self.port, self.timeout, self._pinned_ip)
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -212,15 +232,14 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         super().__init__(host, **kwargs)
 
     def connect(self):
-        sock = socket.create_connection(
-            (self._pinned_ip, self.port),
-            self.timeout,
-            self.source_address,
-        )
+        sock = _connect(self.host, self.port, self.timeout, self._pinned_ip)
         if self._tunnel_host:
             self.sock = sock
             self._tunnel()
             sock = self.sock
+        # Whatever carried the bytes, the certificate must still name the
+        # host this request asked for. The broker pins the transport; TLS
+        # pins the identity.
         self.sock = self._context.wrap_socket(
             sock,
             server_hostname=self.host,
@@ -260,7 +279,9 @@ class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
 
 
 def _open_pinned(request, timeout, addresses):
-    pinned_ip = addresses[0][4][0]
+    # `None` means the egress broker owns resolution and pinning; the
+    # placeholder address is never dialled in that case.
+    pinned_ip = addresses[0][4][0] if addresses else ""
     opener = urllib.request.build_opener(
         urllib.request.ProxyHandler({}),
         _NoRedirect(),

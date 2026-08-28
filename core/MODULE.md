@@ -27,6 +27,7 @@ persistence, and structured primitive dispatch.
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
+| `src/worker/` | Shared hostile-worker sandbox: launch policy, Linux provider, per-launch brokers |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |
 | `src/audit.rs` | Hash-chained audit persistence |
 | `src/audit_policy.rs` | Per-command/per-tool allowlist every durable audit projection applies |

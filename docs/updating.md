@@ -92,6 +92,48 @@ rerunning the setup wizard:
 cos agent setup text --verify-only
 ```
 
+### App data moves into per-App directories
+
+From the release that isolates App workers, an App no longer receives the
+owner's data root. `COS_DATA_DIR` is its own directory,
+`<data-root>/apps/<app-id>`, created `0700`, and no other App's directory or
+owner-private store is inside its sandbox.
+
+The state bundled Apps wrote before that — `calendar/`, `db/`, `kv.json`,
+`launcher/`, `logs/`, `notifications.json`, `trash/`, the `exec` App's captured
+`proc/stdout.*` and `proc/stderr.*`, and each gateway's
+`apps/gateway-*/state.json` — is moved into the new directory automatically,
+once, the first time that App runs. The move is a rename on the same
+filesystem, so nothing is copied and nothing is duplicated. No action is needed
+and no output is printed when it succeeds.
+
+It stops and reports instead of guessing when:
+
+- the App already has a file of the same name in its new directory *and* the
+  old one is still in the data root — keep whichever is current and delete the
+  other, then run the App again;
+- the old path is a symlink, a hardlinked file, or a socket, FIFO or device
+  node — move it across by hand;
+- the old path is owned by another user, or sits on a different filesystem from
+  the data root — move it across by hand.
+
+In every one of those cases nothing has been changed and the App's existing
+state is still where it was. An interrupted move is finished by the next run.
+
+To see where an App's data now lives:
+
+```bash
+ls ~/.local/share/cos/apps/
+```
+
+Kernel-owned state — sessions, the capability registry at `proc/registry.json`,
+the agent's memory, approvals and the journal — does not move and is never
+inside a sandbox. The `exec` App wrote a file of the same name in the same
+directory; the per-App directory is what finally separates the two, and the
+App's own process registry starts empty there. Apps still write to the shared
+agent memory through `cos_runtime.memory`, which the launcher carries out on
+their behalf.
+
 ## Removing the Claw OS integration package
 
 Removing `claw-os-base` also removes the service that presents the managed

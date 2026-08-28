@@ -45,6 +45,19 @@ try:
 except Exception:  # pragma: no cover - missing only outside the kernel
     policy = None  # type: ignore[assignment]
 
+try:
+    from cos_runtime import smtp as cos_smtp  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - missing only outside the kernel
+    # Outside a Claw OS runtime the ordinary `smtplib` classes are the
+    # transport. Inside one they are never reached: `cos_runtime.smtp`
+    # substitutes the dial at `smtplib`'s own extension point, so a
+    # sandboxed send has no path back to `socket.create_connection`.
+    class _PlainSmtp:
+        SafeSMTP = smtplib.SMTP
+        SafeSMTP_SSL = smtplib.SMTP_SSL
+
+    cos_smtp = _PlainSmtp()  # type: ignore[assignment]
+
 
 PLATFORM = "email"
 USER_AGENT = "ClawOSEmail/0.1.0"
@@ -178,13 +191,19 @@ def _send(to: str, subject: str, body: str, cc: str = "") -> dict:
 
     try:
         if cfg["port"] == 465:
-            # Implicit TLS.
+            # Implicit TLS over the operation's approved transport: the
+            # brokered egress tunnel inside a sandbox, an ordinary dial
+            # outside one. `SafeSMTP_SSL` wraps whatever the transport
+            # returned with this context and the configured hostname, so
+            # the certificate still has to name the server we asked for.
             ctx = _tls_context()
-            with smtplib.SMTP_SSL(cfg["host"], cfg["port"], context=ctx, timeout=30) as smtp:
+            with cos_smtp.SafeSMTP_SSL(
+                cfg["host"], cfg["port"], context=ctx, timeout=30
+            ) as smtp:
                 smtp.login(cfg["user"], cfg["password"])
                 smtp.send_message(msg, from_addr=cfg["from"], to_addrs=recipients)
         else:
-            with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
+            with cos_smtp.SafeSMTP(cfg["host"], cfg["port"], timeout=30) as smtp:
                 smtp.ehlo()
                 if not smtp.has_extn("starttls"):
                     raise _StartTLSUnavailable(

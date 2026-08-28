@@ -33,6 +33,18 @@ registry, capability, and prompt-injection boundaries.
 Equivalent first-party MCP failures use the generated codes owned by
 `claw-os-sdk/wire/v1/contract.json`.
 
+A stdio server is third-party code and is launched through the shared
+hostile-worker sandbox in [`crate::worker`](../../../worker/MODULE.md),
+never with a local `Command`. It gets a read-only system image, the
+configured working directory (checked against the owner's home), no App
+data directory, no network namespace of the host's, no inherited
+environment, and a per-launch broker endpoint that shadows the real
+broker socket and admits nothing by default. Its authority arrives per
+call as transient capabilities the kernel sets on the session, so a
+`tools/list` or `tools/call` result can never become authority. Keep the
+`LaunchResources` on the server handle: dropping the handle is what
+tears the sandbox and its endpoints down.
+
 ## Tests
 
 ```bash

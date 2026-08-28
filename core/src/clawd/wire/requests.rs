@@ -395,6 +395,22 @@ pub struct AppSessionSetTransient {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct AppSessionRelay {
+    pub session_id: Token,
+    pub handle: Token,
+    /// Wire name of the inner route. Resolved against the one typed
+    /// route registry; anything the registry does not name, or names as
+    /// something other than a `Session`-subject system-service route,
+    /// is refused before its body is decoded.
+    pub command: Text<COMMAND_BYTES>,
+    /// The inner route's own parameters, decoded by that route's typed
+    /// body before it is authorized or dispatched.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub params: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppSessionDeregister {
     pub session_id: Token,
     pub handle: Token,

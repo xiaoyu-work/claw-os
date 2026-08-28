@@ -1025,6 +1025,25 @@ routes! {
         },
     }
 
+    AppSessionRelay {
+        name: "app_session.relay",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: handle(Audience::AppRelay),
+        body: body::AppSessionRelay,
+        audit: &[
+            ("session_id", FieldRule::Token),
+            ("command", FieldRule::Token),
+        ],
+        run: |c| {
+            let authority = c.authority()?;
+            app_sessions::relay(c.state, c.params.clone(), c.client, authority)
+                .await
+                .map_err(BrokerError::from)
+        },
+    }
+
     // -----------------------------------------------------------------
     // Scheduler authority
     // -----------------------------------------------------------------

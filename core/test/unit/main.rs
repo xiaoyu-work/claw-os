@@ -38,6 +38,22 @@ fn extract_format_preserves_delimiter_and_app_data_flags() {
 }
 
 #[test]
+fn extract_format_leaves_internal_bridge_argv_alone() {
+    // `cos __memory remember --json <payload>` is a private wire
+    // format between the SDK and the kernel: stripping `--json` here
+    // would silently deliver a payload-less call to the bridge.
+    let original = vec![
+        "__memory".to_string(),
+        "remember".to_string(),
+        "--json".to_string(),
+        "{\"source\":\"expense-tracker\",\"text\":\"x\"}".to_string(),
+    ];
+    let (args, fmt) = extract_format(original.clone());
+    assert_eq!(args, original);
+    assert!(matches!(fmt, OutputFormat::Compact));
+}
+
+#[test]
 fn stdin_request_is_explicit_and_respects_end_of_options() {
     let (args, requested) = extract_stdin_request(vec![
         "app".into(),

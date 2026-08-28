@@ -58,6 +58,23 @@ try:
 except Exception:  # pragma: no cover - exercised only when runtime is absent
     policy = None  # type: ignore[assignment]
 
+try:
+    from cos_runtime import egress  # type: ignore[import-not-found]
+except Exception:  # pragma: no cover - exercised only when runtime is absent
+
+    class _NoEgress:
+        """Stand-in used outside a Claw OS runtime: never brokered."""
+
+        @staticmethod
+        def available() -> bool:
+            return False
+
+        @staticmethod
+        def create_connection(host, port, timeout=None):
+            raise RuntimeError("cos_runtime.egress is unavailable")
+
+    egress = _NoEgress()  # type: ignore[assignment]
+
 
 # Public exceptions ---------------------------------------------------------
 
@@ -80,6 +97,11 @@ class EgressBlocked(EgressError):
 _PRIVATE_OK_ENV = "COS_GATEWAY_ALLOW_PRIVATE"
 _MAX_CONNECT_TARGETS = 8
 _HTTP_TOKEN = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
+
+# Sentinel standing in for "the egress broker owns this connection".
+# It carries no address on purpose: inside a sandbox the worker must not
+# learn, choose or reach one.
+_BROKERED_TARGET: tuple = ("brokered", 0, 0, ())
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -166,7 +188,17 @@ def _parse_target(url: str) -> Tuple[str, str, int, str]:
 
 
 def _resolve_targets(host: str, port: int) -> list[tuple[int, int, int, tuple]]:
-    """Resolve once, reject unsafe answers, and retain exact socket addresses."""
+    """Resolve once, reject unsafe answers, and retain exact socket addresses.
+
+    Inside a worker sandbox there is nothing to resolve here and nothing
+    to dial: the process holds no route and, under the worker seccomp
+    filter, may open only ``AF_UNIX`` sockets. The brokered egress
+    endpoint resolves the name, screens every answer and connects on the
+    worker's behalf, so this returns a single brokered target instead of
+    an address list.
+    """
+    if egress.available():
+        return [_BROKERED_TARGET]
     try:
         infos = socket.getaddrinfo(
             host,
@@ -206,8 +238,18 @@ def _resolve_targets(host: str, port: int) -> list[tuple[int, int, int, tuple]]:
 def _open_pinned_socket(
     target: tuple[int, int, int, tuple],
     timeout: float,
+    host: str = "",
+    port: int = 0,
 ) -> socket.socket:
-    """Connect directly to a previously validated getaddrinfo result."""
+    """Connect to a previously validated target.
+
+    A brokered target carries no address: the egress broker owns
+    resolution and pinning, and refuses anything outside the operation's
+    exact ``net.dial`` grant. A refusal is raised, never downgraded to a
+    direct dial.
+    """
+    if target is _BROKERED_TARGET:
+        return egress.create_connection(host, port, timeout)
     family, socktype, proto, sockaddr = target
     sock = socket.socket(family, socktype, proto)
     try:
@@ -231,7 +273,12 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
     def connect(self) -> None:
         if self._tunnel_host:
             raise EgressBlocked("HTTP CONNECT tunnels are not permitted")
-        self.sock = _open_pinned_socket(self._pinned_target, self.timeout)
+        self.sock = _open_pinned_socket(
+            self._pinned_target,
+            self.timeout,
+            self.host,
+            self.port,
+        )
 
 
 _TLS_CONTEXT = ssl.create_default_context()
@@ -417,7 +464,7 @@ def safe_tls_connect(
     for target in targets:
         raw_sock: Optional[socket.socket] = None
         try:
-            raw_sock = _open_pinned_socket(target, timeout)
+            raw_sock = _open_pinned_socket(target, timeout, host, port)
             tls_sock = _TLS_CONTEXT.wrap_socket(raw_sock, server_hostname=host)
             tls_sock.settimeout(timeout)
             return tls_sock

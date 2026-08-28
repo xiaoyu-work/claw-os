@@ -47,6 +47,18 @@ jobs:
       - name: Test session journal packaging contract
         run: bash packaging/deb/tests/test-session-journal-packaging.sh
 
+      - name: Test worker sandbox packaging contract
+        run: bash packaging/deb/tests/test-worker-sandbox-packaging.sh
+
+      # Every App operation, GUI surface, MCP server and adapter runs
+      # inside bubblewrap, and the launcher fails closed without it. The
+      # runner image does not ship it, so it is installed here — and
+      # `COS_WORKER_SANDBOX_REQUIRED` makes the isolation suite *fail*
+      # rather than skip if it is somehow still unavailable, so a
+      # missing dependency cannot turn those tests into a no-op.
+      - name: Install worker sandbox dependencies
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends bubblewrap
+
       - name: Cache cargo registry & target
         uses: actions/cache@v4
         with:
@@ -75,6 +87,13 @@ jobs:
         # but the env vars themselves are shared, so two modules racing on
         # separate locks still trample each other. Running serially is the
         # cheapest fix; the lib test binary finishes in ~70s.
+        #
+        # `COS_WORKER_SANDBOX_REQUIRED` turns an unavailable worker
+        # sandbox into a failure here: the previous step installed the
+        # prerequisites, so a skip would mean they are broken rather
+        # than absent.
+        env:
+          COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
 
       - name: Run cos-browser tests

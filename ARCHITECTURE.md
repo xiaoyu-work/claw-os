@@ -410,8 +410,10 @@ apps/<id>/app.json
   -> core app discovery and manifest validation
   -> operation schema / validated default binding / capability derivation
   -> app session registration
-  -> declared Python / Node / shell / binary entrypoint with effective args
-  -> policy-enforced SDK/runtime calls
+  -> hostile-worker launch policy derived from the granted capabilities
+  -> declared Python / Node / shell / binary entrypoint with effective args,
+     inside a namespace/seccomp/cgroup sandbox
+  -> policy-enforced SDK/runtime calls through the per-launch broker endpoint
   -> structured result
 ```
 
@@ -459,10 +461,30 @@ verb, and scope; the caller waits on `permission.status` and retries over the
 same connection. A stored job never carries more than its creator could prove,
 bounded by the same home-scoped ceiling the executor applies before it runs.
 
+### Worker isolation
+
+Every process Claw OS did not write — an App operation, a GUI App
+surface, an MCP server, an adapter, a model-authored command — runs
+under one shared launch policy defined in `core/src/worker/`. The
+definition is typed and derived by trusted code from authenticated
+manifest, operation and capability data; the Linux provider enforces it
+with user/mount/PID/IPC/UTS/network namespaces, all capabilities
+dropped, a seccomp filter, a resource governor, a read-only root and an
+explicit mount list. There is no second, weaker launch path: the App
+bridge, the MCP attach path and the agent sandbox tool are consumers of
+the same provider, and a host that cannot enforce the policy refuses
+the launch instead of running the worker unsandboxed.
+
+Only a kernel-allowlisted, root-owned native host is exempt, and taking
+that exemption is recorded. Read
+[`core/src/worker/MODULE.md`](core/src/worker/MODULE.md) before
+changing anything a worker can observe.
+
 ### MCP attachment
 
 ```text
 config or discovered agent-API sidecar
+  -> hostile-worker launch policy (network denied, no App data, no host paths)
   -> MCP transport/client initialization
   -> tools/list
   -> prefixed tool registration

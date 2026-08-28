@@ -65,6 +65,15 @@ pub enum Audience {
     Credential,
     /// Privileged system providers (audio, packages, users, …).
     SystemService,
+    /// The trusted launcher relaying one App-session system-service
+    /// call on behalf of a worker it sandboxed.
+    ///
+    /// A relay grant carries no capabilities of its own. It is the
+    /// right to *present* an already-issued App session grant from the
+    /// launcher process, which is the only process outside the sandbox
+    /// that legitimately speaks for that session. Every effect is still
+    /// authorized against the session grant on the inner route.
+    AppRelay,
 }
 
 impl Audience {
@@ -80,6 +89,7 @@ impl Audience {
             Audience::Scheduler => "scheduler",
             Audience::Credential => "credential",
             Audience::SystemService => "system-service",
+            Audience::AppRelay => "app-relay",
         }
     }
 

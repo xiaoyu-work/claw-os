@@ -199,9 +199,10 @@ struct PrimitiveSpec {
 const PRIMITIVES: &[PrimitiveSpec] = &[
     PrimitiveSpec {
         name: "cos_sandbox",
-        description: "Run commands inside a fail-closed bubblewrap+cgroup sandbox \
-                      (network denied and root/workspace read-only by default; mandatory \
-                      mem/cpu/pids/timeout/output limits and seccomp). Use for any user-supplied or \
+        description: "Run commands inside a fail-closed bubblewrap+seccomp+cgroup sandbox \
+                      (network denied and root/workspace read-only by default; egress needs \
+                      explicit `--allow-host HOST:PORT` endpoints; mandatory \
+                      mem/cpu/pids/timeout/output limits). Use for any user-supplied or \
                       model-generated shell command.",
         primitive: crate::sandbox::run,
         commands: &["exec"],
