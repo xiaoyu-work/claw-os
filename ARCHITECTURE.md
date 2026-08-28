@@ -281,6 +281,13 @@ broker-only lease nonce and deadline, and the revocation generation current at
 request time; a stale decision, replacement worker, or concurrent task cannot
 rebind it.
 
+In-process Agent surfaces use the same binding model without a process-global
+identity. Each invocation installs a Tokio task-local identity derived from its
+actual task or conversation-turn identifier plus a fresh nonce. Invocation
+completion, cancellation, and web-client disconnect durably revoke that
+identity and retire its pending and approved records, so another conversation
+or a later turn in the same conversation cannot redeem them.
+
 An approved record is durable consent evidence, not ambient session authority.
 At execution `clawd` atomically spends the exact record, then mints and
 immediately exercises an in-memory `Issuer::Approval` capability grant bound to

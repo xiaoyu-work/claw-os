@@ -14,6 +14,8 @@ through model turns, tools, hooks, progress, and final records.
 - Dispatch parallel-safe and serial tools deterministically.
 - Treat `dangerous_tools` as a legacy name filter only; capability-aware
   proxies reach exact execution-time consent instead.
+- Install a fresh task-local approval identity for every invocation and retire
+  its consent state on completion or cancellation.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 

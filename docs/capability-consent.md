@@ -26,6 +26,12 @@ may run.
    grant is exercised. The capability check still occurs immediately before
    the guarded operation; approval never edits the session's ambient `CapSet`.
 
+Daemon workers take their task identity from the authenticated broker lease.
+In-process runtimes (including the multiplexed web server) instead install a
+Tokio task-local identity for each Agent invocation. Web identities include the
+conversation and a fresh turn ID; every invocation also receives a fresh
+nonce. There is no process-wide fallback identity.
+
 For example, `cos_proc status <session>` derives low-risk
 `proc.observe:self:<session>`, while `cos_proc kill <session>` derives
 high-risk `proc.signal:self:<session>`. They share one proxy tool name but not
@@ -41,6 +47,10 @@ route, and a request id is metadata rather than authority.
 - A decision or redemption fails if the originating process is gone, the task
   or lease identity differs, the request deadline passed, or the revocation
   generation changed. A replacement worker is never silently rebound.
+- Ending or cancelling an in-process invocation writes a durable
+  execution-revocation marker and retires its pending and approved records.
+  A later turn, concurrent conversation, disconnected client, or restored
+  approval file cannot reuse that invocation's consent.
 - `once` has one use. `session` and `forever` remain use-limited and expire.
 - Concurrent spends and concurrent approve/deny decisions have one winner.
 - Revocation increments a root-owned owner/session generation. Every grant

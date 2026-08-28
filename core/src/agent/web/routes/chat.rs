@@ -54,10 +54,7 @@ fn default_true() -> bool {
     true
 }
 
-pub async fn handler(
-    State(state): State<AppState>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
+pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
     if req.prompt.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -81,7 +78,7 @@ pub async fn handler(
                 .into_response();
         }
     };
-    let interrupt_scope = format!("web-{}", uuid::Uuid::new_v4().simple());
+    let interrupt_scope = web_turn_scope(&session_id);
 
     let (tx, rx) = mpsc::channel::<SseFrame>(SSE_CHANNEL_CAPACITY);
 
@@ -111,12 +108,7 @@ pub async fn handler(
                 Ok(v) => v,
                 Err(_) => json!({ "error": e }),
             };
-            let _ = send_frame(
-                &tx,
-                &scope_for_task,
-                sse::encode_event("error", &payload),
-            )
-            .await;
+            let _ = send_frame(&tx, &scope_for_task, sse::encode_event("error", &payload)).await;
         }
     });
 
@@ -150,6 +142,22 @@ fn begin_turn(
 
 struct TurnConflict {
     session_id: String,
+}
+
+fn web_turn_scope(session_id: &str) -> String {
+    let conversation = if session_id.len() <= 48
+        && session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte))
+    {
+        session_id.to_string()
+    } else {
+        format!(
+            "sha256-{}",
+            &crate::crypto::sha256_hex(session_id.as_bytes())[..24]
+        )
+    };
+    format!("web:{conversation}:turn:{}", uuid::Uuid::new_v4().simple())
 }
 
 // ---------------------------------------------------------------------------
@@ -449,10 +457,7 @@ impl StreamSink for SseSink {
                 ));
             }
             StreamEvent::Warning { message } => {
-                self.send(sse::encode_event(
-                    "warning",
-                    &json!({ "message": message }),
-                ));
+                self.send(sse::encode_event("warning", &json!({ "message": message })));
             }
         }
     }

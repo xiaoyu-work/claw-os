@@ -193,7 +193,13 @@ impl Tool for CosPrimitiveTool {
                 Err(message) => ToolResult::err(message),
             };
         }
-        let join = tokio::task::spawn_blocking(move || primitive(&command, &args)).await;
+        let local_execution = crate::approvals::capture_local_execution();
+        let join = tokio::task::spawn_blocking(move || {
+            crate::approvals::with_captured_local_execution(local_execution, || {
+                primitive(&command, &args)
+            })
+        })
+        .await;
 
         match join {
             Ok(Ok(value)) => {
