@@ -832,7 +832,12 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         let config = deps
             .config_snapshot()
             .unwrap_or_else(crate::config::current_snapshot);
-        AutoCurator::from_snapshot_logged(config, db, deps.notes().clone())
+        AutoCurator::from_snapshot_with_paths(
+            config,
+            db,
+            deps.notes().clone(),
+            deps.routed_paths(),
+        )
     });
 
     if let Some((db, sid)) = recorder {

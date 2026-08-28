@@ -18,3 +18,6 @@
   `register_default_media_tools_with_outputs_dir`. The old no-argument
   `default_registry` and one-argument `register_default_media_tools` remain as
   deprecated composition wrappers.
+- Detached runtime work captures and reinstalls `RoutedPathContext`, preserving
+  owner-partitioned budget, audit, notes, credential, and user-state paths
+  across Tokio task boundaries.

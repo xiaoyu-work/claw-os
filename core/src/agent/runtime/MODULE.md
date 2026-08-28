@@ -35,7 +35,8 @@ resolves hooks, audit/notes/nudge/Skill paths, clock, and semantic indexing
 before entering the lifecycle. Delegated children inherit the parent's runtime
 hooks, clock, and paths while retaining their own provider and narrowed tool
 registry, and their hook context is marked delegated. Detached curator work
-reinstalls the captured `Arc<CosConfig>` snapshot. It never executes a model-emitted tool call
+reinstalls both the captured `Arc<CosConfig>` and typed routed-path context
+(owner home, owner UID, routed-job marker). It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
 every turn.
 

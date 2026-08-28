@@ -65,6 +65,35 @@ fn auto_curator_retains_the_request_config_snapshot() {
     assert!(Arc::ptr_eq(curator.config_snapshot(), &config));
 }
 
+#[tokio::test]
+async fn non_routed_detached_context_keeps_process_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let data = root.path().join("data");
+    let logs = root.path().join("logs");
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", &data);
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", &logs);
+    let context = crate::paths::RoutedPathContext::capture();
+    let config = Arc::new(crate::config::CosConfig::default());
+
+    let observed = tokio::spawn(with_detached_context(config, context, None, async {
+        (
+            crate::paths::ai_budget_db_path(),
+            crate::paths::ai_run_log_path(),
+            crate::paths::agent_notes_dir(),
+            crate::paths::current_owner_uid_override(),
+            crate::paths::is_routed_job(),
+        )
+    }))
+    .await
+    .unwrap();
+
+    assert_eq!(observed.0, data.join("ai_budget.db"));
+    assert_eq!(observed.1, logs.join("ai.jsonl"));
+    assert_eq!(observed.2, data.join("agent").join("notes"));
+    assert_eq!(observed.3, None);
+    assert!(!observed.4);
+}
+
 /// `aux_from_main` errors when the main model is empty — we
 /// shouldn't silently swallow a malformed config.
 #[test]

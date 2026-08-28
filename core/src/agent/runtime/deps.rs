@@ -57,6 +57,7 @@ pub struct RuntimeDeps {
     paths: Option<RuntimePaths>,
     notes: crate::agent::memory::notes::NotesStore,
     config: Option<Arc<crate::config::CosConfig>>,
+    routed_paths: crate::paths::RoutedPathContext,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
 }
 
@@ -73,6 +74,7 @@ impl RuntimeDeps {
             paths: None,
             notes: crate::agent::memory::notes::NotesStore::system_default(),
             config: None,
+            routed_paths: crate::paths::RoutedPathContext::capture(),
             _auto_hook_guard: None,
         }
     }
@@ -161,6 +163,10 @@ impl RuntimeDeps {
 
     pub fn config_snapshot(&self) -> Option<Arc<crate::config::CosConfig>> {
         self.config.clone()
+    }
+
+    pub fn routed_paths(&self) -> crate::paths::RoutedPathContext {
+        self.routed_paths.clone()
     }
 }
 

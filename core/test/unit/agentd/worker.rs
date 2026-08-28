@@ -50,6 +50,50 @@ fn an_unprivileged_worker_is_accepted() {
     assert!(identity(1000, 1000).require_expected_identity(1000).is_ok());
 }
 
+#[tokio::test]
+async fn routed_curator_context_survives_detached_spawn() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("owner-home");
+    std::fs::create_dir_all(&home).unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", root.path());
+    let owner_uid = 4242;
+    let context = crate::paths::with_routed_job(crate::paths::with_user_override(
+        owner_uid,
+        home.clone(),
+        async { crate::paths::RoutedPathContext::capture() },
+    ))
+    .await;
+    let config = Arc::new(crate::config::CosConfig::default());
+
+    let observed = tokio::spawn(crate::agent::runtime::auto_curator::with_detached_context(
+        config,
+        context,
+        None,
+        async {
+            (
+                crate::paths::ai_budget_db_path(),
+                crate::paths::ai_run_log_path(),
+                crate::paths::agent_notes_dir(),
+                crate::paths::user_config_path(),
+                crate::paths::current_owner_uid_override(),
+                crate::paths::is_routed_job(),
+            )
+        },
+    ))
+    .await
+    .unwrap();
+
+    let owner_root = root.path().join("users").join(owner_uid.to_string());
+    assert_eq!(observed.0, owner_root.join("ai_budget.db"));
+    assert_eq!(observed.1, owner_root.join("logs").join("ai.jsonl"));
+    assert_eq!(observed.2, owner_root.join("agent").join("notes"));
+    assert_eq!(observed.3, home.join(".config").join("cos").join("config.json"));
+    assert_eq!(observed.4, Some(owner_uid));
+    assert!(observed.5);
+    assert!(crate::paths::current_owner_uid_override().is_none());
+    assert!(!crate::paths::is_routed_job());
+}
+
 // ---------------------------------------------------------------------------
 // Permission mediation
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ pub struct AutoCurator {
     curator: Arc<MemoryCurator>,
     db: MemoryDb,
     config: Arc<crate::config::CosConfig>,
+    routed_paths: crate::paths::RoutedPathContext,
 }
 
 impl AutoCurator {
@@ -60,6 +61,20 @@ impl AutoCurator {
         config: Arc<crate::config::CosConfig>,
         db: &MemoryDb,
         notes: NotesStore,
+    ) -> Option<Arc<Self>> {
+        Self::from_snapshot_with_paths(
+            config,
+            db,
+            notes,
+            crate::paths::RoutedPathContext::capture(),
+        )
+    }
+
+    pub fn from_snapshot_with_paths(
+        config: Arc<crate::config::CosConfig>,
+        db: &MemoryDb,
+        notes: NotesStore,
+        routed_paths: crate::paths::RoutedPathContext,
     ) -> Option<Arc<Self>> {
         let cfg = &config.agent;
         let aux = match auxiliary_from_cfg(cfg) {
@@ -91,6 +106,7 @@ impl AutoCurator {
             curator: Arc::new(curator),
             db: db.clone(),
             config,
+            routed_paths,
         }))
     }
 
@@ -117,21 +133,14 @@ impl AutoCurator {
         let curator = self.curator.clone();
         let db = self.db.clone();
         let config = Arc::clone(&self.config);
+        let routed_paths = self.routed_paths.clone();
         let trusted_session = crate::proc::current_trusted_session_for_caps();
         crate::agent::runtime::background::spawn(async move {
-            crate::config::with_snapshot(config, async move {
+            with_detached_context(config, routed_paths, trusted_session, async move {
                 let curate_session_id = session_id.clone();
-                let run = async move {
-                    curator
-                        .curate_session(&db, &curate_session_id, false)
-                        .await
-                };
-                let result = match trusted_session {
-                    Some(session) => {
-                        crate::proc::with_trusted_session_override(session, run).await
-                    }
-                    None => run.await,
-                };
+                let result = curator
+                    .curate_session(&db, &curate_session_id, false)
+                    .await;
                 match result {
                     Ok(outcome) => {
                         if outcome.skipped_no_new_messages {
@@ -162,6 +171,26 @@ impl AutoCurator {
             .await;
         });
     }
+}
+
+pub(crate) async fn with_detached_context<F, R>(
+    config: Arc<crate::config::CosConfig>,
+    routed_paths: crate::paths::RoutedPathContext,
+    trusted_session: Option<crate::proc::SessionInfo>,
+    future: F,
+) -> R
+where
+    F: std::future::Future<Output = R>,
+{
+    let trusted = async move {
+        match trusted_session {
+            Some(session) => crate::proc::with_trusted_session_override(session, future).await,
+            None => future.await,
+        }
+    };
+    routed_paths
+        .scope(crate::config::with_snapshot(config, trusted))
+        .await
 }
 
 /// Build an [`AuxiliaryClient`] from the **main** `[agent]` provider

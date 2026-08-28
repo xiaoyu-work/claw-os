@@ -289,7 +289,10 @@ their discovered App root; Skill roots retain their trust origin. Legacy
 while all production core code uses Arc-owned
 `current_snapshot`/`with_snapshot`; a source inventory test enforces that
 separation. Detached curation and web request composition reinstall the
-captured snapshot before gated work. Legacy direct-library agent adapters
+captured snapshot before gated work. Detached curation also reinstalls a typed
+`RoutedPathContext` containing the owner home, owner UID, and routed-job marker,
+so budget, run-log, notes, credentials, and other path resolvers remain in the
+owner partition after `tokio::spawn`. Legacy direct-library agent adapters
 retain compatibility contexts, but production CLI, web, and worker flows use
 `runtime::loop_::run_with_deps`.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
