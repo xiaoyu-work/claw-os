@@ -43,6 +43,8 @@ export function InboxPage() {
 
   useEffect(() => {
     load();
+    window.addEventListener("cos:notifications-changed", load);
+    return () => window.removeEventListener("cos:notifications-changed", load);
   }, [load]);
 
   return (

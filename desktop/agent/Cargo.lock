@@ -1075,6 +1075,7 @@ dependencies = [
  "tower",
  "tracing",
  "tracing-subscriber",
+ "zbus",
 ]
 
 [[package]]

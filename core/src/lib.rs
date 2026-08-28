@@ -32,6 +32,7 @@ pub mod i18n;
 pub mod ipc;
 pub mod model;
 pub mod netfilter;
+pub mod notifications;
 pub mod paths;
 pub mod perms;
 pub mod policy;

@@ -27,6 +27,7 @@ library API exported by `core/src/lib.rs`.
 | `caps/` | Capability model and enforcement |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
+| `notifications/` | Durable owner-scoped notification model, store, policy, and external delivery adapters |
 | `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |
 | `service.rs`, `../test/unit/service.rs` | Managed service lifecycle and regressions |
 

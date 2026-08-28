@@ -222,14 +222,19 @@ impl Job {
 #[derive(Debug, Clone)]
 pub struct Store {
     root: PathBuf,
+    publish_notifications: bool,
 }
 
 impl Store {
     pub fn open_default() -> io::Result<Self> {
-        Self::with_root(agent_jobs_dir())
+        Self::open(agent_jobs_dir(), true)
     }
 
     pub fn with_root(root: PathBuf) -> io::Result<Self> {
+        Self::open(root, false)
+    }
+
+    fn open(root: PathBuf, publish_notifications: bool) -> io::Result<Self> {
         // The bucket dirs (pending/running/done) and a sibling
         // `locks/` dir hold the per-job flock sentinels. Pre-creating
         // them keeps the hot path (claim_one / cancel_pending /
@@ -237,7 +242,10 @@ impl Store {
         for sub in ["pending", "running", "done", "locks", "streams"] {
             crate::storage::ensure_private_dir(&root.join(sub))?;
         }
-        Ok(Self { root })
+        Ok(Self {
+            root,
+            publish_notifications,
+        })
     }
 
     pub fn root(&self) -> &Path {
@@ -264,6 +272,12 @@ impl Store {
 
     fn job_lock_path(&self, id: &str) -> PathBuf {
         self.root.join("locks").join(format!("{id}.lock"))
+    }
+
+    fn notify(&self, job: &Job, phase: &str) {
+        if self.publish_notifications {
+            publish_task_notification(job, phase);
+        }
     }
 
     fn active_job_exists(&self, id: &str) -> io::Result<bool> {
@@ -414,6 +428,7 @@ impl Store {
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
+        self.notify(&job, "submitted");
         Ok(job)
     }
 
@@ -549,6 +564,7 @@ impl Store {
                         crate::proc::read_start_time_ticks_pub(worker_pid);
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
+                    self.notify(&job, "started");
                     return Ok(Some(job));
                 }
                 Err(e) if e.kind() == ErrorKind::NotFound => continue, // raced
@@ -655,6 +671,7 @@ impl Store {
                     "clawd.task.worker_identity_unverifiable",
                     &job,
                 );
+                self.notify(&job, "failed");
                 failed += 1;
                 continue;
             }
@@ -667,6 +684,7 @@ impl Store {
                 fs::rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
                 continue;
             }
 
@@ -687,6 +705,7 @@ impl Store {
                 fs::rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+                self.notify(&job, "failed");
                 failed += 1;
                 continue;
             }
@@ -703,6 +722,7 @@ impl Store {
             let pending = self.path_for(JobStatus::Pending, &id);
             fs::rename(&path, &pending)?;
             crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
+            self.notify(&audit_job, "recovered");
             requeued += 1;
         }
 
@@ -764,6 +784,7 @@ impl Store {
             fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+            self.notify(&job, "cancelled");
             return Ok(Some(job));
         }
 
@@ -779,6 +800,7 @@ impl Store {
             fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
+            self.notify(&job, "failed");
             return Ok(Some(job));
         }
 
@@ -789,6 +811,7 @@ impl Store {
         write_json_atomic(&path, &job)?;
         fs::rename(&path, self.path_for(JobStatus::Pending, id))?;
         crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
+        self.notify(&job, "recovered");
         Ok(Some(job))
     }
 
@@ -836,6 +859,15 @@ impl Store {
         fs::rename(&running_path, &done_path)?;
         finish_durable_session(&job)?;
         crate::clawd::audit::record_task_event("clawd.task.finished", &job);
+        self.notify(
+            &job,
+            match job.status {
+                JobStatus::Ok => "completed",
+                JobStatus::Error => "failed",
+                JobStatus::Cancelled => "cancelled",
+                JobStatus::Pending | JobStatus::Running => "finished",
+            },
+        );
         Ok(job)
     }
 
@@ -877,6 +909,7 @@ impl Store {
                 fs::rename(&src, &dst)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
                 Ok(Some(job))
             }
             Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
@@ -905,6 +938,7 @@ impl Store {
                 fs::rename(&pending, &done)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
+                self.notify(&job, "cancelled");
                 return Ok(Some((job, true)));
             }
             Err(error) if error.kind() == ErrorKind::NotFound => {}
@@ -1399,6 +1433,88 @@ fn finish_durable_session(job: &Job) -> io::Result<()> {
         JobStatus::Pending | JobStatus::Running => return Ok(()),
     };
     crate::session::end(&sid, status).map_err(io_other)
+}
+
+fn publish_task_notification(job: &Job, phase: &str) {
+    let Some(owner_uid) = job.owner_uid.filter(|uid| *uid != 0) else {
+        return;
+    };
+    let trigger = job
+        .session_id
+        .as_deref()
+        .and_then(|session_id| session_id.parse::<crate::session::SessionId>().ok())
+        .and_then(|session_id| crate::session::get_meta(&session_id).ok())
+        .is_some_and(|meta| meta.origin == Some(crate::session::SessionOrigin::TriggerDelegation));
+    let source = if trigger { "trigger" } else { "agent" };
+    let kind = if trigger {
+        format!("trigger.agent.{phase}")
+    } else {
+        format!("agent.{phase}")
+    };
+    let (severity, title, body, activity) = match phase {
+        "submitted" => (
+            crate::notifications::Severity::Info,
+            "Agent task queued",
+            "A background Agent task is waiting to run.",
+            true,
+        ),
+        "started" => (
+            crate::notifications::Severity::Info,
+            "Agent task started",
+            "A background Agent task has started.",
+            true,
+        ),
+        "recovered" => (
+            crate::notifications::Severity::Warning,
+            "Agent task restarted",
+            "A background Agent task was recovered after its worker stopped.",
+            true,
+        ),
+        "completed" => (
+            crate::notifications::Severity::Info,
+            "Agent task completed",
+            "A background Agent task finished successfully.",
+            false,
+        ),
+        "cancelled" => (
+            crate::notifications::Severity::Warning,
+            "Agent task cancelled",
+            "A background Agent task was cancelled.",
+            false,
+        ),
+        _ => (
+            crate::notifications::Severity::Error,
+            "Agent task failed",
+            "A background Agent task failed. Open the Agent to inspect the result.",
+            false,
+        ),
+    };
+    let mut draft =
+        crate::notifications::NotificationDraft::new(source, kind, severity, title, body)
+            .dedupe(format!("task:{}:{phase}", job.id));
+    if activity {
+        draft = draft.activity();
+    }
+    draft.task_id = Some(job.id.clone());
+    draft.session_id = job.session_id.clone();
+    if let Some(session_id) = job.session_id.as_deref() {
+        draft
+            .actions
+            .push(crate::notifications::NotificationAction {
+                id: "open-agent".to_string(),
+                label: "Open Agent".to_string(),
+                uri: format!("clawos://agent/session/{session_id}"),
+            });
+    }
+    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+        tracing::warn!(
+            task = %job.id,
+            owner_uid,
+            phase,
+            %error,
+            "failed to publish Agent task notification"
+        );
+    }
 }
 
 fn now_iso() -> String {

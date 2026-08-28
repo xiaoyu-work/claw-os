@@ -20,6 +20,7 @@ import {
 
 type Task = {
   id: string;
+  purpose?: string;
   title?: string;
   status?: string;
   state?: string;
@@ -49,6 +50,8 @@ export function TasksPage() {
 
   useEffect(() => {
     load();
+    window.addEventListener("cos:notifications-changed", load);
+    return () => window.removeEventListener("cos:notifications-changed", load);
   }, [load]);
 
   async function act(id: string, action: "stop" | "undo" | "resume") {
@@ -96,7 +99,9 @@ export function TasksPage() {
               tasks.map((t) => (
                 <TableRow key={t.id}>
                   <TableCell className="font-mono text-xs">{t.id.slice(0, 12)}</TableCell>
-                  <TableCell className="text-sm">{t.title || t.description || "—"}</TableCell>
+                  <TableCell className="text-sm">
+                    {t.title || t.purpose || t.description || "—"}
+                  </TableCell>
                   <TableCell className="text-xs">{t.status || t.state || "—"}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">

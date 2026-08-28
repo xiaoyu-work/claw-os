@@ -301,6 +301,18 @@ async fn bring_up_app(
     if let Some(home) = crate::paths::current_home_override() {
         command.env("HOME", &home).env("COS_HOME", home);
     }
+    if app_id == "cosmic-notifications" {
+        for key in [
+            "DISPLAY",
+            "WAYLAND_DISPLAY",
+            "XDG_RUNTIME_DIR",
+            "DBUS_SESSION_BUS_ADDRESS",
+        ] {
+            if let Ok(value) = std::env::var(key) {
+                command.env(key, value);
+            }
+        }
+    }
     crate::bridge::apply_routed_identity(command.as_std_mut())?;
 
     let mut child = command

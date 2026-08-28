@@ -3,6 +3,7 @@ pub mod auth;
 pub mod chat;
 pub mod inbox;
 pub mod meta;
+pub mod notifications;
 pub mod sessions;
 pub mod setup;
 pub mod sysinfo;

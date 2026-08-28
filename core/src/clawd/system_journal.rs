@@ -153,6 +153,29 @@ pub fn record_task_event(event: &'static str, job: &Job) {
     let _ = append(task_event_record(event, job));
 }
 
+pub fn record_notification_event(
+    operation: &'static str,
+    notification: &crate::notifications::Notification,
+) {
+    let record = json!({
+        "ts": Utc::now(),
+        "event": "system.operation",
+        "source": "notification.service",
+        "operation": operation,
+        "ok": true,
+        "notification_id": notification.id,
+        "notification_source": notification.source,
+        "notification_kind": notification.kind,
+        "severity": notification.severity,
+        "state": notification.state,
+        "owner_uid": notification.owner_uid,
+        "task_id": notification.task_id,
+        "session_id": notification.session_id,
+        "job_id": notification.job_id,
+    });
+    let _ = append(record);
+}
+
 fn task_event_record(event: &'static str, job: &Job) -> Value {
     json!({
         "ts": Utc::now(),
@@ -173,11 +196,7 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
     })
 }
 
-pub fn record_power_intent(
-    action: &str,
-    owner_uid: u32,
-    session_id: &str,
-) -> Result<(), String> {
+pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Result<(), String> {
     append(json!({
         "ts": Utc::now(),
         "event": "system.operation",
@@ -244,10 +263,7 @@ pub fn query(params: Value) -> Result<Value, String> {
     query_with_owner(params, None)
 }
 
-pub fn query_for_client(
-    params: Value,
-    client: &ClientIdentity,
-) -> Result<Value, String> {
+pub fn query_for_client(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let uid = client.require_uid()?;
     query_with_owner(params, (uid != 0).then_some(uid))
 }

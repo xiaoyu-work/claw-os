@@ -2870,6 +2870,37 @@ pub fn load_for_scheduler(
         .map_err(|error| format!("credential is not valid UTF-8: {error}"))
 }
 
+pub fn load_optional_for_scheduler(
+    name: &str,
+    namespace: &str,
+    home: &Path,
+    owner_uid: u32,
+    session_tier: u8,
+) -> Result<Option<String>, String> {
+    credential_scope(namespace, name)?;
+    let home = home
+        .canonicalize()
+        .map_err(|error| format!("canonicalize scheduled credential home: {error}"))?;
+    let path = home
+        .join(".local")
+        .join("share")
+        .join("cos")
+        .join("credentials")
+        .join(namespace)
+        .join(format!("{name}.json"));
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.file_type().is_file() => {}
+        Ok(_) => {
+            return Err(format!(
+                "scheduled credential is not a regular file: {name}"
+            ))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("inspect scheduled credential: {error}")),
+    }
+    load_for_scheduler(name, namespace, &home, owner_uid, session_tier).map(Some)
+}
+
 #[cfg(target_os = "linux")]
 fn read_owner_credential(path: &Path, home: &Path, owner_uid: u32) -> Result<String, String> {
     use std::io::Read;

@@ -10,6 +10,7 @@
  *   #/tasks                  → tasks
  *   #/approvals              → approvals
  *   #/inbox                  → inbox
+ *   #/notifications          → notification center
  *   #/system                 → sysinfo
  *   #/settings               → settings overview (text model)
  *   #/settings/text          → settings :: text modality

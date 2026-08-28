@@ -13,6 +13,8 @@ surfaces.
   request-local model context separately.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
+- Publish deterministic task and approval lifecycle notifications after durable
+  state transitions.
 - Attach built-in, app, and MCP tools to one guarded registry.
 - Expose CLI, task-queue, and authenticated local web surfaces. The queue's
   execution side runs in `claw-agentd`, never in the `clawd` broker — see

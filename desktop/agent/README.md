@@ -18,6 +18,7 @@ desktop/agent/
 │   └── src/
 │       ├── main.rs         # 127.0.0.1 Axum server (/api only)
 │       ├── state.rs        # port discovery + shared clawd client
+│       ├── notifications.rs # clawd delivery lease → session D-Bus popup
 │       └── routes/
 │           ├── chat.rs     # POST /api/chat   (SSE stream)
 │           ├── sessions.rs # GET/DELETE /api/sessions[/:id]
@@ -53,15 +54,22 @@ desktop/agent/
            ┌──────────────────────────┐
            │  cos-agent-bridge        │
            │  127.0.0.1:$PORT         │
-           │  /api/*  (JSON + SSE)    │
+           │  /api/* + notification   │
+           │  delivery subscriber     │
            └────────────┬─────────────┘
                         │
                         ▼  Unix socket
            ┌──────────────────────────┐
            │  clawd                   │
-           │  task.submit / stream    │
+           │  task + notification RPC │
            └──────────────────────────┘
 ```
+
+The bridge also claims pending desktop deliveries from the owner-scoped
+Notification Service, posts them to the graphical session's
+`org.freedesktop.Notifications` D-Bus service, and reports delivery success or
+retryable failure to `clawd`. This reverse bridge keeps the system daemon out
+of the user's session bus.
 
 The bridge and approval applet share `crates/clawd-client` for canonical
 `CLAWD_SOCKET` discovery (`COS_CLAWD_SOCKET` remains a compatibility alias),

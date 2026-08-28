@@ -62,6 +62,8 @@ export function ApprovalsPage() {
 
   useEffect(() => {
     load();
+    window.addEventListener("cos:notifications-changed", load);
+    return () => window.removeEventListener("cos:notifications-changed", load);
   }, [load]);
 
   async function decide(id: string, action: "approve" | "deny") {

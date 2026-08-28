@@ -43,6 +43,16 @@ trait Notifications {
 
 struct PostTool;
 
+fn sender_name(input: &Value) -> String {
+    input
+        .get("app")
+        .or_else(|| input.get("app_name"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Claw OS Agent")
+        .to_string()
+}
+
 #[async_trait]
 impl Tool for PostTool {
     fn name(&self) -> &'static str {
@@ -75,19 +85,28 @@ impl Tool for PostTool {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing required field: summary"),
         };
-        let body = input.get("body").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let body = input
+            .get("body")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
         let icon = input
             .get("icon")
             .and_then(|v| v.as_str())
             .unwrap_or("com.clawos.Notifications")
             .to_string();
-        let app = input
-            .get("app")
-            .and_then(|v| v.as_str())
-            .unwrap_or("cos-agent")
-            .to_string();
-        let expire_ms = input.get("expire_ms").and_then(|v| v.as_i64()).unwrap_or(-1) as i32;
-        let transient = input.get("transient").and_then(|v| v.as_bool()).unwrap_or(false);
+        let app = sender_name(&input);
+        let expire_ms = match input.get("expire_ms").and_then(|v| v.as_i64()) {
+            Some(value) => match i32::try_from(value) {
+                Ok(value) => value,
+                Err(_) => return ToolResult::err("expire_ms is outside the supported range"),
+            },
+            None => -1,
+        };
+        let transient = input
+            .get("transient")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         let conn = match Connection::session().await {
             Ok(c) => c,
@@ -138,8 +157,12 @@ impl Tool for CloseTool {
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
-        let id = match input.get("id").and_then(|v| v.as_u64()) {
-            Some(n) => n as u32,
+        let id = match input
+            .get("id")
+            .and_then(|v| v.as_u64())
+            .and_then(|value| u32::try_from(value).ok())
+        {
+            Some(n) => n,
             None => return ToolResult::err("missing or non-integer field: id"),
         };
         let conn = match Connection::session().await {
@@ -169,4 +192,9 @@ pub(crate) fn run() -> anyhow::Result<()> {
             .await
             .map_err(|e| anyhow::anyhow!("MCP server exited: {e}"))
     })
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/mcp.rs"));
 }

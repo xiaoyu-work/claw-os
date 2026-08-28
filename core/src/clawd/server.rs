@@ -93,6 +93,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     // the broker down, and supervision stopping still leaves every
     // non-agent primitive served.
     let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown);
+    let _notification_dispatcher = super::notifications::spawn_external_dispatcher();
     spawn_heartbeat();
     let admission = Admission::new(Limits::default());
     let serve = async move {

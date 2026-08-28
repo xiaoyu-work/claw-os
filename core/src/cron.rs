@@ -24,7 +24,7 @@ use serde_json::{json, Value};
 use std::fs;
 use std::path::PathBuf;
 
-use crate::caps::{Cap, CapSet, Role, require_or_json, Scope, Verb};
+use crate::caps::{require_or_json, Cap, CapSet, Role, Scope, Verb};
 use chrono::Timelike;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 300;
@@ -62,11 +62,7 @@ fn failed_run(
         status: "failed".to_string(),
         stdout_tail: None,
         stderr_tail: Some(error.to_string()),
-        duration_ms: Some(
-            end.signed_duration_since(*start)
-                .num_milliseconds()
-                .max(0) as u64,
-        ),
+        duration_ms: Some(end.signed_duration_since(*start).num_milliseconds().max(0) as u64),
         run_id: None,
         pid: None,
         pid_start_time_ticks: None,
@@ -83,8 +79,8 @@ fn apply_cron_identity(
     use std::os::unix::fs::MetadataExt;
     use std::os::unix::process::CommandExt;
 
-    let metadata = fs::metadata(home)
-        .map_err(|error| format!("inspect cron owner home: {error}"))?;
+    let metadata =
+        fs::metadata(home).map_err(|error| format!("inspect cron owner home: {error}"))?;
     if metadata.uid() != uid {
         return Err("cron owner home uid mismatch".to_string());
     }
@@ -102,9 +98,7 @@ fn apply_cron_identity(
             }
             for fd in &credential_fds {
                 let flags = libc::fcntl(*fd, libc::F_GETFD);
-                if flags < 0
-                    || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
-                {
+                if flags < 0 || libc::fcntl(*fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
                     return Err(std::io::Error::last_os_error());
                 }
             }
@@ -503,8 +497,8 @@ where
     let captured: std::cell::RefCell<Option<CronJob>> = std::cell::RefCell::new(None);
     crate::filelock::update_locked::<_, String>(&path, |existing| {
         let raw = existing.ok_or_else(|| format!("cron job not found: {id}"))?;
-        let job: CronJob = serde_json::from_str(&raw)
-            .map_err(|e| format!("failed to parse job {id}: {e}"))?;
+        let job: CronJob =
+            serde_json::from_str(&raw).map_err(|e| format!("failed to parse job {id}: {e}"))?;
         let next = transform(job)?;
         let data = serde_json::to_string_pretty(&next)
             .map_err(|e| format!("failed to serialize job: {e}"))?;
@@ -672,7 +666,11 @@ fn execute_job(job: &CronJob, run_id: &str) -> CronRunResult {
         start_time_ticks: None,
     };
     if let Err(error) = crate::proc::register_session_for_owner(session, owner_uid) {
-        return failed_run(&started_at, &start, &format!("register cron session: {error}"));
+        return failed_run(
+            &started_at,
+            &start,
+            &format!("register cron session: {error}"),
+        );
     }
     let _session_guard = CronSessionGuard {
         id: session_id.clone(),
@@ -768,13 +766,14 @@ fn execute_job(job: &CronJob, run_id: &str) -> CronRunResult {
     #[cfg(unix)]
     let credential_fds: Vec<_> = {
         use std::os::unix::io::AsRawFd;
-        credential_files.iter().map(|file| file.as_raw_fd()).collect()
+        credential_files
+            .iter()
+            .map(|file| file.as_raw_fd())
+            .collect()
     };
     #[cfg(not(unix))]
     let credential_fds = Vec::new();
-    if let Err(error) =
-        apply_cron_identity(&mut cmd, owner_uid, &owner_home, &credential_fds)
-    {
+    if let Err(error) = apply_cron_identity(&mut cmd, owner_uid, &owner_home, &credential_fds) {
         return failed_run(&started_at, &start, &error);
     }
 
@@ -862,12 +861,8 @@ fn prepare_credential_memfd(name: &str, value: &str) -> std::io::Result<std::fs:
 
     let label = std::ffi::CString::new(format!("cos-cron-{name}"))
         .map_err(|_| std::io::Error::other("credential name contains NUL"))?;
-    let fd = unsafe {
-        libc::memfd_create(
-            label.as_ptr(),
-            libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
-        )
-    };
+    let fd =
+        unsafe { libc::memfd_create(label.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
     if fd < 0 {
         return Err(std::io::Error::last_os_error());
     }
@@ -893,9 +888,7 @@ fn require_proc_credential_isolation() -> Result<(), String> {
         .parse::<u32>()
         .map_err(|error| format!("parse kernel.yama.ptrace_scope: {error}"))?;
     if level < 2 {
-        return Err(
-            "cron credentials require kernel.yama.ptrace_scope=2 or stronger".to_string(),
-        );
+        return Err("cron credentials require kernel.yama.ptrace_scope=2 or stronger".to_string());
     }
     Ok(())
 }
@@ -914,9 +907,10 @@ fn prepare_credential_memfd(_name: &str, _value: &str) -> std::io::Result<std::f
 
 fn reject_symlink(path: &std::path::Path) -> std::io::Result<()> {
     match fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => Err(std::io::Error::other(
-            format!("refusing symlink credential path {}", path.display()),
-        )),
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(std::io::Error::other(format!(
+            "refusing symlink credential path {}",
+            path.display()
+        ))),
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(error),
@@ -1248,9 +1242,9 @@ fn is_running(job: &CronJob) -> bool {
     match r.pid {
         Some(pid) => {
             crate::proc::is_alive_with_start_time(pid, r.pid_start_time_ticks)
-                || job.owner_uid.is_some_and(|uid| {
-                    process_group_alive(pid) && process_group_owned_by(pid, uid)
-                })
+                || job
+                    .owner_uid
+                    .is_some_and(|uid| process_group_alive(pid) && process_group_owned_by(pid, uid))
         }
         None => chrono::DateTime::parse_from_rfc3339(&r.started_at)
             .ok()
@@ -1296,14 +1290,15 @@ fn terminate_previous_run(
     {
         let expected_start =
             start_time_ticks.ok_or_else(|| "previous run has no process start time".to_string())?;
-        let owner_uid =
-            owner_uid.ok_or_else(|| "previous run has no trusted owner".to_string())?;
+        let owner_uid = owner_uid.ok_or_else(|| "previous run has no trusted owner".to_string())?;
         let leader_alive = crate::proc::is_alive_with_start_time(pid, Some(expected_start));
         if !leader_alive && !process_group_alive(pid) {
             return Ok(());
         }
         if leader_alive && process_uid(pid) != Some(owner_uid) {
-            return Err(format!("previous run pid {pid} is not owned by uid {owner_uid}"));
+            return Err(format!(
+                "previous run pid {pid} is not owned by uid {owner_uid}"
+            ));
         }
         if !process_group_owned_by(pid, owner_uid) {
             return Err(format!(
@@ -1590,10 +1585,7 @@ fn cmd_add(args: &[String]) -> Result<Value, String> {
     let now = chrono::Utc::now();
     let next = next_run_time(&schedule, &now);
     let owner = current_owner()?;
-    if !owner
-        .caps
-        .covers(&Cap::new(Verb::PROC_SPAWN, Scope::Wild))
-    {
+    if !owner.caps.covers(&Cap::new(Verb::PROC_SPAWN, Scope::Wild)) {
         return Err("cron owner lacks proc.spawn:* for shell execution".to_string());
     }
     let tier = match (tier, owner.tier) {
@@ -1723,10 +1715,7 @@ fn cmd_enable(args: &[String]) -> Result<Value, String> {
 
     let id = args.first().ok_or("usage: cos cron enable <id>")?;
     let owner = current_owner()?;
-    if !owner
-        .caps
-        .covers(&Cap::new(Verb::PROC_SPAWN, Scope::Wild))
-    {
+    if !owner.caps.covers(&Cap::new(Verb::PROC_SPAWN, Scope::Wild)) {
         return Err("cron owner lacks proc.spawn:* for shell execution".to_string());
     }
     let now = chrono::Utc::now();
@@ -1862,6 +1851,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
     let job = match job {
         Ok(j) => j,
         Err(e) if e == "__SKIPPED__" => {
+            publish_cron_skipped(owner_uid, id, "overlap");
             return Ok(json!({
                 "job_id": id,
                 "status": "skipped",
@@ -1869,6 +1859,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
             }));
         }
         Err(e) if e == "__QUEUED__" => {
+            publish_cron_skipped(owner_uid, id, "queued");
             return Ok(json!({
                 "job_id": id,
                 "status": "skipped",
@@ -1876,6 +1867,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
             }));
         }
         Err(e) if e == "__PENDING__" => {
+            publish_cron_skipped(owner_uid, id, "spawn-pending");
             return Ok(json!({
                 "job_id": id,
                 "status": "skipped",
@@ -1889,6 +1881,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
         .as_ref()
         .and_then(|run| run.run_id.clone())
         .ok_or_else(|| "cron run claim has no run id".to_string())?;
+    publish_cron_started(&job, &run_id);
     if let Some((pid, start_time)) = previous_to_kill.into_inner() {
         if let Err(error) = terminate_previous_run(pid, start_time, job.owner_uid) {
             let failure_start = chrono::Utc::now();
@@ -1910,6 +1903,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
                 }
                 Ok(current)
             })?;
+            publish_cron_result(&job, &result);
             return serde_json::to_value(&result)
                 .map_err(|e| format!("failed to serialize result: {e}"));
         }
@@ -1923,12 +1917,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
     let log_error = save_run_log(&job.id, &result).err();
     let result_for_close = result.clone();
     update_job(id, |mut job| {
-        if job
-            .last_run
-            .as_ref()
-            .and_then(|run| run.run_id.as_deref())
-            != Some(run_id.as_str())
-        {
+        if job.last_run.as_ref().and_then(|run| run.run_id.as_deref()) != Some(run_id.as_str()) {
             return Ok(job);
         }
         job.last_run = Some(result_for_close);
@@ -1940,6 +1929,7 @@ fn cmd_run(args: &[String]) -> Result<Value, String> {
         };
         Ok(job)
     })?;
+    publish_cron_result(&job, &result);
 
     let mut value =
         serde_json::to_value(&result).map_err(|e| format!("failed to serialize result: {e}"))?;
@@ -1972,10 +1962,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
         if !cron_matches(&job.schedule, &tick_time) {
             continue;
         }
-        if job.owner_uid.is_none()
-            || job.owner_home.is_none()
-            || job.caps.is_none()
-        {
+        if job.owner_uid.is_none() || job.owner_home.is_none() || job.caps.is_none() {
             skipped.push(json!({
                 "id": job.id,
                 "reason": "legacy ownerless job is quarantined",
@@ -1987,6 +1974,9 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
         if is_running(&job) {
             match job.overlap_policy {
                 OverlapPolicy::Skip => {
+                    if let Some(owner_uid) = job.owner_uid {
+                        publish_cron_skipped(owner_uid, &job.id, "overlap");
+                    }
                     skipped.push(json!({
                         "id": job.id,
                         "reason": "previous run still running (overlap_policy: Skip)",
@@ -1996,6 +1986,9 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                 OverlapPolicy::Queue => {
                     // In a real implementation, we'd enqueue and wait.
                     // For simplicity, skip with a note.
+                    if let Some(owner_uid) = job.owner_uid {
+                        publish_cron_skipped(owner_uid, &job.id, "queued");
+                    }
                     skipped.push(json!({
                         "id": job.id,
                         "reason": "previous run still running (overlap_policy: Queue, queued for next tick)",
@@ -2030,8 +2023,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                         let Some(pid) = run.pid else {
                             return Err("__PENDING__".to_string());
                         };
-                        *previous_to_kill.borrow_mut() =
-                            Some((pid, run.pid_start_time_ticks));
+                        *previous_to_kill.borrow_mut() = Some((pid, run.pid_start_time_ticks));
                     }
                     OverlapPolicy::Allow => {}
                 }
@@ -2055,6 +2047,9 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
             Ok(j) => j,
             Err(e) if e == "__DISABLED__" || e == "__NOT_DUE__" => continue,
             Err(e) if e == "__SKIPPED__" => {
+                if let Some(owner_uid) = job.owner_uid {
+                    publish_cron_skipped(owner_uid, &job.id, "overlap");
+                }
                 skipped.push(json!({
                     "id": job.id,
                     "reason": "previous run still running (race with concurrent tick)",
@@ -2062,6 +2057,9 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                 continue;
             }
             Err(e) if e == "__QUEUED__" => {
+                if let Some(owner_uid) = job.owner_uid {
+                    publish_cron_skipped(owner_uid, &job.id, "queued");
+                }
                 skipped.push(json!({
                     "id": job.id,
                     "reason": "previous run still running (overlap_policy: Queue)",
@@ -2069,6 +2067,9 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                 continue;
             }
             Err(e) if e == "__PENDING__" => {
+                if let Some(owner_uid) = job.owner_uid {
+                    publish_cron_skipped(owner_uid, &job.id, "spawn-pending");
+                }
                 skipped.push(json!({
                     "id": job.id,
                     "reason": "previous run has not finished spawning",
@@ -2083,11 +2084,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                 continue;
             }
         };
-        let run_id = match job
-            .last_run
-            .as_ref()
-            .and_then(|run| run.run_id.clone())
-        {
+        let run_id = match job.last_run.as_ref().and_then(|run| run.run_id.clone()) {
             Some(run_id) => run_id,
             None => {
                 skipped.push(json!({
@@ -2097,6 +2094,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                 continue;
             }
         };
+        publish_cron_started(&job, &run_id);
         if let Some((pid, start_time)) = previous_to_kill.into_inner() {
             if let Err(error) = terminate_previous_run(pid, start_time, job.owner_uid) {
                 let mut result = failed_run(
@@ -2127,6 +2125,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
                     "id": job.id,
                     "reason": error,
                 }));
+                publish_cron_result(&job, &result);
                 continue;
             }
         }
@@ -2142,12 +2141,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
         let exec_status = result.status.clone();
         let result_for_close = result.clone();
         if let Err(close_error) = update_job(&job.id, |mut j| {
-            if j
-                .last_run
-                .as_ref()
-                .and_then(|run| run.run_id.as_deref())
-                != Some(run_id.as_str())
-            {
+            if j.last_run.as_ref().and_then(|run| run.run_id.as_deref()) != Some(run_id.as_str()) {
                 return Ok(j);
             }
             j.last_run = Some(result_for_close);
@@ -2163,6 +2157,7 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
         if let Some(error) = log_error.as_deref() {
             tracing::warn!(job_id = %job.id, error = %error, "failed to persist cron run log");
         }
+        publish_cron_result(&job, &result);
 
         executed.push(json!({
             "id": job.id,
@@ -2179,14 +2174,98 @@ fn cmd_tick(_args: &[String]) -> Result<Value, String> {
     }))
 }
 
+fn publish_cron_started(job: &CronJob, run_id: &str) {
+    let Some(owner_uid) = job.owner_uid.filter(|uid| *uid != 0) else {
+        return;
+    };
+    let mut draft = crate::notifications::NotificationDraft::new(
+        "cron",
+        "cron.started",
+        crate::notifications::Severity::Info,
+        "Scheduled task started",
+        format!("Cron job `{}` has started.", job.id),
+    )
+    .activity()
+    .dedupe(format!("cron:{}:{run_id}:started", job.id));
+    draft.job_id = Some(job.id.clone());
+    publish_cron(owner_uid, &job.id, draft);
+}
+
+fn publish_cron_result(job: &CronJob, result: &CronRunResult) {
+    let Some(owner_uid) = job.owner_uid.filter(|uid| *uid != 0) else {
+        return;
+    };
+    let (kind, severity, title, body) = match result.status.as_str() {
+        "success" => (
+            "cron.completed",
+            crate::notifications::Severity::Info,
+            "Scheduled task completed",
+            format!("Cron job `{}` finished successfully.", job.id),
+        ),
+        "timeout" => (
+            "cron.timeout",
+            crate::notifications::Severity::Error,
+            "Scheduled task timed out",
+            format!("Cron job `{}` exceeded its time limit.", job.id),
+        ),
+        _ => (
+            "cron.failed",
+            crate::notifications::Severity::Error,
+            "Scheduled task failed",
+            format!(
+                "Cron job `{}` failed. Open its run history for details.",
+                job.id
+            ),
+        ),
+    };
+    let run_id = result.run_id.as_deref().unwrap_or("unknown");
+    let mut draft =
+        crate::notifications::NotificationDraft::new("cron", kind, severity, title, body)
+            .dedupe(format!("cron:{}:{run_id}:{}", job.id, result.status));
+    draft.job_id = Some(job.id.clone());
+    draft
+        .actions
+        .push(crate::notifications::NotificationAction {
+            id: "open-scheduled-task".to_string(),
+            label: "View task".to_string(),
+            uri: format!("clawos://agent/cron/{}", job.id),
+        });
+    publish_cron(owner_uid, &job.id, draft);
+}
+
+fn publish_cron_skipped(owner_uid: u32, job_id: &str, reason: &str) {
+    if owner_uid == 0 {
+        return;
+    }
+    let mut draft = crate::notifications::NotificationDraft::new(
+        "cron",
+        "cron.overlap_skipped",
+        crate::notifications::Severity::Warning,
+        "Scheduled task skipped",
+        format!("Cron job `{job_id}` was skipped because another run is still active."),
+    )
+    .activity()
+    .dedupe(format!("cron:{job_id}:skipped:{reason}"));
+    draft.job_id = Some(job_id.to_string());
+    publish_cron(owner_uid, job_id, draft);
+}
+
+fn publish_cron(owner_uid: u32, job_id: &str, draft: crate::notifications::NotificationDraft) {
+    if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+        tracing::warn!(
+            owner_uid,
+            job_id,
+            %error,
+            "failed to publish cron notification"
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/cron.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/cron.rs"));
 }

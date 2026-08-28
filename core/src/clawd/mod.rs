@@ -29,6 +29,7 @@ pub mod journal;
 pub mod location;
 pub mod memory;
 pub mod network;
+pub mod notifications;
 pub mod packages;
 pub mod permissions;
 pub mod power;

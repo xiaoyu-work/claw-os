@@ -429,6 +429,32 @@ pub fn submit_owned(
     let data = serde_json::to_string_pretty(&req).map_err(|e| e.to_string())?;
     write_atomic(&path, data.as_bytes()).map_err(|e| format!("write pending: {e}"))?;
     crate::clawd::system_journal::record_approval_request(&req);
+    if let Some(owner_uid) = req.owner_uid.filter(|uid| *uid != 0) {
+        let mut draft = crate::notifications::NotificationDraft::new(
+            "approval",
+            "agent.approval_required",
+            crate::notifications::Severity::Warning,
+            "Approval required",
+            "The Agent is waiting for permission to continue.",
+        )
+        .dedupe(format!("approval:{}", req.id));
+        draft.session_id = Some(req.session.clone());
+        draft
+            .actions
+            .push(crate::notifications::NotificationAction {
+                id: "review-approval".to_string(),
+                label: "Review".to_string(),
+                uri: "clawos://agent/approvals".to_string(),
+            });
+        if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+            tracing::warn!(
+                approval_id = %req.id,
+                owner_uid,
+                %error,
+                "failed to publish approval notification"
+            );
+        }
+    }
     Ok(req.id)
 }
 
@@ -586,6 +612,38 @@ fn resolve(
     let _ = fs::remove_file(&scratch);
 
     crate::clawd::system_journal::record_approval_decision(&resolved);
+    if let Some(owner_uid) = resolved.request.owner_uid.filter(|uid| *uid != 0) {
+        let (kind, title, body) = match resolved.decision.outcome {
+            Outcome::Approved => (
+                "agent.approval_granted",
+                "Approval granted",
+                "The Agent may continue the requested operation.",
+            ),
+            Outcome::Denied => (
+                "agent.approval_denied",
+                "Approval denied",
+                "The requested Agent operation was denied.",
+            ),
+        };
+        let mut draft = crate::notifications::NotificationDraft::new(
+            "approval",
+            kind,
+            crate::notifications::Severity::Info,
+            title,
+            body,
+        )
+        .activity()
+        .dedupe(format!("approval:{}", resolved.request.id));
+        draft.session_id = Some(resolved.request.session.clone());
+        if let Err(error) = crate::clawd::notifications::publish_for_owner(owner_uid, draft) {
+            tracing::warn!(
+                approval_id = %resolved.request.id,
+                owner_uid,
+                %error,
+                "failed to publish approval decision notification"
+            );
+        }
+    }
 
     Ok(resolved)
 }

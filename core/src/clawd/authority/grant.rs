@@ -51,6 +51,8 @@ pub enum Audience {
     Task,
     /// Memory, context and journal reads.
     Context,
+    /// Owner-scoped notification state and delivery leases.
+    Notification,
     /// The consent surface itself.
     Permission,
     /// Privileged-mutation transactions.
@@ -71,6 +73,7 @@ impl Audience {
             Audience::Daemon => "daemon",
             Audience::Task => "task",
             Audience::Context => "context",
+            Audience::Notification => "notification",
             Audience::Permission => "permission",
             Audience::Transaction => "transaction",
             Audience::AppLaunch => "app-launch",
@@ -129,6 +132,7 @@ impl AudienceSet {
             Audience::Daemon,
             Audience::Task,
             Audience::Context,
+            Audience::Notification,
             Audience::Permission,
             Audience::Transaction,
             Audience::AppLaunch,

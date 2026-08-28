@@ -30,8 +30,9 @@ via include_dir!. Commit the regenerated dist/.
 - src/main.tsx          — React entry
 - src/App.tsx           — sidebar + inset shell + hash router
 - src/lib/api.ts        — fetch + SSE wrappers (token-aware)
+- src/lib/notifications.tsx — live notification subscription and browser opt-in
 - src/lib/router.ts     — hash-based router (no HTML5 history)
 - src/components/       — sidebar, token gate
 - src/components/ui/    — shadcn primitives (copied verbatim from OA)
-- src/pages/            — chat, tasks, approvals, inbox, system, settings
+- src/pages/            — chat, tasks, approvals, inbox, notifications, system, settings
 - src/app/globals.css   — OA's oklch tokens (light + dark + sidebar)

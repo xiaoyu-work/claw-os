@@ -2,9 +2,10 @@
 //! Agent UI (the desktop App at `com.clawos.Agent`) to `clawd`.
 //!
 //! The bridge is intentionally thin: it owns no LLM state, holds no
-//! credentials, and persists nothing of its own. Every chat turn is
-//! submitted to the user-session daemon and re-framed as Server-Sent
-//! Events for the native UI.
+//! credentials, and persists nothing of its own. Chat turns are submitted to
+//! the system daemon and re-framed as Server-Sent Events for the native UI;
+//! owner-scoped notification deliveries are pulled back into the graphical
+//! session and posted to Freedesktop D-Bus.
 //!
 //! Bound to `127.0.0.1` only. Every route also requires a random bearer
 //! token published inside the owning user's private runtime directory,
@@ -30,6 +31,7 @@ use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 mod api_error;
+mod notifications;
 mod routes;
 mod state;
 mod translation;
@@ -45,6 +47,7 @@ async fn main() -> anyhow::Result<()> {
 
     let state = state::AppState::from_env()?;
     let port = state.port;
+    let _notification_delivery = notifications::spawn(state.clone());
 
     let api = routes::api()
         .route_layer(middleware::from_fn_with_state(state.clone(), require_auth))

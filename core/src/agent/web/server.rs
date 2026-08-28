@@ -43,6 +43,36 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/approvals/{id}/deny", post(routes::approvals::deny))
         .route("/api/sysinfo/{command}", get(routes::sysinfo::command))
         .route("/api/inbox", get(routes::inbox::list))
+        .route("/api/notifications", get(routes::notifications::list))
+        .route(
+            "/api/notifications/stream",
+            post(routes::notifications::stream),
+        )
+        .route(
+            "/api/notifications/{id}/read",
+            post(routes::notifications::mark_read),
+        )
+        .route(
+            "/api/notifications/{id}/acknowledge",
+            post(routes::notifications::acknowledge),
+        )
+        .route(
+            "/api/notifications/{id}/dismiss",
+            post(routes::notifications::dismiss),
+        )
+        .route(
+            "/api/notifications/{id}/delivered",
+            post(routes::notifications::delivered),
+        )
+        .route(
+            "/api/notifications/delivery/claim",
+            post(routes::notifications::claim_web_deliveries),
+        )
+        .route(
+            "/api/notifications/preferences",
+            get(routes::notifications::get_preferences)
+                .post(routes::notifications::set_preferences),
+        )
         // Setup / configuration — surfaces the same wizard the CLI has,
         // so the web UI can be a complete first-run onboarding surface.
         .route("/api/setup/status", get(routes::setup::status_all))

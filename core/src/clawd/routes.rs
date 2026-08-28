@@ -39,9 +39,9 @@ use super::wire::{Fault, RequestId};
 use super::{
     accessibility, app_sessions, audio, backup, bluetooth, camera, clipboard, config_editor,
     containers, context, context_events, crash, credentials, desktop, display, event_center,
-    firewall, hardware, journal as journal_ops, location, memory, network, packages, permissions,
-    power, printer, scheduler, security, snapshots, storage, system_journal, systemd, tasks,
-    transactions, usb_guard, users,
+    firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
+    permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
+    tasks, transactions, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -312,6 +312,9 @@ fn decode_body<T: DeserializeOwned + Serialize>(params: Value) -> Result<Value, 
     let params = if params.is_null() {
         Value::Object(serde_json::Map::new())
     } else {
+        if !params.is_object() {
+            return Err(Fault::InvalidParams);
+        }
         params
     };
     let typed = serde_json::from_value::<T>(params).map_err(|error| {
@@ -673,6 +676,134 @@ routes! {
             ("limit", FieldRule::Count),
         ],
         run: |c| system_journal::query_for_client(c.params, c.client).map_err(BrokerError::from),
+    }
+
+    // -----------------------------------------------------------------
+    // Notifications
+    // -----------------------------------------------------------------
+    NotificationPublish {
+        name: "notification.publish",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationPublish,
+        audit: &[
+            ("source", FieldRule::Identifier),
+            ("kind", FieldRule::Identifier),
+            ("severity", FieldRule::Token),
+            ("title", FieldRule::Size),
+            ("body", FieldRule::Size),
+            ("task_id", FieldRule::Token),
+            ("session_id", FieldRule::Token),
+            ("job_id", FieldRule::Token),
+        ],
+        run: |c| notifications::publish(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationList {
+        name: "notification.list",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::query(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationList,
+        audit: &[("limit", FieldRule::Count)],
+        run: |c| notifications::list(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationSubscribe {
+        name: "notification.subscribe",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::poll(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationSubscribe,
+        audit: &[
+            ("cursor", FieldRule::Count),
+            ("limit", FieldRule::Count),
+        ],
+        run: |c| notifications::subscribe(c.params, c.client).await.map_err(BrokerError::from),
+    }
+    NotificationRead {
+        name: "notification.read",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::mark_read(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationAcknowledge {
+        name: "notification.acknowledge",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::acknowledge(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDismiss {
+        name: "notification.dismiss",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| notifications::dismiss(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationPreferencesGet {
+        name: "notification.preferences.get",
+        access: Access::User,
+        kind: Kind::Query,
+        budget: Budget::fast(),
+        authority: peer(Audience::Notification),
+        body: body::NoBody,
+        run: |c| notifications::get_preferences(c.client).map_err(BrokerError::from),
+    }
+    NotificationPreferencesSet {
+        name: "notification.preferences.set",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationPreferencesSet,
+        audit: &[
+            ("web_enabled", FieldRule::Flag),
+            ("desktop_enabled", FieldRule::Flag),
+            ("ntfy_enabled", FieldRule::Flag),
+            ("retention_days", FieldRule::Count),
+        ],
+        run: |c| notifications::set_preferences(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDeliveryClaim {
+        name: "notification.delivery.claim",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationDeliveryClaim,
+        audit: &[
+            ("channel", FieldRule::Token),
+            ("limit", FieldRule::Count),
+        ],
+        run: |c| notifications::claim_deliveries(c.params, c.client).map_err(BrokerError::from),
+    }
+    NotificationDeliveryComplete {
+        name: "notification.delivery.complete",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Notification),
+        body: body::NotificationDeliveryComplete,
+        audit: &[
+            ("id", FieldRule::Token),
+            ("channel", FieldRule::Token),
+            ("status", FieldRule::Token),
+            ("error_code", FieldRule::Token),
+        ],
+        run: |c| notifications::complete_delivery(c.params, c.client).map_err(BrokerError::from),
     }
 
     // -----------------------------------------------------------------

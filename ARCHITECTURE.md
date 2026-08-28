@@ -48,6 +48,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
+| Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
@@ -248,6 +249,33 @@ session memory, audit records, and evidence verifier. Canonical prompt snapshots
 live in content-addressed memory tables and are restored byte-for-byte across
 continuations. Dynamic due/App context is logged separately as injected audit
 data and never becomes user-authored history.
+
+### Proactive notification
+
+```text
+cron / triggers / Agent task lifecycle / heartbeat / due nudges
+  -> bounded NotificationDraft after the source transition is durable
+  -> core notification service
+  -> SQLite notification + change + per-channel delivery state
+  -> owner-scoped clawd list / subscribe / acknowledge / dismiss routes
+       -> authenticated Agent Web SSE + browser notifications
+       -> user-session cos-agent-bridge -> Freedesktop notification D-Bus
+  -> daemon delivery lease
+       -> opt-in ntfy adapter
+```
+
+Notification delivery is deterministic system behavior and never depends on
+the model deciding to call a notification tool. The service stores no full
+prompt, tool arguments, credentials, or raw task result. `context.event`
+remains an automation input and `system-operations.jsonl` remains immutable
+audit evidence; notification read, acknowledgement, dismissal, retry, and DND
+state live independently in `notifications.db`.
+
+The system daemon never opens a user's session D-Bus. The user-session Agent
+bridge claims desktop deliveries from `clawd`, posts them through
+`org.freedesktop.Notifications`, and reports success or retryable failure.
+External ntfy delivery is disabled by default and is enabled through
+owner-scoped preferences.
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
@@ -481,6 +509,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
+| Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |
 | App discovery | `core/src/apps.rs` | `app.json` loading and schema generation |
 | App runtime | `apps/<id>/main.py` | Bundled operation implementation |
 | Rootfs build | `rootfs/build.sh` | Feature composition |

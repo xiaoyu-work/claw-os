@@ -23,6 +23,7 @@ async-stream = "0.3"
 bytes = "1"
 clawd-client = { path = "../../../crates/clawd-client" }
 cos-agent-protocol = { workspace = true }
+zbus = { version = "5.14.0", features = ["tokio", "p2p"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

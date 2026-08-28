@@ -11,6 +11,8 @@ and agent tasks.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
 - Own task ownership/lease and expose task lifecycle RPC.
+- Expose owner-scoped notification publication, subscription, state, and
+  delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
   in this process (see `core/src/agentd/MODULE.md`).
 - Install audit hooks around broker-visible work, including runtime audit
@@ -29,6 +31,7 @@ and agent tasks.
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
+| `notifications.rs` | Notification RPC handlers, due-nudge fanout, and external delivery dispatcher |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
 | Service modules | One privileged capability provider per domain |

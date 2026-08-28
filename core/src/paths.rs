@@ -551,6 +551,16 @@ pub fn session_journal_dir() -> PathBuf {
     data_dir().join("journal")
 }
 
+/// Durable, daemon-owned notification state.
+///
+/// Notifications are partitioned by `owner_uid` inside the database and are
+/// exposed only through owner-scoped `clawd` routes. Keeping the database
+/// under the daemon tree prevents an unprivileged Agent worker from rewriting
+/// delivery, acknowledgement, or preference state.
+pub fn notifications_db_path() -> PathBuf {
+    data_dir().join("clawd").join("notifications.db")
+}
+
 /// Directory for agent's per-session todo lists. Lives under
 /// `data_dir/agent/todos/`. Each session writes a JSON file named
 /// `<session_id>.json`.

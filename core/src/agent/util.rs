@@ -35,6 +35,17 @@ use std::path::Path;
 /// contents (rename hadn't taken effect) or the new contents (rename
 /// succeeded + parent dir fsync committed the dirent).
 pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()> {
+    atomic_write_with_fsync_and_prepare(path, data, |_| Ok(()))
+}
+
+pub(crate) fn atomic_write_with_fsync_and_prepare<F>(
+    path: &Path,
+    data: &[u8],
+    prepare: F,
+) -> io::Result<()>
+where
+    F: FnOnce(&Path) -> io::Result<()>,
+{
     let parent = path
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent dir"))?;
@@ -52,10 +63,7 @@ pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    let tmp = parent.join(format!(
-        ".{file_name}.{}.{nonce}.tmp",
-        std::process::id()
-    ));
+    let tmp = parent.join(format!(".{file_name}.{}.{nonce}.tmp", std::process::id()));
 
     {
         let mut options = fs::OpenOptions::new();
@@ -70,6 +78,10 @@ pub(crate) fn atomic_write_with_fsync(path: &Path, data: &[u8]) -> io::Result<()
         // sync_all flushes data + metadata; sync_data would skip mtime
         // and similar but both are sufficient for our durability claim.
         f.sync_all()?;
+    }
+    if let Err(error) = prepare(&tmp) {
+        let _ = fs::remove_file(&tmp);
+        return Err(error);
     }
 
     if let Err(e) = fs::rename(&tmp, path) {

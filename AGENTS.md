@@ -40,6 +40,7 @@ editing additional surfaces.
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |
 | Session journal or mutation bracketing | `core/src/session/journal/`, `core/src/clawd/journal.rs` | `core/src/clawd/server.rs` dispatch, `core/src/agentd/supervisor.rs`, authority audit, packaging modes |
+| Proactive notification | `core/src/notifications/`, `core/src/clawd/notifications.rs` | cron/triggers/heartbeat/nudges, Agent task lifecycle, Agent Web UI, desktop Agent bridge |
 | `clawd` RPC or privileged operation | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs` | client RPC, caps, audit, the owning `clawd` module |
 | Broker wire protocol or a new broker route | `core/src/clawd/routes.rs`, `core/src/clawd/wire/`, `core/src/clawd/transport/` | `client.rs`, every in-repo client, `audit_policy.rs`, `core/tests/clawd_broker_socket.rs` |
 | MCP client/server integration | `core/src/agent/tools/mcp/`, `core/src/config.rs` | tool registry and agent lifecycle attachment |
@@ -158,6 +159,15 @@ Documentation-only changes do not require code tests.
 Trace the full chain: catalog/scope definition → enforcement/provider →
 consumer/tool or app manifest. Update policy-facing tests and audit behavior in
 the same change.
+
+### New or changed notification
+
+Trace the full path: deterministic producer -> durable Notification Service ->
+owner-scoped broker route -> enabled delivery adapters. Keep notification state
+separate from audit and context-event journals, publish only after the source
+state transition is durable, and cover deduplication, DND, retries, owner
+isolation, and acknowledgement in tests. Background delivery must not depend
+on an LLM choosing to invoke a notification tool.
 
 ### LLM provider change
 

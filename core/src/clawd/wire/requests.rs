@@ -30,6 +30,7 @@ const PROMPT_BYTES: usize = 512 * 1024;
 const PATH_BYTES: usize = 4096;
 const LABEL_BYTES: usize = 1024;
 const COMMAND_BYTES: usize = 8192;
+const NOTIFICATION_BODY_BYTES: usize = 16 * 1024;
 
 pub type NoBody = NoParams;
 
@@ -160,6 +161,102 @@ pub struct ContextEventQuery {
     pub order: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+}
+
+// ---------------------------------------------------------------------------
+// Notifications
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationPublish {
+    pub source: Name<128>,
+    pub kind: Name<128>,
+    pub severity: Token<32>,
+    pub title: Text<LABEL_BYTES>,
+    pub body: Text<NOTIFICATION_BODY_BYTES>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_policy: Option<Token<32>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dedupe_key: Option<Name<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub job_id: Option<Token<192>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actions: Option<Structured>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationList {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_dismissed: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationSubscribe {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cursor: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<WaitMillis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationId {
+    pub id: Token<192>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationPreferencesSet {
+    pub web_enabled: bool,
+    pub desktop_enabled: bool,
+    pub ntfy_enabled: bool,
+    pub web_min_severity: Token<32>,
+    pub desktop_min_severity: Token<32>,
+    pub ntfy_min_severity: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub muted_kinds: Option<TextList<128, 128>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dnd_start_minute_utc: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dnd_end_minute_utc: Option<u16>,
+    pub critical_bypasses_dnd: bool,
+    pub retention_days: u16,
+    pub ntfy_server: Text<2048>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ntfy_topic: Option<Name<192>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeliveryClaim {
+    pub channel: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lease_ms: Option<WaitMillis>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotificationDeliveryComplete {
+    pub id: Token<192>,
+    pub channel: Token<32>,
+    pub status: Token<32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_code: Option<Token<128>>,
 }
 
 // ---------------------------------------------------------------------------
