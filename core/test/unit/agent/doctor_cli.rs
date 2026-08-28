@@ -123,10 +123,9 @@ fn check_engines_returns_list_and_status() {
 
 #[test]
 fn check_memory_attaches_stats_block_when_db_open() {
-    // The default DB lives at agent_memory_db_path() and may or
-    // may not exist; check_memory creates it on demand. Either
-    // way the stats block should be present (object, possibly
-    // with all-zero counts on a fresh install).
+    // The default DB lives at agent_memory_db_path() and may or may not exist.
+    // Doctor diagnoses it without creating it; either way the stats block is
+    // present (possibly all zeroes on a fresh install).
     let v = check_memory();
     let memory_db = v.get("memory_db").expect("memory_db field");
     // Only assert the stats sub-shape when the memory_db itself
@@ -137,6 +136,28 @@ fn check_memory_attaches_stats_block_when_db_open() {
         assert!(stats.get("messages_last_7d").is_some());
         assert!(stats.get("total_sessions").is_some());
     }
+}
+
+#[test]
+fn focused_memory_doctor_reports_integrity_dimensions_without_creating_db() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("memory.db");
+    let v = check_memory_database(&path);
+    assert_eq!(v["status"], json!("ok"));
+    assert_eq!(v["initialized"], json!(false));
+    for key in [
+        "sqlite",
+        "wal",
+        "schema",
+        "fts",
+        "prompt_references",
+        "prompt_hashes",
+        "titles",
+        "repair_lifecycle",
+    ] {
+        assert_eq!(v[key]["status"], json!("ok"), "unexpected {key} status");
+    }
+    assert!(!path.exists(), "read-only doctor must not create memory.db");
 }
 
 #[test]

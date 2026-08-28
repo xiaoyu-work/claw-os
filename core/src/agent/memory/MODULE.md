@@ -20,12 +20,15 @@ results, and curates durable notes from completed work.
   while preserving the complete human-readable `MEMORY.md` history.
 - Redact sensitive model-visible memory where required.
 - Preserve schema, transaction, and recovery behavior.
+- Diagnose corruption and serialize explicit repair against active database
+  handles without deleting the damaged evidence.
 
 ## Key Files
 
 | Path | Role |
 | --- | --- |
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence |
+| `recovery.rs` | Snapshot health checks, full WAL validation, FTS rebuild, repair logging, quarantine, and attempt-bound replacement |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
 | `ontology.rs` | Canonical aliases, lifetime policy, and TTL bounds |
@@ -43,5 +46,9 @@ coverage.
 ## Tests
 
 ```bash
+cargo test -p cos agent::memory::recovery::tests -- --test-threads=1
 cargo test -p cos agent::memory:: -- --test-threads=1
 ```
+
+Operator commands and recovery limits are documented in
+[`../../../../docs/memory-recovery.md`](../../../../docs/memory-recovery.md).

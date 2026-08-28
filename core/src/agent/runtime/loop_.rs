@@ -64,6 +64,9 @@ pub enum AgentError {
     #[error("interrupted: session {0} cancelled before completing")]
     Interrupted(String),
 
+    #[error("memory integrity failure: {0}")]
+    MemoryIntegrity(String),
+
     #[error("internal: {0}")]
     Internal(String),
 }
@@ -482,11 +485,16 @@ fn resolve_system_prompt(
     cfg: &AgentConfig,
     user_prompt: &str,
     recorder: Option<(&MemoryDb, &str)>,
-) -> String {
+) -> Result<String, AgentError> {
     if let Some((db, sid)) = recorder {
         match db.system_prompt_for(sid, prompt::CANONICAL_PROMPT_VERSION) {
-            Ok(Some(prompt)) => return prompt,
+            Ok(Some(prompt)) => return Ok(prompt),
             Ok(None) => {}
+            Err(error) if error.is_integrity_failure() => {
+                return Err(AgentError::MemoryIntegrity(format!(
+                    "refusing session {sid}: {error}; run `cos agent sessions health` and explicit repair"
+                )));
+            }
             Err(error) => {
                 tracing::warn!(
                     session_id = sid,
@@ -500,7 +508,7 @@ fn resolve_system_prompt(
     let extra = cfg.system_prompt_path.as_deref().map(Path::new);
     let (candidate, segments) = prompt::build_system_prompt_traced(extra, Some(user_prompt));
     let Some((db, sid)) = recorder else {
-        return candidate;
+        return Ok(candidate);
     };
 
     match db.freeze_system_prompt(sid, &candidate, prompt::CANONICAL_PROMPT_VERSION) {
@@ -508,8 +516,11 @@ fn resolve_system_prompt(
             if snapshot.newly_frozen {
                 record_injected_segments(recorder, &segments);
             }
-            snapshot.prompt
+            Ok(snapshot.prompt)
         }
+        Err(error) if error.is_integrity_failure() => Err(AgentError::MemoryIntegrity(format!(
+            "refusing session {sid}: {error}; run `cos agent sessions health` and explicit repair"
+        ))),
         Err(error) => {
             tracing::warn!(
                 session_id = sid,
@@ -517,7 +528,7 @@ fn resolve_system_prompt(
                 "memory: failed to freeze system prompt; using request-local candidate"
             );
             record_injected_segments(recorder, &segments);
-            candidate
+            Ok(candidate)
         }
     }
 }
@@ -599,7 +610,7 @@ async fn ask_inner(
         }
     }
 
-    let system = resolve_system_prompt(cfg, user_prompt, recorder);
+    let system = resolve_system_prompt(cfg, user_prompt, recorder)?;
 
     let mut messages = initial_messages;
     messages.push(build_request_user_message(user_prompt, None, recorder));
@@ -963,7 +974,7 @@ async fn ask_inner_streaming(
         }
     }
 
-    let system = resolve_system_prompt(cfg, user_prompt, recorder);
+    let system = resolve_system_prompt(cfg, user_prompt, recorder)?;
 
     let mut messages: Vec<Message> = {
         let mut v = initial_messages;
@@ -1284,6 +1295,9 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
             )
             .await
         }
+        Err(e) if e.is_integrity_failure() => Err(AgentError::MemoryIntegrity(format!(
+            "{e}; run `cos agent sessions health` and explicit repair"
+        ))),
         Err(e) => {
             tracing::warn!(
                 "memory: default DB unavailable ({e}); running without history recording"

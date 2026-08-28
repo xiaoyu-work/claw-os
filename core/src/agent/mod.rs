@@ -1202,7 +1202,7 @@ fn recall_cmd(args: &[String]) -> Result<Value, String> {
 fn sessions_cmd(args: &[String]) -> Result<Value, String> {
     // `cos agent sessions [N]` keeps working as the list shortcut
     // when N parses as a number. Otherwise the first arg is treated
-    // as a verb: list / title / set-title / count / clear.
+    // as a verb: list / title / set-title / count / clear / health / repair.
     let first = args.first().map(|s| s.as_str()).unwrap_or("list");
     if first.parse::<usize>().is_ok() {
         return sessions_list(args);
@@ -1216,8 +1216,10 @@ fn sessions_cmd(args: &[String]) -> Result<Value, String> {
         "purge" => sessions_purge(&args[1..]),
         "stats" => sessions_stats(&args[1..]),
         "top" => sessions_top(&args[1..]),
+        "health" => sessions_health(&args[1..]),
+        "repair" => sessions_repair(&args[1..]),
         other => Err(format!(
-            "unknown sessions subcommand: {other}. try: list [N] | top [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats"
+            "unknown sessions subcommand: {other}. try: list [N] | top [N] | title <id> | set-title <id> \"<title>\" | count [<id>] | clear <id> --yes | purge --older-than <days> [--dry-run] [--yes] | stats | health | repair --dry-run | repair [--rebuild-fts] [--quarantine] --yes"
         )),
     }
 }
@@ -1580,6 +1582,66 @@ fn sessions_stats_session_with(
         "oldest_ts_ms": stats.oldest_ts_ms,
         "newest_ts_ms": stats.newest_ts_ms,
     }))
+}
+
+/// `cos agent sessions health` — focused, read-only memory database diagnosis.
+fn sessions_health(args: &[String]) -> Result<Value, String> {
+    if !args.is_empty() {
+        return Err("usage: cos agent sessions health".to_string());
+    }
+    sessions_health_with_path(&crate::paths::agent_memory_db_path())
+}
+
+fn sessions_health_with_path(path: &std::path::Path) -> Result<Value, String> {
+    let report = memory::recovery::diagnose(path)
+        .map_err(|error| format!("memory health check failed: {error}"))?;
+    serde_json::to_value(report).map_err(|error| format!("serialize memory health: {error}"))
+}
+
+/// `cos agent sessions repair --dry-run` previews repair. Applying any
+/// mutation requires `--yes`; whole-database quarantine additionally requires
+/// `--quarantine`.
+fn sessions_repair(args: &[String]) -> Result<Value, String> {
+    let mut dry_run = false;
+    let mut yes = false;
+    let mut rebuild_fts = false;
+    let mut allow_quarantine = false;
+    for arg in args {
+        match arg.as_str() {
+            "--dry-run" => dry_run = true,
+            "--yes" => yes = true,
+            "--rebuild-fts" => rebuild_fts = true,
+            "--quarantine" => allow_quarantine = true,
+            other => {
+                return Err(format!(
+                    "unknown repair arg: {other}. try: --dry-run | --rebuild-fts | --quarantine | --yes"
+                ));
+            }
+        }
+    }
+    if !dry_run && !yes {
+        return Err(
+            "refusing to mutate memory.db without --yes; preview with `cos agent sessions repair --dry-run`"
+                .to_string(),
+        );
+    }
+    sessions_repair_with_path(
+        &crate::paths::agent_memory_db_path(),
+        memory::recovery::RepairOptions {
+            dry_run,
+            rebuild_fts,
+            allow_quarantine,
+        },
+    )
+}
+
+fn sessions_repair_with_path(
+    path: &std::path::Path,
+    options: memory::recovery::RepairOptions,
+) -> Result<Value, String> {
+    let report = memory::recovery::repair(path, options)
+        .map_err(|error| format!("memory repair failed: {error}"))?;
+    serde_json::to_value(report).map_err(|error| format!("serialize memory repair: {error}"))
 }
 
 /// `cos agent memory [list|show|search|forget]` — user-facing

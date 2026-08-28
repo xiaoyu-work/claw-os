@@ -259,6 +259,26 @@ live in content-addressed memory tables and are restored byte-for-byte across
 continuations. Dynamic due/App context is logged separately as injected audit
 data and never becomes user-authored history.
 
+Memory recovery treats `messages` as authoritative and FTS, titles, and
+session prompt links as validated projections. `cos agent doctor` and
+`cos agent sessions health` diagnose SQLite, WAL, schema, FTS, prompt
+references, prompt hashes, titles, and repair lifecycle state without rewriting
+the database: it inspects a private snapshot of the database/WAL/SHM family.
+`cos agent sessions repair` takes an exclusive lifecycle lock shared by every
+normal `MemoryDb` handle, brackets mutation in a private metadata-only repair
+log, and rebuilds FTS transactionally. Damage that cannot be repaired without
+trusting suspect prompt or SQLite bytes is renamed to a restrictive
+same-filesystem quarantine before an attempt-bound staged replacement is
+installed. A malformed WAL is never replayed during salvage; repair validates a
+separate copy of the quarantined main database and retains its checkpointed
+authoritative rows when possible. A valid WAL must checkpoint completely before
+any rename, and staged replacements are accepted only after their attempt
+marker and recovered counts are durable in the standalone main database.
+Authoritative messages are scanned without secondary indexes and committed
+before rebuilding indexes/FTS or attempting title and prompt projection
+recovery.
+See [`docs/memory-recovery.md`](docs/memory-recovery.md).
+
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
 that starts as root only long enough to `exec`: `core/src/agentd/spawn.rs`
@@ -523,6 +543,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   is no permissive dual-stack listener.
 - Memory and audit stores are append/transaction oriented; schema and recovery
   behavior require regression tests.
+- Memory repair never deletes quarantined evidence, never restores a prompt
+  blob without verifying its SHA-256 address, and never replaces a database
+  while a cooperating reader or writer still holds its lifecycle lock.
 - Rootfs/image builds require Linux filesystem semantics and root privileges.
 - Windows case-insensitive checkouts cannot faithfully represent every
   case-colliding desktop symlink.
@@ -535,6 +558,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 
 - [`docs/app-development.md`](docs/app-development.md)
 - [`docs/image-architecture.md`](docs/image-architecture.md)
+- [`docs/memory-recovery.md`](docs/memory-recovery.md)
 - [`docs/semantic-search-design.md`](docs/semantic-search-design.md)
 - [`docs/browser-attached-design.md`](docs/browser-attached-design.md)
 - [`packaging/README.md`](packaging/README.md)

@@ -38,6 +38,7 @@ surfaces.
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
+| `memory/recovery.rs` | Memory health, serialized repair, FTS rebuild, and evidence-preserving quarantine |
 | `prompt/` | System prompt composition, tracing, caching |
 | `safety/` | Redaction, file/tool safety, and external-data controls |
 | `web/` | Authenticated local agent API and UI |

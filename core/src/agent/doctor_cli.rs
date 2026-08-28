@@ -2,8 +2,9 @@
 //!
 //! Aggregates many small checks into one pass/warn/fail summary so
 //! operators can answer "is my agent stack healthy?" in one
-//! command. By default every check is cheap (file stats, in-memory
-//! counts, JSONL scans of the local run log); no network calls.
+//! command. Checks stay local by default; memory diagnosis may snapshot and
+//! scan SQLite and rebuild a temporary in-memory FTS projection, while no
+//! network calls run.
 //! Pass `--probe-network` to also issue a one-shot live ping to
 //! the active provider.
 //!
@@ -60,7 +61,7 @@ use serde_json::{json, Value};
 
 use crate::agent::audit_cli;
 use crate::agent::llm;
-use crate::agent::memory::sqlite_fts::MemoryDb;
+use crate::agent::memory::recovery;
 use crate::agent::runtime::hooks::global_registry;
 use crate::agent::runtime::hooks_config;
 use crate::agent::skills;
@@ -339,68 +340,7 @@ fn check_media_modalities() -> Value {
 }
 
 fn check_memory() -> Value {
-    let now_ms: i64 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let memory_db = match MemoryDb::open_default() {
-        Ok(db) => {
-            let total = db.count_total().unwrap_or(0);
-            // Best-effort enrichment with the same surface
-            // ``cos agent sessions stats`` exposes — if stats fails
-            // for any reason we still report the basic count. This
-            // lets a single ``cos agent doctor`` answer "how much
-            // history have I accumulated, and is it worth purging?"
-            // without forcing the user to run a second command.
-            let stats_block = match db.stats(now_ms) {
-                Ok(s) => json!({
-                    "total_sessions": s.total_sessions as u64,
-                    "titled_sessions": s.titled_sessions as u64,
-                    "messages_last_1d": s.messages_last_1d as u64,
-                    "messages_last_7d": s.messages_last_7d as u64,
-                    "messages_last_30d": s.messages_last_30d as u64,
-                    "oldest_ts_ms": s.oldest_ts_ms,
-                    "newest_ts_ms": s.newest_ts_ms,
-                }),
-                Err(_) => Value::Null,
-            };
-            json!({
-                "status": "ok",
-                "path": paths::agent_memory_db_path().display().to_string(),
-                "total_messages": total,
-                "stats": stats_block,
-            })
-        }
-        Err(e) => {
-            let err_str = e.to_string();
-            let path = paths::agent_memory_db_path();
-            let parent = path.parent().map(|p| p.display().to_string()).unwrap_or_default();
-            let fix = if err_str.to_lowercase().contains("permission denied")
-                || err_str.to_lowercase().contains("eperm")
-            {
-                Some(format!(
-                    "ensure `{parent}` is writable by the user running cos, e.g.: sudo install -d -m 0755 -o $USER {parent}"
-                ))
-            } else if err_str.to_lowercase().contains("no such file")
-                || err_str.to_lowercase().contains("enoent")
-            {
-                Some(format!(
-                    "create the parent dir: sudo install -d -m 0755 -o $USER {parent}"
-                ))
-            } else {
-                None
-            };
-            let mut entry = json!({
-                "status": "fail",
-                "path": path.display().to_string(),
-                "error": err_str,
-            });
-            if let Some(f) = fix {
-                entry["fix"] = json!(f);
-            }
-            entry
-        }
-    };
+    let memory_db = check_memory_database(&paths::agent_memory_db_path());
 
     // Semantic store is opt-in (needs an embedder configured). When
     // it returns Ok(None), report disabled rather than failed.
@@ -454,6 +394,45 @@ fn check_memory() -> Value {
         "semantic": semantic,
         "notes": notes,
     })
+}
+
+fn check_memory_database(path: &Path) -> Value {
+    match recovery::diagnose(path) {
+        Ok(report) => {
+            let mut value = serde_json::to_value(&report).unwrap_or_else(|error| {
+                json!({
+                    "status": "fail",
+                    "path": path.display().to_string(),
+                    "error": format!("serialize memory health: {error}"),
+                })
+            });
+            value["total_messages"] = json!(report
+                .stats
+                .as_ref()
+                .map(|stats| stats.total_messages)
+                .unwrap_or(0));
+            if report.status != "ok" {
+                value["fix"] = if report.requires_quarantine {
+                    json!(
+                        "preview with `cos agent sessions repair --dry-run`; after inspection, \
+                         preserve the damaged files with `cos agent sessions repair --quarantine --yes`"
+                    )
+                } else {
+                    json!(
+                        "preview with `cos agent sessions repair --dry-run`, then apply with \
+                         `cos agent sessions repair --yes`"
+                    )
+                };
+            }
+            value
+        }
+        Err(error) => json!({
+            "status": "fail",
+            "path": path.display().to_string(),
+            "error": error.to_string(),
+            "fix": "inspect directory ownership and permissions, then run `cos agent sessions health`",
+        }),
+    }
 }
 
 fn check_log_file(path: &Path, label: &str) -> Value {
