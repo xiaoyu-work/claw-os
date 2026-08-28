@@ -210,13 +210,38 @@ impl Tool for Delegate {
 
         let parent_cfg = self.deps.config.agent.clone();
         let deps = self.deps.clone();
-        run_delegate(parsed, &parent_cfg, move || default_registry(&deps)).await
+        let runtime = self.deps.runtime.clone();
+        run_delegate_with_deps(
+            parsed,
+            &parent_cfg,
+            move || default_registry(&deps),
+            runtime,
+        )
+        .await
     }
 }
 
 /// Core delegate logic. Split out from `Tool::exec` so tests can drive it
 /// without going through `serde_json::Value`.
 async fn run_delegate<F>(input: DelegateInput, parent_cfg: &AgentConfig, factory: F) -> ToolResult
+where
+    F: Fn() -> ToolRegistry,
+{
+    run_delegate_with_deps(
+        input,
+        parent_cfg,
+        factory,
+        crate::agent::runtime::deps::RuntimeDeps::isolated(),
+    )
+    .await
+}
+
+async fn run_delegate_with_deps<F>(
+    input: DelegateInput,
+    parent_cfg: &AgentConfig,
+    factory: F,
+    runtime: crate::agent::runtime::deps::RuntimeDeps,
+) -> ToolResult
 where
     F: Fn() -> ToolRegistry,
 {
@@ -291,7 +316,8 @@ where
     let task = input.task.clone();
 
     let child_future = DELEGATE_DEPTH.scope(cur + 1, async move {
-        loop_::ask_with(provider, &child_cfg, &task, &tools).await
+        let request = loop_::RuntimeRequest::buffered(provider, &child_cfg, &task, &tools);
+        loop_::run_with_deps(&runtime, request).await
     });
 
     let outcome = tokio::time::timeout(timeout, child_future).await;

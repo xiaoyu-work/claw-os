@@ -1025,3 +1025,48 @@ fn cmd_list_orders_union_by_created_at_desc() {
     assert_eq!(arr[1]["id"], mid.id);
     assert_eq!(arr[2]["id"], oldest.id);
 }
+#[tokio::test]
+async fn standalone_worker_hook_registry_records_runtime_audit() {
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let hooks = standalone_runtime_hooks();
+    assert!(hooks.names().contains(&"clawd-runtime-audit".to_string()));
+    let config = crate::config::AgentConfig {
+        provider: "mock".into(),
+        model: "mock-model".into(),
+        ..Default::default()
+    };
+    let mock = crate::agent::llm::providers::mock::MockProvider::new(&config.model, &config);
+    mock.push_response(crate::agent::llm::providers::mock::MockResponse::ToolUse(
+        vec![crate::agent::llm::ToolCall {
+        id: "standalone-call".into(),
+        name: "echo".into(),
+        input: serde_json::json!({"text":"audit"}),
+        }],
+    ));
+    mock.push_response(crate::agent::llm::providers::mock::MockResponse::Text(
+        "done".into(),
+    ));
+    let provider: Arc<dyn crate::agent::llm::Provider> = Arc::new(mock);
+    let runtime = crate::agent::runtime::deps::RuntimeDeps::new(
+        hooks,
+        Arc::new(crate::agent::runtime::deps::SystemClock),
+        None,
+    );
+    let tools = crate::agent::tools::registry::builtin_only_registry();
+    let request = crate::agent::runtime::loop_::RuntimeRequest::buffered(
+        provider,
+        &config,
+        "run audited tool",
+        &tools,
+    );
+
+    crate::agent::runtime::loop_::run_with_deps(&runtime, request)
+        .await
+        .unwrap();
+
+    let audit = std::fs::read_to_string(temp.path().join("clawd").join("audit.jsonl")).unwrap();
+    assert!(audit.contains("\"event\":\"clawd.agent.tool.started\""));
+    assert!(audit.contains("\"event\":\"clawd.agent.tool.finished\""));
+    assert!(audit.contains("\"event\":\"clawd.agent.turn.finished\""));
+}

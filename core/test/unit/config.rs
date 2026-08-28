@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 fn current_override() -> Option<Arc<CosConfig>> {
-    CONFIG_OVERRIDE.try_with(Arc::clone).ok()
+    CONFIG_SNAPSHOT_OVERRIDE.try_with(Arc::clone).ok()
 }
 
 #[test]
@@ -196,7 +196,7 @@ fn load_from_path_missing_file_returns_defaults() {
 }
 
 #[tokio::test]
-async fn with_override_swaps_get_inside_scope_only() {
+async fn with_snapshot_swaps_current_snapshot_inside_scope_only() {
     // Establish a baseline: outside any scope, no override.
     assert!(current_override().is_none());
 
@@ -205,8 +205,8 @@ async fn with_override_swaps_get_inside_scope_only() {
     cfg.agent.model = "claude-opus-4.7".into();
     let scoped = Arc::new(cfg);
 
-    with_override(scoped, async {
-        let inside = get();
+    with_snapshot(scoped, async {
+        let inside = current_snapshot();
         assert_eq!(inside.agent.provider, "copilot");
         assert_eq!(inside.agent.model, "claude-opus-4.7");
         assert!(current_override().is_some());
@@ -232,14 +232,16 @@ async fn override_propagates_through_awaited_futures() {
     cfg.agent.provider = "openai".into();
     let scoped = Arc::new(cfg);
 
-    let observed = with_override(scoped, async move {
+    let observed = with_snapshot(scoped, async move {
         // Plain `.await` of a child future.
-        let a = async { get().agent.provider.clone() }.await;
+        let a = async { current_snapshot().agent.provider.clone() }.await;
         // join_all-style concurrency drives futures within the
         // same task, so the override is still visible.
         let bcd =
-            futures_util::future::join_all((0..3).map(|_| async { get().agent.provider.clone() }))
-                .await;
+            futures_util::future::join_all(
+                (0..3).map(|_| async { current_snapshot().agent.provider.clone() }),
+            )
+            .await;
         (a, bcd)
     })
     .await;
@@ -260,13 +262,13 @@ async fn override_does_not_leak_across_spawn() {
     cfg.agent.provider = "openai".into();
     let scoped = Arc::new(cfg);
 
-    let observed = with_override(scoped, async move {
+    let observed = with_snapshot(scoped, async move {
         tokio::spawn(async move {
             // Inside the spawned task: no override, so this
             // returns the process-wide config (defaults in the
             // unit-test environment) and definitely NOT
             // "openai".
-            get().agent.provider.clone()
+            current_snapshot().agent.provider.clone()
         })
         .await
         .unwrap()
@@ -289,13 +291,13 @@ async fn parallel_override_scopes_are_isolated_and_reclaimed() {
     let right_weak = Arc::downgrade(&right);
 
     let (seen_left, seen_right) = tokio::join!(
-        with_override(left, async {
+        with_snapshot(left, async {
             tokio::task::yield_now().await;
-            get().agent.provider.clone()
+            current_snapshot().agent.provider.clone()
         }),
-        with_override(right, async {
+        with_snapshot(right, async {
             tokio::task::yield_now().await;
-            get().agent.provider.clone()
+            current_snapshot().agent.provider.clone()
         })
     );
 
@@ -314,8 +316,32 @@ fn scoped_config_is_reclaimed_after_scope() {
         .enable_all()
         .build()
         .unwrap();
-    runtime.block_on(with_override(scoped, async {}));
+    runtime.block_on(with_snapshot(scoped, async {}));
     assert!(weak.upgrade().is_none());
+}
+
+#[test]
+#[allow(deprecated)]
+fn legacy_static_config_api_remains_source_compatible() {
+    fn accepts_config(_: &CosConfig) {}
+
+    accepts_config(get());
+    let _: CosConfig = get().clone();
+
+    static LEGACY: OnceLock<CosConfig> = OnceLock::new();
+    let legacy = LEGACY.get_or_init(|| {
+        let mut config = CosConfig::default();
+        config.agent.provider = "legacy".into();
+        config
+    });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let observed = runtime.block_on(with_override(legacy, async {
+        get().agent.provider.clone()
+    }));
+    assert_eq!(observed, "legacy");
 }
 
 #[test]

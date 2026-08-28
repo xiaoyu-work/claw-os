@@ -909,6 +909,10 @@ impl MemoryCurator {
         }
     }
 
+    pub fn notes_dir(&self) -> &Path {
+        self.notes.dir()
+    }
+
     pub fn with_config(mut self, config: CuratorConfig) -> Self {
         self.config = config;
         self

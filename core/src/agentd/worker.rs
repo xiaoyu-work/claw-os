@@ -650,7 +650,7 @@ async fn execute(
     let config = crate::config::load_for_home(&home);
     let scoped = crate::agent::service::execute_job(request, stream_sink, progress_sink, hooks);
     let scoped = with_session(assignment.session, scoped);
-    let scoped = crate::config::with_override(config, scoped);
+    let scoped = crate::config::with_snapshot(config, scoped);
     // The same per-owner scoping the in-process worker installed, so
     // config, credentials, consents and memory resolve inside the
     // owner's own account.

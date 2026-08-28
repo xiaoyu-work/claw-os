@@ -523,7 +523,7 @@ pub async fn chat(req: ChatRequest) -> Result<ChatResult, AiError> {
         Err(err) => {
             let mut rec = LlmRunRecord::from_denial(
                 &req.app_id,
-                &config::get().agent.model,
+                &config::current_snapshot().agent.model,
                 denial_reason_token(err),
                 &err.to_string(),
                 duration_ms,
@@ -792,7 +792,8 @@ async fn chat_inner(req: &ChatRequest) -> Result<ChatResult, AiError> {
     // 5. Resolve the model. Apps don't get to pick — the OS owner
     //    configures one provider and one model in
     //    `/etc/cos/agent.toml`, and every app call uses that.
-    let cfg = &config::get().agent;
+    let config = config::current_snapshot();
+    let cfg = &config.agent;
     let model = cfg.model.clone();
 
     // 6. Capability check at the kernel boundary.
@@ -1278,7 +1279,8 @@ impl LlmProvider for SystemGatedProvider {
     }
 
     async fn chat(&self, mut request: LlmChatRequest) -> LlmResult<LlmChatResponse> {
-        let cfg = &config::get().agent;
+        let config = config::current_snapshot();
+        let cfg = &config.agent;
         let model = request.model.clone();
         normalize_output_limit(&mut request)?;
 
@@ -1335,7 +1337,8 @@ impl LlmProvider for SystemGatedProvider {
         //   - on `StreamEvent::Done { usage }` we settle to actuals,
         //   - on early drop (consumer hung up) we charge the conservative
         //     estimate because the provider may already have generated tokens.
-        let cfg = &config::get().agent;
+        let config = config::current_snapshot();
+        let cfg = &config.agent;
         let model = request.model.clone();
         normalize_output_limit(&mut request)?;
 

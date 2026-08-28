@@ -32,7 +32,9 @@ through model turns, tools, hooks, progress, and final records.
 Runtime depends on provider-neutral LLM types, the guarded tool registry,
 prompt/memory services, and an explicit `RuntimeDeps`. Production composition
 resolves hooks, audit/notes/nudge/Skill paths, clock, and semantic indexing
-before entering the lifecycle. It never executes a model-emitted tool call
+before entering the lifecycle. Delegated children inherit the parent's runtime
+hooks, clock, and paths while retaining their own provider and narrowed tool
+registry. It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
 every turn.
 

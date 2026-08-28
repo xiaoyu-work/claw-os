@@ -51,12 +51,12 @@ pub const MODEL_NAME: &str = "text-embedding-3-small";
 /// cloud `[agent]` provider is available. Returns an error if the
 /// config block names a provider that does not exist.
 pub fn build_default() -> Result<Option<Box<dyn Embedder>>, String> {
-    let cfg = &crate::config::get().embed;
-    build_from(cfg)
+    let config = crate::config::current_snapshot();
+    build_from(&config.embed)
 }
 
 pub fn build_from(cfg: &EmbedConfig) -> Result<Option<Box<dyn Embedder>>, String> {
-    build_from_with_agent(cfg, &crate::config::get().agent)
+    build_from_with_agent(cfg, &crate::config::current_snapshot().agent)
 }
 
 /// Variant of [`build_from`] that takes the `[agent]` config

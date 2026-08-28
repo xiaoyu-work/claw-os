@@ -666,8 +666,12 @@ fn resolve_system_prompt(
                 &options,
                 paths.system_skills_origin,
             );
-            let notes = crate::agent::memory::notes::NotesStore::at(&paths.notes_dir);
-            prompt::build_system_prompt_traced_with(extra, Some(user_prompt), &skills, &notes)
+            prompt::build_system_prompt_traced_with(
+                extra,
+                Some(user_prompt),
+                &skills,
+                deps.notes(),
+            )
         }
         None => prompt::build_system_prompt_traced(extra, Some(user_prompt)),
     };
@@ -805,7 +809,9 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
     // Auto-curator: opt-in via `[agent] auxiliary_*` config. After
     // each final answer, fires `curate_session` in the background to
     // extract durable user facts and append them to MEMORY.md.
-    let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
+    let auto_curator = recorder.and_then(|(db, _)| {
+        AutoCurator::from_cfg_logged_with_notes(cfg, db, deps.notes().clone())
+    });
 
     if let Some((db, sid)) = recorder {
         let to_record = redactor
@@ -873,11 +879,13 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
             ));
         }
 
+        let turn_started_ms = deps.now_ms();
         let hook_ctx = hooks::HookContext::new(
             hook_session_id.clone(),
             provider.effective_provider_name(),
             provider.effective_model_name(&cfg.model),
         )
+        .with_started_at_ms(turn_started_ms)
         .with_registry(hook_registry.clone())
         .with_turn_index(turn);
         if let hooks::HookOutcome::Stop(reason) = hook_registry.dispatch_pre_turn(&hook_ctx) {
@@ -933,7 +941,6 @@ async fn ask_inner(request: LifecycleRequest<'_>) -> Result<AskResult, AgentErro
         }
 
         let len_before = messages.len();
-        let turn_started_ms = deps.now_ms();
         let outcome_result = match (&output, force_finalize) {
             (LifecycleOutput::Buffered, true) => {
                 super::turn::run_final_turn_interruptible(
@@ -1219,7 +1226,7 @@ async fn ask_inner_streaming(
 /// and run `ask_with_memory`. If the memory DB cannot be opened (read-only
 /// filesystem etc.), falls back to `ask_with` with a warning.
 pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
-    let config = crate::config::get();
+    let config = crate::config::current_snapshot();
     let cfg = &config.agent;
     let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
@@ -1227,10 +1234,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
         Arc::clone(&config),
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
-    let runtime_deps = RuntimeDeps::load(
-        &crate::agent::runtime::deps::RuntimePaths::from_process(),
-        registry_deps.semantic.clone(),
-    );
+    let runtime_deps = registry_deps.runtime.clone();
     let mut tools = default_registry(&registry_deps);
     tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));

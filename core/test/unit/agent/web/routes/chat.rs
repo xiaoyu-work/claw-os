@@ -2,6 +2,37 @@ use super::*;
 use crate::agent::llm::{ChatResponse, ContentBlock, FinishReason, ToolCall, Usage};
 
 #[test]
+fn chat_registry_uses_the_same_complete_config_snapshot() {
+    let temp = tempfile::tempdir().unwrap();
+    let mut config = crate::config::CosConfig::default();
+    config.agent.provider = "mock".into();
+    config.agent.model = "snapshot-model".into();
+    config.embed.provider = "none".into();
+    let config = Arc::new(config);
+    let paths = crate::agent::tools::registry::RegistryPaths {
+        apps_dir: temp.path().join("apps"),
+        todos_dir: temp.path().join("todos"),
+        system_skills_dir: temp.path().join("system-skills"),
+        user_skills_dir: temp.path().join("user-skills"),
+        skills_usage_path: temp.path().join("skills-usage.jsonl"),
+        media_outputs_dir: temp.path().join("media"),
+        memory_db_path: temp.path().join("memory.db"),
+        semantic_db_path: temp.path().join("semantic.db"),
+        notes_dir: temp.path().join("notes"),
+        hooks_config_path: temp.path().join("hooks.json"),
+        audit_log_path: temp.path().join("audit.jsonl"),
+        nudges_path: temp.path().join("nudges.json"),
+        system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
+    };
+
+    let deps = compose_registry_deps(Arc::clone(&config), paths);
+
+    assert!(Arc::ptr_eq(&config, &deps.config));
+    assert_eq!(deps.config.agent.model, "snapshot-model");
+    assert_eq!(deps.config.embed.provider, "none");
+}
+
+#[test]
 fn generated_sessions_get_independent_turn_leases() {
     let state = AppState::new(crate::config::AgentConfig::default(), 1000);
     let (first_id, _first_lease) =

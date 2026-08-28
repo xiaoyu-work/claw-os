@@ -281,9 +281,14 @@ authorization, execution ordering, hooks, and conversation history meet.
 Composition roots resolve environment-backed paths and open optional
 memory/semantic stores once. `RegistryDeps` makes registry assembly
 side-effect-free, while `RuntimeDeps` carries the scoped hook registry, clock,
-semantic indexer, and prompt/audit paths into the unified lifecycle. Legacy
-direct-library adapters retain compatibility contexts, but production CLI,
-web, and worker flows use `runtime::loop_::run_with_deps`.
+semantic indexer, notes store, and prompt/audit paths into the unified
+lifecycle. Standalone and `claw-agentd` audit hooks are installed into that
+exact registry, and delegated children inherit it. App-session tools retain
+their discovered App root; Skill roots retain their trust origin. Legacy
+`config::get()` and static `with_override` callers remain source compatible,
+while production uses Arc-owned `current_snapshot`/`with_snapshot`. Legacy
+direct-library agent adapters retain compatibility contexts, but production
+CLI, web, and worker flows use `runtime::loop_::run_with_deps`.
 The projection in `core/src/agent/runtime/presentation.rs` affects display
 events only; complete tool inputs/results remain in the runtime trajectory,
 session memory, audit records, and evidence verifier. Canonical prompt snapshots

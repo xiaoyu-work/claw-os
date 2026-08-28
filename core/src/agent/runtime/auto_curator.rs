@@ -42,6 +42,14 @@ impl AutoCurator {
     /// i.e. the main provider is `mock` or build fails. Errors are
     /// logged at `warn!` and downgrade to `None`.
     pub fn from_cfg_logged(cfg: &AgentConfig, db: &MemoryDb) -> Option<Arc<Self>> {
+        Self::from_cfg_logged_with_notes(cfg, db, NotesStore::system_default())
+    }
+
+    pub fn from_cfg_logged_with_notes(
+        cfg: &AgentConfig,
+        db: &MemoryDb,
+        notes: NotesStore,
+    ) -> Option<Arc<Self>> {
         let aux = match auxiliary_from_cfg(cfg) {
             Ok(Some(a)) => a,
             Ok(None) => match aux_from_main(cfg) {
@@ -65,13 +73,16 @@ impl AutoCurator {
                 return None;
             }
         };
-        let notes = NotesStore::system_default();
         let log_path = default_log_path();
         let curator = MemoryCurator::new(aux, notes, log_path);
         Some(Arc::new(Self {
             curator: Arc::new(curator),
             db: db.clone(),
         }))
+    }
+
+    pub fn notes_dir(&self) -> &std::path::Path {
+        self.curator.notes_dir()
     }
 
     /// Fire-and-forget curation pass over `session_id`. The curator

@@ -151,7 +151,7 @@ struct TurnConflict {
 // ---------------------------------------------------------------------------
 
 async fn drive_chat(
-    state: AppState,
+    _state: AppState,
     prompt: String,
     session_id: String,
     interrupt_scope: String,
@@ -169,36 +169,22 @@ async fn drive_chat(
     // would forever report "agent not configured" — even after the
     // config file on disk has been fully populated.
     //
-    // Falls back to the startup snapshot if disk-read returns an
-    // empty provider AND the snapshot has one (paranoia for a config
-    // file truncated mid-write).
-    let cfg = {
-        let fresh = crate::config::load_user_config().agent.clone();
-        if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
-            state.inner.cfg.clone()
-        } else {
-            fresh
-        }
-    };
-    setup::is_ready(&cfg)?;
+    let config = crate::config::load_user_config();
+    let cfg = &config.agent;
+    setup::is_ready(cfg)?;
 
-    let provider = crate::ai::gate::build_system_provider(&cfg)
+    let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
 
-    let mut effective_config = (*crate::config::get()).clone();
-    effective_config.agent = cfg.clone();
-    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
-        Arc::new(effective_config),
+    let registry_deps = compose_registry_deps(
+        Arc::clone(&config),
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
-    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load(
-        &crate::agent::runtime::deps::RuntimePaths::from_process(),
-        registry_deps.semantic.clone(),
-    );
+    let runtime_deps = registry_deps.runtime.clone();
     let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(&cfg));
-    tools.set_approval(runtime::loop_::approval_from_cfg(&cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
+    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
+    tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
+    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
 
     let memory_db = if use_memory {
         registry_deps.memory.clone()
@@ -237,7 +223,7 @@ async fn drive_chat(
         Some(db) => {
             let request = runtime::loop_::RuntimeRequest::streaming(
                 provider.clone(),
-                &cfg,
+                cfg,
                 &prompt,
                 &tools,
                 sink,
@@ -250,7 +236,7 @@ async fn drive_chat(
         None => {
             let request = runtime::loop_::RuntimeRequest::streaming(
                 provider.clone(),
-                &cfg,
+                cfg,
                 &prompt,
                 &tools,
                 sink,
@@ -475,6 +461,13 @@ impl ProgressSink for SseSink {
             }),
         ));
     }
+}
+
+fn compose_registry_deps(
+    config: Arc<crate::config::CosConfig>,
+    paths: crate::agent::tools::registry::RegistryPaths,
+) -> crate::agent::tools::registry::RegistryDeps {
+    crate::agent::tools::registry::RegistryDeps::load(config, paths)
 }
 
 // ---------------------------------------------------------------------------

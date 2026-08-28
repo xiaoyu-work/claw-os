@@ -1853,7 +1853,6 @@ fn run_worker_loop_inner(
     // agent work is spawned into an unprivileged `claw-agentd` process
     // by `agentd::supervisor` instead.
     crate::agentd::guard::ensure_agent_runtime_allowed("in-process agent worker loop")?;
-    crate::clawd::audit::install_runtime_hook();
     let store = Store::open_default().map_err(|e| e.to_string())?;
     // Reclaim jobs stranded in running/ by a previously-crashed worker
     // before we start claiming new ones. This is what makes a daemon
@@ -2044,7 +2043,7 @@ async fn run_one_routed_job(job: &Job) -> FinishOutcome {
     if let Some(home) = job.owner_home.as_deref() {
         let home_path = std::path::PathBuf::from(home);
         let cfg = crate::config::load_for_home(&home_path);
-        let run = crate::config::with_override(cfg, run_one_job_inner(job));
+        let run = crate::config::with_snapshot(cfg, run_one_job_inner(job));
         match job.owner_uid {
             Some(0) => run.await,
             Some(uid) => crate::paths::with_user_override(uid, home_path, run).await,
@@ -2069,6 +2068,7 @@ async fn run_one_job_inner(job: &Job) -> FinishOutcome {
 }
 
 async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
+    let hooks = standalone_runtime_hooks();
     let stream_sink: Arc<dyn crate::agent::llm::accumulate::StreamSink> = Arc::new(JobStreamSink {
         job_id: job.id.clone(),
     });
@@ -2087,9 +2087,15 @@ async fn run_one_job_scoped(job: &Job) -> FinishOutcome {
         },
         stream_sink,
         progress_sink,
-        crate::agent::runtime::hooks::HookRegistry::new(),
+        hooks,
     )
     .await
+}
+
+fn standalone_runtime_hooks() -> crate::agent::runtime::hooks::HookRegistry {
+    let hooks = crate::agent::runtime::hooks::HookRegistry::new();
+    hooks.register(crate::clawd::audit::runtime_hook());
+    hooks
 }
 
 /// One unit of agent work, decoupled from where the job record lives.
@@ -2128,7 +2134,7 @@ pub async fn execute_job(
     // `config::get()` here is intentionally the *task-local* one
     // installed by the caller for clawd-routed jobs; for in-process
     // submits it falls through to the process-wide config as before.
-    let current_config = crate::config::get();
+    let current_config = crate::config::current_snapshot();
     let base = current_config.agent.clone();
     let mut cfg = base;
     if let Some(n) = job.max_turns {
@@ -2140,15 +2146,12 @@ pub async fn execute_job(
     };
     let mut effective_config = (*current_config).clone();
     effective_config.agent = cfg.clone();
-    let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
+    let registry_deps = crate::agent::tools::registry::RegistryDeps::load_with_hooks(
         Arc::new(effective_config),
         crate::agent::tools::registry::RegistryPaths::from_process(),
-    );
-    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load_with_hooks(
-        &crate::agent::runtime::deps::RuntimePaths::from_process(),
-        registry_deps.semantic.clone(),
         hooks,
     );
+    let runtime_deps = registry_deps.runtime.clone();
     let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
     tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));

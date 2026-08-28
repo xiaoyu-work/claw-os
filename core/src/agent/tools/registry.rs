@@ -34,6 +34,11 @@ pub struct RegistryPaths {
     pub media_outputs_dir: PathBuf,
     pub memory_db_path: PathBuf,
     pub semantic_db_path: PathBuf,
+    pub notes_dir: PathBuf,
+    pub hooks_config_path: PathBuf,
+    pub audit_log_path: PathBuf,
+    pub nudges_path: PathBuf,
+    pub system_skills_origin: crate::agent::skills::loader::SkillOrigin,
 }
 
 impl RegistryPaths {
@@ -41,6 +46,11 @@ impl RegistryPaths {
         let apps_dir = std::env::var_os("COS_APPS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("/usr/lib/cos/apps"));
+        let system_skills_origin = if std::env::var_os("COS_SYSTEM_SKILLS_DIR").is_some() {
+            crate::agent::skills::loader::SkillOrigin::Local
+        } else {
+            crate::agent::skills::loader::SkillOrigin::BuiltIn
+        };
         Self {
             apps_dir,
             todos_dir: crate::paths::agent_todos_dir(),
@@ -50,6 +60,23 @@ impl RegistryPaths {
             media_outputs_dir: crate::paths::agent_media_outputs_dir(),
             memory_db_path: crate::paths::agent_memory_db_path(),
             semantic_db_path: crate::paths::agent_semantic_db_path(),
+            notes_dir: crate::paths::agent_notes_dir(),
+            hooks_config_path: crate::paths::agent_hooks_path(),
+            audit_log_path: crate::paths::agent_audit_log_path(),
+            nudges_path: crate::paths::agent_nudges_path(),
+            system_skills_origin,
+        }
+    }
+
+    pub fn runtime_paths(&self) -> crate::agent::runtime::deps::RuntimePaths {
+        crate::agent::runtime::deps::RuntimePaths {
+            hooks_config: self.hooks_config_path.clone(),
+            audit_log: self.audit_log_path.clone(),
+            notes_dir: self.notes_dir.clone(),
+            nudges_path: self.nudges_path.clone(),
+            system_skills_dir: self.system_skills_dir.clone(),
+            user_skills_dir: self.user_skills_dir.clone(),
+            system_skills_origin: self.system_skills_origin,
         }
     }
 }
@@ -61,12 +88,16 @@ pub struct RegistryDeps {
     pub paths: RegistryPaths,
     pub memory: Option<crate::agent::memory::sqlite_fts::MemoryDb>,
     pub semantic: Option<Arc<crate::agent::memory::semantic::SemanticStore>>,
-    app_session_manifests: Vec<Arc<crate::caps::manifest::Manifest>>,
+    pub runtime: crate::agent::runtime::deps::RuntimeDeps,
+    app_sessions: Vec<super::cos_apps_session::RegisteredAppSession>,
 }
 
 impl RegistryDeps {
     pub fn load_current() -> Self {
-        Self::load(crate::config::get(), RegistryPaths::from_process())
+        Self::load(
+            crate::config::current_snapshot(),
+            RegistryPaths::from_process(),
+        )
     }
 
     /// Resolve paths, discover App-session manifests, and open optional stores.
@@ -75,6 +106,18 @@ impl RegistryDeps {
     /// perform process-state reads and fallible I/O at a visible composition
     /// boundary, while registry assembly itself remains deterministic.
     pub fn load(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        Self::load_with_hooks(
+            config,
+            paths,
+            crate::agent::runtime::hooks::HookRegistry::new(),
+        )
+    }
+
+    pub fn load_with_hooks(
+        config: Arc<CosConfig>,
+        paths: RegistryPaths,
+        hooks: crate::agent::runtime::hooks::HookRegistry,
+    ) -> Self {
         let memory = match crate::agent::memory::sqlite_fts::MemoryDb::open(&paths.memory_db_path) {
             Ok(db) => Some(db),
             Err(error) => {
@@ -93,29 +136,41 @@ impl RegistryDeps {
                 None
             }
         };
-        let app_session_manifests = crate::apps::discover(&paths.apps_dir)
+        let app_sessions = crate::apps::discover(&paths.apps_dir)
             .values()
             .filter(|app| app.manifest.session.is_some())
-            .map(|app| Arc::new(app.manifest.clone()))
+            .map(|app| super::cos_apps_session::RegisteredAppSession {
+                manifest: Arc::new(app.manifest.clone()),
+                app_dir: app.dir.clone(),
+            })
             .collect();
+        let runtime = crate::agent::runtime::deps::RuntimeDeps::load_with_hooks(
+            &paths.runtime_paths(),
+            semantic.clone(),
+            hooks,
+        );
         Self {
             config,
             paths,
             memory,
             semantic,
-            app_session_manifests,
+            runtime,
+            app_sessions,
         }
     }
 
     /// Side-effect-free dependency set for tests and deliberately minimal
     /// compositions.
     pub fn without_optional_resources(config: Arc<CosConfig>, paths: RegistryPaths) -> Self {
+        let runtime =
+            crate::agent::runtime::deps::RuntimeDeps::load(&paths.runtime_paths(), None);
         Self {
             config,
             paths,
             memory: None,
             semantic: None,
-            app_session_manifests: Vec::new(),
+            runtime,
+            app_sessions: Vec::new(),
         }
     }
 }
@@ -259,11 +314,16 @@ pub fn default_registry(deps: &RegistryDeps) -> ToolRegistry {
         deps.paths.system_skills_dir.clone(),
         deps.paths.user_skills_dir.clone(),
         deps.paths.skills_usage_path.clone(),
+        deps.paths.system_skills_origin,
     )));
     r.register(Arc::new(super::cos_help::CosHelp));
-    super::cos_proxy::register_all(&mut r);
+    super::cos_proxy::register_all_with_notes(&mut r, deps.runtime.notes().clone());
     super::cos_apps::register_default(&mut r);
-    super::cos_apps_session::register_manifests(&mut r, &deps.app_session_manifests);
+    super::cos_apps_session::register_manifests(
+        &mut r,
+        &deps.paths.apps_dir,
+        &deps.app_sessions,
+    );
     super::media::register_default_media_tools(&mut r, deps.paths.media_outputs_dir.clone());
     if let Some(db) = &deps.memory {
         super::cos_proxy::register_recall(&mut r, db.clone());

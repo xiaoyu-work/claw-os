@@ -83,8 +83,8 @@ pub trait ImageGenerator: Send + Sync {
 // =====================================================================
 
 pub fn build_default() -> Result<Option<Box<dyn ImageGenerator>>, String> {
-    let cfg = &crate::config::get().imagegen;
-    build_from(cfg)
+    let config = crate::config::current_snapshot();
+    build_from(&config.imagegen)
 }
 
 pub fn build_from(cfg: &ImageGenConfig) -> Result<Option<Box<dyn ImageGenerator>>, String> {

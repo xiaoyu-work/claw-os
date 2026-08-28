@@ -437,16 +437,13 @@ async fn chat_cmd_async(
 
     // Build the registry once. MCP servers attach the same way as
     // `live`/`ask`, so the model has the full toolbox.
-    let mut effective_config = (*crate::config::get()).clone();
+    let mut effective_config = (*crate::config::current_snapshot()).clone();
     effective_config.agent = cfg.clone();
     let registry_deps = crate::agent::tools::registry::RegistryDeps::load(
         Arc::new(effective_config),
         crate::agent::tools::registry::RegistryPaths::from_process(),
     );
-    let runtime_deps = crate::agent::runtime::deps::RuntimeDeps::load(
-        &crate::agent::runtime::deps::RuntimePaths::from_process(),
-        registry_deps.semantic.clone(),
-    );
+    let runtime_deps = registry_deps.runtime.clone();
     let mut tools = crate::agent::tools::registry::default_registry(&registry_deps);
     tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));

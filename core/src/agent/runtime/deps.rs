@@ -55,6 +55,7 @@ pub struct RuntimeDeps {
     clock: Arc<dyn Clock>,
     semantic_indexer: Option<Arc<SemanticIndexer>>,
     paths: Option<RuntimePaths>,
+    notes: crate::agent::memory::notes::NotesStore,
     _auto_hook_guard: Option<Arc<super::hooks_config::AutoHookGuard>>,
 }
 
@@ -69,6 +70,7 @@ impl RuntimeDeps {
             clock,
             semantic_indexer,
             paths: None,
+            notes: crate::agent::memory::notes::NotesStore::system_default(),
             _auto_hook_guard: None,
         }
     }
@@ -122,6 +124,7 @@ impl RuntimeDeps {
         let semantic_indexer = semantic_store.map(SemanticIndexer::from_shared_store);
         let mut deps = Self::new(hooks, Arc::new(SystemClock), semantic_indexer);
         deps.paths = Some(paths.clone());
+        deps.notes = crate::agent::memory::notes::NotesStore::at(&paths.notes_dir);
         deps._auto_hook_guard = Some(Arc::new(super::hooks_config::AutoHookGuard::new(
             deps.hooks.clone(),
             names,
@@ -143,6 +146,10 @@ impl RuntimeDeps {
 
     pub fn paths(&self) -> Option<&RuntimePaths> {
         self.paths.as_ref()
+    }
+
+    pub fn notes(&self) -> &crate::agent::memory::notes::NotesStore {
+        &self.notes
     }
 }
 

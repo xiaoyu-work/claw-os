@@ -14,6 +14,11 @@ fn delegate() -> Delegate {
                 media_outputs_dir: root.join("media"),
                 memory_db_path: root.join("memory.db"),
                 semantic_db_path: root.join("semantic.db"),
+                notes_dir: root.join("notes"),
+                hooks_config_path: root.join("hooks.json"),
+                audit_log_path: root.join("audit.jsonl"),
+                nudges_path: root.join("nudges.json"),
+                system_skills_origin: crate::agent::skills::loader::SkillOrigin::Local,
             },
         ),
     )
@@ -306,6 +311,51 @@ async fn run_delegate_happy_path_uses_mock_echo_default() {
     assert!(result.content.contains("model=mock-model"));
     assert!(result.content.contains("turns=1"));
     assert!(result.content.contains("hello child agent"));
+}
+
+#[tokio::test]
+async fn delegate_child_inherits_runtime_audit_hooks() {
+    struct AuditSpy(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::agent::runtime::hooks::Hook for AuditSpy {
+        fn name(&self) -> &str {
+            "delegate-audit-spy"
+        }
+
+        fn post_turn(
+            &self,
+            _context: &crate::agent::runtime::hooks::HookContext,
+            _summary: &crate::agent::runtime::hooks::TurnSummary,
+        ) -> crate::agent::runtime::hooks::HookOutcome {
+            self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            crate::agent::runtime::hooks::HookOutcome::Continue
+        }
+    }
+
+    let _perms = crate::test_env::PermissiveModeGuard::new();
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let hooks = crate::agent::runtime::hooks::HookRegistry::new();
+    hooks.register(Arc::new(AuditSpy(Arc::clone(&calls))));
+    let runtime = crate::agent::runtime::deps::RuntimeDeps::new(
+        hooks,
+        Arc::new(crate::agent::runtime::deps::SystemClock),
+        None,
+    );
+
+    let result = run_delegate_with_deps(
+        fresh_input("audit child", &[]),
+        &parent_cfg(),
+        test_registry,
+        runtime,
+    )
+    .await;
+
+    assert!(!result.is_error, "delegate failed: {}", result.content);
+    assert_eq!(
+        calls.load(std::sync::atomic::Ordering::SeqCst),
+        1,
+        "child turn must pass through the inherited audit registry"
+    );
 }
 
 #[tokio::test]

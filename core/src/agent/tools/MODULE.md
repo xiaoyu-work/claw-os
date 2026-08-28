@@ -32,7 +32,9 @@ which tool calls are exposed and executed.
 Runtime dispatch depends on the registry, never on concrete tools directly.
 Composition resolves `RegistryPaths`, optional memory/semantic stores, App
 session manifests, and immutable configuration into `RegistryDeps`; assembling
-`default_registry(&deps)` performs no environment reads or store opens. Tools
+`default_registry(&deps)` performs no environment reads or store opens.
+Registry paths also preserve the system Skill trust origin, exact App root,
+and one notes store shared by prompt reads, `cos_memory`, and curation. Tools
 consume stable service/capability definitions. Model output and external tool
 results are untrusted; authority comes only from session and capability
 context.

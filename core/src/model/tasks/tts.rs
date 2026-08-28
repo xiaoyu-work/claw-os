@@ -65,7 +65,7 @@ pub trait TextToSpeech: Send + Sync {
 // =====================================================================
 
 pub fn build_default() -> Result<Option<Box<dyn TextToSpeech>>, String> {
-    build_from(&crate::config::get().tts)
+    build_from(&crate::config::current_snapshot().tts)
 }
 
 pub fn build_from(cfg: &TtsConfig) -> Result<Option<Box<dyn TextToSpeech>>, String> {

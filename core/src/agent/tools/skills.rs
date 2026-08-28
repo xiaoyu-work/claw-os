@@ -12,10 +12,20 @@ use crate::agent::skills::disclosure;
 use crate::agent::skills::loader::{self, LoadOptions, LoadResult, SkillOrigin};
 use crate::agent::skills::provenance::{UsageRecord, UsageStore};
 
-#[derive(Default)]
 pub struct SkillDisclosure {
     roots: Option<(PathBuf, PathBuf)>,
     usage_path: Option<PathBuf>,
+    system_origin: SkillOrigin,
+}
+
+impl Default for SkillDisclosure {
+    fn default() -> Self {
+        Self {
+            roots: None,
+            usage_path: None,
+            system_origin: SkillOrigin::BuiltIn,
+        }
+    }
 }
 
 impl SkillDisclosure {
@@ -23,10 +33,16 @@ impl SkillDisclosure {
         Self::default()
     }
 
-    pub fn with_paths(system_root: PathBuf, user_root: PathBuf, usage_path: PathBuf) -> Self {
+    pub fn with_paths(
+        system_root: PathBuf,
+        user_root: PathBuf,
+        usage_path: PathBuf,
+        system_origin: SkillOrigin,
+    ) -> Self {
         Self {
             roots: Some((system_root, user_root)),
             usage_path: Some(usage_path),
+            system_origin,
         }
     }
 
@@ -36,6 +52,7 @@ impl SkillDisclosure {
             system_root.to_path_buf(),
             user_root.to_path_buf(),
             user_root.join(".skills-usage.jsonl"),
+            SkillOrigin::BuiltIn,
         )
     }
 
@@ -45,7 +62,12 @@ impl SkillDisclosure {
             ..LoadOptions::default()
         };
         match &self.roots {
-            Some((system, user)) => loader::load_layered(system, user, &options),
+            Some((system, user)) => loader::load_layered_with_origin(
+                system,
+                user,
+                &options,
+                self.system_origin,
+            ),
             None => loader::load_catalog_default(),
         }
     }

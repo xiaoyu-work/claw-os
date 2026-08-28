@@ -12,7 +12,8 @@ use std::future::Future;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-static CONFIG: OnceLock<Arc<CosConfig>> = OnceLock::new();
+static CONFIG: OnceLock<CosConfig> = OnceLock::new();
+static CONFIG_SNAPSHOT: OnceLock<Arc<CosConfig>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CosConfig {
@@ -1029,22 +1030,23 @@ pub fn load_from_path(path: &Path) -> CosConfig {
 //
 // To bridge the two we install a per-async-task override: clawd's
 // worker resolves the job's owner home, loads that user's config, and
-// wraps the entire job execution in `with_override(...)`. Every
-// `config::get()` call from within that task — including ones deep
+// wraps the entire job execution in `with_snapshot(...)`. Every
+// `config::current_snapshot()` call from within that task — including ones deep
 // inside the LLM gate, model task helpers, and tool implementations —
 // transparently sees the user's config instead of clawd's.
 //
 // Overrides own an immutable `Arc<CosConfig>`. A request can pass the
-// snapshot explicitly to lower layers while compatibility callers of
-// `get()` receive a cheap clone. The allocation is reclaimed when the
+// snapshot explicitly to lower layers while compatibility callers retain the
+// original static `get()` API. The allocation is reclaimed when the
 // request scope and its explicit consumers finish.
 // ---------------------------------------------------------------------------
 
 tokio::task_local! {
-    /// Optional override for `config::get()`. Set by
-    /// `with_override(...)` for the duration of a single
+    /// Optional override for `config::current_snapshot()`. Set by
+    /// `with_snapshot(...)` for the duration of a single
     /// clawd-dispatched agent job; absent everywhere else.
-    static CONFIG_OVERRIDE: Arc<CosConfig>;
+    static CONFIG_SNAPSHOT_OVERRIDE: Arc<CosConfig>;
+    static CONFIG_OVERRIDE: &'static CosConfig;
 }
 
 /// Load an immutable snapshot of `<home>/.config/cos/config.json`.
@@ -1060,7 +1062,8 @@ pub fn load_for_home(home: &Path) -> Arc<CosConfig> {
 /// `CONFIG: OnceLock<CosConfig>` at startup and never observe later
 /// writes — including writes the daemon itself makes via
 /// `cos agent setup apply`. Wrap each request handler in
-/// `with_override(load_user_config(), ...)` so every `config::get()`
+/// `with_snapshot(load_user_config(), ...)` so every
+/// `config::current_snapshot()`
 /// call in the handler sees the current on-disk state.
 pub fn load_user_config() -> Arc<CosConfig> {
     let path = std::env::var_os("COS_CONFIG_PATH")
@@ -1069,31 +1072,65 @@ pub fn load_user_config() -> Arc<CosConfig> {
     Arc::new(load_from_path(&path))
 }
 
+#[deprecated(note = "use load_for_home; static interning was removed")]
+pub fn intern_for_home(home: &Path) -> Arc<CosConfig> {
+    load_for_home(home)
+}
+
+#[deprecated(note = "use load_user_config; static interning was removed")]
+pub fn intern_user_config() -> Arc<CosConfig> {
+    load_user_config()
+}
+
 /// Run `fut` with `cfg` installed as the per-task override visible to
 /// every `config::get()` call polled inside it. Separately spawned Tokio
 /// tasks do not inherit task-local values and must capture the `Arc` or
-/// establish their own scope. Outside the scope `config::get()` returns the
-/// process-wide config as before.
-pub async fn with_override<Fut, R>(cfg: Arc<CosConfig>, fut: Fut) -> R
+/// establish their own scope. Outside the scope [`current_snapshot`] returns
+/// the process-wide snapshot.
+pub async fn with_snapshot<Fut, R>(cfg: Arc<CosConfig>, fut: Fut) -> R
+where
+    Fut: Future<Output = R>,
+{
+    CONFIG_SNAPSHOT_OVERRIDE.scope(cfg, fut).await
+}
+
+/// Return the immutable config snapshot for explicit runtime composition.
+pub fn current_snapshot() -> Arc<CosConfig> {
+    if let Ok(cfg) = CONFIG_SNAPSHOT_OVERRIDE.try_with(Arc::clone) {
+        return cfg;
+    }
+    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|cfg| *cfg) {
+        return Arc::new(cfg.clone());
+    }
+    Arc::clone(CONFIG_SNAPSHOT.get_or_init(|| Arc::new(get().clone())))
+}
+
+/// Legacy static override retained for source compatibility.
+///
+/// Dynamic production scopes must use [`with_snapshot`]; obtaining a new
+/// `'static` config without leaking is intentionally unsupported.
+#[deprecated(note = "use with_snapshot(Arc<CosConfig>, ...) for request-scoped config")]
+pub async fn with_override<Fut, R>(cfg: &'static CosConfig, fut: Fut) -> R
 where
     Fut: Future<Output = R>,
 {
     CONFIG_OVERRIDE.scope(cfg, fut).await
 }
 
-/// Get the global config. Inside a [`with_override`] scope this
-/// returns the override; outside, it returns the process-wide config
-/// loaded once from disk.
-pub fn get() -> Arc<CosConfig> {
-    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(Arc::clone) {
+/// Get the process-global or legacy static-scoped configuration.
+///
+/// New runtime composition should use [`current_snapshot`] so ownership is
+/// explicit and request-scoped snapshots are visible.
+pub fn get() -> &'static CosConfig {
+    if let Ok(cfg) = CONFIG_OVERRIDE.try_with(|cfg| *cfg) {
         return cfg;
     }
-    Arc::clone(CONFIG.get_or_init(|| Arc::new(load_from_disk())))
+    CONFIG.get_or_init(load_from_disk)
 }
 
 /// Return config values as environment variables for Python app subprocesses.
 pub fn as_env_vars() -> Vec<(String, String)> {
-    let cfg = get();
+    let cfg = current_snapshot();
     vec![
         ("COS_EXEC_TIMEOUT".into(), cfg.exec.timeout.to_string()),
         ("COS_EXEC_SHELL".into(), cfg.exec.shell.clone()),
