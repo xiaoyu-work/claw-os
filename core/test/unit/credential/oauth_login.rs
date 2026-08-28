@@ -1,5 +1,32 @@
 use super::*;
 
+struct FakeStore;
+
+impl super::super::CredentialStore for FakeStore {
+    fn contains(&self, _id: &super::super::CredentialId) -> Result<bool, String> {
+        Ok(true)
+    }
+
+    fn load(
+        &self,
+        _id: &super::super::CredentialId,
+        _enforce_tier: bool,
+    ) -> Result<String, String> {
+        Ok("from-store-interface".to_string())
+    }
+
+    fn minimum_tier(&self, _id: &super::super::CredentialId) -> Result<Option<u8>, String> {
+        Ok(Some(0))
+    }
+
+    fn store(
+        &self,
+        _request: super::super::StoreRequest<'_>,
+    ) -> Result<super::super::StoreResult, String> {
+        unreachable!("configuration lookup is read-only")
+    }
+}
+
 fn session(role: crate::caps::Role, app_id: Option<&str>, pid: u32) -> crate::proc::SessionInfo {
     crate::proc::SessionInfo {
         session_id: "oauth-login-test".into(),
@@ -120,18 +147,14 @@ fn authorization_url_uses_pkce_loopback_and_offline_consent() {
 
 #[test]
 fn callback_requires_matching_state_and_decodes_code() {
-    let code = parse_callback_target(
-        "/oauth/callback?code=abc%2F123&state=expected",
-        "expected",
-    )
-    .unwrap();
+    let code =
+        parse_callback_target("/oauth/callback?code=abc%2F123&state=expected", "expected").unwrap();
     assert_eq!(code, "abc/123");
-    assert!(parse_callback_target(
-        "/oauth/callback?code=abc&state=wrong",
-        "expected"
-    )
-    .unwrap_err()
-    .contains("state"));
+    assert!(
+        parse_callback_target("/oauth/callback?code=abc&state=wrong", "expected")
+            .unwrap_err()
+            .contains("state")
+    );
 }
 
 #[test]
@@ -151,4 +174,16 @@ fn accepts_complete_google_scope_grant() {
     assert!(scopes
         .iter()
         .any(|scope| scope == "https://www.googleapis.com/auth/gmail.send"));
+}
+
+#[test]
+fn oauth_configuration_uses_credential_store_interface() {
+    let value = client_setting(
+        &FakeStore,
+        "COS_TEST_OAUTH_SETTING_DOES_NOT_EXIST",
+        "GOOGLE_CLIENT_ID",
+        "default",
+    )
+    .unwrap();
+    assert_eq!(value.as_deref(), Some("from-store-interface"));
 }

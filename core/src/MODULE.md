@@ -25,6 +25,7 @@ library API exported by `core/src/lib.rs`.
 | `agent/` | Agent runtime and AI-facing tools |
 | `clawd/` | Privileged broker services |
 | `caps/` | Capability model and enforcement |
+| `credential/` | Encrypted store, crypto/master-key boundary, authorization, OAuth, lifecycle, and CLI facade; see [`credential/MODULE.md`](credential/MODULE.md) |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `notifications/` | Durable owner-scoped notification model, store, policy, and external delivery adapters |

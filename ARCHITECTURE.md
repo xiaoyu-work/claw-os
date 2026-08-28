@@ -45,6 +45,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
+| Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Session event journal | Root-owned, MAC-chained record of session lifecycle and privileged mutation brackets; the ordering and recovery authority the other session/audit views project from | `core/src/session/journal/`, `core/src/clawd/journal.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
@@ -460,6 +461,13 @@ default credential namespace and exact credential capability checks still
 apply. Delegate children and inbound MCP servers exclude the tool. OAuth client
 registration remains runtime system configuration and is never embedded in
 packages or entered through model chat.
+
+OAuth flows depend on the credential store interface in
+`core/src/credential/domain.rs`; they do not know file locations, lock files,
+encryption keys, keyring syscalls, or persistent record encoding. The CLI
+facade preserves command flags and output while coordinating typed credential
+identifiers and store requests. Cryptography and master-key persistence are
+below the store boundary and cannot be imported by OAuth or CLI callers.
 
 ### Progressive Agent Skill disclosure
 

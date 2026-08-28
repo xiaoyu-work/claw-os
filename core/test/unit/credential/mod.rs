@@ -88,6 +88,25 @@ fn aes_gcm_empty_plaintext() {
     assert!(pt.is_empty());
 }
 
+#[test]
+fn aes_256_gcm_nist_vector_is_byte_compatible() {
+    let key = [0u8; 32];
+    let nonce = [0u8; 12];
+    let plaintext = [0u8; 16];
+    let expected = [
+        0xce, 0xa7, 0x40, 0x3d, 0x4d, 0x60, 0x6b, 0x6e, 0x07, 0x4e, 0xc5, 0xd3, 0xba, 0xf3, 0x9d,
+        0x18, 0xd0, 0xd1, 0xc8, 0xa7, 0x99, 0x99, 0x6b, 0xf0, 0x26, 0x5b, 0x98, 0xb5, 0xd4, 0x8a,
+        0xb9, 0x19,
+    ];
+
+    let encrypted = aes_gcm::encrypt(&key, &nonce, &plaintext);
+    assert_eq!(encrypted, expected);
+    assert_eq!(
+        aes_gcm::decrypt(&key, &nonce, &expected).unwrap(),
+        plaintext
+    );
+}
+
 // ---- Base64 -----------------------------------------------------------
 
 #[test]
@@ -110,7 +129,7 @@ fn legacy_xor_backward_compat() {
     let plain = "legacy-secret-value";
 
     // Manually create a legacy-format credential (no nonce_b64, XOR-obfuscated).
-    let key = legacy_obfuscation_key();
+    let key = legacy_obfuscation_key().unwrap();
     let obfuscated: Vec<u8> = plain
         .as_bytes()
         .iter()
@@ -286,7 +305,7 @@ fn ttl_expired_credential() {
 
     // Store with TTL = 0 (expires immediately)
     // We achieve "already expired" by writing directly with a past expires_at.
-    let (value_b64, nonce_b64) = encrypt_value(b"will-expire");
+    let (value_b64, nonce_b64) = encrypt_value(b"will-expire").unwrap();
     let cred = StoredCredential {
         name: name.clone(),
         namespace: "default".into(),
@@ -482,7 +501,7 @@ fn load_auto_refresh_on_expiry() {
     // We write the credential file directly to bypass store validation.
     let dir = namespace_dir("default");
     let _ = fs::create_dir_all(&dir);
-    let (value_b64, nonce_b64) = encrypt_value(b"old-value");
+    let (value_b64, nonce_b64) = encrypt_value(b"old-value").unwrap();
     let now = chrono::Utc::now();
     let stored_at = now.format("%Y-%m-%dT%H:%M:%SZ").to_string();
     // Use a fixed timestamp far in the past to guarantee expiry
@@ -579,7 +598,7 @@ fn compute_ttl_from_timestamps() {
 fn oauth_refresh_unknown_provider() {
     perms_init();
     setup();
-    let r = cmd_oauth_refresh(&["unknown".into()]);
+    let r = cmd_oauth_refresh(&FILE_STORE, &["unknown".into()]);
     assert!(r.is_err());
     assert!(r.unwrap_err().contains("unsupported"));
 }
@@ -588,7 +607,7 @@ fn oauth_refresh_unknown_provider() {
 fn oauth_refresh_missing_provider() {
     perms_init();
     setup();
-    let r = cmd_oauth_refresh(&[]);
+    let r = cmd_oauth_refresh(&FILE_STORE, &[]);
     assert!(r.is_err());
     assert!(r.unwrap_err().contains("usage"));
 }
@@ -642,13 +661,13 @@ fn test_machine_id_missing_falls_back_to_persistent_random_key() {
 
     // 1. No persistent key yet.
     assert!(
-        load_persistent_root_key_at(&key_path).is_none(),
+        load_persistent_root_key_at(&key_path).unwrap().is_none(),
         "key file must not exist before first generate call"
     );
 
     // 2. Generate + persist (this is what `derive_key` calls when neither
     //    the keyring nor machine-id are available).
-    let key1 = generate_and_persist_root_key_at(&key_path);
+    let key1 = generate_and_persist_root_key_at(&key_path).unwrap();
     assert_eq!(key1.len(), 32, "root key must be exactly 32 bytes");
     assert!(
         key1.iter().any(|&b| b != 0),
@@ -671,13 +690,15 @@ fn test_machine_id_missing_falls_back_to_persistent_random_key() {
     }
 
     // 4. Second call returns the SAME key from disk.
-    let key2 = load_persistent_root_key_at(&key_path).expect("key should load after generate");
+    let key2 = load_persistent_root_key_at(&key_path)
+        .unwrap()
+        .expect("key should load after generate");
     assert_eq!(key1, key2, "persisted key must round-trip");
 
     // 5. A redundant `generate_and_persist_root_key_at()` call (e.g. from
     //    a racing process) MUST NOT overwrite the existing key — it must
     //    fall back to reading whatever is already there.
-    let key3 = generate_and_persist_root_key_at(&key_path);
+    let key3 = generate_and_persist_root_key_at(&key_path).unwrap();
     assert_eq!(
         key1, key3,
         "repeated generate must not overwrite an existing on-disk key"
@@ -685,6 +706,106 @@ fn test_machine_id_missing_falls_back_to_persistent_random_key() {
 
     let _ = fs::remove_file(&key_path);
     let _ = fs::remove_dir(&dir);
+}
+
+#[test]
+fn malformed_persistent_root_key_is_not_silently_replaced() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-malformed-rootkey-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+    fs::write(&key_path, b"too-short").unwrap();
+
+    let error = load_persistent_root_key_at(&key_path).unwrap_err();
+    assert!(error.contains("invalid length"));
+    assert_eq!(fs::read(&key_path).unwrap(), b"too-short");
+
+    fs::remove_file(&key_path).unwrap();
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn encrypted_record_json_shape_is_stable() {
+    let credential = StoredCredential {
+        name: "API_KEY".into(),
+        namespace: "default".into(),
+        value_b64: "AQID".into(),
+        nonce_b64: Some("BAUG".into()),
+        min_tier: 2,
+        stored_at: "2026-01-02T03:04:05Z".into(),
+        stored_by: Some("session-1".into()),
+        expires_at: Some("2026-01-02T04:04:05Z".into()),
+        refresh_cmd: None,
+    };
+
+    assert_eq!(
+        serde_json::to_string_pretty(&credential).unwrap(),
+        "{\n  \"name\": \"API_KEY\",\n  \"namespace\": \"default\",\n  \"value_b64\": \"AQID\",\n  \"nonce_b64\": \"BAUG\",\n  \"min_tier\": 2,\n  \"stored_at\": \"2026-01-02T03:04:05Z\",\n  \"stored_by\": \"session-1\",\n  \"expires_at\": \"2026-01-02T04:04:05Z\",\n  \"refresh_cmd\": null\n}"
+    );
+}
+
+#[test]
+fn keyring_master_key_label_is_stable() {
+    assert_eq!(MASTER_KEY_LABEL, b"cos-credential-key");
+}
+
+#[cfg(unix)]
+#[test]
+fn atomic_write_replaces_content_with_mode_0600() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-atomic-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("record.json");
+
+    write_credential_atomic(&path, "first").unwrap();
+    write_credential_atomic(&path, "second").unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "second");
+    assert_eq!(
+        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    assert!(!path.with_extension("tmp").exists());
+
+    fs::remove_file(&path).unwrap();
+    let _ = fs::remove_file(path.with_file_name("record.json.lock"));
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn scheduled_load_rejects_symlinked_credential() {
+    use std::os::unix::fs::symlink;
+    use std::os::unix::fs::MetadataExt;
+
+    let root = std::env::temp_dir().join(format!(
+        "cos-cred-symlink-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let home = root.join("home");
+    let credential_dir = home.join(".local/share/cos/credentials/default");
+    fs::create_dir_all(&credential_dir).unwrap();
+    let outside = root.join("outside.json");
+    fs::write(&outside, "{}").unwrap();
+    let link = credential_dir.join("API_KEY.json");
+    symlink(&outside, &link).unwrap();
+    let uid = fs::metadata(&home).unwrap().uid();
+
+    let error = load_for_scheduler("API_KEY", "default", &home, uid, 0).unwrap_err();
+    assert!(error.contains("failed to open scheduled credential"));
+
+    fs::remove_file(&link).unwrap();
+    fs::remove_file(&outside).unwrap();
+    fs::remove_dir_all(&root).unwrap();
 }
 
 // ---- Refresh serialization (HIGH audit fix) ---------------------------
