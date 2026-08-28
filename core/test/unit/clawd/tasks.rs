@@ -95,69 +95,185 @@ fn attended_client() -> ClientIdentity {
     }
 }
 
+fn fresh_root() -> tempfile::TempDir {
+    tempfile::tempdir().unwrap()
+}
+
+fn pending_job() -> Job {
+    Job::new_pending_with_client(
+        "test".to_string(),
+        None,
+        None,
+        Some("session-a".to_string()),
+        None,
+        Some(1000),
+        Some("/home/test".to_string()),
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+    )
+}
+
 #[test]
 fn live_submission_presence_is_consumed_once() {
     let _lock = crate::caps::test_env_lock::env_lock();
     clear_presence_leases();
-    remember_submission_presence_at("task-live", &attended_client(), 1_000);
-    let presence = claim_attended_presence_at(
-        "task-live",
-        1000,
-        2_000,
-        60_000,
-        |pid, start, uid| pid == 4242 && start == 77 && uid == 1000,
-    )
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
+        .unwrap();
+    let (_, presence) = claim_job_with_presence_at(&store, 2_000, 60_000, |pid, start, uid| {
+        pid == 4242 && start == 77 && uid == 1000
+    })
+    .unwrap()
+    .expect("published task");
+    let presence = presence
     .expect("live authenticated submitter should retain attendance");
     assert_eq!(presence.owner_uid, 1000);
     assert_eq!(presence.pid, 4242);
     assert_eq!(presence.expires_at_ms, 62_000);
-    assert!(
-        claim_attended_presence_at("task-live", 1000, 2_000, 60_000, |_, _, _| true).is_none()
-    );
 }
 
 #[test]
 fn submitter_exit_expires_presence() {
     let _lock = crate::caps::test_env_lock::env_lock();
     clear_presence_leases();
-    remember_submission_presence_at("task-exit", &attended_client(), 1_000);
-    assert!(claim_attended_presence_at(
-        "task-exit",
-        1000,
-        2_000,
-        60_000,
-        |_, _, _| false
-    )
-    .is_none());
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
+        .unwrap();
+    let (_, presence) =
+        claim_job_with_presence_at(&store, 2_000, 60_000, |_, _, _| false)
+            .unwrap()
+            .expect("published task");
+    assert!(presence.is_none());
 }
 
 #[test]
 fn queue_delay_expires_presence() {
     let _lock = crate::caps::test_env_lock::env_lock();
     clear_presence_leases();
-    remember_submission_presence_at("task-delay", &attended_client(), 1_000);
-    assert!(claim_attended_presence_at(
-        "task-delay",
-        1000,
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
+        .unwrap();
+    let (_, presence) = claim_job_with_presence_at(
+        &store,
         1_000 + SUBMISSION_PRESENCE_TTL_MS + 1,
         60_000,
         |_, _, _| true,
     )
-    .is_none());
+    .unwrap()
+    .expect("published task");
+    assert!(presence.is_none());
 }
 
 #[test]
 fn daemon_restart_drops_presence() {
     let _lock = crate::caps::test_env_lock::env_lock();
     clear_presence_leases();
-    remember_submission_presence_at("task-restart", &attended_client(), 1_000);
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, &attended_client(), 1_000, || store.publish(job))
+        .unwrap();
     clear_presence_leases();
-    assert!(claim_attended_presence_at(
-        "task-restart",
-        1000,
-        2_000,
-        60_000,
-        |_, _, _| true
-    )
-    .is_none());
+    let (_, presence) =
+        claim_job_with_presence_at(&store, 2_000, 60_000, |_, _, _| true)
+            .unwrap()
+            .expect("published task");
+    assert!(presence.is_none());
+}
+
+#[test]
+fn publication_and_claim_are_atomic_with_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let publisher_store = store.clone();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    let client = attended_client();
+    let (installed_tx, installed_rx) = std::sync::mpsc::channel();
+    let (publish_tx, publish_rx) = std::sync::mpsc::channel();
+    let publisher = std::thread::spawn(move || {
+        with_presence_publication(&task_id, &client, 1_000, || {
+            installed_tx.send(()).unwrap();
+            publish_rx.recv().unwrap();
+            publisher_store.publish(job)
+        })
+        .unwrap();
+    });
+    installed_rx.recv().unwrap();
+
+    let claimant_store = store.clone();
+    let (claimed_tx, claimed_rx) = std::sync::mpsc::channel();
+    let claimant = std::thread::spawn(move || {
+        let claimed =
+            claim_job_with_presence_at(&claimant_store, 2_000, 60_000, |_, _, _| true)
+                .unwrap();
+        claimed_tx.send(claimed).unwrap();
+    });
+    assert!(
+        claimed_rx
+            .recv_timeout(std::time::Duration::from_millis(50))
+            .is_err(),
+        "claim must wait until presence and the pending file are published together"
+    );
+    publish_tx.send(()).unwrap();
+    publisher.join().unwrap();
+    let (_, presence) = claimed_rx
+        .recv_timeout(std::time::Duration::from_secs(1))
+        .unwrap()
+        .expect("published task");
+    claimant.join().unwrap();
+    assert!(presence.is_some());
+}
+
+#[test]
+fn failed_publication_removes_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    let result = with_presence_publication(
+        "task-failed",
+        &attended_client(),
+        1_000,
+        || Err::<(), _>("write failed"),
+    );
+    assert_eq!(result, Err("write failed"));
+    let leases = presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    assert!(!leases.contains_key("task-failed"));
+}
+
+#[test]
+fn recovered_job_cannot_reuse_consumed_presence() {
+    let _lock = crate::caps::test_env_lock::env_lock();
+    clear_presence_leases();
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = pending_job();
+    let task_id = job.id.clone();
+    store.publish(job).unwrap();
+    let claimed = store.claim_one().unwrap().expect("first claim");
+    store
+        .release_for_retry(&claimed.id, "worker exited")
+        .unwrap()
+        .expect("released");
+    // Simulate the old publish/lease race completing after recovery. Even a
+    // still-live late lease must not make a retried attempt attended.
+    with_presence_publication(&task_id, &attended_client(), 2_500, || Ok::<(), ()>(()))
+        .unwrap();
+    let (_, retry_presence) =
+        claim_job_with_presence_at(&store, 3_000, 60_000, |_, _, _| true)
+            .unwrap()
+            .expect("retry claim");
+    assert!(retry_presence.is_none());
 }

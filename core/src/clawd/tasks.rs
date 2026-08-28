@@ -77,87 +77,101 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
             session_client,
         )?),
     };
-    let job = store
-        .submit_with_context_and_client(
-            prompt,
-            context,
-            branch_context,
-            session_id,
-            max_turns,
-            Some(owner_uid),
-            Some(owner_home.to_string_lossy().into_owned()),
-            session_client,
-        )
+    let job = Job::new_pending_with_client(
+        prompt,
+        context,
+        branch_context,
+        session_id,
+        max_turns,
+        Some(owner_uid),
+        Some(owner_home.to_string_lossy().into_owned()),
+        session_client,
+    );
+    let job = publish_task_with_presence(&store, job, client)
         .map_err(|err| err.to_string())?;
-    remember_submission_presence(&job.id, client);
     Ok(job_value(job))
 }
 
-fn remember_submission_presence(task_id: &str, client: &ClientIdentity) {
-    remember_submission_presence_at(task_id, client, unix_now_ms());
+fn publish_task_with_presence(
+    store: &Store,
+    job: Job,
+    client: &ClientIdentity,
+) -> std::io::Result<Job> {
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
 }
 
-fn remember_submission_presence_at(task_id: &str, client: &ClientIdentity, now_ms: u64) {
-    let (Some(owner_uid), Some(pid), Some(start_time_ticks)) =
-        (client.uid, client.pid, client.start_time_ticks)
-    else {
-        return;
-    };
-    if !client.attended_local {
-        return;
-    }
+fn with_presence_publication<T, E>(
+    task_id: &str,
+    client: &ClientIdentity,
+    now_ms: u64,
+    publish: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
     let mut leases = presence_leases()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
-    leases.insert(
-        task_id.to_string(),
-        PendingPresence {
-            owner_uid,
-            pid,
-            start_time_ticks,
-            expires_at_ms: now_ms.saturating_add(SUBMISSION_PRESENCE_TTL_MS),
-        },
-    );
+    let (Some(owner_uid), Some(pid), Some(start_time_ticks)) =
+        (client.uid, client.pid, client.start_time_ticks)
+    else {
+        return publish();
+    };
+    if client.attended_local {
+        leases.insert(
+            task_id.to_string(),
+            PendingPresence {
+                owner_uid,
+                pid,
+                start_time_ticks,
+                expires_at_ms: now_ms.saturating_add(SUBMISSION_PRESENCE_TTL_MS),
+            },
+        );
+    }
+    let result = publish();
+    if result.is_err() {
+        leases.remove(task_id);
+    }
+    result
 }
 
-pub(crate) fn claim_attended_presence(
-    task_id: &str,
-    owner_uid: u32,
+pub(crate) fn claim_job_with_presence(
+    store: &Store,
     execution_ttl: Duration,
-) -> Option<crate::session::SessionPresence> {
-    claim_attended_presence_at(
-        task_id,
-        owner_uid,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    claim_job_with_presence_at(
+        store,
         unix_now_ms(),
         execution_ttl.as_millis() as u64,
         crate::proc::process_identity_is_live,
     )
 }
 
-fn claim_attended_presence_at(
-    task_id: &str,
-    owner_uid: u32,
+fn claim_job_with_presence_at(
+    store: &Store,
     now_ms: u64,
     execution_ttl_ms: u64,
-    process_is_live: impl FnOnce(u32, u64, u32) -> bool,
-) -> Option<crate::session::SessionPresence> {
-    let pending = presence_leases()
+    process_is_live: impl Fn(u32, u64, u32) -> bool,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    let mut leases = presence_leases()
         .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .remove(task_id)?;
-    if pending.owner_uid != owner_uid
-        || now_ms > pending.expires_at_ms
-        || !process_is_live(pending.pid, pending.start_time_ticks, pending.owner_uid)
-    {
-        return None;
-    }
-    Some(crate::session::SessionPresence {
-        owner_uid: pending.owner_uid,
-        pid: pending.pid,
-        start_time_ticks: pending.start_time_ticks,
-        expires_at_ms: now_ms.saturating_add(execution_ttl_ms),
-    })
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
+    let Some(job) = store.claim_one()? else {
+        return Ok(None);
+    };
+    let presence = leases.remove(&job.id).and_then(|pending| {
+        (job.recovery_count == 0
+            && job.owner_uid == Some(pending.owner_uid)
+            && now_ms <= pending.expires_at_ms
+            && process_is_live(pending.pid, pending.start_time_ticks, pending.owner_uid))
+        .then_some(crate::session::SessionPresence {
+            owner_uid: pending.owner_uid,
+            pid: pending.pid,
+            start_time_ticks: pending.start_time_ticks,
+            expires_at_ms: now_ms.saturating_add(execution_ttl_ms),
+        })
+    });
+    Ok(Some((job, presence)))
 }
 
 fn unix_now_ms() -> u64 {

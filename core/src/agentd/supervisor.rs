@@ -167,7 +167,7 @@ pub async fn run_with_store(
         let Ok(permit) = permits.clone().acquire_owned().await else {
             break;
         };
-        let claimed = match store.claim_one() {
+        let claimed = match crate::clawd::tasks::claim_job_with_presence(&store, config.lease) {
             Ok(claimed) => claimed,
             Err(error) => {
                 tracing::warn!(error = %error, "agentd supervisor failed to claim a task");
@@ -176,7 +176,7 @@ pub async fn run_with_store(
                 continue;
             }
         };
-        let Some(job) = claimed else {
+        let Some((job, presence)) = claimed else {
             drop(permit);
             sleep_interruptible(config.poll, &shutdown).await;
             continue;
@@ -200,6 +200,7 @@ pub async fn run_with_store(
                 shutdown,
                 broker_pid,
                 job,
+                presence,
             )
             .await;
             if let Err(error) = supervised {
@@ -280,6 +281,7 @@ async fn supervise(
     shutdown: Arc<AtomicBool>,
     broker_pid: u32,
     job: Job,
+    presence: Option<crate::session::SessionPresence>,
 ) -> Result<(), String> {
     let Some(owner_uid) = job.owner_uid else {
         finish_error(
@@ -336,8 +338,6 @@ async fn supervise(
     // `attended` is never durable authority. A live, in-memory submission
     // presence lease is the only way a queued task may recover attendance.
     effective_client.attended = false;
-    let presence =
-        crate::clawd::tasks::claim_attended_presence(&job.id, owner_uid, config.lease);
     if let Some(session) = session.as_mut() {
         session.client = effective_client;
     }

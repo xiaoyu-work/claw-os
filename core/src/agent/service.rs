@@ -190,7 +190,7 @@ impl Job {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn new_pending_with_client(
+    pub(crate) fn new_pending_with_client(
         prompt: String,
         context: Option<String>,
         branch_context: Option<String>,
@@ -198,8 +198,9 @@ impl Job {
         max_turns: Option<u32>,
         owner_uid: Option<u32>,
         owner_home: Option<String>,
-        client: crate::session::SessionClient,
+        mut client: crate::session::SessionClient,
     ) -> Self {
+        client.attended = false;
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
@@ -459,11 +460,8 @@ impl Store {
         max_turns: Option<u32>,
         owner_uid: Option<u32>,
         owner_home: Option<String>,
-        mut client: crate::session::SessionClient,
+        client: crate::session::SessionClient,
     ) -> io::Result<Job> {
-        // Presence is ephemeral and process-bound. Persist only provenance;
-        // a recovered or delayed job must never inherit attended authority.
-        client.attended = false;
         let job = Job::new_pending_with_client(
             prompt,
             context,
@@ -474,6 +472,10 @@ impl Store {
             owner_home,
             client,
         );
+        self.publish(job)
+    }
+
+    pub(crate) fn publish(&self, job: Job) -> io::Result<Job> {
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.submitted", &job);
