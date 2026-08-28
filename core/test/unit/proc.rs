@@ -1,5 +1,21 @@
 use super::*;
 
+#[test]
+fn numeric_session_id_error_redirects_to_os_process_inspection() {
+    let error = session_not_found("1432043");
+    assert!(error.contains("OS PID"), "got: {error}");
+    assert!(error.contains("cos_sysinfo"), "got: {error}");
+    assert!(error.contains("process"), "got: {error}");
+}
+
+#[test]
+fn named_session_id_error_stays_generic() {
+    assert_eq!(
+        session_not_found("build-worker"),
+        "session not found: build-worker"
+    );
+}
+
 /// PID recycle protection: a registry entry with a pid that is
 /// currently alive but whose recorded `start_time_ticks` does
 /// not match the kernel's report must be treated as exited.

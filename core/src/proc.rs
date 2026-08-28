@@ -974,6 +974,17 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
+fn session_not_found(identifier: &str) -> String {
+    if !identifier.is_empty() && identifier.bytes().all(|byte| byte.is_ascii_digit()) {
+        return format!(
+            "session not found: {identifier}. `{identifier}` looks like an OS PID, but cos_proc \
+             commands operate on registered cos session ids. Inspect the PID with cos_sysinfo \
+             command `process` and args [`{identifier}`]."
+        );
+    }
+    format!("session not found: {identifier}")
+}
+
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let parent_info = current_session_info_for_caps()
@@ -1444,7 +1455,7 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -1534,7 +1545,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     // --since-offset mode: incremental reading from byte offset
     if let Some(offset) = since_offset {
@@ -1670,7 +1681,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     validate_signal_target(info, true)?;
     kill_process(info.pid)?;
@@ -1817,7 +1828,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
             .sessions
             .iter()
             .find(|s| s.session_id == sid)
-            .ok_or_else(|| format!("session not found: {sid}"))?;
+            .ok_or_else(|| session_not_found(sid))?;
         vec![(info.session_id.clone(), info.pid)]
     } else {
         return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
@@ -1923,7 +1934,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     validate_signal_target(info, false)?;
@@ -1979,7 +1990,7 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -2073,7 +2084,7 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| &s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     let alive = is_alive(pid);
@@ -2205,7 +2216,7 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
         .sessions
         .iter()
         .find(|s| s.session_id == sid)
-        .ok_or_else(|| format!("session not found: {sid}"))?;
+        .ok_or_else(|| session_not_found(sid))?;
 
     let pid = info.pid;
     if !is_alive(pid) {

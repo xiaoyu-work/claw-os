@@ -106,6 +106,18 @@ fn should_render_evidence_warning(
         )
 }
 
+fn format_tool_failure(name: &str, latency_ms: u64, content_preview: &str) -> String {
+        let elapsed =
+            crate::agent::display::format_duration(std::time::Duration::from_millis(latency_ms));
+        let header = format!("[tool failed: {name} after {elapsed}]");
+        let detail = content_preview.trim();
+        if detail.is_empty() {
+            header
+        } else {
+            format!("{header}\n{detail}")
+        }
+}
+
 #[derive(Debug, Default)]
 struct TerminalOutputState {
     line_open: bool,
@@ -477,12 +489,13 @@ async fn chat_cmd_async(
         let mut e = stderr.lock();
         let _ = writeln!(
             e,
-            "cos agent chat — provider={} model={} session={} memory={} streaming={}",
+            "cos agent chat — provider={} model={} session={} memory={} streaming={} max_turns={}",
             cfg.provider,
             cfg.model,
             session_id,
             if memory_db.is_some() { "on" } else { "off" },
-            if streaming { "on" } else { "off" }
+            if streaming { "on" } else { "off" },
+            cfg.max_turns,
         );
         let _ = writeln!(e, "Type /help for commands. Ctrl-D or /quit to exit.");
         if show_tools {
@@ -623,9 +636,9 @@ async fn chat_cmd_async(
             id: &str,
             name: &str,
             ok: bool,
-            _latency_ms: u64,
+            latency_ms: u64,
             _bytes_returned: usize,
-            _content_preview: &str,
+            content_preview: &str,
         ) {
             self.heartbeat.stop(id);
             {
@@ -635,7 +648,7 @@ async fn chat_cmd_async(
             if !ok {
                 mlock(&self.terminal).write_line(
                     &mut std::io::stderr().lock(),
-                    &format!("[tool failed: {name}]"),
+                    &format_tool_failure(name, latency_ms, content_preview),
                 );
             }
         }

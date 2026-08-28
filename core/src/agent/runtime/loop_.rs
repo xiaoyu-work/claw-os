@@ -815,6 +815,15 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     } else {
         None
     };
+    let progress = match recorder {
+        Some((db, sid)) => progress::recording_progress(
+            progress,
+            db.clone(),
+            sid,
+            cfg.redact_memory_enabled,
+        ),
+        None => progress,
+    };
 
     // Semantic auto-indexer: opt-in via `[embed]` config. Mirrors
     // every recorded message into the semantic store so the LLM can

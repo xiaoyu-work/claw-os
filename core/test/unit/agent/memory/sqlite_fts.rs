@@ -11,6 +11,18 @@ fn open_in_memory_is_clean() {
 }
 
 #[test]
+fn tool_invocations_are_separate_from_messages_and_clear_with_session() {
+    let db = db();
+    db.record_tool_start("s", "call-1", "cos_sysinfo", r#"{"command":"info"}"#)
+        .unwrap();
+    assert_eq!(db.count_total().unwrap(), 0);
+    assert_eq!(db.recent_tool_invocations("s", 10).unwrap().len(), 1);
+
+    assert_eq!(db.clear_session("s").unwrap(), 0);
+    assert!(db.recent_tool_invocations("s", 10).unwrap().is_empty());
+}
+
+#[test]
 fn read_only_open_never_mutates_an_existing_database() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("memory.db");

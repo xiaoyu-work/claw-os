@@ -39,6 +39,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 
         // processes
         "proc" => cmd_proc(),
+        "process" => cmd_process(args),
         "top" => cmd_top(args),
         "threads" => cmd_threads(args),
         "port" => cmd_port(args),
@@ -312,6 +313,7 @@ fn cmd_uptime() -> Result<Value, String> {
 /// Structured process listing — agent-readable equivalent of /proc/*/stat.
 ///
 /// Returns all running processes with PID, name, state, CPU, and memory.
+/// Use `process <pid> [pid ...]` for ownership and ancestry details.
 fn cmd_proc() -> Result<Value, String> {
     #[cfg(target_os = "linux")]
     {
@@ -385,6 +387,113 @@ fn cmd_proc() -> Result<Value, String> {
     #[cfg(not(target_os = "linux"))]
     {
         Err("sys proc requires Linux /proc filesystem".into())
+    }
+}
+
+/// Inspect arbitrary host PIDs without confusing them with cos-managed
+/// process-session ids.
+fn cmd_process(args: &[String]) -> Result<Value, String> {
+    #[cfg(target_os = "linux")]
+    {
+        const MAX_PIDS: usize = 32;
+        const MAX_ANCESTORS: usize = 16;
+
+        if args.is_empty() {
+            return Err("usage: process <pid> [pid ...]".into());
+        }
+        if args.len() > MAX_PIDS {
+            return Err(format!(
+                "process accepts at most {MAX_PIDS} PIDs per call (got {})",
+                args.len()
+            ));
+        }
+
+        let mut requested = Vec::with_capacity(args.len());
+        for raw in args {
+            let pid = raw
+                .parse::<u32>()
+                .map_err(|_| format!("invalid pid: {raw}"))?;
+            if pid == 0 {
+                return Err("invalid pid: 0".into());
+            }
+            requested.push(pid);
+        }
+
+        let users = passwd_users();
+        let mut found = 0usize;
+        let mut processes = Vec::with_capacity(requested.len());
+        for pid in &requested {
+            let identity = match read_process_identity(*pid, &users) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    processes.push(json!({
+                        "pid": pid,
+                        "error": error,
+                    }));
+                    continue;
+                }
+            };
+            found += 1;
+
+            let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+            let cwd = std::fs::read_link(proc_dir.join("cwd"))
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
+            let executable = std::fs::read_link(proc_dir.join("exe"))
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
+            let cgroups = read_str_trim(&proc_dir.join("cgroup"))
+                .map(|body| body.lines().map(str::to_string).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            let mut ancestors = Vec::new();
+            let mut ancestor_pid = identity.ppid;
+            let mut seen = std::collections::HashSet::new();
+            for _ in 0..MAX_ANCESTORS {
+                if ancestor_pid == 0 || !seen.insert(ancestor_pid) {
+                    break;
+                }
+                match read_process_identity(ancestor_pid, &users) {
+                    Ok(ancestor) => {
+                        let next = ancestor.ppid;
+                        let is_init = ancestor.pid == 1;
+                        ancestors.push(process_identity_value(&ancestor));
+                        if is_init {
+                            break;
+                        }
+                        ancestor_pid = next;
+                    }
+                    Err(error) => {
+                        ancestors.push(json!({
+                            "pid": ancestor_pid,
+                            "error": error,
+                        }));
+                        break;
+                    }
+                }
+            }
+
+            let mut value = process_identity_value(&identity);
+            if let Some(object) = value.as_object_mut() {
+                object.insert("cwd".into(), json!(cwd));
+                object.insert("executable".into(), json!(executable));
+                object.insert("cgroups".into(), json!(cgroups));
+                object.insert("ancestors".into(), json!(ancestors));
+            }
+            processes.push(value);
+        }
+
+        Ok(json!({
+            "requested": requested.len(),
+            "found": found,
+            "processes": processes,
+        }))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = args;
+        Err("sys process requires Linux /proc filesystem".into())
     }
 }
 
@@ -670,6 +779,38 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
             bv.partial_cmp(&av).unwrap_or(std::cmp::Ordering::Equal)
         });
         rows.truncate(top_n);
+
+        // The performance diagnosis consumes this output directly. Include
+        // enough provenance to answer "what owns this process?" without
+        // forcing the model to guess whether an OS PID is a cos session id or
+        // to fall back to shell/App execution.
+        let users = passwd_users();
+        for row in &mut rows {
+            let Some(pid) = row["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) else {
+                continue;
+            };
+            let Ok(identity) = read_process_identity(pid, &users) else {
+                continue;
+            };
+            let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+            let cwd = std::fs::read_link(proc_dir.join("cwd"))
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
+            let executable = std::fs::read_link(proc_dir.join("exe"))
+                .ok()
+                .map(|path| path.to_string_lossy().into_owned());
+            if let Some(object) = row.as_object_mut() {
+                object.insert("ppid".into(), json!(identity.ppid));
+                object.insert("uid".into(), json!(identity.uid));
+                object.insert("user".into(), json!(identity.user));
+                object.insert(
+                    "command".into(),
+                    json!(truncate_process_text(&identity.command, 512)),
+                );
+                object.insert("cwd".into(), json!(cwd));
+                object.insert("executable".into(), json!(executable));
+            }
+        }
 
         Ok(json!({
             "interval_ms": interval_ms,
@@ -1440,6 +1581,114 @@ fn parse_proc_stat(stat: &str) -> Option<(String, Vec<&str>)> {
     let tail = stat[rparen + 1..].trim();
     let fields: Vec<&str> = tail.split_whitespace().collect();
     Some((comm, fields))
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug)]
+struct ProcessIdentity {
+    pid: u32,
+    ppid: u32,
+    name: String,
+    state: String,
+    uid: Option<u32>,
+    user: Option<String>,
+    command: String,
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_identity(
+    pid: u32,
+    users: &std::collections::HashMap<u32, String>,
+) -> Result<ProcessIdentity, String> {
+    use std::os::unix::fs::MetadataExt;
+
+    let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    let stat_path = proc_dir.join("stat");
+    let stat = std::fs::read_to_string(&stat_path)
+        .map_err(|error| format!("read {}: {error}", stat_path.display()))?;
+    let (name, fields) =
+        parse_proc_stat(&stat).ok_or_else(|| format!("parse {}", stat_path.display()))?;
+    if fields.len() < 2 {
+        return Err(format!("parse {}: missing state or parent pid", stat_path.display()));
+    }
+    let ppid = fields[1]
+        .parse::<u32>()
+        .map_err(|_| format!("parse {}: invalid parent pid", stat_path.display()))?;
+    let state = state_name(fields[0]).to_string();
+
+    let uid = std::fs::read_to_string(proc_dir.join("status"))
+        .ok()
+        .and_then(|status| {
+            status
+                .lines()
+                .find_map(|line| line.strip_prefix("Uid:"))
+                .and_then(|line| line.split_whitespace().next())
+                .and_then(|raw| raw.parse::<u32>().ok())
+        })
+        .or_else(|| std::fs::metadata(&proc_dir).ok().map(|metadata| metadata.uid()));
+    let user = uid.and_then(|uid| users.get(&uid).cloned());
+    let command = std::fs::read(proc_dir.join("cmdline"))
+        .ok()
+        .map(|bytes| {
+            String::from_utf8_lossy(&bytes)
+                .split('\0')
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+        .filter(|command| !command.is_empty())
+        .unwrap_or_else(|| format!("[{name}]"));
+
+    Ok(ProcessIdentity {
+        pid,
+        ppid,
+        name,
+        state,
+        uid,
+        user,
+        command,
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn process_identity_value(identity: &ProcessIdentity) -> Value {
+    json!({
+        "pid": identity.pid,
+        "ppid": identity.ppid,
+        "name": identity.name,
+        "state": identity.state,
+        "uid": identity.uid,
+        "user": identity.user,
+        "command": truncate_process_text(&identity.command, 4096),
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn truncate_process_text(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    truncated.push_str(" ...[truncated]");
+    truncated
+}
+
+#[cfg(target_os = "linux")]
+fn passwd_users() -> std::collections::HashMap<u32, String> {
+    let mut users = std::collections::HashMap::new();
+    let Ok(passwd) = std::fs::read_to_string("/etc/passwd") else {
+        return users;
+    };
+    for line in passwd.lines() {
+        let fields = line.split(':').collect::<Vec<_>>();
+        if fields.len() < 3 {
+            continue;
+        }
+        if let Ok(uid) = fields[2].parse::<u32>() {
+            users.entry(uid).or_insert_with(|| fields[0].to_string());
+        }
+    }
+    users
 }
 
 #[cfg(target_os = "linux")]

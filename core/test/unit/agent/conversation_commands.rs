@@ -66,6 +66,14 @@ fn terminal_heartbeat_line_finishes_before_tool_failure() {
 }
 
 #[test]
+fn tool_failure_includes_elapsed_time_and_reason() {
+    assert_eq!(
+        format_tool_failure("cos_proc", 1_250, "session not found: status"),
+        "[tool failed: cos_proc after 1.2s]\nsession not found: status"
+    );
+}
+
+#[test]
 fn terminal_heartbeat_line_finishes_before_next_prompt() {
     let mut state = TerminalOutputState::default();
     let mut out = Vec::new();

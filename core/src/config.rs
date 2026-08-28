@@ -706,7 +706,7 @@ fn default_agent_model() -> String {
     String::new()
 }
 fn default_agent_max_turns() -> u32 {
-    10
+    50
 }
 fn default_agent_max_tokens() -> u32 {
     4096

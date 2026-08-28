@@ -4,7 +4,9 @@
 //! evidence markers because the runtime needs them for tool execution,
 //! memory, audit, and evidence verification. User-facing sinks receive this
 //! projection instead: answer text without evidence markers, tool identity
-//! without arguments, and lifecycle status without result bodies.
+//! without arguments, and lifecycle status without successful result bodies.
+//! Failed result previews are redacted and bounded so users can understand
+//! why a tool failed without exposing secrets or dumping arbitrary output.
 
 use std::sync::{Arc, Mutex};
 
@@ -113,10 +115,17 @@ impl ProgressSink for UserVisibleProgressSink {
         ok: bool,
         latency_ms: u64,
         bytes_returned: usize,
-        _content_preview: &str,
+        content_preview: &str,
     ) {
+        let visible_preview = if ok {
+            String::new()
+        } else {
+            let redacted =
+                crate::agent::safety::redact::Redactor::default_set().redact(content_preview);
+            super::progress::preview_with_limit(&redacted, super::progress::DEFAULT_PREVIEW_BYTES)
+        };
         self.inner
-            .on_tool_result(id, name, ok, latency_ms, bytes_returned, "");
+            .on_tool_result(id, name, ok, latency_ms, bytes_returned, &visible_preview);
     }
 }
 

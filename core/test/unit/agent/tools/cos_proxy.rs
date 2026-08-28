@@ -57,6 +57,19 @@ fn schema_includes_command_enum() {
     assert!(enum_vals.iter().any(|v| v.as_str() == Some("exec")));
 }
 
+#[test]
+fn sysinfo_schema_exposes_arbitrary_process_inspection() {
+    let mut registry = ToolRegistry::new();
+    register_all(&mut registry);
+    let tool = registry.get("cos_sysinfo").unwrap();
+    let schema = tool.input_schema();
+    let commands = schema
+        .pointer("/properties/command/enum")
+        .and_then(Value::as_array)
+        .expect("command enum must be present");
+    assert!(commands.iter().any(|value| value.as_str() == Some("process")));
+}
+
 #[tokio::test]
 async fn unknown_command_is_returned_as_tool_error() {
     let tool = CosPrimitiveTool::new(
@@ -90,6 +103,22 @@ async fn args_default_to_empty() {
         "sysinfo info unexpectedly failed: {}",
         result.content
     );
+}
+
+#[tokio::test]
+async fn sandbox_nonzero_exit_is_a_tool_error() {
+    fn failed_command(_command: &str, _args: &[String]) -> Result<Value, String> {
+        Ok(json!({
+            "exit_code": 1,
+            "stderr": "permission denied",
+        }))
+    }
+
+    let tool = CosPrimitiveTool::new("cos_sandbox", "test", failed_command, &["exec"]);
+    let result = tool.exec(json!({"command": "exec", "args": ["false"]})).await;
+    assert!(result.is_error);
+    assert!(result.content.contains("\"exit_code\":1"));
+    assert!(result.content.contains("permission denied"));
 }
 
 #[test]

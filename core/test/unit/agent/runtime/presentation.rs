@@ -115,6 +115,26 @@ fn tool_progress_hides_inputs_and_result_previews() {
 }
 
 #[test]
+fn tool_progress_shows_redacted_failure_previews() {
+    let captured = Arc::new(CapturingProgressSink::default());
+    let sink = user_visible_progress_sink(captured.clone());
+
+    sink.on_tool_result(
+        "call-1",
+        "cos_proc",
+        false,
+        12,
+        128,
+        "request failed with Authorization: Bearer abcdefghijklmnopqrstuvwxyz",
+    );
+
+    let preview = captured.preview.lock().unwrap().clone().unwrap();
+    assert!(preview.contains("request failed"));
+    assert!(preview.contains("[REDACTED:bearer]"));
+    assert!(!preview.contains("abcdefghijklmnopqrstuvwxyz"));
+}
+
+#[test]
 fn buffered_message_projects_text_once_and_preserves_terminal_metadata() {
     let captured = Arc::new(CapturingStreamSink::default());
     let sink = user_visible_stream_sink(captured.clone());
