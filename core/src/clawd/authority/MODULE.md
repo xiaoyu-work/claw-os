@@ -44,6 +44,13 @@ before its handler runs.
 | `PeerSession` | Addressed by the caller's own registered session; authenticated from process ancestry and given a single-use request-scoped grant | `system.package.restore`, `system.service.restore`, `credential.oauth-refresh` |
 | `Handle` | Addressed by the opaque handle itself | App session bind / set-transient / deregister |
 
+Agent approval redemption uses the same store without exposing another broker
+route. After a durable exact consent record is spent, `clawd` issues an
+`AgentWorker`-audience grant with `Issuer::Approval`, bound to the verified
+owner, session, task, worker pid/start time, capability, remaining approval
+expiry, one use, and the approval's revocation generation. The broker exercises
+that grant before telling the worker its final `caps::require` check succeeded.
+
 Each `PeerSession` route also declares whether an App session's one-call
 transient capabilities count for it. `credential.oauth-refresh` excludes them,
 preserving what the credential broker checked before this module existed; the

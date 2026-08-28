@@ -92,6 +92,8 @@ pub fn record_cap_decision(entry: &Value) {
         "decision": entry.get("decision").cloned().unwrap_or(Value::Null),
         "reason": entry.get("reason").cloned().unwrap_or(Value::Null),
         "hint": entry.get("hint").cloned().unwrap_or(Value::Null),
+        "risk": entry.get("risk").cloned().unwrap_or(Value::Null),
+        "approval": entry.get("approval").cloned().unwrap_or(Value::Null),
         "mode": entry.get("mode").cloned().unwrap_or(Value::Null),
         "owner_uid": entry.get("owner_uid").cloned().unwrap_or(Value::Null),
     });
@@ -113,6 +115,8 @@ fn approval_request_record(request: &ApprovalRequest) -> Value {
         "session_id": audit_policy::safe_reference(&request.session),
         "verb": &request.verb,
         "scope": &request.scope,
+        "risk": request.risk,
+        "consent_context": request.context,
         // Free text the requester supplied for the user's prompt; the
         // approvals store keeps it, this projection does not.
         "reason": audit_policy::text_digest(&request.reason),
@@ -139,6 +143,14 @@ fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
         "outcome": resolved.decision.outcome,
         "duration": resolved.decision.duration,
         "decided_by": &resolved.decision.decided_by,
+        "risk": resolved.request.risk,
+        "consent_context": resolved.request.context,
+        "grant": resolved.decision.grant.as_ref().map(|grant| json!({
+            "reference": grant.reference,
+            "expires_at": grant.expires_at,
+            "uses_remaining": grant.uses_remaining,
+            "generation": grant.generation,
+        })),
         // The approver's free-text note is never journalled.
         "note": resolved
             .decision

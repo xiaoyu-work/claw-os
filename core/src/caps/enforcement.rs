@@ -41,7 +41,8 @@ use std::path::PathBuf;
 use serde::Deserialize;
 
 use super::cap::{Cap, CapSet};
-use super::denial::{Denial, DenialReason};
+use super::consent::ConsentContext;
+use super::denial::{ApprovalInfo, ApprovalStatus, Denial, DenialReason};
 use super::scope::Scope;
 use super::verb::Verb;
 
@@ -294,11 +295,19 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 /// and covers allows and denials alike; the process being checked has
 /// no switch that suppresses either class.
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
+    let scope = scope.canonicalized();
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
-    let mut result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
+    let consent_context = consent_context(session_id.as_deref());
+    let mut result = require_impl(
+        verb,
+        scope.clone(),
+        mode,
+        session_id.as_deref(),
+        consent_context,
+    );
     if let Err(denial) = &mut result {
-        attach_approval_request(denial, mode, session_id.as_deref());
+        attach_approval_request(denial, mode, session_id.as_deref(), consent_context);
     }
     crate::audit::log_cap_decision(build_cap_audit_record(
         verb,
@@ -313,8 +322,9 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
 /// File (or reuse) a pending approval request for a capability the
 /// session was denied, and point the caller at it.
 ///
-/// Every strict-mode capability denial gets one, not only the
-/// high-risk ones. The system-Agent baseline
+/// Every attended strict-mode capability denial gets one, not only
+/// the high-risk ones. Unattended work fails closed and must receive
+/// its exact authority when it is scheduled. The system-Agent baseline
 /// ([`crate::clawd::system_caps`]) deliberately withholds low- and
 /// medium-risk authority whose *resource* is dangerous — an arbitrary
 /// host, a new process, another user's file — so a risk floor here
@@ -326,7 +336,12 @@ pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
 /// approving it authorises that resource and nothing adjacent, and it
 /// is spent at the gate by [`approved_grant_covers`] rather than
 /// written back into any session's capability set.
-fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&str>) {
+fn attach_approval_request(
+    denial: &mut Denial,
+    mode: Mode,
+    session_id: Option<&str>,
+    context: ConsentContext,
+) {
     if mode != Mode::Strict
         || matches!(
             denial.reason,
@@ -356,58 +371,120 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
         return;
     }
 
+    if context == ConsentContext::Unattended {
+        denial.hint = Some(format!(
+            "{} capability `{}` on `{}` requires attended consent; unattended work must receive the exact capability when it is scheduled",
+            meta.risk.label().current(),
+            denial.verb.as_str(),
+            denial.requested_scope
+        ));
+        denial.approval = Some(Box::new(ApprovalInfo {
+            status: ApprovalStatus::RequiredUnattended,
+            risk: meta.risk,
+            context,
+            request_id: None,
+        }));
+        return;
+    }
+
     let owner_uid = crate::paths::current_owner_uid_override().or_else(current_euid);
     // An `agentd` worker cannot open the root-owned consent store and
     // has no broker route, so it files through its job channel instead.
     // The broker supplies session and owner from the verified grant;
     // nothing about the request travels except the exact verb and scope.
     if let Some(gateway) = super::approval_gateway::installed() {
-        denial.hint = Some(
-            match gateway.request(denial.verb, &denial.requested_scope) {
-                Ok(pending) => match pending.request_id {
+        match gateway.request(denial.verb, &denial.requested_scope) {
+            Ok(pending) => {
+                denial.approval = Some(Box::new(ApprovalInfo {
+                    status: ApprovalStatus::Pending,
+                    risk: meta.risk,
+                    context,
+                    request_id: pending.request_id.clone(),
+                }));
+                denial.hint = Some(match pending.request_id {
                     Some(id) => format!(
                         "approval request {id} is pending; approve it in Claw OS, then retry"
                     ),
                     None => "an approval request is pending; approve it in Claw OS, then retry"
                         .to_string(),
-                },
-                Err(error) => format!("could not create approval request: {error}"),
-            },
-        );
+                });
+            }
+            Err(error) => {
+                denial.approval = Some(Box::new(ApprovalInfo {
+                    status: ApprovalStatus::Unavailable,
+                    risk: meta.risk,
+                    context,
+                    request_id: None,
+                }));
+                denial.hint = Some(format!("could not create approval request: {error}"));
+            }
+        }
         return;
     }
 
-    let existing = crate::approvals::list_pending_for_owner(owner_uid)
-        .into_iter()
-        .find(|request| {
-            request.session == session_id
-                && request.verb == denial.verb.as_str()
-                && request.scope.covers(&denial.requested_scope)
-        });
+    let cap = denial.requested_cap();
+    let existing = crate::approvals::find_pending_exact(session_id, &cap, owner_uid, Some(context));
     let request_id = match existing {
         Some(request) => Ok(request.id),
-        None => crate::approvals::submit_owned(
+        None => crate::approvals::submit_owned_with_context(
             denial.verb,
             denial.requested_scope.clone(),
             session_id,
-            format!(
-                "{}: {}",
-                meta.label.current(),
-                denial.requested_scope
-            ),
+            format!("{}: {}", meta.label.current(), denial.requested_scope),
             Some("system-agent".to_string()),
             owner_uid,
+            Some(context),
         ),
     };
     match request_id {
         Ok(id) => {
+            denial.approval = Some(Box::new(ApprovalInfo {
+                status: ApprovalStatus::Pending,
+                risk: meta.risk,
+                context,
+                request_id: Some(id.clone()),
+            }));
             denial.hint = Some(format!(
                 "approval request {id} is pending; approve it in Claw OS, then retry"
             ));
         }
         Err(error) => {
+            denial.approval = Some(Box::new(ApprovalInfo {
+                status: ApprovalStatus::Unavailable,
+                risk: meta.risk,
+                context,
+                request_id: None,
+            }));
             denial.hint = Some(format!("could not create approval request: {error}"));
         }
+    }
+}
+
+fn consent_context(session_id: Option<&str>) -> ConsentContext {
+    if let Some(gateway) = super::approval_gateway::installed() {
+        return gateway.context();
+    }
+    let Some(session_id) = session_id else {
+        return ConsentContext::Attended;
+    };
+    let Ok(session_id) = session_id.parse::<crate::session::SessionId>() else {
+        return ConsentContext::Attended;
+    };
+    let Ok(meta) = crate::session::get_meta(&session_id) else {
+        return ConsentContext::Attended;
+    };
+    if crate::session::record_is_root_owned(&session_id)
+        && matches!(
+            meta.origin,
+            Some(
+                crate::session::SessionOrigin::CronDelegation
+                    | crate::session::SessionOrigin::TriggerDelegation
+            )
+        )
+    {
+        ConsentContext::Unattended
+    } else {
+        ConsentContext::Attended
     }
 }
 
@@ -426,6 +503,7 @@ fn require_impl(
     scope: Scope,
     mode: Mode,
     session_id: Option<&str>,
+    consent_context: ConsentContext,
 ) -> Result<(), Denial> {
     let session_id = match session_id {
         Some(s) if !s.is_empty() => s,
@@ -452,6 +530,7 @@ fn require_impl(
             session.caps.as_ref(),
             session.transient_caps.as_ref(),
             session.app_id.is_some(),
+            consent_context,
         );
     }
 
@@ -493,6 +572,7 @@ fn require_impl(
         session.caps.as_ref(),
         session.transient_caps.as_ref(),
         session.app_id.is_some(),
+        consent_context,
     )
 }
 
@@ -504,6 +584,7 @@ fn authorize_session_caps(
     caps: Option<&CapSet>,
     transient_caps: Option<&CapSet>,
     is_app: bool,
+    consent_context: ConsentContext,
 ) -> Result<(), Denial> {
     let requested = Cap::new(verb, scope.clone());
     let mut caps = match caps {
@@ -523,7 +604,7 @@ fn authorize_session_caps(
     }
 
     if caps.covers(&requested)
-        || (!is_app && approved_grant_covers(session_id, verb, &scope))
+        || (!is_app && approved_grant_covers(session_id, verb, &scope, consent_context))
     {
         Ok(())
     } else if caps.verbs().contains(&verb) {
@@ -534,7 +615,12 @@ fn authorize_session_caps(
     }
 }
 
-fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
+fn approved_grant_covers(
+    session_id: &str,
+    verb: Verb,
+    scope: &Scope,
+    context: ConsentContext,
+) -> bool {
     // Same one-shot semantics either way: the grant is spent at the
     // gate, never written back into a session's capability set. A
     // worker asks the broker to spend it because the store is
@@ -554,13 +640,14 @@ fn approved_grant_covers(session_id: &str, verb: Verb, scope: &Scope) -> bool {
             }
         };
     }
-    match crate::approvals::consume_matching_grant_for_owner(
+    match crate::approvals::redeem_matching_grant_for_owner(
         session_id,
         verb,
         scope,
-        crate::paths::current_owner_uid_override(),
+        crate::paths::current_owner_uid_override().or_else(current_euid),
+        Some(context),
     ) {
-        Ok(Some(_duration)) => true,
+        Ok(Some(_grant)) => true,
         Ok(None) => false,
         Err(err) => {
             tracing::warn!(
@@ -589,8 +676,13 @@ fn build_cap_audit_record(
         .ok()
         .or_else(|| std::env::var("COS_APP_ID").ok());
 
-    let (decision, reason, hint) = match result {
-        Ok(()) => ("allow", serde_json::Value::Null, serde_json::Value::Null),
+    let (decision, reason, hint, approval) = match result {
+        Ok(()) => (
+            "allow",
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+        ),
         Err(d) => (
             "deny",
             serde_json::to_value(&d.reason).unwrap_or(serde_json::Value::Null),
@@ -598,6 +690,7 @@ fn build_cap_audit_record(
                 .as_ref()
                 .map(|h| serde_json::Value::String(h.clone()))
                 .unwrap_or(serde_json::Value::Null),
+            serde_json::to_value(&d.approval).unwrap_or(serde_json::Value::Null),
         ),
     };
 
@@ -616,6 +709,8 @@ fn build_cap_audit_record(
         "decision":        decision,
         "reason":          reason,
         "hint":            hint,
+        "risk":            super::catalog::lookup(verb).map(|meta| meta.risk),
+        "approval":        approval,
         "mode":            mode.as_str(),
         "owner_uid":       crate::paths::current_owner_uid_override(),
     })

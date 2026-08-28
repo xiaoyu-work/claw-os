@@ -1873,6 +1873,12 @@ fn approval_cmd_check_safe_tool_returns_approved() {
 }
 
 #[test]
+fn approval_cmd_reports_capability_authority_for_core_proxy() {
+    let v = approval_cmd(&["check".into(), "cos_proc".into()]).expect("approval check ok");
+    assert_eq!(v.get("authority").and_then(|v| v.as_str()), Some("capability"));
+}
+
+#[test]
 fn approval_cmd_check_requires_tool_name() {
     let err = approval_cmd(&["check".into()]).unwrap_err();
     assert!(err.contains("check"));

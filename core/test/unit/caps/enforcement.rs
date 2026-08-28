@@ -163,6 +163,11 @@ fn denies_with_verb_not_granted_when_verb_missing() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].verb, Verb::FS_DELETE.as_str());
     assert_eq!(pending[0].scope, Scope::path("/home/jay/x"));
+    assert_eq!(pending[0].risk, Some(crate::caps::Risk::High));
+    assert_eq!(
+        pending[0].context,
+        Some(crate::caps::ConsentContext::Attended)
+    );
 }
 
 /// Every capability denial gets an exact, one-shot request — not only
@@ -183,6 +188,7 @@ fn low_risk_denial_creates_an_exact_approval_request() {
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].verb, Verb::NET_RESOLVE.as_str());
     assert_eq!(pending[0].scope, Scope::host("example.com"));
+    assert_eq!(pending[0].risk, Some(crate::caps::Risk::Low));
 }
 
 /// A path denial inside a verb the session already holds is the
@@ -245,12 +251,14 @@ fn approved_once_grant_allows_exactly_one_denied_request() {
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
-    let id = crate::approvals::submit(
+    let id = crate::approvals::submit_owned_with_context(
         Verb::FS_WRITE,
-        Scope::path("/tmp/granted/**"),
+        Scope::path("/tmp/granted/file"),
         "s1",
         "test grant",
         None,
+        Some(unsafe { libc::geteuid() }),
+        Some(crate::caps::ConsentContext::Attended),
     )
     .unwrap();
     crate::approvals::approve(&id, crate::approvals::GrantDuration::Once, None, None).unwrap();
@@ -529,6 +537,8 @@ fn audit_record_allow_carries_decision_verb_and_target() {
     assert_eq!(rec["scope"]["value"], "/home/jay/notes.md");
     assert!(rec["reason"].is_null());
     assert!(rec["hint"].is_null());
+    assert_eq!(rec["risk"], "low");
+    assert!(rec["approval"].is_null());
 }
 
 #[test]
@@ -540,6 +550,8 @@ fn audit_record_deny_emits_reason_and_hint() {
     assert_eq!(rec["decision"], "deny");
     assert_eq!(rec["reason"], "verb-not-granted");
     assert_eq!(rec["hint"], "ask the user");
+    assert_eq!(rec["risk"], "high");
+    assert!(rec["approval"].is_null());
     assert!(rec["session_id"].is_null());
 }
 
@@ -593,6 +605,7 @@ struct FakeGateway {
     consume: std::sync::Mutex<Result<bool, String>>,
     request: std::sync::Mutex<Result<crate::caps::PendingApproval, String>>,
     asked: std::sync::Mutex<Vec<(String, String)>>,
+    context: crate::caps::ConsentContext,
 }
 
 impl FakeGateway {
@@ -604,6 +617,19 @@ impl FakeGateway {
             consume: std::sync::Mutex::new(consume),
             request: std::sync::Mutex::new(request),
             asked: std::sync::Mutex::new(Vec::new()),
+            context: crate::caps::ConsentContext::Attended,
+        })
+    }
+
+    fn unattended(
+        consume: Result<bool, String>,
+        request: Result<crate::caps::PendingApproval, String>,
+    ) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            consume: std::sync::Mutex::new(consume),
+            request: std::sync::Mutex::new(request),
+            asked: std::sync::Mutex::new(Vec::new()),
+            context: crate::caps::ConsentContext::Unattended,
         })
     }
 
@@ -615,6 +641,10 @@ impl FakeGateway {
 }
 
 impl crate::caps::ApprovalGateway for FakeGateway {
+    fn context(&self) -> crate::caps::ConsentContext {
+        self.context
+    }
+
     fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
         self.record(verb, scope);
         self.consume.lock().unwrap().clone()
@@ -699,4 +729,37 @@ fn an_unavailable_broker_keeps_the_gate_closed() {
         .expect_err("mediation failure must not open the gate");
     let hint = denial.hint.unwrap_or_default();
     assert!(hint.contains("could not create approval request"), "{hint}");
+}
+
+#[test]
+fn an_unattended_worker_fails_closed_without_filing_a_request() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-unattended", caps);
+    let _g = EnvGuard::new(&reg, Some("s-unattended"), Some("strict"));
+    let gateway = FakeGateway::unattended(
+        Ok(false),
+        Err("request should not be attempted".to_string()),
+    );
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+
+    let denial = require(Verb::FS_DELETE, Scope::path("/home/jay/x"))
+        .expect_err("unattended work must not open a prompt");
+    assert_eq!(
+        denial.approval.as_ref().map(|approval| approval.status),
+        Some(crate::caps::ApprovalStatus::RequiredUnattended)
+    );
+    assert!(
+        denial
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("unattended"))
+    );
+    assert_eq!(
+        gateway.asked.lock().unwrap().len(),
+        1,
+        "only the exact-grant consume probe should reach the broker"
+    );
+    assert!(crate::approvals::list_pending().is_empty());
 }

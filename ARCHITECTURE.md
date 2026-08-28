@@ -269,13 +269,23 @@ admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
 
-Consent still works. `core/src/caps/approval_gateway.rs` is the seam
-`caps::require` consults instead of the root-owned approvals store: the worker
-names the exact verb and canonical scope it was denied and nothing else, and
-`clawd` supplies owner, session and task from the verified grant, spends an
-exactly-matching approved grant one-shot or files a deduped pending request
-under that identity. There is no route to decide a request or to obtain a
-reusable capability.
+Consent remains inside the capability boundary.
+`core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
+of the root-owned approvals store: after validated arguments produce an exact
+verb and canonical scope, the worker names only those values. `clawd` supplies
+owner, session, task, worker identity, attended/unattended context, and catalog
+risk from trusted state. Attended denials may file one exact request;
+unattended denials fail closed and must rely on authority delegated when the
+automation was created.
+
+An approved record is durable consent evidence, not ambient session authority.
+At execution `clawd` atomically spends the exact record, then mints and
+immediately exercises an in-memory `Issuer::Approval` capability grant bound to
+the owner, session, task, worker pid/start time, verb, scope, approval expiry,
+use budget, and revocation generation. Only then does the execution-time
+`caps::require` return success. There is no worker route to decide a request or
+obtain a reusable capability. See
+[`docs/capability-consent.md`](docs/capability-consent.md).
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one
@@ -288,7 +298,7 @@ navigation, process spawn/exec, credentials, system/package/service/identity/
 storage/power mutation, cron persistence, device control, cross-user local
 channels, and observation domains that describe another principal, another
 account's units, or the machine's security posture are denied and require an
-authenticated task/session delegation or an exact, one-shot approval settled at
+authenticated task/session delegation or an exact, bounded approval settled at
 the gate. Resource-addressing verbs never receive an untyped wildcard, and a
 verb absent from the table is denied.
 
@@ -318,9 +328,11 @@ system authority. Owner homes for every one of these derivations come from
 no fallback.
 
 An approval is likewise a bounded decision rather than a licence.
-`core/src/approvals.rs` stamps every approved record with a wall-clock deadline,
-a use budget, a revocation generation and a keyed audit reference, and spends it
-atomically under a store-wide lock, so `once` cannot be double-spent and
+`core/src/approvals.rs` binds every new record to the exact owner, session,
+capability, catalog risk, and consent context, then stamps an approval with a
+wall-clock deadline, use budget, revocation generation, and keyed audit
+reference. Matching is exact rather than scope-covering, and spending is atomic
+under a store-wide lock, so `once` cannot be double-spent and
 `session`/`forever` still expire. Revocation lives in
 `core/src/approvals/generations.rs`: a monotonic counter in root-owned state
 that a binding captures at approval time and every load compares against, so

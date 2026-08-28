@@ -33,6 +33,10 @@ consumer may act on a delegation variant only after `record_is_root_owned`
 confirms the record could not have been authored by the account it would
 delegate to. `None` always means "no delegation".
 
+The same trusted origin selects consent context: ambient system-Agent tasks are
+attended, while cron/trigger delegations are unattended and cannot open a new
+approval prompt at execution time.
+
 ## Tests
 
 ```bash

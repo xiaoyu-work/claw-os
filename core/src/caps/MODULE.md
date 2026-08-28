@@ -11,12 +11,15 @@ separate description from system authority.
 - Parse, normalize, and compare scopes.
 - Validate app manifests and derive operation needs.
 - Enforce permissions for sessions, tools, apps, and broker requests.
+- Route denied Agent capabilities into attended, exact-scope consent
+  without turning approval into ambient session authority.
 
 ## Key Files
 
 | Path | Role |
 | --- | --- |
 | `catalog.rs` | Known capability verbs and metadata |
+| `consent.rs` | Attended versus unattended consent context |
 | `scope.rs` | Scope kinds, normalization, containment |
 | `manifest.rs` | `app.json` schema and validation |
 | `../../test/unit/caps/manifest.rs` | Manifest parsing, need binding, AI/session/desktop tests |
@@ -35,6 +38,11 @@ decides is `clawd::authority`, which holds grants bound to an authenticated
 process and hands each broker route one decision. A serialized `CapSet` found on
 disk, in a request body, or in a session row is a description to be re-derived
 and clamped — never promoted.
+
+For Agent consent, `caps::require` receives the exact verb and canonical scope
+only after the owning operation validates its arguments. Attended denials may
+create a bounded approval request; unattended denials never prompt. A worker
+approval is redeemed through `clawd::authority` at the final gate.
 
 ## Tests
 

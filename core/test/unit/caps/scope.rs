@@ -1,6 +1,18 @@
 use super::*;
 
 #[test]
+fn canonicalized_scope_matches_authorization_identity() {
+    assert_eq!(
+        Scope::host("API.Example.COM:443").canonicalized(),
+        Scope::host("api.example.com:443")
+    );
+    assert_eq!(
+        Scope::path("/var/lib/../log/app").canonicalized(),
+        Scope::path("/var/log/app")
+    );
+}
+
+#[test]
 fn wild_covers_anything() {
     assert!(Scope::Wild.covers(&Scope::path("/etc/passwd")));
     assert!(Scope::Wild.covers(&Scope::host("evil.com")));

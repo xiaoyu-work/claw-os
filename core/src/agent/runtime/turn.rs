@@ -759,6 +759,14 @@ async fn dispatch_tool(
     call: &ToolCall,
     session_id: Option<&str>,
 ) -> ToolResult {
+    let Some(tool) = registry.get(&call.name) else {
+        return ToolResult::err(format!(
+            "unknown tool '{}'. registered: {:?}",
+            call.name,
+            registry.names()
+        ));
+    };
+
     // Per-call approval gate. Skip the await entirely when the tool
     // is not configured under any of the three sets. `is_classified`
     // is one O(1) HashSet lookup that covers
@@ -767,7 +775,12 @@ async fn dispatch_tool(
     let approval = registry.approval();
     if approval.is_classified(&call.name) {
         let outcome = approval
-            .evaluate(&call.name, &call.input, "policy: dangerous_tools")
+            .evaluate_for(
+                &call.name,
+                &call.input,
+                "policy: dangerous_tools",
+                tool.approval_boundary(),
+            )
             .await;
         match outcome {
             crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {
@@ -795,31 +808,21 @@ async fn dispatch_tool(
         }
     }
 
-    match registry.get(&call.name) {
-        Some(tool) => {
-            // Scope the task-locals that `cos_delegate` (and any other
-            // policy-aware tool) reads to discover the parent registry's
-            // current guardrails + approval gate. Without this scope a
-            // child agent spawned via `cos_delegate` would run under
-            // permissive defaults regardless of the parent's deny rules
-            // or approval policy — a privilege-escalation bug at the
-            // delegate boundary.
-            let g = registry.guardrails().clone();
-            let a = registry.approval().clone();
-            crate::agent::tools::delegate::PARENT_GUARDRAILS
-                .scope(
-                    g,
-                    crate::agent::tools::delegate::PARENT_APPROVAL
-                        .scope(a, tool.exec(effective_tool_input(call, session_id))),
-                )
-                .await
-        }
-        None => ToolResult::err(format!(
-            "unknown tool '{}'. registered: {:?}",
-            call.name,
-            registry.names()
-        )),
-    }
+    // Scope the task-locals that `cos_delegate` (and any other
+    // policy-aware tool) reads to discover the parent registry's
+    // current guardrails + approval gate. Without this scope a child
+    // agent spawned via `cos_delegate` would run under permissive
+    // defaults regardless of the parent's deny rules or approval
+    // policy — a privilege-escalation bug at the delegate boundary.
+    let g = registry.guardrails().clone();
+    let a = registry.approval().clone();
+    crate::agent::tools::delegate::PARENT_GUARDRAILS
+        .scope(
+            g,
+            crate::agent::tools::delegate::PARENT_APPROVAL
+                .scope(a, tool.exec(effective_tool_input(call, session_id))),
+        )
+        .await
 }
 
 /// Outcome of a single dispatch: the (possibly-overridden) call, the

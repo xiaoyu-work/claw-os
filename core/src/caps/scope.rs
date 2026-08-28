@@ -112,6 +112,25 @@ impl Scope {
             Scope::SelfRef(_) => false,
         }
     }
+
+    /// Canonical representation used for authorization and consent.
+    ///
+    /// Capability containment already compares canonical filesystem
+    /// identities and case-folded DNS names. Persisted approvals must
+    /// use the same representation so spelling differences cannot
+    /// create a second approval identity or substitute a sibling scope.
+    pub fn canonicalized(&self) -> Self {
+        match self {
+            Scope::Path(path) => {
+                let normalized = normalize_path(&expand_path(path));
+                Scope::Path(canonicalize_pattern_prefix(&normalized))
+            }
+            Scope::Host(host) => Scope::Host(host.to_ascii_lowercase()),
+            Scope::Name(name) => Scope::Name(name.clone()),
+            Scope::SelfRef(reference) => Scope::SelfRef(reference.clone()),
+            Scope::Wild => Scope::Wild,
+        }
+    }
 }
 
 impl fmt::Display for Scope {

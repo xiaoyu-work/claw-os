@@ -17,8 +17,10 @@
 //!     denied/<id>.json
 //! ```
 //!
-//! Rendering and notification are owned by the Agent UX. This module is just
-//! the storage + waiter layer.
+//! Rendering and notification are owned by the Agent UX. This module stores
+//! durable consent evidence and atomically spends it. For supervised Agent
+//! work, `clawd` then redeems that evidence into a one-use in-memory authority
+//! grant bound to the live task and worker.
 
 use std::fs;
 use std::io::Write;
@@ -27,7 +29,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::caps::{Cap, Scope, Verb};
+use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 
 pub mod generations;
 
@@ -68,6 +70,16 @@ pub struct Request {
     pub requested_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_uid: Option<u32>,
+    /// Catalog risk captured when the exact capability was requested.
+    /// Missing on legacy records; those are re-derived before a new
+    /// decision is allowed to mint authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<Risk>,
+    /// Execution context for Agent-originated consent. Non-Agent
+    /// approval flows leave this absent and cannot satisfy an Agent
+    /// capability denial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ConsentContext>,
     /// Process that asked. Helps the user distinguish "the file
     /// manager I just opened" from "some background cron job."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +134,46 @@ pub struct GrantBinding {
     pub generation: Option<u32>,
     /// Keyed, non-reversible reference shared with the audit trail.
     pub reference: String,
+    /// Exact authority this decision may redeem.
+    ///
+    /// This is deliberately duplicated from the request. A restored or
+    /// edited request cannot turn a historical decision into authority
+    /// for a different owner, session, capability, risk, or execution
+    /// context. Bindings written before this field existed fail closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<ApprovalAuthorization>,
+}
+
+/// Exact capability and session context an approved record may redeem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalAuthorization {
+    pub owner_uid: Option<u32>,
+    pub session: String,
+    pub capability: Cap,
+    pub risk: Risk,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ConsentContext>,
+}
+
+/// A durable approval use that has been atomically spent.
+///
+/// For an Agent worker this is not yet execution authority. `clawd`
+/// redeems it into a one-shot in-memory capability grant bound to the
+/// authenticated task and worker before returning success to the gate.
+#[derive(Debug, Clone)]
+pub struct ConsumedGrant {
+    pub duration: GrantDuration,
+    pub expires_at: u64,
+    pub uses_remaining: u32,
+    pub generation: u32,
+    pub reference: String,
+    pub authorization: ApprovalAuthorization,
+}
+
+impl ConsumedGrant {
+    pub fn expires_in(&self) -> Duration {
+        Duration::from_secs(self.expires_at.saturating_sub(now_secs()))
+    }
 }
 
 /// Longest a `session`-scoped approval may stand.
@@ -134,7 +186,13 @@ const FOREVER_GRANT_SECS: u64 = 30 * 24 * 60 * 60;
 const REPEATABLE_GRANT_USES: u32 = 512;
 
 impl GrantBinding {
-    fn mint(duration: GrantDuration, id: &str, now: u64, generation: u32) -> Self {
+    fn mint(
+        duration: GrantDuration,
+        id: &str,
+        now: u64,
+        generation: u32,
+        authorization: ApprovalAuthorization,
+    ) -> Self {
         let (lifetime, uses) = match duration {
             GrantDuration::Once => (SESSION_GRANT_SECS, 1),
             GrantDuration::Session => (SESSION_GRANT_SECS, REPEATABLE_GRANT_USES),
@@ -145,18 +203,25 @@ impl GrantBinding {
             uses_remaining: uses,
             generation: Some(generation),
             reference: crate::audit_policy::text_digest(id).digest,
+            authorization: Some(authorization),
         }
     }
 
-    /// Is this binding still authority for `(owner_uid, session)`?
+    /// Is this binding still authority for the exact expected request?
     ///
     /// Three independent conditions, each of which alone kills the
     /// grant: the use budget, the deadline, and the revocation
     /// generation. The generation lookup reads root-owned state, and an
     /// error there is a refusal — an authority that cannot tell whether
     /// something was revoked must assume it was.
-    fn is_live(&self, now: u64, owner_uid: Option<u32>, session: &str) -> bool {
+    fn is_live(&self, now: u64, expected: &ApprovalAuthorization) -> bool {
         if self.uses_remaining == 0 || now >= self.expires_at {
+            return false;
+        }
+        let Some(authorization) = self.authorization.as_ref() else {
+            return false;
+        };
+        if authorization != expected {
             return false;
         }
         let Some(generation) = self.generation else {
@@ -165,7 +230,7 @@ impl GrantBinding {
             // never bounded, so it is refused until re-approved.
             return false;
         };
-        match generations::current(owner_uid, session) {
+        match generations::current(authorization.owner_uid, &authorization.session) {
             Ok(current) => generation == current,
             Err(error) => {
                 tracing::error!(
@@ -390,6 +455,79 @@ fn sync_dir(path: &Path) {
     }
 }
 
+pub fn canonical_capability(verb: Verb, scope: Scope) -> Result<(Cap, Risk), String> {
+    let meta = crate::caps::lookup_meta(verb)
+        .ok_or_else(|| format!("capability verb is not in the catalog: {}", verb.as_str()))?;
+    let scope = scope.canonicalized();
+    let kind_matches = matches!(
+        (meta.scope_kind, &scope),
+        (_, Scope::Wild)
+        | (ScopeKind::Path, Scope::Path(_))
+        | (ScopeKind::Host, Scope::Host(_))
+        | (ScopeKind::Name, Scope::Name(_))
+        | (ScopeKind::SelfRef, Scope::SelfRef(_))
+    );
+    if !kind_matches {
+        return Err(format!(
+            "capability {} expects {:?} scope, got {:?}",
+            verb.as_str(),
+            meta.scope_kind,
+            scope.kind()
+        ));
+    }
+    let rendered = scope.to_string();
+    if rendered.is_empty() || rendered.len() > 512 || rendered.contains(['\n', '\r', '\0']) {
+        return Err("capability scope is not a bounded single-line value".to_string());
+    }
+    Ok((Cap::new(verb, scope), meta.risk))
+}
+
+pub fn capability_risk(verb: Verb, scope: &Scope) -> Result<Risk, String> {
+    canonical_capability(verb, scope.clone()).map(|(_, risk)| risk)
+}
+
+fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization, String> {
+    let verb = Verb::parse(&request.verb)
+        .ok_or_else(|| format!("unknown capability verb: {}", request.verb))?;
+    let (capability, risk) = canonical_capability(verb, request.scope.clone())?;
+    if capability.scope != request.scope {
+        return Err("approval request scope is not canonical; request a fresh approval".to_string());
+    }
+    if request.risk.is_some_and(|recorded| recorded != risk) {
+        return Err(format!(
+            "capability risk changed for {}; request a fresh approval",
+            request.verb
+        ));
+    }
+    Ok(ApprovalAuthorization {
+        owner_uid: request.owner_uid,
+        session: request.session.clone(),
+        capability,
+        risk,
+        context: request.context,
+    })
+}
+
+fn validate_agent_duration(
+    authorization: &ApprovalAuthorization,
+    duration: GrantDuration,
+) -> Result<(), String> {
+    if authorization.context != Some(ConsentContext::Attended) {
+        return Ok(());
+    }
+    match (authorization.risk, duration) {
+        (Risk::Critical, GrantDuration::Session | GrantDuration::Forever) => Err(
+            "critical Agent capabilities may only be approved once; choose duration `once`"
+                .to_string(),
+        ),
+        (Risk::High, GrantDuration::Forever) => Err(
+            "high-risk Agent capabilities may not be approved forever; choose `once` or `session`"
+                .to_string(),
+        ),
+        _ => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API — write side
 // ---------------------------------------------------------------------------
@@ -414,15 +552,32 @@ pub fn submit_owned(
     requester: Option<String>,
     owner_uid: Option<u32>,
 ) -> Result<String, String> {
+    submit_owned_with_context(verb, scope, session, reason, requester, owner_uid, None)
+}
+
+/// Submit an Agent-originated capability request with its trusted
+/// attended/unattended context.
+pub fn submit_owned_with_context(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<String, String> {
+    let (capability, risk) = canonical_capability(verb, scope)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let req = Request {
         id: format!("ap-{}", short_id()),
         verb: verb.as_str().to_string(),
-        scope,
+        scope: capability.scope,
         session: session.into(),
         reason: reason.into(),
         requested_at: now_secs(),
         owner_uid,
+        risk: Some(risk),
+        context,
         requester,
     };
     let path = pending_dir().join(format!("{}.json", req.id));
@@ -531,7 +686,7 @@ fn resolve(
         Ok(s) => s,
         Err(e) => return Err(format!("read claimed {id}: {e}")),
     };
-    let request: Request =
+    let mut request: Request =
         serde_json::from_str(&data).map_err(|e| format!("parse claimed {id}: {e}"))?;
     if !request_visible_to(&request, owner_uid) {
         fs::rename(&scratch, &pending)
@@ -543,15 +698,41 @@ fn resolve(
     }
 
     let decided_at = now_secs();
+    let authorization = if outcome == Outcome::Approved {
+        let authorization = match authorization_for_request(&request) {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                fs::rename(&scratch, &pending)
+                    .map_err(|restore| format!("{error}; restore pending {id}: {restore}"))?;
+                return Err(error);
+            }
+        };
+        if let Some(duration) = duration {
+            if let Err(error) = validate_agent_duration(&authorization, duration) {
+                fs::rename(&scratch, &pending)
+                    .map_err(|restore| format!("{error}; restore pending {id}: {restore}"))?;
+                return Err(error);
+            }
+        }
+        request.risk = Some(authorization.risk);
+        Some(authorization)
+    } else {
+        None
+    };
     // The generation is captured from root-owned state at decision
     // time, so a later revocation of this owner or this grant session
     // retires the record without touching it — and a restore of this
     // very file from an older backup cannot bring it back.
     let generation = match outcome {
-        Outcome::Approved => Some(
-            generations::current(request.owner_uid, &request.session)
-                .map_err(|error| format!("could not read approval revocation state: {error}"))?,
-        ),
+        Outcome::Approved => match generations::current(request.owner_uid, &request.session) {
+            Ok(generation) => Some(generation),
+            Err(error) => {
+                let message = format!("could not read approval revocation state: {error}");
+                fs::rename(&scratch, &pending)
+                    .map_err(|restore| format!("{message}; restore pending {id}: {restore}"))?;
+                return Err(message);
+            }
+        },
         Outcome::Denied => None,
     };
     let decision = Decision {
@@ -561,14 +742,17 @@ fn resolve(
         duration,
         note,
         // Only an approval carries authority, and only a bounded one.
-        grant: generation.map(|generation| {
-            GrantBinding::mint(
-                duration.unwrap_or(GrantDuration::Once),
-                id,
-                decided_at,
-                generation,
-            )
-        }),
+        grant: generation
+            .zip(authorization)
+            .map(|(generation, authorization)| {
+                GrantBinding::mint(
+                    duration.unwrap_or(GrantDuration::Once),
+                    id,
+                    decided_at,
+                    generation,
+                    authorization,
+                )
+            }),
     };
     let resolved = Resolved { request, decision };
     let dest_dir = match outcome {
@@ -668,20 +852,41 @@ pub fn consume_matching_grant_for_owner(
     requested_scope: &Scope,
     owner_uid: Option<u32>,
 ) -> Result<Option<GrantDuration>, String> {
+    redeem_matching_grant_for_owner(session, verb, requested_scope, owner_uid, None)
+        .map(|grant| grant.map(|grant| grant.duration))
+}
+
+/// Atomically spend one Agent approval for an exact capability.
+///
+/// The returned record is consent evidence, not execution authority.
+/// The `agentd` broker must redeem it into a process-bound
+/// `clawd::authority` grant before the worker may proceed.
+pub fn redeem_matching_grant_for_owner(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<Option<ConsumedGrant>, String> {
+    let (capability, risk) = canonical_capability(verb, requested_scope.clone())?;
+    let expected = ApprovalAuthorization {
+        owner_uid,
+        session: session.to_string(),
+        capability,
+        risk,
+        context,
+    };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     // The scan, the budget decrement and the retirement all happen
     // under one store-wide lock, so two callers cannot both spend the
     // last use of the same grant.
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         for path in list_dir(&approved_dir()) {
-            let Some(resolved) =
-                load_matching_grant(&path, session, verb, requested_scope, owner_uid)
-            else {
+            let Some(resolved) = load_matching_grant(&path, &expected) else {
                 continue;
             };
-            let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
-            if spend_grant(&path, resolved)? {
-                return Ok(Some(duration));
+            if let Some(grant) = spend_grant(&path, resolved)? {
+                return Ok(Some(grant));
             }
         }
         Ok(None)
@@ -691,21 +896,36 @@ pub fn consume_matching_grant_for_owner(
 /// Spend one use of an approved grant, retiring it when the budget runs
 /// out.
 ///
-/// Called with the store lock held. Returns `Ok(false)` when another
+/// Called with the store lock held. Returns `Ok(None)` when another
 /// caller won the race and the record is already gone.
-fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<bool, String> {
+fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<Option<ConsumedGrant>, String> {
+    let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
     let Some(binding) = resolved.decision.grant.as_mut() else {
         // Refused by `load_matching_grant`; belt and braces.
-        return Ok(false);
+        return Ok(None);
+    };
+    let Some(generation) = binding.generation else {
+        return Ok(None);
+    };
+    let Some(authorization) = binding.authorization.clone() else {
+        return Ok(None);
     };
     binding.uses_remaining = binding.uses_remaining.saturating_sub(1);
+    let consumed = ConsumedGrant {
+        duration,
+        expires_at: binding.expires_at,
+        uses_remaining: binding.uses_remaining,
+        generation,
+        reference: binding.reference.clone(),
+        authorization,
+    };
     if binding.uses_remaining == 0 {
-        return consume_grant_file(path);
+        return consume_grant_file(path).map(|moved| moved.then_some(consumed));
     }
     let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
     write_atomic(path, payload.as_bytes())
         .map_err(|e| format!("spend approved grant {}: {e}", path.display()))?;
-    Ok(true)
+    Ok(Some(consumed))
 }
 
 /// True when an approved, unconsumed grant already covers this exact
@@ -717,10 +937,50 @@ pub fn has_approved_grant_for_owner(
     cap: &Cap,
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
+    has_approved_grant_for_context(session, cap, owner_uid, None)
+}
+
+pub fn has_approved_grant_for_context(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<bool, String> {
+    let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+    let expected = ApprovalAuthorization {
+        owner_uid,
+        session: session.to_string(),
+        capability,
+        risk,
+        context,
+    };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     Ok(list_dir(&approved_dir())
         .into_iter()
-        .any(|path| load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()))
+        .any(|path| load_matching_grant(&path, &expected).is_some()))
+}
+
+/// Find a pending request for exactly this owner/session/capability and
+/// execution context. Scope containment is intentionally not used:
+/// consent for one canonical operation must never be substituted for
+/// a sibling or broader resource.
+pub fn find_pending_exact(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Option<Request> {
+    let (cap, risk) = canonical_capability(cap.verb, cap.scope.clone()).ok()?;
+    list_pending_for_owner(owner_uid)
+        .into_iter()
+        .find(|request| {
+            request.session == session
+                && request.owner_uid == owner_uid
+                && request.verb == cap.verb.as_str()
+                && request.scope == cap.scope
+                && request.context == context
+                && request.risk == Some(risk)
+        })
 }
 
 /// Decision state of one request, as reported to the requester.
@@ -806,9 +1066,16 @@ pub fn consume_grant_set_once_for_owner(
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         let mut claimed: Vec<PathBuf> = Vec::new();
         for cap in required {
+            let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+            let expected = ApprovalAuthorization {
+                owner_uid,
+                session: session.to_string(),
+                capability,
+                risk,
+                context: None,
+            };
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
-                !claimed.contains(path)
-                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid).is_some()
+                !claimed.contains(path) && load_matching_grant(path, &expected).is_some()
             });
             match found {
                 Some(path) => claimed.push(path),
@@ -850,8 +1117,8 @@ fn grant_lock_path() -> PathBuf {
     root().join("grants")
 }
 
-/// Load `path` when it holds an approved grant covering this exact
-/// session, owner, verb and scope.
+/// Load `path` when it holds an approved grant for this exact
+/// owner, session, verb, scope, risk, and consent context.
 ///
 /// A record with no [`GrantBinding`] is refused. Those are the records
 /// written before approvals carried an expiry, a use budget and a
@@ -860,38 +1127,36 @@ fn grant_lock_path() -> PathBuf {
 /// historical "yes" into standing permission the user was never asked
 /// for. An expired, spent or revoked binding is refused the same way,
 /// and so is one the revocation state cannot be read for.
-fn load_matching_grant(
-    path: &Path,
-    session: &str,
-    verb: Verb,
-    requested_scope: &Scope,
-    owner_uid: Option<u32>,
-) -> Option<Resolved> {
+fn load_matching_grant(path: &Path, expected: &ApprovalAuthorization) -> Option<Resolved> {
     let data = fs::read_to_string(path).ok()?;
     let resolved = serde_json::from_str::<Resolved>(&data).ok()?;
-    if resolved.request.session != session {
+    if resolved.request.session != expected.session {
         return None;
     }
-    if owner_uid.is_some() && resolved.request.owner_uid != owner_uid {
+    if resolved.request.owner_uid != expected.owner_uid {
         return None;
     }
-    if Verb::parse(&resolved.request.verb) != Some(verb) {
+    if Verb::parse(&resolved.request.verb) != Some(expected.capability.verb) {
         return None;
     }
     if resolved.decision.outcome != Outcome::Approved {
         return None;
     }
-    // Generations are keyed by the *record's* owner, not the caller's
-    // filter, so a lookup with no owner filter still compares against
-    // the counter the approval was minted under.
-    if !resolved.decision.grant.as_ref()?.is_live(
-        now_secs(),
-        resolved.request.owner_uid,
-        &resolved.request.session,
-    ) {
+    if resolved.request.scope != expected.capability.scope {
         return None;
     }
-    if !resolved.request.scope.covers(requested_scope) {
+    if resolved.request.context != expected.context {
+        return None;
+    }
+    if resolved.request.risk != Some(expected.risk) {
+        return None;
+    }
+    if !resolved
+        .decision
+        .grant
+        .as_ref()?
+        .is_live(now_secs(), expected)
+    {
         return None;
     }
     Some(resolved)

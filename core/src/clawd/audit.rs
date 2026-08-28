@@ -266,10 +266,21 @@ struct WorkerApprovalAudit<'a> {
     event: &'static str,
     job_id: &'a str,
     owner_uid: u32,
+    worker_pid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_start_time_ticks: Option<u64>,
     session_id: String,
     verb: String,
     scope: String,
+    risk: &'static str,
+    context: &'static str,
     action: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_grant: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_generation: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    authority_grant: Option<&'a crate::clawd::authority::GrantRef>,
 }
 
 /// Record one permission mediation the broker performed for a worker.
@@ -277,13 +288,21 @@ struct WorkerApprovalAudit<'a> {
 /// Identity comes from the caller's verified lease, and the verb/scope
 /// are re-bounded here, so the trail says exactly which consent decision
 /// was spent or filed on whose behalf without trusting worker text.
+#[allow(clippy::too_many_arguments)]
 pub fn record_worker_approval(
     task_id: &str,
     owner_uid: u32,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
     session_id: &str,
     verb: &str,
     scope: &crate::caps::Scope,
+    risk: crate::caps::Risk,
+    context: crate::caps::ConsentContext,
     action: &'static str,
+    approval_grant: Option<&str>,
+    approval_generation: Option<u32>,
+    authority_grant: Option<&crate::clawd::authority::GrantRef>,
 ) {
     let job_id = audit_policy::safe_identity(task_id);
     let record = WorkerApprovalAudit {
@@ -291,10 +310,17 @@ pub fn record_worker_approval(
         event: "clawd.agent.approval.mediated",
         job_id: &job_id,
         owner_uid,
+        worker_pid,
+        worker_start_time_ticks,
         session_id: audit_policy::safe_identity(session_id),
         verb: audit_policy::safe_identity(verb),
         scope: audit_policy::safe_reference(&scope.to_string()),
+        risk: risk.as_str(),
+        context: context.as_str(),
         action,
+        approval_grant,
+        approval_generation,
+        authority_grant,
     };
     if let Err(err) = append_jsonl(&record) {
         tracing::error!(error = %err, "failed to write agentd approval audit record");

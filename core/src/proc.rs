@@ -964,7 +964,6 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SPAWN, Scope::wild()).map_err(|v| v.to_string())?;
     let parent_info = current_session_info_for_caps()
         .ok_or_else(|| "proc spawn requires a registered parent session".to_string())?;
     crate::caps::enforcement::require_current_session_identity(
@@ -1192,6 +1191,8 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 
     let sid = session_id.unwrap_or_else(|| format!("proc-{}", short_id()));
     validate_session_identifier(&sid)?;
+    require_or_json(Verb::PROC_SPAWN, Scope::self_ref("children"))
+        .map_err(|v| v.to_string())?;
     let dir = proc_dir();
     fs::create_dir_all(&dir)
         .map_err(|error| format!("create proc directory {}: {error}", dir.display()))?;
@@ -1426,14 +1427,15 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc status <session-id>")?;
+    validate_session_identifier(sid)?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -1488,8 +1490,8 @@ fn cmd_status(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_output(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc output <session-id>")?;
+    validate_session_identifier(sid)?;
     let mut tail_lines: Option<usize> = None;
     let mut stream = "both".to_string();
     let mut follow = false;
@@ -1524,6 +1526,7 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
         .iter()
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     // --since-offset mode: incremental reading from byte offset
     if let Some(offset) = since_offset {
@@ -1588,7 +1591,6 @@ fn cmd_output(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_kill(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     // --group mode: kill all sessions in a group
     if args.len() >= 2 && args[0] == "--group" {
         let group_name = &args[1];
@@ -1601,6 +1603,11 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         if group_sessions.is_empty() {
             return Err(format!("no sessions in group: {group_name}"));
         }
+        require_or_json(
+            Verb::PROC_SIGNAL,
+            Scope::self_ref(format!("group:{group_name}")),
+        )
+        .map_err(|v| v.to_string())?;
 
         // Per-leader UID scope check. `kill_process` sends
         // `kill(-pid, SIGTERM)` which fans the signal across the
@@ -1654,6 +1661,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
     }
 
     let sid = args.first().ok_or("usage: cos proc kill <session-id>")?;
+    validate_session_identifier(sid)?;
     let reg = load_registry();
     let info = reg
         .sessions
@@ -1662,6 +1670,7 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
         .ok_or_else(|| format!("session not found: {sid}"))?;
 
     validate_signal_target(info, true)?;
+    require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
     kill_process(info.pid)?;
 
     Ok(json!({
@@ -1672,8 +1681,6 @@ fn cmd_kill(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_list(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
-    let reg = load_registry();
     let mut group_filter: Option<&str> = None;
 
     let mut i = 0;
@@ -1686,6 +1693,12 @@ fn cmd_list(args: &[String]) -> Result<Value, String> {
             _ => i += 1,
         }
     }
+
+    let scope = group_filter
+        .map(|group| Scope::self_ref(format!("group:{group}")))
+        .unwrap_or_else(|| Scope::self_ref("children"));
+    require_or_json(Verb::PROC_OBSERVE, scope).map_err(|v| v.to_string())?;
+    let reg = load_registry();
 
     let infos: Vec<Value> = reg
         .sessions
@@ -1767,7 +1780,6 @@ fn kill_process(pid: u32) -> Result<(), String> {
 }
 
 fn cmd_wait(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let mut timeout: Option<u64> = None;
     let mut group_name: Option<&str> = None;
     let mut session_id: Option<&str> = None;
@@ -1792,6 +1804,14 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
         }
     }
 
+    let requested_scope = if let Some(group) = group_name {
+        Scope::self_ref(format!("group:{group}"))
+    } else if let Some(session) = session_id {
+        validate_session_identifier(session)?;
+        Scope::self_ref(session)
+    } else {
+        return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
+    };
     let reg = load_registry();
 
     // Collect PIDs and session IDs to wait on
@@ -1809,7 +1829,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
             .ok_or_else(|| format!("session not found: {sid}"))?;
         vec![(info.session_id.clone(), info.pid)]
     } else {
-        return Err("usage: cos proc wait <session-id> [--timeout N] or --group <name>".into());
+        unreachable!("target validation above requires a session or group")
     };
 
     drop(reg);
@@ -1817,6 +1837,7 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
     if targets.is_empty() {
         return Err("no matching sessions to wait on".into());
     }
+    require_or_json(Verb::PROC_OBSERVE, requested_scope).map_err(|v| v.to_string())?;
 
     let start = SystemTime::now();
     let timeout_dur = timeout.map(Duration::from_secs);
@@ -1900,11 +1921,11 @@ fn cmd_wait(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_signal(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
     if args.len() < 2 {
         return Err("usage: cos proc signal <session-id> <signal-name>".into());
     }
     let sid = &args[0];
+    validate_session_identifier(sid)?;
     let signal_name = args[1].to_uppercase();
 
     let reg = load_registry();
@@ -1931,6 +1952,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
                 "unsupported signal: {signal_name}. Supported: TERM, KILL, HUP, USR1, USR2, STOP, CONT"
             )),
         };
+        require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
         let ret = unsafe { libc::kill(pid as i32, signum) };
         if ret != 0 {
             return Err(format!(
@@ -1942,6 +1964,7 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 
     #[cfg(not(unix))]
     {
+        require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
         match signal_name.as_str() {
             "TERM" | "KILL" => {
                 let _ = Command::new("taskkill")
@@ -1961,14 +1984,15 @@ fn cmd_signal(args: &[String]) -> Result<Value, String> {
 }
 
 fn cmd_result(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc result <session-id>")?;
+    validate_session_identifier(sid)?;
     let mut reg = load_registry();
     let idx = reg
         .sessions
         .iter()
         .position(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     let binding = pending_bind_is_fresh(&reg.sessions[idx]);
     let alive = is_alive_for_info(&reg.sessions[idx]);
@@ -2054,8 +2078,8 @@ fn cmd_result(args: &[String]) -> Result<Value, String> {
 /// Reads from /proc/<pid>/stat and /proc/<pid>/status on Linux.
 /// Usage: cos proc stats <session-id>
 fn cmd_stats(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
     let sid = args.first().ok_or("usage: cos proc stats <session-id>")?;
+    validate_session_identifier(sid)?;
 
     let reg = load_registry();
     let info = reg
@@ -2063,6 +2087,7 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
         .iter()
         .find(|s| &s.session_id == sid)
         .ok_or_else(|| format!("session not found: {sid}"))?;
+    require_or_json(Verb::PROC_OBSERVE, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     let pid = info.pid;
     let alive = is_alive(pid);
@@ -2161,8 +2186,6 @@ fn cmd_stats(args: &[String]) -> Result<Value, String> {
 ///
 /// Usage: cos proc renice <session-id> --priority low|normal|high|realtime
 fn cmd_renice(args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::PROC_SIGNAL, Scope::wild()).map_err(|v| v.to_string())?;
-
     let mut session_id: Option<&str> = None;
     let mut priority: Option<String> = None;
 
@@ -2187,6 +2210,7 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
     }
 
     let sid = session_id.ok_or("usage: cos proc renice <session-id> --priority <level>")?;
+    validate_session_identifier(sid)?;
     let prio = priority.ok_or("--priority is required")?;
 
     let reg = load_registry();
@@ -2200,6 +2224,7 @@ fn cmd_renice(args: &[String]) -> Result<Value, String> {
     if !is_alive(pid) {
         return Err(format!("session {sid} is not running"));
     }
+    require_or_json(Verb::PROC_SIGNAL, Scope::self_ref(sid)).map_err(|v| v.to_string())?;
 
     #[cfg(unix)]
     {

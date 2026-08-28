@@ -4528,17 +4528,15 @@ fn guardrails_cmd(args: &[String]) -> Result<Value, String> {
 /// — surface the approval gate the runtime would build from the
 /// current `AgentConfig` (auto_approve_tools / auto_deny_tools /
 /// dangerous_tools). `show` lists the three sets. `check <tool>`
-/// runs `ApprovalGate::evaluate` against the tool name and returns
-/// the outcome (`approved` / `denied` / `deferred`).
+/// applies the compatibility filter using the tool's declared consent
+/// boundary and returns the outcome (`approved` / `denied` /
+/// `deferred`).
 ///
-/// Headless: no interactive approver is configured, so `dangerous`
-/// tools without an explicit auto_approve return `deferred` — the
-/// same outcome the runtime would surface back to the model as an
-/// error tool_result. `--input` lets you pass a hypothetical JSON
-/// payload (the gate doesn't shape-match yet but will once the
-/// per-call predicate hooks land).
+/// Capability-aware core proxies report `approved` here because their
+/// exact verb/scope/risk decision happens later at execution; this
+/// command never predicts or grants that capability.
 fn approval_cmd(args: &[String]) -> Result<Value, String> {
-    use crate::agent::runtime::approval::ApprovalOutcome;
+    use crate::agent::runtime::approval::{ApprovalBoundary, ApprovalOutcome};
     let cfg = &crate::config::get().agent;
     let gate = crate::agent::runtime::loop_::approval_from_cfg(cfg);
 
@@ -4559,6 +4557,7 @@ fn approval_cmd(args: &[String]) -> Result<Value, String> {
                 "config_auto_approve_tools": cfg.auto_approve_tools.clone(),
                 "config_auto_deny_tools": cfg.auto_deny_tools.clone(),
                 "config_dangerous_tools": cfg.dangerous_tools.clone(),
+                "migration": "dangerous_tools remains only for tools without capability-aware consent; use auto_deny_tools for a hard tool block",
             }))
         }
         "check" => {
@@ -4582,12 +4581,17 @@ fn approval_cmd(args: &[String]) -> Result<Value, String> {
                     ));
                 }
             }
-            // ApprovalGate::evaluate is async; spin a small runtime.
+            let registry = crate::agent::tools::registry::default_registry();
+            let boundary = registry
+                .get_unfiltered(&tool)
+                .map(|tool| tool.approval_boundary())
+                .unwrap_or(ApprovalBoundary::ToolName);
+            // ApprovalGate::evaluate_for is async; spin a small runtime.
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .map_err(|e| format!("tokio runtime: {e}"))?;
-            let outcome = runtime.block_on(gate.evaluate(&tool, &input, "cli probe"));
+            let outcome = runtime.block_on(gate.evaluate_for(&tool, &input, "cli probe", boundary));
             let (decision, note, reason, prompt) = match &outcome {
                 ApprovalOutcome::Approved { note } => ("approved", note.clone(), None, None),
                 ApprovalOutcome::Denied { reason } => ("denied", None, reason.clone(), None),
@@ -4599,7 +4603,11 @@ fn approval_cmd(args: &[String]) -> Result<Value, String> {
                 "note": note,
                 "reason": reason,
                 "prompt": prompt,
-                "would_short_circuit": gate.would_short_circuit(&tool),
+                "would_short_circuit": gate.would_short_circuit_for(&tool, boundary),
+                "authority": match boundary {
+                    ApprovalBoundary::Capability => "capability",
+                    ApprovalBoundary::ToolName => "legacy_tool_name",
+                },
             }))
         }
         other => Err(format!(

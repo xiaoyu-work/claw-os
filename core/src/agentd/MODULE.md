@@ -74,14 +74,16 @@ installs one.
 
 - The worker sends the **exact denied verb and canonical scope**, and nothing
   else. There is no session, owner, task, requester, reason, duration or
-  capability field on the wire.
-- `clawd` takes owner, session and task from the verified grant, re-parses the
-  verb against the catalog, rejects a scope that will not render as a bounded
-  single-line record, and composes the reason text itself from the catalog
-  label.
-- `Consume` spends one exactly-matching approved grant, one-shot; a replay
-  finds nothing. `Request` files or dedupes a pending request under the
-  grant-bound session and owner and returns a bounded id.
+  capability set on the request wire.
+- `clawd` takes owner, session, task, worker pid/start time, and
+  attended/unattended context from trusted lease/session state. It re-parses
+  the verb and scope against the catalog and composes the reason itself.
+- Attended `Request` files or dedupes a pending record bound to the exact
+  capability, catalog risk, owner, session, and consent context. Unattended
+  requests fail closed with a scheduling/delegation hint.
+- `Consume` atomically spends an exactly matching, live decision, then mints
+  and exercises a one-use `clawd::authority` grant bound to this task and
+  worker. A replay finds nothing.
 - There is no decide route. A worker can never approve anything, name another
   session or owner, or receive a reusable capability.
 - Mediation is bounded on both sides (`protocol::MAX_APPROVAL_ASKS`), refused

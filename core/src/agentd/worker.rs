@@ -45,7 +45,7 @@ use crate::agent::runtime::progress::ProgressSink;
 use crate::agent::service::{FinishOutcome, JobExecution};
 use crate::audit_policy;
 use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
-use crate::caps::{Scope, Verb};
+use crate::caps::{ConsentContext, Scope, Verb};
 
 use super::protocol::{
     self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, FrameReader, ProgressRecord,
@@ -95,9 +95,11 @@ fn run() -> Result<(), String> {
     let io = ChannelIo::start(channel, identity.clone())?;
     let assignment = io.handshake()?;
     let task_id = assignment.job.id.clone();
+    let consent_context = assignment.consent_context;
 
     crate::caps::approval_gateway::install(Arc::new(ChannelApprovalGateway {
         task_id: task_id.clone(),
+        consent_context,
         state: io.state.clone(),
     }));
 
@@ -538,6 +540,7 @@ where
 #[derive(Debug)]
 struct ChannelApprovalGateway {
     task_id: String,
+    consent_context: ConsentContext,
     state: Arc<ChannelState>,
 }
 
@@ -584,6 +587,10 @@ impl ChannelApprovalGateway {
 }
 
 impl ApprovalGateway for ChannelApprovalGateway {
+    fn context(&self) -> ConsentContext {
+        self.consent_context
+    }
+
     fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
         match self.ask(ApprovalAsk::Consume {
             verb: verb.as_str().to_string(),

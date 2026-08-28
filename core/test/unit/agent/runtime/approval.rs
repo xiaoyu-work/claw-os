@@ -51,6 +51,42 @@ async fn dangerous_no_approver_defers() {
 }
 
 #[tokio::test]
+async fn capability_aware_tool_defers_to_exact_execution_gate() {
+    let cfg = ApprovalConfig::new()
+        .dangerous("cos_proc")
+        .auto_approve("cos_proc");
+    let gate = ApprovalGate::new(cfg);
+    let out = gate
+        .evaluate_for(
+            "cos_proc",
+            &json!({"command": "kill", "args": ["s1"]}),
+            "legacy config",
+            ApprovalBoundary::Capability,
+        )
+        .await;
+    match out {
+        ApprovalOutcome::Approved { note } => {
+            assert!(note.unwrap_or_default().contains("exact capability"));
+        }
+        other => panic!("capability-aware tool must reach its final gate, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn auto_deny_still_blocks_capability_aware_tools() {
+    let gate = ApprovalGate::new(ApprovalConfig::new().auto_deny("cos_proc"));
+    let out = gate
+        .evaluate_for(
+            "cos_proc",
+            &json!({"command": "status", "args": ["s1"]}),
+            "operator deny",
+            ApprovalBoundary::Capability,
+        )
+        .await;
+    assert!(matches!(out, ApprovalOutcome::Denied { .. }));
+}
+
+#[tokio::test]
 async fn dangerous_with_approver_uses_approver() {
     let cfg = ApprovalConfig::new().dangerous("cos_proc");
     let gate = ApprovalGate::new(cfg).with_approver(Arc::new(StaticApprover {
@@ -143,6 +179,7 @@ fn would_short_circuit_for_auto_approve() {
 fn would_not_short_circuit_for_dangerous() {
     let gate = ApprovalGate::new(ApprovalConfig::new().dangerous("x"));
     assert!(!gate.would_short_circuit("x"));
+    assert!(gate.would_short_circuit_for("x", ApprovalBoundary::Capability));
 }
 
 #[test]

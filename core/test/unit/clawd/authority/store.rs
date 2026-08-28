@@ -666,6 +666,75 @@ fn revoking_a_session_retires_its_lineage() {
 }
 
 #[test]
+fn revoking_a_session_retires_unindexed_approval_grants() {
+    let store = store();
+    let mut request = issuance("agent-session", &[Audience::AgentWorker]);
+    request.issuer = Issuer::Approval;
+    request.binding = Binding::Process;
+    request.subject = Subject::session("agent-session").with_task(Some("task-a".to_string()));
+    request.uses = Uses::Budget(1);
+    request.index_session = false;
+    let (_handle, view) = store.issue_with_generation(request, 7).unwrap();
+
+    assert_eq!(view.generation, 7);
+    assert_eq!(store.revoke_session("agent-session"), 1);
+    assert_eq!(
+        store
+            .consume(
+                view.id,
+                &[read_cap()],
+                &Presentation {
+                    session_id: Some("agent-session".to_string()),
+                    ..presentation(Audience::AgentWorker)
+                },
+            )
+            .unwrap_err(),
+        AuthorityError::UnknownGrant
+    );
+}
+
+#[test]
+fn approval_revocation_does_not_retire_the_sessions_base_grant() {
+    let store = store();
+    let (_base_handle, _) = store
+        .issue(issuance("agent-session", &[Audience::SystemService]))
+        .unwrap();
+    let mut approval = issuance("agent-session", &[Audience::AgentWorker]);
+    approval.issuer = Issuer::Approval;
+    approval.binding = Binding::Process;
+    approval.subject =
+        Subject::session("agent-session").with_task(Some("task-a".to_string()));
+    approval.uses = Uses::Budget(1);
+    approval.index_session = false;
+    let (_approval_handle, approval_view) =
+        store.issue_with_generation(approval, 3).unwrap();
+
+    assert_eq!(store.revoke_approvals_for_session("agent-session"), 1);
+    store
+        .resolve_session(
+            "agent-session",
+            &Presentation {
+                session_id: Some("agent-session".to_string()),
+                ..presentation(Audience::SystemService)
+            },
+        )
+        .expect("base session authority stays live");
+    assert_eq!(
+        store
+            .consume(
+                approval_view.id,
+                &[read_cap()],
+                &Presentation {
+                    session_id: Some("agent-session".to_string()),
+                    ..presentation(Audience::AgentWorker)
+                },
+            )
+            .unwrap_err(),
+        AuthorityError::UnknownGrant
+    );
+}
+
+#[test]
 fn revoking_an_owner_retires_everything_it_holds() {
     let store = store();
     store

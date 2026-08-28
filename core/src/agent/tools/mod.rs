@@ -21,6 +21,8 @@ pub mod todo;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
+use crate::agent::runtime::approval::ApprovalBoundary;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     /// Result content shown back to the model. Plain text recommended; may
@@ -79,5 +81,15 @@ pub trait Tool: Send + Sync {
     /// "what's the biggest file" UX.
     fn parallel_safe(&self) -> bool {
         false
+    }
+
+    /// Identify the authoritative consent boundary for this tool.
+    ///
+    /// Capability-aware tools must still honour `auto_deny_tools`, but
+    /// the legacy `dangerous_tools` prompt is skipped so a coarse tool
+    /// name cannot pre-approve or block unrelated commands exposed by
+    /// the same proxy.
+    fn approval_boundary(&self) -> ApprovalBoundary {
+        ApprovalBoundary::ToolName
     }
 }

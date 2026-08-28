@@ -223,27 +223,22 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_deny: Vec<String>,
 
-    /// Optional tool-name approval override. Capability risk remains the
-    /// default policy: high/critical capability requests enter the durable
-    /// approval queue automatically. When this list is non-empty, headless
-    /// mode (no approver
-    /// configured) emits a synthetic `tool_result` with
-    /// `is_error: true` and the deferral prompt — the agent sees it
-    /// and can ask the user. Names matched literally against
-    /// `ToolCall.name`.
+    /// Deprecated tool-name approval filter for tools that do not
+    /// expose a capability-aware execution boundary. Core proxies that
+    /// declare that boundary ignore this coarse prompt and derive
+    /// consent from the exact validated capability at execution.
+    /// Names are matched literally against `ToolCall.name`.
     #[serde(default)]
     pub dangerous_tools: Vec<String>,
 
-    /// Approval gate: tools that always pass approval without prompting,
-    /// even if listed in `dangerous_tools`. Useful for explicit
-    /// per-context overrides (e.g. allow `cos_proc kill` in an
-    /// orchestrator context but require approval everywhere else).
+    /// Legacy tool-name prompt bypass. This never grants a capability
+    /// and therefore cannot bypass the exact execution-time gate.
     #[serde(default)]
     pub auto_approve_tools: Vec<String>,
 
-    /// Approval gate: tools that are always blocked. Takes precedence
-    /// over `auto_approve_tools` and `dangerous_tools`. The dispatcher
-    /// emits a synthetic `tool_result` with `is_error: true`.
+    /// Tools that are always blocked before dispatch. This remains a
+    /// supported hard operator deny and takes precedence over every
+    /// consent path.
     #[serde(default)]
     pub auto_deny_tools: Vec<String>,
 

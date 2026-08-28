@@ -66,6 +66,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
     (
         ChannelApprovalGateway {
             task_id: "task-a".to_string(),
+            consent_context: crate::caps::ConsentContext::Attended,
             state,
         },
         rx,

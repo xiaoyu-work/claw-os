@@ -209,6 +209,21 @@ impl Authority {
     /// a grant with no start time cannot detect pid reuse, so it is
     /// refused rather than issued unbound.
     pub fn issue(&self, issuance: Issuance) -> Result<(GrantHandle, GrantView), AuthorityError> {
+        self.issue_with_generation(issuance, 0)
+    }
+
+    /// Issue a root grant carrying an externally validated revocation
+    /// generation.
+    ///
+    /// Ordinary grants start at generation zero. Approval redemption
+    /// uses the generation from the durable consent record so the
+    /// in-memory authority and its audit trail remain tied to the
+    /// revocation check that authorized issuance.
+    pub(crate) fn issue_with_generation(
+        &self,
+        issuance: Issuance,
+        generation: u64,
+    ) -> Result<(GrantHandle, GrantView), AuthorityError> {
         if issuance.principal.start_time_ticks.is_none() {
             return Err(AuthorityError::UnverifiablePrincipal);
         }
@@ -249,7 +264,7 @@ impl Authority {
             expires_at,
             uses: issuance.uses,
             revoked: false,
-            generation: 0,
+            generation,
             parent: None,
             depth: 0,
             children: 0,
@@ -418,17 +433,41 @@ impl Authority {
         inner.revoke_lineage(id)
     }
 
-    /// Revoke the grant a session owns, and everything derived from it.
-    /// Called when a session finishes, is cancelled, or is deregistered.
+    /// Revoke every grant bound to a session, and every descendant.
+    ///
+    /// Most sessions have one indexed root. Request-scoped and
+    /// approval-redemption grants are deliberately not indexed, so the
+    /// scan also catches those if revocation races an in-flight request.
     pub fn revoke_session(&self, session_id: &str) -> usize {
         let mut inner = self.lock();
-        let Some(key) = inner.by_session.get(session_id).copied() else {
-            return 0;
-        };
-        let Some(id) = inner.grants.get(&key).map(|grant| grant.id) else {
-            return 0;
-        };
-        inner.revoke_lineage(id)
+        let roots: Vec<GrantId> = inner
+            .grants
+            .values()
+            .filter(|grant| grant.subject.session_id.as_deref() == Some(session_id))
+            .map(|grant| grant.id)
+            .collect();
+        roots
+            .into_iter()
+            .map(|id| inner.revoke_lineage(id))
+            .sum()
+    }
+
+    /// Revoke only approval-derived grants for one session.
+    pub fn revoke_approvals_for_session(&self, session_id: &str) -> usize {
+        let mut inner = self.lock();
+        let grants: Vec<GrantId> = inner
+            .grants
+            .values()
+            .filter(|grant| {
+                grant.issuer == Issuer::Approval
+                    && grant.subject.session_id.as_deref() == Some(session_id)
+            })
+            .map(|grant| grant.id)
+            .collect();
+        grants
+            .into_iter()
+            .map(|id| inner.revoke_lineage(id))
+            .sum()
     }
 
     /// Revoke everything one owner holds. Used when a worker lease
@@ -442,6 +481,21 @@ impl Authority {
             .map(|grant| grant.id)
             .collect();
         roots.into_iter().map(|id| inner.revoke_lineage(id)).sum()
+    }
+
+    /// Revoke only approval-derived grants for one owner.
+    pub fn revoke_approvals_for_owner(&self, uid: u32) -> usize {
+        let mut inner = self.lock();
+        let grants: Vec<GrantId> = inner
+            .grants
+            .values()
+            .filter(|grant| grant.issuer == Issuer::Approval && grant.principal.uid == uid)
+            .map(|grant| grant.id)
+            .collect();
+        grants
+            .into_iter()
+            .map(|id| inner.revoke_lineage(id))
+            .sum()
     }
 
     /// Drop expired, exhausted, revoked and orphaned grants. Safe to

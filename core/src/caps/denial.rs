@@ -9,6 +9,8 @@
 use crate::i18n::LocalizedStr;
 
 use super::cap::{Cap, CapSet};
+use super::consent::ConsentContext;
+use super::risk::Risk;
 use super::scope::Scope;
 use super::verb::Verb;
 
@@ -27,6 +29,27 @@ pub struct Denial {
     /// Kept as a plain `&'static str` when set from constants; dynamic
     /// hints go through the formatter.
     pub hint: Option<String>,
+    /// Capability-aware consent state, when this denial reached the
+    /// approval workflow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval: Option<Box<ApprovalInfo>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ApprovalInfo {
+    pub status: ApprovalStatus,
+    pub risk: Risk,
+    pub context: ConsentContext,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub request_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalStatus {
+    Pending,
+    RequiredUnattended,
+    Unavailable,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -51,6 +74,7 @@ impl Denial {
             granted_scopes: vec![],
             reason: DenialReason::VerbNotGranted,
             hint: None,
+            approval: None,
         }
     }
 
@@ -70,6 +94,7 @@ impl Denial {
             granted_scopes,
             reason: DenialReason::ScopeOutOfRange,
             hint: None,
+            approval: None,
         }
     }
 
@@ -80,6 +105,7 @@ impl Denial {
             granted_scopes: vec![],
             reason: DenialReason::NoSession,
             hint: None,
+            approval: None,
         }
     }
 
@@ -98,11 +124,17 @@ impl Denial {
                 session_pid,
             },
             hint: None,
+            approval: None,
         }
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn with_approval(mut self, approval: ApprovalInfo) -> Self {
+        self.approval = Some(Box::new(approval));
         self
     }
 
@@ -133,6 +165,7 @@ impl Denial {
             "granted_scopes": self.granted_scopes,
             "reason": self.reason,
             "hint": self.hint,
+            "approval": self.approval,
             "summary": self.summary(),
         })
     }

@@ -1,7 +1,7 @@
 use std::env;
 use std::path::Path;
 
-use crate::caps::{CapSet, Role};
+use crate::caps::{CapSet, ConsentContext, Role};
 use crate::proc::SessionInfo;
 use crate::session::{self, SessionId, SessionMeta, SessionOrigin, Status as SessionStatus};
 
@@ -119,6 +119,24 @@ fn trusted_origin(meta: &SessionMeta, root_owned: bool) -> SessionOrigin {
         }
         _ => SessionOrigin::SystemAgentTask,
     }
+}
+
+/// Whether a capability denial in this durable session may open an
+/// interactive consent request.
+///
+/// Only daemon-authored scheduler provenance selects unattended mode.
+/// Missing, legacy, or user-writable provenance is treated as an
+/// ordinary attended conversation; this can create a prompt but can
+/// never grant authority by itself.
+pub fn consent_context(session_id: &SessionId) -> Result<ConsentContext, String> {
+    let meta = session::get_meta(session_id).map_err(|err| err.to_string())?;
+    let origin = trusted_origin(&meta, session::record_is_root_owned(session_id));
+    Ok(match origin {
+        SessionOrigin::SystemAgentTask => ConsentContext::Attended,
+        SessionOrigin::CronDelegation | SessionOrigin::TriggerDelegation => {
+            ConsentContext::Unattended
+        }
+    })
 }
 
 #[cfg(test)]

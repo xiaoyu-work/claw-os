@@ -149,6 +149,8 @@ fn approval_reasons_are_journalled_as_metadata() {
         reason: "needs hunter2-password to continue".to_string(),
         requested_at: 0,
         owner_uid: Some(1000),
+        risk: Some(crate::caps::Risk::High),
+        context: Some(crate::caps::ConsentContext::Attended),
         requester: Some("uid:1000".to_string()),
     };
     let record = approval_request_record(&request);
@@ -157,6 +159,8 @@ fn approval_reasons_are_journalled_as_metadata() {
     assert_eq!(record["approval_id"], json!("ap-1"));
     assert_eq!(record["session_id"], json!("app-1"));
     assert_eq!(record["verb"], json!("secret.read"));
+    assert_eq!(record["risk"], json!("high"));
+    assert_eq!(record["consent_context"], json!("attended"));
     assert_eq!(record["reason"]["bytes"], json!(request.reason.len()));
 }
 

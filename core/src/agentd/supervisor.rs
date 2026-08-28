@@ -22,6 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
 
 use crate::agent::service::{FinishOutcome, Job, Store};
+use crate::caps::ConsentContext;
 
 use super::grant::{GrantClaims, GrantExpectation, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use super::protocol::{
@@ -267,6 +268,7 @@ struct Lease {
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
+    consent_context: ConsentContext,
 }
 
 async fn supervise(
@@ -312,7 +314,7 @@ async fn supervise(
 
     // Capabilities are derived here, from root-owned session metadata,
     // and handed to the worker. Nothing the worker says can widen them.
-    let session = match job.session_id.as_deref() {
+    let (session, consent_context) = match job.session_id.as_deref() {
         Some(session_id) => match broker_session_info(session_id) {
             Ok(session) => session,
             Err(error) => {
@@ -320,7 +322,7 @@ async fn supervise(
                 return Ok(());
             }
         },
-        None => None,
+        None => (None, ConsentContext::Unattended),
     };
 
     let spawned = match spawn::spawn_worker(&identity, &job.id) {
@@ -366,6 +368,7 @@ async fn supervise(
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
+        consent_context,
     };
 
     let outcome = pump(
@@ -447,6 +450,7 @@ async fn pump(
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
         },
+        consent_context: lease.consent_context,
         session,
     };
     if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
@@ -682,22 +686,62 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
     let Some(verb) = crate::caps::Verb::parse(ask.verb()) else {
         return refuse(lease, ask, "unknown capability verb");
     };
-    if crate::caps::lookup_meta(verb).is_none() {
-        return refuse(lease, ask, "capability verb is not in the catalog");
-    }
-    let scope = ask.scope();
-    if !scope_is_recordable(scope) {
-        return refuse(lease, ask, "capability scope is not recordable");
-    }
+    let (cap, risk) = match crate::approvals::canonical_capability(verb, ask.scope().clone()) {
+        Ok(capability) => capability,
+        Err(error) => return refuse(lease, ask, &error),
+    };
+    let scope = &cap.scope;
     let owner = Some(lease.owner_uid);
 
     match ask {
         ApprovalAsk::Consume { .. } => {
-            match crate::approvals::consume_matching_grant_for_owner(session_id, verb, scope, owner)
-            {
-                Ok(Some(_)) => {
-                    audit_approval(lease, verb, scope, "consumed");
-                    ApprovalReply::Granted
+            match crate::approvals::redeem_matching_grant_for_owner(
+                session_id,
+                verb,
+                scope,
+                owner,
+                Some(lease.consent_context),
+            ) {
+                Ok(Some(grant)) => {
+                    let lease_remaining = lease.deadline.saturating_duration_since(Instant::now());
+                    match crate::clawd::authority::authorize_worker_approval(
+                        lease.owner_uid,
+                        &lease.task_id,
+                        session_id,
+                        lease.worker_pid,
+                        lease.worker_start_time_ticks,
+                        lease_remaining,
+                        &grant,
+                    ) {
+                        Ok(authority_grant) => {
+                            let authority_ref = authority_grant.id.audit_ref();
+                            audit_approval(
+                                lease,
+                                verb,
+                                scope,
+                                risk,
+                                "granted",
+                                Some(&grant),
+                                Some(&authority_ref),
+                            );
+                            ApprovalReply::Granted
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                task = %lease.task_id,
+                                error = %error,
+                                "approved capability could not be bound to the worker"
+                            );
+                            refuse(lease, ask, "approved capability could not be bound to this worker")
+                        }
+                    }
+                }
+                Ok(None) if lease.consent_context == ConsentContext::Unattended => {
+                    refuse(
+                        lease,
+                        ask,
+                        "unattended tasks cannot request interactive consent; delegate the exact capability when scheduling the task",
+                    )
                 }
                 Ok(None) => ApprovalReply::Pending { request_id: None },
                 Err(error) => {
@@ -707,13 +751,19 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
             }
         }
         ApprovalAsk::Request { .. } => {
-            let existing = crate::approvals::list_pending_for_owner(owner)
-                .into_iter()
-                .find(|request| {
-                    request.session == session_id
-                        && request.verb == verb.as_str()
-                        && request.scope.covers(scope)
-                });
+            if lease.consent_context == ConsentContext::Unattended {
+                return refuse(
+                    lease,
+                    ask,
+                    "unattended tasks cannot request interactive consent; delegate the exact capability when scheduling the task",
+                );
+            }
+            let existing = crate::approvals::find_pending_exact(
+                session_id,
+                &cap,
+                owner,
+                Some(lease.consent_context),
+            );
             if let Some(request) = existing {
                 return ApprovalReply::Pending {
                     request_id: Some(request.id),
@@ -724,16 +774,17 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 .unwrap_or_else(|| verb.as_str().to_string());
             // Reason text is composed here from the catalog and the
             // canonical scope; no worker-authored string is persisted.
-            match crate::approvals::submit_owned(
+            match crate::approvals::submit_owned_with_context(
                 verb,
                 scope.clone(),
                 session_id,
                 format!("{label}: {scope}"),
                 Some("agentd-worker".to_string()),
                 owner,
+                Some(lease.consent_context),
             ) {
                 Ok(id) => {
-                    audit_approval(lease, verb, scope, "requested");
+                    audit_approval(lease, verb, scope, risk, "requested", None, None);
                     ApprovalReply::Pending {
                         request_id: Some(id),
                     }
@@ -748,6 +799,11 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
 }
 
 fn refuse(lease: &Lease, ask: &ApprovalAsk, message: &str) -> ApprovalReply {
+    if let Some(verb) = crate::caps::Verb::parse(ask.verb()) {
+        if let Ok(risk) = crate::approvals::capability_risk(verb, ask.scope()) {
+            audit_approval(lease, verb, ask.scope(), risk, "refused", None, None);
+        }
+    }
     tracing::warn!(
         task = %lease.task_id,
         owner_uid = lease.owner_uid,
@@ -759,26 +815,29 @@ fn refuse(lease: &Lease, ask: &ApprovalAsk, message: &str) -> ApprovalReply {
     }
 }
 
-/// A scope must round-trip to a bounded, canonical string before it can
-/// become a durable consent record the user is asked to read.
-fn scope_is_recordable(scope: &crate::caps::Scope) -> bool {
-    let rendered = scope.to_string();
-    !rendered.is_empty() && rendered.len() <= 512 && !rendered.contains(['\n', '\r', '\0'])
-}
-
 fn audit_approval(
     lease: &Lease,
     verb: crate::caps::Verb,
     scope: &crate::caps::Scope,
+    risk: crate::caps::Risk,
     action: &'static str,
+    grant: Option<&crate::approvals::ConsumedGrant>,
+    authority_grant: Option<&crate::clawd::authority::GrantRef>,
 ) {
     crate::clawd::audit::record_worker_approval(
         &lease.task_id,
         lease.owner_uid,
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
         lease.session_id.as_deref().unwrap_or_default(),
         verb.as_str(),
         scope,
+        risk,
+        lease.consent_context,
         action,
+        grant.map(|grant| grant.reference.as_str()),
+        grant.map(|grant| grant.generation),
+        authority_grant,
     );
 }
 
@@ -848,14 +907,18 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
     crate::clawd::audit::record_worker_runtime(&lease.task_id, lease.owner_uid, record);
 }
 
-fn broker_session_info(session_id: &str) -> Result<Option<crate::proc::SessionInfo>, String> {
+fn broker_session_info(
+    session_id: &str,
+) -> Result<(Option<crate::proc::SessionInfo>, ConsentContext), String> {
     let sid = session_id
         .parse::<crate::session::SessionId>()
         .map_err(|error| error.to_string())?;
     if !crate::session::session_dir(&sid).exists() {
-        return Ok(None);
+        return Ok((None, ConsentContext::Unattended));
     }
-    crate::clawd::session_scope::trusted_session_info(&sid, "claw-agentd").map(Some)
+    let context = crate::clawd::session_scope::consent_context(&sid)?;
+    crate::clawd::session_scope::trusted_session_info(&sid, "claw-agentd")
+        .map(|session| (Some(session), context))
 }
 
 async fn send(

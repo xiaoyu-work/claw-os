@@ -12,6 +12,8 @@ through model turns, tools, hooks, progress, and final records.
 - Keep due reminders and application context request-local.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
+- Treat `dangerous_tools` as a legacy name filter only; capability-aware
+  proxies reach exact execution-time consent instead.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 
@@ -32,6 +34,10 @@ Runtime depends on provider-neutral LLM types, the guarded tool registry,
 prompt/memory services, and hooks. It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
 every turn.
+
+`auto_deny_tools` remains a hard pre-dispatch block. `dangerous_tools` and
+`auto_approve_tools` cannot grant or widen a capability; core primitive proxies
+declare a capability-aware boundary and defer consent to `caps::require`.
 
 ## Tests
 

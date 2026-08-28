@@ -20,7 +20,7 @@ use crate::agent::llm::{ProviderFallbackState, StreamEvent};
 use crate::agent::runtime::evidence::EvidenceReport;
 use crate::agent::service::FinishOutcome;
 use crate::audit_policy::{TextDigest, ToolFacts};
-use crate::caps::Scope;
+use crate::caps::{ConsentContext, Scope};
 use crate::proc::SessionInfo;
 
 use super::grant::SignedGrant;
@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -158,6 +158,10 @@ pub struct Assignment {
     pub protocol: u32,
     pub grant: SignedGrant,
     pub job: JobSpec,
+    /// Broker-derived execution context. The worker uses this only to
+    /// explain denials; the broker independently enforces it whenever
+    /// consent is requested.
+    pub consent_context: ConsentContext,
     /// Session scope the *broker* derived. Capabilities are never taken
     /// from the worker; they are re-derived by `clawd` from root-owned
     /// session metadata and installed in the worker as a task-local.

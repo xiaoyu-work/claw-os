@@ -5,9 +5,8 @@
 //! is `Guardrails::permissive()` (every registered tool is permitted).
 //!
 //! Optionally carries an [`ApprovalGate`](super::super::runtime::approval::ApprovalGate)
-//! that gates per-call invocations of tools the policy classifies as
-//! dangerous. The default is an empty gate (every call short-circuits
-//! to `Approved`).
+//! for legacy tool-name filters and hard operator denies. Capability-aware
+//! tools derive consent from their exact validated operation at execution.
 
 use std::collections::HashMap;
 use std::sync::Arc;

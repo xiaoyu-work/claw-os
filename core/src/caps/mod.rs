@@ -28,6 +28,7 @@
 //! - [`cap`] — [`Cap`] and [`CapSet`] types.
 //! - [`catalog`] — user-visible metadata for every verb (label, blurb,
 //!   icon, risk, scope kind).
+//! - [`consent`] — attended versus unattended approval context.
 //! - [`role`] — built-in [`Role`] bundles ("worker", "automator", …)
 //!   that expand to cap sets.
 //! - [`denial`] — structured failure type returned by `require()`.
@@ -41,6 +42,7 @@ pub mod args;
 pub mod approval_gateway;
 pub mod cap;
 pub mod catalog;
+pub mod consent;
 pub mod denial;
 pub mod enforcement;
 pub mod manifest;
@@ -61,7 +63,8 @@ pub(crate) mod test_env_lock {
 pub use cap::{Cap, CapSet};
 pub use approval_gateway::{ApprovalGateway, PendingApproval};
 pub use catalog::{lookup as lookup_meta, CapMeta, CATALOG};
-pub use denial::{Denial, DenialReason};
+pub use consent::ConsentContext;
+pub use denial::{ApprovalInfo, ApprovalStatus, Denial, DenialReason};
 pub use enforcement::{require, require_or_json, Mode};
 pub use manifest::{Arg, ArgKind, Manifest, ManifestError, Need, Operation, Runtime, ScopeBinding};
 pub use risk::Risk;

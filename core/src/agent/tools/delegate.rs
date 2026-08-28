@@ -310,11 +310,11 @@ async fn run_delegate(
 ///
 /// The child registry **inherits the parent's `Guardrails` and
 /// `ApprovalGate`**. Without this, every delegate ran with the
-/// default permissive guardrails + a default no-op approver — meaning
-/// any tool the parent had a deny rule for, or any tool that required
-/// human approval, became unguarded as soon as it crossed the
-/// delegate boundary. The agent's blast-radius advertised model
-/// (parent picks tools, parent's deny/approval policy follows them)
+/// default permissive guardrails + a default no-op legacy approver —
+/// meaning any tool the parent had a deny rule for, or any non-capability
+/// tool that required a name-level prompt, became unguarded as soon as it
+/// crossed the delegate boundary. The agent's blast-radius advertised
+/// model (parent picks tools, parent's deny/approval policy follows them)
 /// only works if the child's registry inherits these.
 ///
 /// We also re-apply the `allowed_tools` filter on top of the parent's

@@ -71,6 +71,8 @@ pub struct Decision {
     subject: Subject,
     caps: CapSet,
     owner_uid: u32,
+    bound_pid: u32,
+    generation: u64,
     presentation: Presentation,
     /// The registry row the subject session refers to, resolved once
     /// under the owner's own path view. Providers that need the row
@@ -99,6 +101,8 @@ impl Decision {
             subject: view.subject,
             caps: view.caps,
             owner_uid: view.owner_uid,
+            bound_pid: view.bound_pid,
+            generation: view.generation,
             presentation,
             session,
             obligation: requirement.is_route_derived(),
@@ -129,6 +133,18 @@ impl Decision {
 
     pub fn app_id(&self) -> Option<&str> {
         self.subject.app_id.as_deref()
+    }
+
+    pub fn task_id(&self) -> Option<&str> {
+        self.subject.task_id.as_deref()
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub fn bound_pid(&self) -> u32 {
+        self.bound_pid
     }
 
     /// The authorized capability set. Read-only: a handler can inspect

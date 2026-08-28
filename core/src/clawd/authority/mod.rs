@@ -72,6 +72,8 @@ pub mod store;
 
 use serde_json::Value;
 
+use crate::caps::CapSet;
+
 pub use decision::{Authorized, Decision};
 pub use grant::{
     Attenuation, AttenuationError, Audience, AudienceSet, Binding, Issuance, Issuer, Principal,
@@ -197,6 +199,10 @@ const PEER_SESSION_GRANT_TTL: std::time::Duration = std::time::Duration::from_se
 /// that decision authorizes one capability set. Any budget above the
 /// number actually needed is authority nobody asked for.
 const PEER_SESSION_GRANT_USES: u32 = 1;
+/// A worker approval is exercised immediately, so it never needs to
+/// survive longer than the small handoff between durable consent and
+/// the final capability check.
+const WORKER_APPROVAL_GRANT_TTL: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// Authenticate the caller's own registered session and mint the grant
 /// this one request runs under.
@@ -423,6 +429,91 @@ fn string_field(params: &Value, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+/// Redeem one already-spent durable approval into the capability
+/// authority and exercise it for the current worker.
+///
+/// The durable record proves that a human approved the exact
+/// capability and that its expiry/revocation generation is still
+/// current. This function supplies the live execution bindings the
+/// record cannot know in advance: owner, task, worker pid/start time,
+/// session and a deadline no later than either the worker lease or the
+/// durable approval. The one-use grant is consumed before success is
+/// returned, immediately before the worker resumes the guarded
+/// operation.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn authorize_worker_approval(
+    owner_uid: u32,
+    task_id: &str,
+    session_id: &str,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_remaining: std::time::Duration,
+    approval: &crate::approvals::ConsumedGrant,
+) -> Result<GrantView, String> {
+    if approval.authorization.owner_uid != Some(owner_uid)
+        || approval.authorization.session != session_id
+    {
+        return Err("approval does not match the worker owner and session".to_string());
+    }
+    let principal = Principal::of_process(owner_uid, worker_pid)
+        .ok_or_else(|| "approval worker identity is no longer live".to_string())?;
+    if principal.start_time_ticks != worker_start_time_ticks {
+        return Err("approval worker start time changed".to_string());
+    }
+    let lifetime = approval
+        .expires_in()
+        .min(lease_remaining)
+        .min(WORKER_APPROVAL_GRANT_TTL);
+    if lifetime.is_zero() {
+        return Err("approval or worker lease has expired".to_string());
+    }
+
+    let cap = approval.authorization.capability.clone();
+    let requirement = Requirement::exact([cap.clone()]);
+    let (_handle, view) = authority()
+        .issue_with_generation(
+            Issuance {
+                issuer: Issuer::Approval,
+                principal,
+                binding: Binding::Process,
+                subject: Subject::session(session_id).with_task(Some(task_id.to_string())),
+                audience: AudienceSet::one(Audience::AgentWorker),
+                caps: CapSet::from_caps([cap.clone()]),
+                lifetime,
+                uses: Uses::Budget(1),
+                index_session: false,
+            },
+            u64::from(approval.generation),
+        )
+        .map_err(|error| error.to_string())?;
+    audit::record_issued(&view, None);
+    let current_generation =
+        crate::approvals::generations::current(Some(owner_uid), session_id)?;
+    if current_generation != approval.generation {
+        let retired = authority().revoke(view.id);
+        audit::record_revoked("approval-generation", Some(session_id), retired);
+        return Err("approval was revoked while execution authority was being minted".to_string());
+    }
+
+    let decision = Decision::new(
+        view.clone(),
+        "agentd.approval.execute",
+        Audience::AgentWorker,
+        Presentation {
+            uid: owner_uid,
+            pid: worker_pid,
+            start_time_ticks: worker_start_time_ticks,
+            audience: Audience::AgentWorker,
+            route: "agentd.approval.execute",
+            session_id: Some(session_id.to_string()),
+        },
+        None,
+        &requirement,
+    );
+    let _authorized = decision.require(cap)?;
+    Ok(view)
 }
 
 /// Revoke every grant bound to a session. Called when a session is

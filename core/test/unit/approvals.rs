@@ -54,7 +54,7 @@ fn approved_once_grant_is_consumed() {
     let _tmp = isolated_env();
     let id = submit(
         Verb::FS_WRITE,
-        Scope::path("/tmp/approved/**"),
+        Scope::path("/tmp/approved/file.txt"),
         "sess-a",
         "write requested",
         None,
@@ -85,6 +85,65 @@ fn approved_once_grant_is_consumed() {
 }
 
 #[test]
+fn approved_scope_cannot_be_substituted_with_a_covered_child() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::FS_WRITE,
+        Scope::path("/tmp/approved/**"),
+        "sess-scope",
+        "write requested",
+        None,
+    )
+    .unwrap();
+    approve(&id, GrantDuration::Once, None, None).unwrap();
+
+    assert_eq!(
+        consume_matching_grant(
+            "sess-scope",
+            Verb::FS_WRITE,
+            &Scope::path("/tmp/approved/file.txt"),
+        )
+        .unwrap(),
+        None,
+        "approval matching is exact; capability containment is enforced only after grant minting"
+    );
+    assert_eq!(
+        consume_matching_grant(
+            "sess-scope",
+            Verb::FS_WRITE,
+            &Scope::path("/tmp/approved/**"),
+        )
+        .unwrap(),
+        Some(GrantDuration::Once)
+    );
+}
+
+#[test]
+fn approval_persists_and_matches_the_canonical_scope() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::NET_DIAL,
+        Scope::host("API.Example.COM:443"),
+        "sess-canonical",
+        "connect",
+        None,
+    )
+    .unwrap();
+    let pending = lookup_pending(&id).unwrap();
+    assert_eq!(pending.scope, Scope::host("api.example.com:443"));
+    approve(&id, GrantDuration::Once, None, None).unwrap();
+    assert_eq!(
+        consume_matching_grant(
+            "sess-canonical",
+            Verb::NET_DIAL,
+            &Scope::host("api.example.com:443"),
+        )
+        .unwrap(),
+        Some(GrantDuration::Once)
+    );
+}
+
+#[test]
 fn approved_session_grant_is_reusable() {
     let _tmp = isolated_env();
     let id = submit(
@@ -110,7 +169,7 @@ fn deny_moves_to_denied_dir() {
     let _tmp = isolated_env();
     let id = submit(
         Verb::FS_DELETE,
-        Scope::Wild,
+        Scope::path("/tmp/delete-me"),
         "sess-b",
         "trying to wipe",
         None,
@@ -323,7 +382,7 @@ fn grant_set_consumption_requires_an_exact_session_owner_verb_and_scope() {
         (
             LAUNCHER,
             Verb::SYS_CONFIG,
-            Scope::name("accounts"),
+            Scope::path("/accounts"),
             Some(1000),
         ),
         (
@@ -492,6 +551,73 @@ fn an_approval_carries_a_bounded_grant() {
         !grant.reference.contains(&id),
         "the audit reference is keyed, not the request id"
     );
+    let authorization = grant
+        .authorization
+        .expect("new approvals bind exact authority");
+    assert_eq!(authorization.owner_uid, None);
+    assert_eq!(authorization.session, "sess-bound");
+    assert_eq!(
+        authorization.capability,
+        Cap::new(Verb::SYS_PACKAGE, Scope::name("git"))
+    );
+    assert_eq!(authorization.risk, crate::caps::Risk::Critical);
+    assert_eq!(authorization.context, None);
+}
+
+#[test]
+fn attended_high_and_critical_defaults_refuse_overbroad_durations() {
+    let _tmp = isolated_env();
+    let critical = submit_owned_with_context(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "agent-critical",
+        "install git",
+        None,
+        Some(1000),
+        Some(crate::caps::ConsentContext::Attended),
+    )
+    .unwrap();
+    let error = approve_for_owner(
+        &critical,
+        GrantDuration::Session,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap_err();
+    assert!(error.contains("only be approved once"), "{error}");
+    assert_eq!(
+        status_for_owner(&critical, Some(1000)),
+        RequestStatus::Pending
+    );
+    approve_for_owner(
+        &critical,
+        GrantDuration::Once,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap();
+
+    let high = submit_owned_with_context(
+        Verb::SECRET_READ,
+        Scope::name("default/API_KEY"),
+        "agent-high",
+        "read key",
+        None,
+        Some(1000),
+        Some(crate::caps::ConsentContext::Attended),
+    )
+    .unwrap();
+    let error = approve_for_owner(
+        &high,
+        GrantDuration::Forever,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap_err();
+    assert!(error.contains("may not be approved forever"), "{error}");
 }
 
 #[test]
@@ -539,6 +665,39 @@ fn a_record_with_no_grant_provenance_authorises_nothing() {
         None,
     )
     .unwrap());
+}
+
+#[test]
+fn a_legacy_bounded_grant_without_exact_authorization_fails_closed() {
+    let _tmp = isolated_env();
+    let id = submit(
+        Verb::FS_WRITE,
+        Scope::path("/tmp/legacy"),
+        "sess-legacy-bound",
+        "write",
+        None,
+    )
+    .unwrap();
+    let mut resolved = approve(&id, GrantDuration::Once, None, None).unwrap();
+    resolved
+        .decision
+        .grant
+        .as_mut()
+        .unwrap()
+        .authorization = None;
+    let path = approved_dir().join(format!("{id}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&resolved).unwrap()).unwrap();
+
+    assert_eq!(
+        consume_matching_grant(
+            "sess-legacy-bound",
+            Verb::FS_WRITE,
+            &Scope::path("/tmp/legacy"),
+        )
+        .unwrap(),
+        None,
+        "legacy records are history, not exact capability authority"
+    );
 }
 
 #[test]

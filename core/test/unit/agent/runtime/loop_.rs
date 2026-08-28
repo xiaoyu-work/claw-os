@@ -1391,7 +1391,7 @@ async fn cache_markers_not_attached_by_default() {
     assert!(!crate::agent::prompt::caching::is_tools_cached(&req));
 }
 
-/// Capability risk owns the default approval policy, so the optional
+/// Capability consent owns the default policy, so the optional legacy
 /// tool-name gate is empty until an operator explicitly configures it.
 #[tokio::test]
 async fn approval_from_cfg_default_is_empty() {

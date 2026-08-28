@@ -1444,11 +1444,10 @@ pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails
     g
 }
 
-/// Build an optional tool-level [`ApprovalGate`] from explicit operator
-/// configuration. Capability risk is enforced separately: high- and
-/// critical-risk capability denials create durable approval requests in the
-/// kernel, so the default tool-name gate stays empty and cannot intercept a
-/// call before its precise verb and scope are known.
+/// Build the legacy tool-name [`ApprovalGate`] from explicit operator
+/// configuration. Capability-aware tools use this only for hard
+/// `auto_deny_tools`; `dangerous_tools` cannot intercept them before
+/// validated arguments produce an exact verb, scope, and risk.
 pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::ApprovalGate {
     use crate::agent::runtime::approval::{ApprovalConfig, ApprovalGate};
     let mut acfg = ApprovalConfig::new();
