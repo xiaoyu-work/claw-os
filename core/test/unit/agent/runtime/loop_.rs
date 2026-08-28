@@ -622,6 +622,79 @@ async fn non_streaming_continuation_honors_configured_compression() {
     }));
 }
 
+#[tokio::test]
+async fn buffered_and_streaming_compression_produce_identical_final_state() {
+    fn seed(db: &MemoryDb, session_id: &str) {
+        for index in 0..6 {
+            db.record_message(
+                session_id,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("long historical message {index} {}", "x".repeat(200)),
+            )
+            .unwrap();
+        }
+    }
+
+    fn provider(cfg: &AgentConfig) -> Arc<MockProvider> {
+        let provider = Arc::new(MockProvider::new(&cfg.model, cfg));
+        provider.push_response(MockResponse::Text("shared compressed history".into()));
+        provider.push_response(MockResponse::Text("shared final answer".into()));
+        provider
+    }
+
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+    let session_id = "shared-lifecycle-compression";
+    let buffered_db = MemoryDb::open_in_memory().unwrap();
+    let streaming_db = MemoryDb::open_in_memory().unwrap();
+    seed(&buffered_db, session_id);
+    seed(&streaming_db, session_id);
+    let buffered_provider = provider(&cfg);
+    let streaming_provider = provider(&cfg);
+
+    let buffered = ask_with_memory_continuation(
+        buffered_provider.clone(),
+        &cfg,
+        "compress identically",
+        &builtin_only_registry(),
+        &buffered_db,
+        session_id,
+        100,
+    )
+    .await
+    .unwrap();
+    let streaming = ask_with_stream_continuation(
+        streaming_provider.clone(),
+        &cfg,
+        "compress identically",
+        &builtin_only_registry(),
+        &streaming_db,
+        session_id,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(buffered.answer, streaming.answer);
+    assert_eq!(
+        serde_json::to_value(buffered_provider.last_request().unwrap()).unwrap(),
+        serde_json::to_value(streaming_provider.last_request().unwrap()).unwrap()
+    );
+    assert_eq!(
+        persisted_snapshot(&buffered_db, session_id),
+        persisted_snapshot(&streaming_db, session_id)
+    );
+    assert_eq!(
+        buffered_db.title_for(session_id).unwrap(),
+        streaming_db.title_for(session_id).unwrap()
+    );
+}
+
 fn cfg() -> AgentConfig {
     AgentConfig {
         provider: "mock".into(),
@@ -1689,6 +1762,214 @@ impl StreamSink for CapturingSink {
     }
 }
 
+fn scripted_lifecycle_provider(cfg: &AgentConfig) -> Arc<MockProvider> {
+    let provider = Arc::new(MockProvider::new(&cfg.model, cfg));
+    provider.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id: "lifecycle-call".into(),
+        name: "echo".into(),
+        input: serde_json::json!({"text": "lifecycle-result"}),
+    }]));
+    provider.push_response(MockResponse::Text(
+        "Lifecycle complete. [evidence:lifecycle-call confidence=0.95]".into(),
+    ));
+    provider
+}
+
+fn persisted_snapshot(db: &MemoryDb, session_id: &str) -> Vec<(String, String)> {
+    db.recent(session_id, 100)
+        .unwrap()
+        .into_iter()
+        .map(|row| (row.role, row.content))
+        .collect()
+}
+
+fn stream_event_name(event: &StreamEvent) -> &'static str {
+    match event {
+        StreamEvent::TextDelta { .. } => "text_delta",
+        StreamEvent::ToolUseStart { .. } => "tool_use_start",
+        StreamEvent::ToolInputDelta { .. } => "tool_input_delta",
+        StreamEvent::ToolUse(_) => "tool_use",
+        StreamEvent::ToolState { .. } => "tool_state",
+        StreamEvent::Reasoning { .. } => "reasoning",
+        StreamEvent::Message(_) => "message",
+        StreamEvent::Done { .. } => "done",
+        StreamEvent::Warning { .. } => "warning",
+    }
+}
+
+#[tokio::test]
+async fn buffered_and_streaming_share_success_lifecycle_side_effects() {
+    use crate::agent::runtime::hooks::{
+        global_registry, Hook, HookContext, HookOutcome, ToolDecision, ToolResultSummary,
+        TurnSummary,
+    };
+
+    struct LifecycleSpy {
+        events: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Hook for LifecycleSpy {
+        fn name(&self) -> &str {
+            "lifecycle-parity-spy"
+        }
+
+        fn pre_turn(&self, ctx: &HookContext) -> HookOutcome {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("pre_turn:{}", ctx.turn_index));
+            HookOutcome::Continue
+        }
+
+        fn post_turn(&self, ctx: &HookContext, summary: &TurnSummary) -> HookOutcome {
+            self.events.lock().unwrap().push(format!(
+                "post_turn:{}:{}:{}:{}",
+                ctx.turn_index, summary.success, summary.stop_reason, summary.tool_calls_made
+            ));
+            HookOutcome::Continue
+        }
+
+        fn pre_tool(&self, ctx: &HookContext, call: &ToolCall) -> ToolDecision {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("pre_tool:{}:{}", ctx.turn_index, call.name));
+            ToolDecision::Allow
+        }
+
+        fn post_tool(
+            &self,
+            ctx: &HookContext,
+            call: &ToolCall,
+            summary: &ToolResultSummary,
+        ) -> HookOutcome {
+            self.events.lock().unwrap().push(format!(
+                "post_tool:{}:{}:{}",
+                ctx.turn_index, call.name, summary.success
+            ));
+            HookOutcome::Continue
+        }
+    }
+
+    let cfg = cfg();
+    let tools = builtin_only_registry();
+    let session_id = "shared-lifecycle-success";
+    let buffered_db = MemoryDb::open_in_memory().unwrap();
+    let streaming_db = MemoryDb::open_in_memory().unwrap();
+    let buffered_provider = scripted_lifecycle_provider(&cfg);
+    let streaming_provider = scripted_lifecycle_provider(&cfg);
+    let hook_events = Arc::new(Mutex::new(Vec::new()));
+    global_registry().register(Arc::new(LifecycleSpy {
+        events: hook_events.clone(),
+    }));
+
+    let buffered = ask_with_memory(
+        buffered_provider.clone(),
+        &cfg,
+        "exercise the lifecycle",
+        &tools,
+        &buffered_db,
+        session_id,
+    )
+    .await
+    .unwrap();
+    let buffered_hook_count = hook_events.lock().unwrap().len();
+
+    let sink: Arc<CapturingSink> = Arc::default();
+    let streaming = ask_with_stream(
+        streaming_provider.clone(),
+        &cfg,
+        "exercise the lifecycle",
+        &tools,
+        Some((&streaming_db, session_id)),
+        sink.clone(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap();
+    global_registry().unregister("lifecycle-parity-spy");
+
+    assert_eq!(buffered.answer, streaming.answer);
+    assert_eq!(buffered.turns, streaming.turns);
+    assert_eq!(buffered.provider, streaming.provider);
+    assert_eq!(buffered.model, streaming.model);
+    assert_eq!(buffered.session_id, streaming.session_id);
+    assert_eq!(buffered.evidence, streaming.evidence);
+    assert_eq!(
+        persisted_snapshot(&buffered_db, session_id),
+        persisted_snapshot(&streaming_db, session_id)
+    );
+    assert_eq!(
+        buffered_db.title_for(session_id).unwrap(),
+        streaming_db.title_for(session_id).unwrap()
+    );
+    assert_eq!(
+        serde_json::to_value(buffered_provider.last_request().unwrap()).unwrap(),
+        serde_json::to_value(streaming_provider.last_request().unwrap()).unwrap()
+    );
+
+    let events = hook_events.lock().unwrap();
+    assert_eq!(
+        &events[..buffered_hook_count],
+        &events[buffered_hook_count..],
+        "both adapters must traverse the same hook boundaries"
+    );
+    let stream_order: Vec<&str> = sink
+        .events
+        .lock()
+        .unwrap()
+        .iter()
+        .map(stream_event_name)
+        .collect();
+    assert_eq!(stream_order, ["message", "done", "message", "done"]);
+    assert!(!format!("{:?}", sink.events.lock().unwrap()).contains("[evidence:"));
+}
+
+#[tokio::test]
+async fn buffered_and_streaming_share_error_terminal_state() {
+    let cfg = cfg();
+    let tools = builtin_only_registry();
+    let session_id = "shared-lifecycle-error";
+    let buffered_db = MemoryDb::open_in_memory().unwrap();
+    let streaming_db = MemoryDb::open_in_memory().unwrap();
+    let buffered_provider = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    buffered_provider.push_response(MockResponse::Error(crate::agent::llm::LlmError::Auth));
+    let streaming_provider = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    streaming_provider.push_response(MockResponse::Error(crate::agent::llm::LlmError::Auth));
+    let sink: Arc<CapturingSink> = Arc::default();
+
+    let buffered = ask_with_memory(
+        buffered_provider,
+        &cfg,
+        "fail identically",
+        &tools,
+        &buffered_db,
+        session_id,
+    )
+    .await
+    .unwrap_err();
+    let streaming = ask_with_stream(
+        streaming_provider,
+        &cfg,
+        "fail identically",
+        &tools,
+        Some((&streaming_db, session_id)),
+        sink.clone(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(buffered.to_string(), streaming.to_string());
+    assert_eq!(
+        persisted_snapshot(&buffered_db, session_id),
+        persisted_snapshot(&streaming_db, session_id)
+    );
+    assert_eq!(buffered_db.title_for(session_id).unwrap(), None);
+    assert_eq!(streaming_db.title_for(session_id).unwrap(), None);
+    assert!(sink.events.lock().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn ask_with_stream_text_response_calls_sink_and_returns_answer() {
     // The mock provider's chat_stream() shims to chat() and emits
@@ -1873,9 +2154,9 @@ impl Provider for PendingProvider {
     }
 
     async fn chat(&self, _request: llm::ChatRequest) -> llm::Result<llm::ChatResponse> {
-        Err(llm::LlmError::Internal(
-            "pending provider only supports streaming test path".into(),
-        ))
+        let _drop_flag = DropFlag(self.dropped.clone());
+        self.entered.notify_one();
+        std::future::pending().await
     }
 
     async fn chat_stream(
@@ -1927,6 +2208,81 @@ async fn interrupt_drops_in_flight_provider_future() {
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "interrupt must drop the provider future"
     );
+}
+
+#[tokio::test]
+async fn buffered_and_streaming_cancellation_share_terminal_rules() {
+    async fn cancel_buffered(cfg: &AgentConfig, session_id: &str) -> (AgentError, bool) {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider: Arc<dyn Provider> = Arc::new(PendingProvider {
+            entered: entered.clone(),
+            dropped: dropped.clone(),
+        });
+        let db = MemoryDb::open_in_memory().unwrap();
+        let tools = builtin_only_registry();
+        let run = ask_with_memory(provider, cfg, "wait forever", &tools, &db, session_id);
+        let signal = async {
+            entered.notified().await;
+            assert!(interrupt::signal(session_id));
+        };
+        let (result, ()) = tokio::join!(run, signal);
+        (
+            result.unwrap_err(),
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    async fn cancel_streaming(cfg: &AgentConfig, session_id: &str) -> (AgentError, bool) {
+        let entered = Arc::new(tokio::sync::Notify::new());
+        let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let provider: Arc<dyn Provider> = Arc::new(PendingProvider {
+            entered: entered.clone(),
+            dropped: dropped.clone(),
+        });
+        let tools = builtin_only_registry();
+        let run = ask_with_stream_scoped(
+            provider,
+            cfg,
+            "wait forever",
+            None,
+            &tools,
+            None,
+            Arc::new(CapturingSink::default()),
+            progress::null_progress(),
+            session_id,
+        );
+        let signal = async {
+            entered.notified().await;
+            assert!(interrupt::signal(session_id));
+        };
+        let (result, ()) = tokio::join!(run, signal);
+        (
+            result.unwrap_err(),
+            dropped.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    }
+
+    let cfg = cfg();
+    let session_id = "shared-lifecycle-cancel";
+    let (buffered, buffered_dropped) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        cancel_buffered(&cfg, session_id),
+    )
+    .await
+    .expect("buffered cancellation timed out");
+    let (streaming, streaming_dropped) = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        cancel_streaming(&cfg, session_id),
+    )
+    .await
+    .expect("streaming cancellation timed out");
+
+    assert_eq!(buffered.to_string(), streaming.to_string());
+    assert!(matches!(buffered, AgentError::Interrupted(_)));
+    assert!(matches!(streaming, AgentError::Interrupted(_)));
+    assert!(buffered_dropped);
+    assert!(streaming_dropped);
 }
 
 struct CountingTool {
