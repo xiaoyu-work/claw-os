@@ -24,6 +24,11 @@ pub fn begin(
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
         meta.origin = Some(SessionOrigin::SystemAgentTask);
+        meta.client = crate::session::SessionClient::new(
+            crate::session::SessionSource::BrokerTask,
+            client.attended_local,
+            true,
+        );
         meta.status = SessionStatus::Running;
     }) {
         return Err(fail_new_session(

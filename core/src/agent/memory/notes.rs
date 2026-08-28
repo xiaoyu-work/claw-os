@@ -584,7 +584,7 @@ pub fn truncate_for_prompt(text: &str, cap_chars: usize) -> std::borrow::Cow<'_,
 
 const MARKER_RESERVE_CHARS: usize = 80;
 
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("note name must not be empty".into());
     }

@@ -39,6 +39,7 @@ use serde_json::json;
 use std::sync::Arc;
 use std::time::Duration;
 
+use super::exposure::{ToolExposure, ToolExposureContext};
 use super::guardrails::Guardrails;
 use super::registry::{default_registry, ToolRegistry};
 use super::{Tool, ToolResult};
@@ -82,6 +83,11 @@ tokio::task_local! {
     /// Snapshot of the parent registry's [`ApprovalGate`]. See
     /// [`PARENT_GUARDRAILS`] for scope semantics.
     pub static PARENT_APPROVAL: ApprovalGate;
+
+    /// Trusted exposure context of the parent call. Delegated children inherit
+    /// the same owner/capabilities/transports, but are explicitly marked as an
+    /// unattended delegated source.
+    pub static PARENT_EXPOSURE: ToolExposureContext;
 }
 
 /// Snapshot of the parent's policy as observed inside a tool's `exec`.
@@ -91,6 +97,10 @@ pub fn current_parent_policy() -> (Option<Guardrails>, Option<ApprovalGate>) {
     let g = PARENT_GUARDRAILS.try_with(|g| g.clone()).ok();
     let a = PARENT_APPROVAL.try_with(|a| a.clone()).ok();
     (g, a)
+}
+
+pub fn current_parent_exposure() -> Option<ToolExposureContext> {
+    PARENT_EXPOSURE.try_with(Clone::clone).ok()
 }
 
 /// Read the current delegate depth. Returns 0 outside any delegate scope.
@@ -193,11 +203,20 @@ impl Tool for Delegate {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AGENT_DELEGATE])
+    }
+
     async fn exec(&self, input: serde_json::Value) -> ToolResult {
         let parsed: DelegateInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::err(format!("invalid delegate input: {e}")),
         };
+        if let Err(denial) =
+            crate::caps::require(crate::caps::Verb::AGENT_DELEGATE, crate::caps::Scope::Wild)
+        {
+            return ToolResult::err(denial.to_string());
+        }
 
         let parent_cfg = crate::config::get().agent.clone();
         run_delegate(parsed, &parent_cfg, registry_factory).await
@@ -279,6 +298,9 @@ async fn run_delegate(
     };
 
     let (parent_guardrails, parent_approval) = current_parent_policy();
+    let parent_exposure = current_parent_exposure().unwrap_or_else(|| {
+        ToolExposureContext::isolated(parent_guardrails.clone().unwrap_or_default())
+    });
     let tools = build_child_registry(
         parent_guardrails.as_ref(),
         parent_approval.as_ref(),
@@ -288,9 +310,11 @@ async fn run_delegate(
 
     let timeout = Duration::from_secs(input.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS));
     let task = input.task.clone();
+    let child_guardrails = child_guardrails(parent_guardrails.as_ref(), &input.allowed_tools);
+    let child_exposure = parent_exposure.delegated(child_guardrails);
 
     let child_future = DELEGATE_DEPTH.scope(cur + 1, async move {
-        loop_::ask_with(provider, &child_cfg, &task, &tools).await
+        loop_::ask_with_exposure(provider, &child_cfg, &task, &tools, &child_exposure).await
     });
 
     let outcome = tokio::time::timeout(timeout, child_future).await;
@@ -299,6 +323,21 @@ async fn run_delegate(
         Ok(Err(e)) => ToolResult::err(format!("delegate child failed: {e}")),
         Err(_) => ToolResult::err(format!("delegate timed out after {}s", timeout.as_secs())),
     }
+}
+
+fn child_guardrails(parent: Option<&Guardrails>, allowed: &[String]) -> Guardrails {
+    let allowed: std::collections::HashSet<String> = allowed
+        .iter()
+        .filter(|name| !matches!(name.as_str(), "cos_delegate" | "cos_oauth_login"))
+        .cloned()
+        .chain(std::iter::once("cos_skill".to_string()))
+        .collect();
+    let mut guardrails = parent.cloned().unwrap_or_default();
+    guardrails.allow = Some(match guardrails.allow.take() {
+        Some(parent_allow) => parent_allow.intersection(&allowed).cloned().collect(),
+        None => allowed,
+    });
+    guardrails
 }
 
 /// Build a registry that contains only the tools the parent allow-listed,
@@ -328,11 +367,6 @@ fn build_child_registry(
     allowed: &[String],
 ) -> ToolRegistry {
     let mut child = ToolRegistry::new();
-    // Inherit parent's policy primitives. These are Clone (Guardrails
-    // is a pair of sets; ApprovalGate wraps everything in Arcs).
-    if let Some(g) = parent_guardrails {
-        child.set_guardrails(g.clone());
-    }
     if let Some(a) = parent_approval {
         child.set_approval(a.clone());
     }

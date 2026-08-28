@@ -27,6 +27,7 @@ use crate::session::{self, SessionId, SessionMeta, SessionOrigin, Status as Sess
 pub fn trusted_session_info(session_id: &SessionId, runtime: &str) -> Result<SessionInfo, String> {
     let session_id_string = session_id.as_str().to_string();
     let meta = session::get_meta(session_id).map_err(|err| err.to_string())?;
+    let root_owned = session::record_is_root_owned(session_id);
     let caps = session_caps(session_id, &meta)?;
     let role = meta.role;
     let credential_tier = meta
@@ -66,6 +67,11 @@ pub fn trusted_session_info(session_id: &SessionId, runtime: &str) -> Result<Ses
         app_id: None,
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+        client: if root_owned {
+            meta.client
+        } else {
+            crate::session::SessionClient::default()
+        },
     })
 }
 

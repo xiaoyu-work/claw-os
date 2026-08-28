@@ -11,6 +11,7 @@ pub mod cos_apps;
 pub mod cos_apps_session;
 pub mod cos_proxy;
 pub mod delegate;
+pub mod exposure;
 pub mod guardrails;
 pub mod mcp;
 pub mod media;
@@ -20,6 +21,42 @@ pub mod todo;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+
+pub(crate) const SYSTEM_AGENT_MEMORY_SCOPE: &str = "agent";
+
+pub(crate) enum MemoryScope<'a> {
+    SystemAgent,
+    Session(&'a str),
+    App(&'a str),
+}
+
+pub(crate) fn validate_memory_scope(value: &str, label: &str) -> Result<(), String> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
+        return Err(format!("{label} must be a non-empty single-line identifier"));
+    }
+    Ok(())
+}
+
+pub(crate) fn require_memory(
+    verb: crate::caps::Verb,
+    target: MemoryScope<'_>,
+) -> Result<(), crate::caps::Denial> {
+    let target = match target {
+        MemoryScope::SystemAgent => SYSTEM_AGENT_MEMORY_SCOPE,
+        MemoryScope::Session(session) | MemoryScope::App(session) => session,
+    };
+    let system_scope = crate::caps::Scope::self_ref(SYSTEM_AGENT_MEMORY_SCOPE);
+    let requested_scope = crate::caps::Scope::self_ref(target);
+    let scope = exposure::current()
+        .filter(|context| {
+            context
+                .capabilities()
+                .covers(&crate::caps::Cap::new(verb, system_scope.clone()))
+        })
+        .map_or(requested_scope, |_| system_scope);
+    crate::caps::require(verb, scope)
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
@@ -59,6 +96,12 @@ pub trait Tool: Send + Sync {
     /// JSON Schema describing the input shape. The schema is consumed by the
     /// LLM to decide how to call this tool.
     fn input_schema(&self) -> serde_json::Value;
+
+    /// Immutable coarse requirements for advertising this tool. Exact
+    /// argument-derived authorization still runs inside [`Tool::exec`].
+    fn exposure(&self) -> exposure::ToolExposure {
+        exposure::ToolExposure::always()
+    }
 
     /// Execute the tool. Errors should be returned via `ToolResult::err`,
     /// not via Result, so the model can see them and react.

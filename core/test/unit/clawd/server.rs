@@ -12,6 +12,7 @@ fn peer(uid: u32) -> ClientIdentity {
         uid: Some(uid),
         gid: Some(uid),
         start_time_ticks: Some(7),
+        attended_local: false,
     }
 }
 

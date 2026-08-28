@@ -57,6 +57,7 @@ fn session_row(session_id: &str, pid: u32, app_id: Option<&str>, caps: CapSet) -
         app_id: app_id.map(ToOwned::to_owned),
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: crate::session::SessionClient::default(),
     }
 }
 

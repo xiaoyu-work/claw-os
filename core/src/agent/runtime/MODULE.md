@@ -12,6 +12,8 @@ through model turns, tools, hooks, progress, and final records.
 - Keep due reminders and application context request-local.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
+- Build every provider tool schema and dispatch lookup from the same
+  session-scoped exposure context.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 
@@ -29,9 +31,11 @@ through model turns, tools, hooks, progress, and final records.
 ## Dependencies
 
 Runtime depends on provider-neutral LLM types, the guarded tool registry,
-prompt/memory services, and hooks. It never executes a model-emitted tool call
-outside `turn.rs` dispatch. Message order and opaque provider state must survive
-every turn.
+trusted tool-exposure context, prompt/memory services, and hooks. It never
+executes a model-emitted tool call outside `turn.rs` dispatch. The dispatch
+path repeats exposure checks before tool execution; exact capability checks
+remain inside tools/providers after argument validation. Message order and
+opaque provider state must survive every turn.
 
 ## Tests
 

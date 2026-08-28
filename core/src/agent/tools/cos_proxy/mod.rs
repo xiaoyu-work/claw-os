@@ -37,8 +37,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use super::exposure::ToolExposure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
+use crate::caps::Verb;
 
 /// Function pointer matching the uniform cos primitive `run` signature.
 pub type PrimitiveFn = fn(&str, &[String]) -> Result<Value, String>;
@@ -57,6 +59,7 @@ pub struct CosPrimitiveTool {
     /// `false`; the LLM still rarely fires more than one such call at
     /// once, and serial dispatch is the safe default.
     parallel_safe: bool,
+    required_any_verbs: &'static [Verb],
 }
 
 impl CosPrimitiveTool {
@@ -66,12 +69,23 @@ impl CosPrimitiveTool {
         primitive: PrimitiveFn,
         commands: &'static [&'static str],
     ) -> Self {
+        Self::new_with_requirements(name, description, primitive, commands, &[])
+    }
+
+    pub const fn new_with_requirements(
+        name: &'static str,
+        description: &'static str,
+        primitive: PrimitiveFn,
+        commands: &'static [&'static str],
+        required_any_verbs: &'static [Verb],
+    ) -> Self {
         Self {
             name,
             description,
             primitive,
             commands,
             parallel_safe: false,
+            required_any_verbs,
         }
     }
 
@@ -84,12 +98,23 @@ impl CosPrimitiveTool {
         primitive: PrimitiveFn,
         commands: &'static [&'static str],
     ) -> Self {
+        Self::new_readonly_with_requirements(name, description, primitive, commands, &[])
+    }
+
+    pub const fn new_readonly_with_requirements(
+        name: &'static str,
+        description: &'static str,
+        primitive: PrimitiveFn,
+        commands: &'static [&'static str],
+        required_any_verbs: &'static [Verb],
+    ) -> Self {
         Self {
             name,
             description,
             primitive,
             commands,
             parallel_safe: true,
+            required_any_verbs,
         }
     }
 }
@@ -123,6 +148,10 @@ impl Tool for CosPrimitiveTool {
             "required": ["command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_any_verb(self.required_any_verbs.iter().copied())
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -194,6 +223,7 @@ struct PrimitiveSpec {
     primitive: PrimitiveFn,
     commands: &'static [&'static str],
     parallel_safe: bool,
+    required_any_verbs: &'static [Verb],
 }
 
 const PRIMITIVES: &[PrimitiveSpec] = &[
@@ -206,6 +236,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::sandbox::run,
         commands: &["exec"],
         parallel_safe: false, // runs arbitrary commands; never parallel.
+        required_any_verbs: &[Verb::PROC_SPAWN],
     },
     PrimitiveSpec {
         name: "cos_proc",
@@ -218,6 +249,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "renice",
         ],
         parallel_safe: false, // includes spawn/kill/signal.
+        required_any_verbs: &[Verb::PROC_SPAWN, Verb::PROC_OBSERVE, Verb::PROC_SIGNAL],
     },
     PrimitiveSpec {
         name: "cos_sysinfo",
@@ -261,6 +293,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         // largest_files walk is the canonical reason we want parallel
         // dispatch — the agent typically pairs it with other reads.
         parallel_safe: true,
+        required_any_verbs: &[Verb::SYS_OBSERVE],
     },
     PrimitiveSpec {
         name: "cos_credential",
@@ -281,6 +314,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "oauth-refresh",
         ],
         parallel_safe: false, // mutating store; locks contended on parallel writes.
+        required_any_verbs: &[Verb::SECRET_READ, Verb::SECRET_WRITE],
     },
     PrimitiveSpec {
         name: "cos_cron",
@@ -291,6 +325,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "add", "remove", "list", "status", "enable", "disable", "logs", "run", "tick",
         ],
         parallel_safe: false,
+        required_any_verbs: &[Verb::TIME_CRON, Verb::DATA_LOG_READ, Verb::PROC_SPAWN, Verb::SYS_KERNEL],
     },
     PrimitiveSpec {
         name: "cos_checkpoint",
@@ -309,6 +344,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "namespaces",
         ],
         parallel_safe: false,
+        required_any_verbs: &[Verb::SYS_KERNEL, Verb::DATA_LOG_READ],
     },
     PrimitiveSpec {
         name: "cos_service",
@@ -320,6 +356,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "start", "stop", "stop-all", "restart", "status", "health", "list", "logs", "register",
         ],
         parallel_safe: false,
+        required_any_verbs: &[Verb::SYS_SERVICE],
     },
     PrimitiveSpec {
         name: "cos_trace",
@@ -329,6 +366,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::trace::run,
         commands: &["start", "end", "span", "span-end", "show", "list"],
         parallel_safe: false, // start/end/span mutate journal.
+        required_any_verbs: &[Verb::DATA_LOG_READ, Verb::DATA_LOG_WRITE],
     },
     PrimitiveSpec {
         name: "cos_watch",
@@ -337,6 +375,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::watch::run,
         commands: &["file", "dir", "proc", "on", "multi", "history"],
         parallel_safe: false,
+        required_any_verbs: &[Verb::FS_WATCH, Verb::SYS_SERVICE, Verb::IPC_SUBSCRIBE, Verb::SECRET_READ],
     },
     PrimitiveSpec {
         name: "cos_ipc",
@@ -347,6 +386,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "send", "recv", "list", "clear", "lock", "unlock", "locks", "barrier", "pipe",
         ],
         parallel_safe: false,
+        required_any_verbs: &[Verb::IPC_PUBLISH, Verb::IPC_SUBSCRIBE, Verb::IPC_INVOKE],
     },
     PrimitiveSpec {
         name: "cos_browser",
@@ -355,6 +395,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::browser::run,
         commands: &["start", "stop", "restart", "status", "health"],
         parallel_safe: false,
+        required_any_verbs: &[Verb::SYS_SERVICE],
     },
     PrimitiveSpec {
         name: "cos_netfilter",
@@ -376,6 +417,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "rate-check",
         ],
         parallel_safe: false,
+        required_any_verbs: &[Verb::SYS_KERNEL],
     },
     PrimitiveSpec {
         name: "cos_model",
@@ -387,6 +429,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "list", "import", "load", "unload", "infer", "status", "bench", "rm",
         ],
         parallel_safe: false, // import/load/unload mutate engine state.
+        required_any_verbs: &[],
     },
     PrimitiveSpec {
         name: "cos_doctor",
@@ -402,6 +445,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         commands: &["run"],
         // Diagnostics-only; no writes outside ephemeral status fields.
         parallel_safe: true,
+        required_any_verbs: &[],
     },
     PrimitiveSpec {
         name: "cos_diagnose",
@@ -414,6 +458,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         primitive: crate::agent::diagnose::diagnose_primitive,
         commands: &["run"],
         parallel_safe: true,
+        required_any_verbs: &[],
     },
 ];
 
@@ -424,14 +469,21 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
         let tool = if spec.parallel_safe {
-            CosPrimitiveTool::new_readonly(
+            CosPrimitiveTool::new_readonly_with_requirements(
                 spec.name,
                 spec.description,
                 spec.primitive,
                 spec.commands,
+                spec.required_any_verbs,
             )
         } else {
-            CosPrimitiveTool::new(spec.name, spec.description, spec.primitive, spec.commands)
+            CosPrimitiveTool::new_with_requirements(
+                spec.name,
+                spec.description,
+                spec.primitive,
+                spec.commands,
+                spec.required_any_verbs,
+            )
         };
         registry.register(Arc::new(tool));
     }

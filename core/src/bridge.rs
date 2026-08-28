@@ -462,6 +462,11 @@ impl AppIdentitySession {
             app_id: Some(app_id.to_string()),
             pending_bind: true,
             start_time_ticks: None,
+            client: crate::session::SessionClient::new(
+                crate::session::SessionSource::App,
+                false,
+                true,
+            ),
         };
         register_session(info)?;
         Ok(Self {

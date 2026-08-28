@@ -167,7 +167,7 @@ pub async fn run_with_store(
         let Ok(permit) = permits.clone().acquire_owned().await else {
             break;
         };
-        let claimed = match store.claim_one() {
+        let claimed = match crate::clawd::tasks::claim_job_with_presence(&store, config.lease) {
             Ok(claimed) => claimed,
             Err(error) => {
                 tracing::warn!(error = %error, "agentd supervisor failed to claim a task");
@@ -176,7 +176,7 @@ pub async fn run_with_store(
                 continue;
             }
         };
-        let Some(job) = claimed else {
+        let Some((job, presence)) = claimed else {
             drop(permit);
             sleep_interruptible(config.poll, &shutdown).await;
             continue;
@@ -200,6 +200,7 @@ pub async fn run_with_store(
                 shutdown,
                 broker_pid,
                 job,
+                presence,
             )
             .await;
             if let Err(error) = supervised {
@@ -264,6 +265,9 @@ struct Lease {
     task_id: String,
     session_id: Option<String>,
     owner_uid: u32,
+    client: crate::session::SessionClient,
+    presence: Option<crate::session::SessionPresence>,
+    capability_generation: String,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
@@ -277,6 +281,7 @@ async fn supervise(
     shutdown: Arc<AtomicBool>,
     broker_pid: u32,
     job: Job,
+    presence: Option<crate::session::SessionPresence>,
 ) -> Result<(), String> {
     let Some(owner_uid) = job.owner_uid else {
         finish_error(
@@ -312,7 +317,7 @@ async fn supervise(
 
     // Capabilities are derived here, from root-owned session metadata,
     // and handed to the worker. Nothing the worker says can widen them.
-    let session = match job.session_id.as_deref() {
+    let mut session = match job.session_id.as_deref() {
         Some(session_id) => match broker_session_info(session_id) {
             Ok(session) => session,
             Err(error) => {
@@ -322,6 +327,20 @@ async fn supervise(
         },
         None => None,
     };
+    let mut effective_client = if job.client.source != crate::session::SessionSource::Unknown {
+        job.client
+    } else {
+        session
+            .as_ref()
+            .map(|session| session.client)
+            .unwrap_or_default()
+    };
+    // `attended` is never durable authority. A live, in-memory submission
+    // presence lease is the only way a queued task may recover attendance.
+    effective_client.attended = false;
+    if let Some(session) = session.as_mut() {
+        session.client = effective_client;
+    }
 
     let spawned = match spawn::spawn_worker(&identity, &job.id) {
         Ok(spawned) => {
@@ -363,6 +382,15 @@ async fn supervise(
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
         owner_uid,
+        client: effective_client,
+        presence,
+        capability_generation: session
+            .as_ref()
+            .and_then(|session| session.caps.as_ref())
+            .map(crate::agent::tools::exposure::capability_generation)
+            .unwrap_or_else(|| {
+                crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
+            }),
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
@@ -448,6 +476,7 @@ async fn pump(
             owner_home: job.owner_home.clone().unwrap_or_default(),
         },
         session,
+        presence: lease.presence,
     };
     if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
         return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
@@ -594,6 +623,9 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         task_id: lease.task_id.clone(),
         session_id: lease.session_id.clone(),
         owner_uid: lease.owner_uid,
+        client: lease.client,
+        presence: lease.presence,
+        capability_generation: lease.capability_generation.clone(),
         owner_gid: 0,
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
@@ -627,6 +659,9 @@ fn accept(
                 task_id: lease.task_id.clone(),
                 session_id: lease.session_id.clone(),
                 owner_uid: lease.owner_uid,
+                client: lease.client,
+                presence: lease.presence,
+                capability_generation: lease.capability_generation.clone(),
                 worker_pid: lease.worker_pid,
                 worker_start_time_ticks: lease.worker_start_time_ticks,
                 route: route.to_string(),

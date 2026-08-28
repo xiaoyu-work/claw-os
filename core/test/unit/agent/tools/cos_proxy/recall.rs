@@ -4,6 +4,44 @@ fn tool() -> CosRecallTool {
     CosRecallTool::new(MemoryDb::open_in_memory().unwrap())
 }
 
+async fn exec(tool: &CosRecallTool, input: Value) -> ToolResult {
+    let session = memory_read_session(crate::caps::Scope::Wild);
+    crate::proc::with_trusted_session_override(session, tool.exec(input)).await
+}
+
+fn memory_read_session(scope: crate::caps::Scope) -> crate::proc::SessionInfo {
+    crate::proc::SessionInfo {
+        session_id: "memory-session".to_string(),
+        pid: std::process::id(),
+        command: vec!["test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+            crate::caps::Verb::MEMORY_READ,
+            scope,
+        )])),
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::BrokerTask,
+            false,
+            true,
+        ),
+    }
+}
+
 #[tokio::test]
 async fn missing_command_is_tool_error() {
     let r = tool().exec(json!({})).await;
@@ -16,9 +54,7 @@ async fn search_finds_inserted_message() {
     let t = tool();
     t.db.record_message("s", "user", "the secret password is rosebud")
         .unwrap();
-    let r = t
-        .exec(json!({ "command": "search", "query": "rosebud" }))
-        .await;
+    let r = exec(&t, json!({ "command": "search", "query": "rosebud" })).await;
     assert!(!r.is_error, "{}", r.content);
     assert!(r.content.contains("rosebud"));
 }
@@ -32,9 +68,7 @@ async fn search_hides_legacy_assistant_evidence_markers() {
         "Network is idle. [evidence:call_1 confidence=0.95]",
     )
     .unwrap();
-    let result = t
-        .exec(json!({ "command": "search", "query": "Network" }))
-        .await;
+    let result = exec(&t, json!({ "command": "search", "query": "Network" })).await;
     assert!(!result.is_error, "{}", result.content);
     assert!(result.content.contains("Network is idle."));
     assert!(!result.content.contains("[evidence:"));
@@ -62,9 +96,11 @@ async fn recent_returns_session_messages() {
     t.db.record_message("alpha", "user", "first").unwrap();
     t.db.record_message("alpha", "assistant", "ok").unwrap();
     t.db.record_message("bravo", "user", "elsewhere").unwrap();
-    let r = t
-        .exec(json!({ "command": "recent", "session_id": "alpha" }))
-        .await;
+    let r = exec(
+        &t,
+        json!({ "command": "recent", "session_id": "alpha" }),
+    )
+    .await;
     assert!(!r.is_error, "{}", r.content);
     assert!(r.content.contains("first"));
     assert!(r.content.contains("ok"));
@@ -76,7 +112,7 @@ async fn sessions_lists_distinct_session_ids() {
     let t = tool();
     t.db.record_message("a", "user", "x").unwrap();
     t.db.record_message("b", "user", "y").unwrap();
-    let r = t.exec(json!({ "command": "sessions" })).await;
+    let r = exec(&t, json!({ "command": "sessions" })).await;
     assert!(!r.is_error, "{}", r.content);
     assert!(r.content.contains("\"a\""));
     assert!(r.content.contains("\"b\""));
@@ -87,7 +123,7 @@ async fn stats_returns_total_count() {
     let t = tool();
     t.db.record_message("s", "user", "one").unwrap();
     t.db.record_message("s", "user", "two").unwrap();
-    let r = t.exec(json!({ "command": "stats" })).await;
+    let r = exec(&t, json!({ "command": "stats" })).await;
     assert!(!r.is_error, "{}", r.content);
     // total_messages: 2
     assert!(r.content.contains("\"total_messages\":2"));
@@ -100,13 +136,15 @@ async fn limit_is_clamped() {
         t.db.record_message("s", "user", &format!("m{i}")).unwrap();
     }
     // limit > MAX_LIMIT must be silently clamped, not rejected.
-    let r = t
-        .exec(json!({
+    let r = exec(
+        &t,
+        json!({
             "command": "recent",
             "session_id": "s",
             "limit": MAX_LIMIT as i64 + 100,
-        }))
-        .await;
+        }),
+    )
+    .await;
     assert!(!r.is_error, "{}", r.content);
 }
 
@@ -128,15 +166,83 @@ async fn search_query_with_fts_meta_chars_is_safe() {
         "*wildcard",
         "-negation",
     ] {
-        let r = t
-            .exec(json!({ "command": "search", "query": hostile }))
-            .await;
+        let r = exec(&t, json!({ "command": "search", "query": hostile })).await;
         assert!(
             !r.is_error,
             "FTS5 meta query {hostile:?} must not error: {}",
             r.content
         );
     }
+
+}
+
+#[tokio::test]
+async fn session_scoped_grant_cannot_read_another_session_or_global_history() {
+    let _lock = crate::test_env::lock_env();
+    let caps_dir = tempfile::tempdir().unwrap();
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let _caps =
+        crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
+    let db = MemoryDb::open_in_memory().unwrap();
+    db.record_message("alpha", "user", "alpha-only").unwrap();
+    db.record_message("bravo", "user", "bravo-only").unwrap();
+    let mut registry = crate::agent::tools::registry::ToolRegistry::new();
+    registry.register(std::sync::Arc::new(CosRecallTool::new(db)));
+    let session = memory_read_session(crate::caps::Scope::self_ref("alpha"));
+    let context = crate::agent::tools::exposure::ToolExposureContext::from_trusted_session(
+        &session,
+        Some("alpha"),
+        None,
+        1000,
+        crate::agent::tools::exposure::ExecutionHost::AgentWorker,
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
+
+    assert!(registry.get_for(&context, "cos_recall").is_some());
+    let (own, own_stats, other, global) =
+        crate::proc::with_trusted_session_override(session, async {
+        let own = registry
+            .execute(
+                &context,
+                "cos_recall",
+                json!({"command": "recent", "session_id": "alpha"}),
+                "test",
+            )
+            .await;
+        let own_stats = registry
+            .execute(
+                &context,
+                "cos_recall",
+                json!({"command": "stats", "session_id": "alpha"}),
+                "test",
+            )
+            .await;
+        let other = registry
+            .execute(
+                &context,
+                "cos_recall",
+                json!({"command": "recent", "session_id": "bravo"}),
+                "test",
+            )
+            .await;
+        let global = registry
+            .execute(
+                &context,
+                "cos_recall",
+                json!({"command": "search", "query": "only"}),
+                "test",
+            )
+            .await;
+        (own, own_stats, other, global)
+    })
+    .await;
+    assert!(!own.is_error, "{}", own.content);
+    assert!(own.content.contains("alpha-only"));
+    assert!(!own_stats.is_error, "{}", own_stats.content);
+    assert!(own_stats.content.contains("\"total_messages\":1"));
+    assert!(other.is_error);
+    assert!(!other.content.contains("bravo-only"));
+    assert!(global.is_error);
 }
 
 #[test]

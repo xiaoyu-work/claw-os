@@ -30,6 +30,7 @@ use serde_json::{json, Value};
 
 use crate::caps::manifest::Manifest;
 
+use super::exposure::ToolExposure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
@@ -190,6 +191,13 @@ impl Tool for CosAppTool {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_caps([crate::caps::Cap::new(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(&self.app),
+        )])
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let command = match input.get("command").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -332,6 +340,10 @@ impl Tool for CosAppCatalog {
             "required": ["command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AGENT_OBSERVE])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -573,6 +585,10 @@ impl Tool for CosAppRun {
             "required": ["app", "command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AGENT_INVOKE])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

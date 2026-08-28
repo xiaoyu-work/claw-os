@@ -8,6 +8,18 @@ fn claims(worker_pid: u32) -> GrantClaims {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::BrokerTask,
+            true,
+            true,
+        ),
+        presence: Some(crate::session::SessionPresence {
+            owner_uid: 1000,
+            pid: 55,
+            start_time_ticks: 44,
+            expires_at_ms: 30_000,
+        }),
+        capability_generation: "caps-a".to_string(),
         owner_gid: 1000,
         worker_pid,
         worker_start_time_ticks: Some(99),
@@ -23,6 +35,18 @@ fn expectation(route: &str) -> GrantExpectation {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::BrokerTask,
+            true,
+            true,
+        ),
+        presence: Some(crate::session::SessionPresence {
+            owner_uid: 1000,
+            pid: 55,
+            start_time_ticks: 44,
+            expires_at_ms: 30_000,
+        }),
+        capability_generation: "caps-a".to_string(),
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
         route: route.to_string(),
@@ -74,6 +98,27 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
         signer.verify(&grant, &other_owner, 2_000),
         Err(GrantError::Owner { .. })
     ));
+
+    let mut other_source = expectation("hello");
+    other_source.client.source = crate::session::SessionSource::ExternalMcp;
+    assert_eq!(
+        signer.verify(&grant, &other_source, 2_000),
+        Err(GrantError::Client)
+    );
+
+    let mut other_generation = expectation("hello");
+    other_generation.capability_generation = "caps-b".to_string();
+    assert_eq!(
+        signer.verify(&grant, &other_generation, 2_000),
+        Err(GrantError::CapabilityGeneration)
+    );
+
+    let mut other_presence = expectation("hello");
+    other_presence.presence.as_mut().unwrap().pid = 56;
+    assert_eq!(
+        signer.verify(&grant, &other_presence, 2_000),
+        Err(GrantError::Presence)
+    );
 
     let mut other_session = expectation("hello");
     other_session.session_id = Some("session-b".to_string());

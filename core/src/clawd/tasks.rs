@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
@@ -5,9 +7,24 @@ use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
 use crate::caps::Role;
-use crate::session::{self, SessionOrigin};
+use crate::session::{self, SessionClient, SessionOrigin, SessionSource};
 
 use super::client_identity::ClientIdentity;
+
+const SUBMISSION_PRESENCE_TTL_MS: u64 = 30_000;
+
+#[derive(Clone, Copy)]
+struct PendingPresence {
+    owner_uid: u32,
+    pid: u32,
+    start_time_ticks: u64,
+    expires_at_ms: u64,
+}
+
+fn presence_leases() -> &'static Mutex<HashMap<String, PendingPresence>> {
+    static LEASES: OnceLock<Mutex<HashMap<String, PendingPresence>>> = OnceLock::new();
+    LEASES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = client.require_uid()?;
@@ -47,25 +64,136 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .map(|value| u32::try_from(value).map_err(|_| format!("max_turns is too large: {value}")))
         .transpose()?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
+    let session_client = SessionClient::new(SessionSource::BrokerTask, false, true);
     let session_id = match session_id {
         Some(session_id) => {
-            prepare_task_session(&session_id, owner_uid, &owner_home)?;
+            prepare_task_session_with_client(&session_id, owner_uid, &owner_home, session_client)?;
             Some(session_id)
         }
-        None => Some(create_task_session(&prompt, owner_uid, &owner_home)?),
+        None => Some(create_task_session_with_client(
+            &prompt,
+            owner_uid,
+            &owner_home,
+            session_client,
+        )?),
     };
-    let job = store
-        .submit_with_context(
-            prompt,
-            context,
-            branch_context,
-            session_id,
-            max_turns,
-            Some(owner_uid),
-            Some(owner_home.to_string_lossy().into_owned()),
-        )
+    let job = Job::new_pending_with_client(
+        prompt,
+        context,
+        branch_context,
+        session_id,
+        max_turns,
+        Some(owner_uid),
+        Some(owner_home.to_string_lossy().into_owned()),
+        session_client,
+    );
+    let job = publish_task_with_presence(&store, job, client)
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
+}
+
+fn publish_task_with_presence(
+    store: &Store,
+    job: Job,
+    client: &ClientIdentity,
+) -> std::io::Result<Job> {
+    let task_id = job.id.clone();
+    with_presence_publication(&task_id, client, unix_now_ms(), || store.publish(job))
+}
+
+fn with_presence_publication<T, E>(
+    task_id: &str,
+    client: &ClientIdentity,
+    now_ms: u64,
+    publish: impl FnOnce() -> Result<T, E>,
+) -> Result<T, E> {
+    let mut leases = presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
+    let (Some(owner_uid), Some(pid), Some(start_time_ticks)) =
+        (client.uid, client.pid, client.start_time_ticks)
+    else {
+        return publish();
+    };
+    if client.attended_local {
+        leases.insert(
+            task_id.to_string(),
+            PendingPresence {
+                owner_uid,
+                pid,
+                start_time_ticks,
+                expires_at_ms: now_ms.saturating_add(SUBMISSION_PRESENCE_TTL_MS),
+            },
+        );
+    }
+    let result = publish();
+    if result.is_err() {
+        leases.remove(task_id);
+    }
+    result
+}
+
+pub(crate) fn claim_job_with_presence(
+    store: &Store,
+    execution_ttl: Duration,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    claim_job_with_presence_at(
+        store,
+        unix_now_ms(),
+        execution_ttl.as_millis() as u64,
+        crate::proc::process_identity_is_live,
+    )
+}
+
+fn claim_job_with_presence_at(
+    store: &Store,
+    now_ms: u64,
+    execution_ttl_ms: u64,
+    process_is_live: impl Fn(u32, u64, u32) -> bool,
+) -> std::io::Result<Option<(Job, Option<crate::session::SessionPresence>)>> {
+    let mut leases = presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    leases.retain(|_, lease| lease.expires_at_ms >= now_ms);
+    let Some(job) = store.claim_one()? else {
+        return Ok(None);
+    };
+    let presence = leases.remove(&job.id).and_then(|pending| {
+        (job.recovery_count == 0
+            && job.owner_uid == Some(pending.owner_uid)
+            && now_ms <= pending.expires_at_ms
+            && process_is_live(pending.pid, pending.start_time_ticks, pending.owner_uid))
+        .then_some(crate::session::SessionPresence {
+            owner_uid: pending.owner_uid,
+            pid: pending.pid,
+            start_time_ticks: pending.start_time_ticks,
+            expires_at_ms: now_ms.saturating_add(execution_ttl_ms),
+        })
+    });
+    Ok(Some((job, presence)))
+}
+
+fn unix_now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+fn drop_presence(task_id: &str) {
+    presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(task_id);
+}
+
+#[cfg(test)]
+fn clear_presence_leases() {
+    presence_leases()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clear();
 }
 
 fn create_task_session(
@@ -73,6 +201,21 @@ fn create_task_session(
     owner_uid: u32,
     owner_home: &std::path::Path,
 ) -> Result<String, String> {
+    create_task_session_with_client(
+        prompt,
+        owner_uid,
+        owner_home,
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+    )
+}
+
+fn create_task_session_with_client(
+    prompt: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    mut client: SessionClient,
+) -> Result<String, String> {
+    client.attended = false;
     let purpose = format!("agent task: {}", preview(prompt, 80));
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
     session::update_meta(&sid, |meta| {
@@ -80,6 +223,7 @@ fn create_task_session(
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
         meta.origin = Some(SessionOrigin::SystemAgentTask);
+        meta.client = client;
     })
     .map_err(|err| err.to_string())?;
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
@@ -92,6 +236,21 @@ fn prepare_task_session(
     owner_uid: u32,
     owner_home: &std::path::Path,
 ) -> Result<(), String> {
+    prepare_task_session_with_client(
+        session_id,
+        owner_uid,
+        owner_home,
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+    )
+}
+
+fn prepare_task_session_with_client(
+    session_id: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    mut client: SessionClient,
+) -> Result<(), String> {
+    client.attended = false;
     let sid = session_id
         .parse::<session::SessionId>()
         .map_err(|err| format!("invalid task session id: {err}"))?;
@@ -133,6 +292,7 @@ fn prepare_task_session(
     // delegation marker cannot be replayed as one.
     session::update_meta(&sid, |meta| {
         meta.origin = Some(SessionOrigin::SystemAgentTask);
+        meta.client = client;
     })
     .map_err(|err| format!("refresh task provenance: {err}"))
 }
@@ -303,6 +463,7 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         .request_cancel_for_owner(&id, owner_uid)
         .map_err(|err| err.to_string())?
     {
+        drop_presence(&id);
         if !immediate {
             crate::agent::runtime::interrupt::signal(&id);
         }

@@ -4574,9 +4574,12 @@ async fn live_cmd_async(
     use std::sync::{Arc, Mutex};
 
     let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
+    let mut exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        runtime::loop_::guardrails_from_cfg(cfg),
+    );
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
+    let _mcp_handles =
+        runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg, &mut exposure).await;
 
     struct LiveSink {
         tool_calls: Mutex<Vec<serde_json::Value>>,

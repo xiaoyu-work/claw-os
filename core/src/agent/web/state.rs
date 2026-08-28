@@ -13,12 +13,17 @@ pub struct AppState {
 pub struct AppStateInner {
     pub cfg: AgentConfig,
     pub owner_uid: u32,
+    pub local_only: bool,
     pub started_at_unix: u64,
     turn_leases: TurnLeaseRegistry,
 }
 
 impl AppState {
     pub fn new(cfg: AgentConfig, owner_uid: u32) -> Self {
+        Self::new_with_locality(cfg, owner_uid, true)
+    }
+
+    pub fn new_with_locality(cfg: AgentConfig, owner_uid: u32, local_only: bool) -> Self {
         let started_at_unix = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -27,6 +32,7 @@ impl AppState {
             inner: Arc::new(AppStateInner {
                 cfg,
                 owner_uid,
+                local_only,
                 started_at_unix,
                 turn_leases: TurnLeaseRegistry::default(),
             }),

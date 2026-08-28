@@ -22,6 +22,7 @@ fn session(role: crate::caps::Role, app_id: Option<&str>, pid: u32) -> crate::pr
         app_id: app_id.map(str::to_string),
         pending_bind: false,
         start_time_ticks: None,
+        client: crate::session::SessionClient::default(),
     }
 }
 
@@ -49,21 +50,6 @@ fn accepts_only_same_pid_admin_cli_session() {
     credential_load.command = vec!["cos".into(), "credential".into(), "load".into()];
     assert!(is_same_pid_admin_cli_session(&credential_load));
     assert!(!is_direct_oauth_login_session(&credential_load));
-}
-
-#[test]
-fn agent_entry_accepts_only_attended_local_agent_sessions() {
-    let mut agent_chat = session(crate::caps::Role::Admin, None, std::process::id());
-    agent_chat.command = vec!["cos".into(), "agent".into(), "chat".into()];
-    assert!(is_attended_agent_oauth_session(&agent_chat));
-
-    let mut mcp_server = session(crate::caps::Role::Admin, None, std::process::id());
-    mcp_server.command = vec!["cos".into(), "agent".into(), "mcp".into(), "serve".into()];
-    assert!(!is_attended_agent_oauth_session(&mcp_server));
-
-    let mut app_session = session(crate::caps::Role::Worker, Some("email"), std::process::id());
-    app_session.command = vec!["cos".into(), "agent".into(), "chat".into()];
-    assert!(!is_attended_agent_oauth_session(&app_session));
 }
 
 #[test]

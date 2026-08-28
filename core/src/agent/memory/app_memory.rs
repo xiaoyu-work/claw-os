@@ -59,7 +59,7 @@ pub const MAX_TAG_CHARS: usize = 48;
 /// Validation regex for a `source` value: kebab/snake/lowercase with
 /// digits, 1–64 chars, must start with a letter. Matches the existing
 /// app id rules ([`crate::caps::manifest::Manifest`]).
-fn validate_source(source: &str) -> Result<(), String> {
+pub(crate) fn validate_source(source: &str) -> Result<(), String> {
     if source.is_empty() || source.len() > 64 {
         return Err(format!(
             "memory: source must be 1..=64 characters (got {})",

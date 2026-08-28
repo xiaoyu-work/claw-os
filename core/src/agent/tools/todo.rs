@@ -38,6 +38,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 /// Windows-reserved device names. These names — regardless of suffix
@@ -344,11 +345,58 @@ impl Tool for Todo {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_memory(
+            [
+                crate::caps::Verb::MEMORY_READ,
+                crate::caps::Verb::MEMORY_WRITE,
+            ],
+            MemoryExposure::SystemAgent,
+        )
+    }
+
     async fn exec(&self, input: serde_json::Value) -> ToolResult {
         let parsed: TodoInput = match serde_json::from_value(input) {
             Ok(p) => p,
             Err(e) => return ToolResult::err(format!("invalid todo input: {e}")),
         };
+        if let Err(error) = self.store.session_file(&parsed.session_id) {
+            return ToolResult::err(error);
+        }
+        let required_verb = match parsed.command.as_str() {
+            "read" => crate::caps::Verb::MEMORY_READ,
+            "write" => {
+                if let Err(error) = parsed
+                    .items
+                    .as_ref()
+                    .map(|items| TodoList {
+                        items: items.clone(),
+                    })
+                    .unwrap_or_default()
+                    .validate()
+                {
+                    return ToolResult::err(error);
+                }
+                crate::caps::Verb::MEMORY_WRITE
+            }
+            "set_status" => {
+                if parsed.id.as_deref().is_none_or(|id| id.trim().is_empty()) {
+                    return ToolResult::err("set_status requires 'id'");
+                }
+                if parsed.status.is_none() {
+                    return ToolResult::err("set_status requires 'status'");
+                }
+                crate::caps::Verb::MEMORY_WRITE
+            }
+            "clear" => crate::caps::Verb::MEMORY_WRITE,
+            other => return ToolResult::err(format!("unknown command: {other}")),
+        };
+        if let Err(denial) = crate::agent::tools::require_memory(
+            required_verb,
+            crate::agent::tools::MemoryScope::SystemAgent,
+        ) {
+            return ToolResult::err(denial.to_string());
+        }
         match parsed.command.as_str() {
             "read" => match self.store.read(&parsed.session_id) {
                 Ok(list) => ToolResult::ok(render_list(&list)),

@@ -192,6 +192,7 @@ fn run_clears_gate_with_sys_observe_only() {
         app_id: None,
         pending_bind: false,
         start_time_ticks: None,
+        client: crate::session::SessionClient::default(),
     };
     register_session(info).expect("register session");
     env::set_var("COS_SESSION", &session_id);

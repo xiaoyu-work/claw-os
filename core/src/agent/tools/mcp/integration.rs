@@ -40,6 +40,7 @@ use tokio::time::timeout;
 use super::client::{ClientError, McpClient};
 use super::protocol::{ClientCapabilities, Implementation, ToolDescriptor, PROTOCOL_VERSION};
 use super::transport::StdioTransport;
+use crate::agent::tools::exposure::{ToolExposure, ToolTransport};
 use crate::agent::tools::registry::ToolRegistry;
 use crate::agent::tools::{Tool, ToolResult};
 
@@ -157,6 +158,7 @@ pub struct McpRemoteTool {
     remote_name: String,
     client: Arc<McpClient>,
     timeout: Duration,
+    exposure: ToolExposure,
 }
 
 impl McpRemoteTool {
@@ -165,6 +167,16 @@ impl McpRemoteTool {
         descriptor: ToolDescriptor,
         client: Arc<McpClient>,
         timeout: Duration,
+    ) -> Self {
+        Self::new_with_transport(prefix, descriptor, client, timeout, ToolTransport::McpStdio)
+    }
+
+    fn new_with_transport(
+        prefix: &str,
+        descriptor: ToolDescriptor,
+        client: Arc<McpClient>,
+        timeout: Duration,
+        transport: ToolTransport,
     ) -> Self {
         let name = format!("mcp_{prefix}_{}", descriptor.name);
         let description = descriptor.description.unwrap_or_else(|| {
@@ -188,6 +200,9 @@ impl McpRemoteTool {
             remote_name: descriptor.name,
             client,
             timeout,
+            exposure: ToolExposure::always()
+                .requiring_transport(transport)
+                .requiring_extension(format!("mcp:{prefix}")),
         }
     }
 }
@@ -204,6 +219,10 @@ impl Tool for McpRemoteTool {
 
     fn input_schema(&self) -> Value {
         self.schema.clone()
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        self.exposure.clone()
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -473,7 +492,13 @@ pub async fn attach_server(
 
     let mut registered = 0usize;
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
+        let tool = McpRemoteTool::new_with_transport(
+            &spec.name,
+            descriptor,
+            client.clone(),
+            timeout_dur,
+            ToolTransport::McpStdio,
+        );
         registry.register(Arc::new(tool));
         registered += 1;
     }
@@ -548,7 +573,13 @@ pub async fn attach_http_server(
 
     let mut registered = 0usize;
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new(&spec.name, descriptor, client.clone(), timeout_dur);
+        let tool = McpRemoteTool::new_with_transport(
+            &spec.name,
+            descriptor,
+            client.clone(),
+            timeout_dur,
+            ToolTransport::McpHttp,
+        );
         registry.register(Arc::new(tool));
         registered += 1;
     }

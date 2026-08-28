@@ -493,6 +493,11 @@ fn submit_job(
         // exactly-named credentials. Only believed because `clawd`
         // writes this record as root.
         meta.origin = Some(crate::session::SessionOrigin::TriggerDelegation);
+        meta.client = crate::session::SessionClient::new(
+            crate::session::SessionSource::ScheduledTrigger,
+            false,
+            true,
+        );
     })
     {
         let _ = crate::session::end(&session, crate::session::Status::Failed);
@@ -509,12 +514,19 @@ fn submit_job(
             return Err(format!("open agent job store: {error}"));
         }
     };
-    let job = match store.submit(
+    let job = match store.submit_with_context_and_client(
         prompt,
+        None,
+        None,
         Some(session.as_str().to_string()),
         rule.max_turns,
         Some(owner.uid),
         Some(owner.home.to_string_lossy().into_owned()),
+        crate::session::SessionClient::new(
+            crate::session::SessionSource::ScheduledTrigger,
+            false,
+            true,
+        ),
     ) {
         Ok(job) => job,
         Err(error) => {

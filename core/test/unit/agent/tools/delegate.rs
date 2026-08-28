@@ -139,7 +139,9 @@ async fn child_inherits_parent_guardrails() {
             // echo was denied by parent → child must not have it
             let echo_present = child.get_unfiltered("echo").is_some();
             let now_present = child.get_unfiltered("now").is_some();
-            (echo_present, now_present, child.guardrails().clone())
+            let child_g =
+                child_guardrails(g.as_ref(), &["echo".to_string(), "now".to_string()]);
+            (echo_present, now_present, child_g)
         })
         .await;
     let (echo_present, now_present, child_g) = observed;

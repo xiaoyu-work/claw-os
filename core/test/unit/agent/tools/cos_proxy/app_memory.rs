@@ -5,6 +5,51 @@ fn tool() -> CosAppMemoryTool {
     CosAppMemoryTool::new(MemoryDb::open_in_memory().unwrap())
 }
 
+fn memory_read_session(scope: crate::caps::Scope, app_id: Option<&str>) -> crate::proc::SessionInfo {
+    crate::proc::SessionInfo {
+        session_id: "app-memory-session".to_string(),
+        pid: std::process::id(),
+        command: vec!["test".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: None,
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(crate::caps::CapSet::from_caps([crate::caps::Cap::new(
+            crate::caps::Verb::MEMORY_READ,
+            scope,
+        )])),
+        transient_caps: None,
+        role: None,
+        app_id: app_id.map(str::to_string),
+        pending_bind: false,
+        start_time_ticks: None,
+        client: crate::session::SessionClient::new(
+            if app_id.is_some() {
+                crate::session::SessionSource::App
+            } else {
+                crate::session::SessionSource::BrokerTask
+            },
+            false,
+            true,
+        ),
+    }
+}
+
+async fn exec(tool: &CosAppMemoryTool, input: Value) -> ToolResult {
+    crate::proc::with_trusted_session_override(
+        memory_read_session(crate::caps::Scope::Wild, None),
+        tool.exec(input),
+    )
+    .await
+}
+
 /// `exec` wraps every payload in the untrusted-memory boundary
 /// (prompt-injection defense), so the JSON body is no longer the
 /// whole string. Pull the object back out for assertions.
@@ -62,7 +107,7 @@ async fn list_returns_recent_rows_across_sources() {
         ],
     )
     .await;
-    let r = t.exec(json!({"command": "list"})).await;
+    let r = exec(&t, json!({"command": "list"})).await;
     assert!(!r.is_error, "list failed: {}", r.content);
     assert!(r.content.contains("calendar"), "content: {}", r.content);
     assert!(r.content.contains("email"), "content: {}", r.content);
@@ -79,7 +124,7 @@ async fn list_filters_by_source() {
         ],
     )
     .await;
-    let r = t.exec(json!({"command": "list", "source": "calendar"})).await;
+    let r = exec(&t, json!({"command": "list", "source": "calendar"})).await;
     assert!(!r.is_error);
     assert!(r.content.contains("Dentist"));
     assert!(!r.content.contains("Quarterly report"));
@@ -96,7 +141,7 @@ async fn search_finds_keyword_across_sources() {
         ],
     )
     .await;
-    let r = t.exec(json!({"command": "search", "query": "hotel"})).await;
+    let r = exec(&t, json!({"command": "search", "query": "hotel"})).await;
     assert!(!r.is_error, "search failed: {}", r.content);
     assert!(r.content.contains("Hilton"), "content: {}", r.content);
 }
@@ -112,9 +157,11 @@ async fn kind_filter_post_filters_results() {
         ],
     )
     .await;
-    let r = t
-        .exec(json!({"command": "list", "source": "calendar", "kind": "preference"}))
-        .await;
+    let r = exec(
+        &t,
+        json!({"command": "list", "source": "calendar", "kind": "preference"}),
+    )
+    .await;
     assert!(!r.is_error);
     assert!(r.content.contains("dislike"), "content: {}", r.content);
     assert!(!r.content.contains("appointment"), "content: {}", r.content);
@@ -125,11 +172,101 @@ async fn show_returns_one_row_by_id() {
     let t = tool();
     seed(&t, &[("calendar", "Dentist Tue 10am", Some("event"))]).await;
     // Roundtrip via list to grab an id without depending on insert ordering.
-    let listed = t.exec(json!({"command": "list", "source": "calendar"})).await;
+    let listed = exec(&t, json!({"command": "list", "source": "calendar"})).await;
     assert!(!listed.is_error, "list failed: {}", listed.content);
     let v: Value = parse_untrusted_json(&listed.content);
     let id = v["rows"][0]["id"].as_i64().expect("row id");
-    let r = t.exec(json!({"command": "show", "id": id})).await;
+    let r = exec(&t, json!({"command": "show", "id": id})).await;
     assert!(!r.is_error);
     assert!(r.content.contains("Dentist"));
+}
+
+#[tokio::test]
+async fn app_scoped_grant_cannot_read_other_sources_or_global_rows() {
+    let _lock = crate::test_env::lock_env();
+    let caps_dir = tempfile::tempdir().unwrap();
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let _caps =
+        crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", caps_dir.path());
+    let db = MemoryDb::open_in_memory().unwrap();
+    let tool = CosAppMemoryTool::new(db.clone());
+    seed(
+        &tool,
+        &[
+            ("calendar", "calendar-only", Some("event")),
+            ("email", "email-only", Some("event")),
+        ],
+    )
+    .await;
+    let email_id = app_memory::list(&db, Some("email"), 10).unwrap()[0].id;
+    let mut registry = crate::agent::tools::registry::ToolRegistry::new();
+    registry.register(std::sync::Arc::new(tool));
+    registry.register(std::sync::Arc::new(
+        crate::agent::tools::cos_proxy::recall::CosRecallTool::new(db.clone()),
+    ));
+    registry.register(std::sync::Arc::new(
+        crate::agent::tools::cos_proxy::recall_semantic::CosRecallSemanticTool::new(
+            std::sync::Arc::new(
+                crate::agent::memory::semantic::SemanticStore::open_in_memory(None).unwrap(),
+            ),
+        ),
+    ));
+    let session = memory_read_session(crate::caps::Scope::self_ref("calendar"), Some("calendar"));
+    let context = crate::agent::tools::exposure::ToolExposureContext::from_trusted_session(
+        &session,
+        None,
+        None,
+        1000,
+        crate::agent::tools::exposure::ExecutionHost::Direct,
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
+
+    assert!(registry.get_for(&context, "cos_app_memory").is_some());
+    assert!(registry.get_for(&context, "cos_recall").is_none());
+    assert!(registry
+        .get_for(&context, "cos_recall_semantic")
+        .is_none());
+    let (own, other, global, show_other) =
+        crate::proc::with_trusted_session_override(session, async {
+            let own = registry
+                .execute(
+                    &context,
+                    "cos_app_memory",
+                    json!({"command": "list", "source": "calendar"}),
+                    "test",
+                )
+                .await;
+            let other = registry
+                .execute(
+                    &context,
+                    "cos_app_memory",
+                    json!({"command": "list", "source": "email"}),
+                    "test",
+                )
+                .await;
+            let global = registry
+                .execute(
+                    &context,
+                    "cos_app_memory",
+                    json!({"command": "list"}),
+                    "test",
+                )
+                .await;
+            let show_other = registry
+                .execute(
+                    &context,
+                    "cos_app_memory",
+                    json!({"command": "show", "id": email_id}),
+                    "test",
+                )
+                .await;
+            (own, other, global, show_other)
+        })
+        .await;
+    assert!(!own.is_error, "{}", own.content);
+    assert!(own.content.contains("calendar-only"));
+    for denied in [other, global, show_other] {
+        assert!(denied.is_error);
+        assert!(!denied.content.contains("email-only"));
+    }
 }

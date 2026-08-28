@@ -25,6 +25,7 @@ fn meta_round_trip_default() {
     assert!(back.budget.tokens.is_none());
     assert!(back.budget.wall_seconds.is_none());
     assert!(back.budget.mutations.is_none());
+    assert_eq!(back.client, SessionClient::default());
 }
 
 #[test]
@@ -36,6 +37,7 @@ fn meta_round_trip_full() {
         credential_tier: Some(Role::Automator.credential_tier()),
         owner_uid: Some(1000),
         origin: Some(SessionOrigin::CronDelegation),
+        client: SessionClient::new(SessionSource::ScheduledTrigger, false, true),
         parent_session: Some(SessionId::generate()),
         status: Status::Running,
         budget: Budget {
@@ -50,6 +52,7 @@ fn meta_round_trip_full() {
     let json = serde_json::to_string_pretty(&m).unwrap();
     let back: SessionMeta = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
+    assert_eq!(back.client.source, SessionSource::ScheduledTrigger);
 }
 
 #[test]

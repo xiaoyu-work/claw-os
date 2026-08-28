@@ -1492,8 +1492,17 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
-pub(crate) fn run_agent_oauth_login(args: &[String]) -> Result<Value, String> {
-    oauth_login::cmd_agent_oauth_login(args)
+pub(crate) use oauth_login::AgentOauthAuthorization;
+
+pub(crate) fn authorize_agent_oauth_login() -> Result<AgentOauthAuthorization, String> {
+    oauth_login::authorize_agent_oauth_login()
+}
+
+pub(crate) fn run_agent_oauth_login_authorized(
+    args: &[String],
+    authorization: AgentOauthAuthorization,
+) -> Result<Value, String> {
+    oauth_login::run_agent_oauth_login_authorized(args, authorization)
 }
 
 // ===========================================================================

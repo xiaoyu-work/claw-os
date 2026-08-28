@@ -410,6 +410,11 @@ impl SchedulerSession {
             app_id: None,
             pending_bind: false,
             start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            client: crate::session::SessionClient::new(
+                crate::session::SessionSource::System,
+                false,
+                true,
+            ),
         };
         crate::proc::register_session(info)?;
         Ok(Self { id })

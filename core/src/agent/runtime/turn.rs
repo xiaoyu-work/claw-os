@@ -17,6 +17,7 @@ use crate::agent::llm::{
 use crate::agent::runtime::hooks::{self, HookContext};
 use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
+use crate::agent::tools::exposure::ToolExposureContext;
 use crate::agent::tools::{registry::ToolRegistry, ToolResult};
 
 /// Outcome of one turn.
@@ -99,12 +100,15 @@ pub async fn run_turn(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    let exposure =
+        ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive());
     run_turn_inner(
         provider,
         model,
         system,
         messages,
         tools,
+        &exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -125,6 +129,7 @@ pub(crate) async fn run_turn_interruptible(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -140,6 +145,7 @@ pub(crate) async fn run_turn_interruptible(
         system,
         messages,
         tools,
+        exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -171,12 +177,15 @@ pub async fn run_final_turn(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    let exposure =
+        ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive());
     run_turn_inner(
         provider,
         model,
         system,
         messages,
         tools,
+        &exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -197,6 +206,7 @@ pub(crate) async fn run_final_turn_interruptible(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -212,6 +222,7 @@ pub(crate) async fn run_final_turn_interruptible(
         system,
         messages,
         tools,
+        exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -232,6 +243,7 @@ async fn run_turn_inner(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -375,6 +387,7 @@ async fn run_turn_inner(
     // ordering guarantees.
     let (result_blocks, pending_stop) = dispatch_calls(
         tools,
+        exposure,
         hook_ctx,
         &tool_calls,
         session_id,
@@ -437,12 +450,15 @@ pub async fn run_turn_streaming(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    let exposure =
+        ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive());
     run_turn_streaming_inner(
         provider,
         model,
         system,
         messages,
         tools,
+        &exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -463,6 +479,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -478,6 +495,7 @@ pub(crate) async fn run_turn_streaming_interruptible(
         system,
         messages,
         tools,
+        exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -507,12 +525,15 @@ pub async fn run_final_turn_streaming(
     hook_ctx: Option<&HookContext>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<TurnReport, super::loop_::AgentError> {
+    let exposure =
+        ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive());
     run_turn_streaming_inner(
         provider,
         model,
         system,
         messages,
         tools,
+        &exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -533,6 +554,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -548,6 +570,7 @@ pub(crate) async fn run_final_turn_streaming_interruptible(
         system,
         messages,
         tools,
+        exposure,
         llm_tools,
         max_tokens,
         temperature,
@@ -568,6 +591,7 @@ async fn run_turn_streaming_inner(
     system: &str,
     messages: &mut Vec<Message>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     llm_tools: &[LlmTool],
     max_tokens: u32,
     temperature: f32,
@@ -669,6 +693,7 @@ async fn run_turn_streaming_inner(
 
     let (result_blocks, pending_stop) = dispatch_calls(
         tools,
+        exposure,
         hook_ctx,
         &tool_calls,
         session_id,
@@ -737,8 +762,18 @@ fn extract_text(response: &ChatResponse) -> String {
 /// model omits the id the tool defaults to `"default"` and silently
 /// writes to the wrong list (see `tools::todo`). When the runtime knows
 /// the session id we override whatever the model supplied.
-fn effective_tool_input(call: &ToolCall, session_id: Option<&str>) -> serde_json::Value {
+fn effective_tool_input(
+    call: &ToolCall,
+    session_id: Option<&str>,
+    exposure: &ToolExposureContext,
+) -> serde_json::Value {
     const SESSION_SCOPED_TOOLS: &[&str] = &["cos_todo"];
+    let session_id = session_id
+        .filter(|value| !value.is_empty())
+        .or_else(|| exposure.conversation_session_id())
+        .or_else(|| {
+            (!exposure.authority_session_id().is_empty()).then(|| exposure.authority_session_id())
+        });
     match session_id {
         Some(sid) if !sid.is_empty() && SESSION_SCOPED_TOOLS.contains(&call.name.as_str()) => {
             let mut input = call.input.clone();
@@ -756,70 +791,18 @@ fn effective_tool_input(call: &ToolCall, session_id: Option<&str>) -> serde_json
 
 async fn dispatch_tool(
     registry: &ToolRegistry,
+    exposure: &ToolExposureContext,
     call: &ToolCall,
     session_id: Option<&str>,
 ) -> ToolResult {
-    // Per-call approval gate. Skip the await entirely when the tool
-    // is not configured under any of the three sets. `is_classified`
-    // is one O(1) HashSet lookup that covers
-    // `auto_approve ∪ auto_deny ∪ dangerous` — vs. three
-    // separate `BTreeSet::contains` calls on the hot path.
-    let approval = registry.approval();
-    if approval.is_classified(&call.name) {
-        let outcome = approval
-            .evaluate(&call.name, &call.input, "policy: dangerous_tools")
-            .await;
-        match outcome {
-            crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {
-                // fall through to tool dispatch
-            }
-            crate::agent::runtime::approval::ApprovalOutcome::Denied { reason } => {
-                return ToolResult::err(format!(
-                    "approval denied for `{}`: {}",
-                    call.name,
-                    reason.unwrap_or_else(|| "no reason".to_string())
-                ));
-            }
-            crate::agent::runtime::approval::ApprovalOutcome::Deferred { prompt } => {
-                // Headless / non-interactive deferral. Surfaces back
-                // to the model as an error tool_result so it can ask
-                // the user (or pick a different approach). The runtime
-                // does NOT block — that would deadlock under
-                // `ask_blocking` and there's nowhere to send a prompt.
-                return ToolResult::err(format!(
-                    "approval pending for `{}`: {}",
-                    call.name,
-                    prompt.unwrap_or_else(|| "user approval required".to_string())
-                ));
-            }
-        }
-    }
-
-    match registry.get(&call.name) {
-        Some(tool) => {
-            // Scope the task-locals that `cos_delegate` (and any other
-            // policy-aware tool) reads to discover the parent registry's
-            // current guardrails + approval gate. Without this scope a
-            // child agent spawned via `cos_delegate` would run under
-            // permissive defaults regardless of the parent's deny rules
-            // or approval policy — a privilege-escalation bug at the
-            // delegate boundary.
-            let g = registry.guardrails().clone();
-            let a = registry.approval().clone();
-            crate::agent::tools::delegate::PARENT_GUARDRAILS
-                .scope(
-                    g,
-                    crate::agent::tools::delegate::PARENT_APPROVAL
-                        .scope(a, tool.exec(effective_tool_input(call, session_id))),
-                )
-                .await
-        }
-        None => ToolResult::err(format!(
-            "unknown tool '{}'. registered: {:?}",
-            call.name,
-            registry.names()
-        )),
-    }
+    registry
+        .execute(
+            exposure,
+            &call.name,
+            effective_tool_input(call, session_id, exposure),
+            "policy: dangerous_tools",
+        )
+        .await
 }
 
 /// Outcome of a single dispatch: the (possibly-overridden) call, the
@@ -880,6 +863,7 @@ async fn wait_progress_ready(
 /// produce a deterministic `pending_stop` order.
 async fn dispatch_one(
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     hook_ctx: Option<&HookContext>,
     call: &ToolCall,
     session_id: Option<&str>,
@@ -901,7 +885,11 @@ async fn dispatch_one(
     let result = if let Some(reason) = decision_error {
         ToolResult::err(reason)
     } else {
-        await_interruptible(interrupt, dispatch_tool(tools, &effective_call, session_id)).await?
+        await_interruptible(
+            interrupt,
+            dispatch_tool(tools, exposure, &effective_call, session_id),
+        )
+        .await?
     };
     let latency_ms = started.elapsed().as_millis() as u64;
 
@@ -940,6 +928,7 @@ async fn dispatch_one(
 ///   the old serial loop.
 async fn dispatch_calls(
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     hook_ctx: Option<&HookContext>,
     tool_calls: &[ToolCall],
     session_id: Option<&str>,
@@ -952,7 +941,7 @@ async fn dispatch_calls(
     let mut parallel: Vec<usize> = Vec::new();
     let mut serial: Vec<usize> = Vec::new();
     for (i, call) in tool_calls.iter().enumerate() {
-        if tools.is_parallel_safe(&call.name) {
+        if tools.is_parallel_safe_for(exposure, &call.name) {
             parallel.push(i);
         } else {
             serial.push(i);
@@ -970,8 +959,10 @@ async fn dispatch_calls(
         let futs = parallel.iter().map(|&i| {
             let call = &tool_calls[i];
             async move {
-                let outcome =
-                    dispatch_one(tools, hook_ctx, call, session_id, progress, interrupt).await?;
+                let outcome = dispatch_one(
+                    tools, exposure, hook_ctx, call, session_id, progress, interrupt,
+                )
+                .await?;
                 Ok::<_, super::loop_::AgentError>((i, outcome))
             }
         });
@@ -990,6 +981,7 @@ async fn dispatch_calls(
     for i in serial {
         let outcome = dispatch_one(
             tools,
+            exposure,
             hook_ctx,
             &tool_calls[i],
             session_id,

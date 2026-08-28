@@ -181,6 +181,8 @@ fn worker_failures_are_journalled_as_metadata() {
     assert_eq!(record["job_id"], json!("job-1"));
     assert_eq!(record["provider"], json!("anthropic"));
     assert_eq!(record["error"]["bytes"], json!(error.len()));
+    assert_eq!(record["client_source"], json!("unknown"));
+    assert_eq!(record["attended"], json!(false));
     assert!(
         !rendered.contains("summarise"),
         "the prompt is never journalled: {rendered}"

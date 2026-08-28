@@ -478,6 +478,28 @@ where
     if assignment.grant.claims.session_id != assignment.job.session_id {
         return Err("agentd grant does not cover the assigned session".to_string());
     }
+    let session_client = assignment
+        .session
+        .as_ref()
+        .map(|session| session.client)
+        .unwrap_or_default();
+    if assignment.grant.claims.client != session_client {
+        return Err("agentd grant does not cover the assigned session client".to_string());
+    }
+    if assignment.grant.claims.presence != assignment.presence {
+        return Err("agentd grant does not cover the assigned presence lease".to_string());
+    }
+    let capability_generation = assignment
+        .session
+        .as_ref()
+        .and_then(|session| session.caps.as_ref())
+        .map(crate::agent::tools::exposure::capability_generation)
+        .unwrap_or_else(|| {
+            crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
+        });
+    if assignment.grant.claims.capability_generation != capability_generation {
+        return Err("agentd grant does not cover the assigned capability generation".to_string());
+    }
     if !assignment
         .grant
         .claims
@@ -643,6 +665,7 @@ async fn execute(
         branch_context: job.branch_context,
         session_id: job.session_id,
         max_turns: job.max_turns,
+        presence: assignment.presence,
     };
 
     let home = std::path::PathBuf::from(&job.owner_home);

@@ -46,3 +46,35 @@ async fn rejects_invalid_timeout_before_authorization() {
     assert!(result.is_error);
     assert!(result.content.contains("between 30 and 900"));
 }
+
+fn fake_authorized_runner(
+    args: Vec<String>,
+    _authorization: crate::credential::AgentOauthAuthorization,
+) -> Result<Value, String> {
+    assert!(
+        crate::agent::tools::exposure::current().is_none(),
+        "spawn_blocking must not be expected to inherit Tokio task locals"
+    );
+    Ok(json!({"authorized": true, "provider": args[0]}))
+}
+
+#[tokio::test]
+async fn direct_cli_and_web_capture_authorization_before_spawn_blocking() {
+    for source in [
+        crate::session::SessionSource::LocalCli,
+        crate::session::SessionSource::LocalWeb,
+    ] {
+        let context = crate::agent::tools::exposure::ToolExposureContext::isolated(
+            crate::agent::tools::guardrails::Guardrails::permissive(),
+        )
+        .with_identity("oauth-session", 1000, source)
+        .with_presence(true, true);
+        let result = crate::agent::tools::exposure::scope(
+            context,
+            execute_with(json!({"provider": "google"}), fake_authorized_runner),
+        )
+        .await;
+        assert!(!result.is_error, "{source:?}: {}", result.content);
+        assert!(result.content.contains("\"authorized\":true"));
+    }
+}

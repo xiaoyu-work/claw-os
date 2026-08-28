@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::notes::NotesStore;
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 /// `cos_memory` LLM tool. Holds its own `NotesStore` so tests can inject a
@@ -82,6 +83,16 @@ impl Tool for CosMemoryTool {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_memory(
+            [
+                crate::caps::Verb::MEMORY_READ,
+                crate::caps::Verb::MEMORY_WRITE,
+            ],
+            MemoryExposure::SystemAgent,
+        )
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let command = match input.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -101,6 +112,26 @@ impl Tool for CosMemoryTool {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
+        let required_verb = match command.as_str() {
+            "read" | "list" => crate::caps::Verb::MEMORY_READ,
+            "write" | "append" | "delete" => crate::caps::Verb::MEMORY_WRITE,
+            other => {
+                return ToolResult::err(format!(
+                    "unknown command '{other}'. valid: read|write|append|list|delete"
+                ))
+            }
+        };
+        if command != "list" {
+            if let Err(error) = crate::agent::memory::notes::validate_name(&name) {
+                return ToolResult::err(error);
+            }
+        }
+        if let Err(denial) = crate::agent::tools::require_memory(
+            required_verb,
+            crate::agent::tools::MemoryScope::SystemAgent,
+        ) {
+            return ToolResult::err(denial.to_string());
+        }
 
         // Notes I/O is sync + filesystem — push to blocking pool. Clone the
         // store so the closure can be 'static.
@@ -127,9 +158,7 @@ impl Tool for CosMemoryTool {
                     store.delete(&name)?;
                     Ok(json!({ "name": name, "deleted": true }))
                 }
-                other => Err(format!(
-                    "unknown command '{other}'. valid: read|write|append|list|delete"
-                )),
+                other => Err(format!("unexpected validated command '{other}'")),
             }
         })
         .await;

@@ -107,6 +107,11 @@ pub struct SessionInfo {
     /// at spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time_ticks: Option<u64>,
+    /// Authenticated frontend and user-presence metadata. This is copied from
+    /// root-owned durable session metadata for broker tasks, or set by a
+    /// trusted local entry point for in-process runtimes.
+    #[serde(default)]
+    pub client: crate::session::SessionClient,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -587,6 +592,19 @@ pub fn swap_app_session_transient_caps(
 /// crashed. See [`is_alive`] for the EPERM rationale.
 pub fn is_pid_alive(pid: u32) -> bool {
     is_alive(pid)
+}
+
+pub(crate) fn process_identity_is_live(pid: u32, start_time_ticks: u64, owner_uid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        read_start_time_ticks(pid) == Some(start_time_ticks)
+            && read_real_uid(pid) == Some(owner_uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = (pid, start_time_ticks, owner_uid);
+        false
+    }
 }
 
 /// Cross-uid safe aliveness check. `kill(pid, 0)` alone returns
@@ -1362,6 +1380,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         app_id: None,
         pending_bind: false,
         start_time_ticks,
+        client: spawned_child_client(&parent_info),
     };
 
     let info_for_registry = info.clone();
@@ -1390,6 +1409,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     if let Some(g) = group {
         result["group"] = json!(g);
     }
+
     if let Some(p) = parent {
         result["parent"] = json!(p);
     }
@@ -1423,6 +1443,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     }
 
     Ok(result)
+}
+
+fn spawned_child_client(_parent: &SessionInfo) -> crate::session::SessionClient {
+    crate::session::SessionClient::new(
+        crate::session::SessionSource::ChildProcess,
+        false,
+        true,
+    )
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {

@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::semantic::{SemanticHit, SemanticStore};
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 const DEFAULT_LIMIT: usize = 10;
@@ -84,6 +85,13 @@ impl Tool for CosRecallSemanticTool {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_memory(
+            [crate::caps::Verb::MEMORY_READ],
+            MemoryExposure::SystemAgentOrSession,
+        )
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let command = match input.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -96,22 +104,45 @@ impl Tool for CosRecallSemanticTool {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_string();
-        let session_id = input
+        let requested_session_id = input
             .get("session_id")
             .and_then(Value::as_str)
-            .map(normalise_namespace);
+            .map(str::to_string);
         let limit = input
             .get("limit")
             .and_then(Value::as_u64)
             .map(|n| n as usize)
             .unwrap_or(DEFAULT_LIMIT)
             .clamp(1, MAX_LIMIT);
+        if !matches!(command.as_str(), "search" | "count") {
+            return ToolResult::err(format!(
+                "unknown command '{command}'. valid: search|count"
+            ));
+        }
+        if command == "search" && query.is_empty() {
+            return ToolResult::err("'search' requires non-empty 'query'");
+        }
+        let scope = match requested_session_id.as_deref() {
+            Some(session_id) => {
+                let scope_id = session_id.strip_prefix("session/").unwrap_or(session_id);
+                if let Err(error) =
+                    crate::agent::tools::validate_memory_scope(scope_id, "session_id")
+                {
+                    return ToolResult::err(error);
+                }
+                crate::agent::tools::MemoryScope::Session(scope_id)
+            }
+            None => crate::agent::tools::MemoryScope::SystemAgent,
+        };
+        if let Err(denial) =
+            crate::agent::tools::require_memory(crate::caps::Verb::MEMORY_READ, scope)
+        {
+            return ToolResult::err(denial.to_string());
+        }
+        let session_id = requested_session_id.as_deref().map(normalise_namespace);
 
         match command.as_str() {
             "search" => {
-                if query.is_empty() {
-                    return ToolResult::err("'search' requires non-empty 'query'".to_string());
-                }
                 let ns = session_id.as_deref();
                 match self.store.search(ns, &query, limit).await {
                     Ok(hits) => {
@@ -142,9 +173,7 @@ impl Tool for CosRecallSemanticTool {
                     Err(e) => ToolResult::err(format!("cos_recall_semantic count: {e}")),
                 }
             }
-            other => ToolResult::err(format!(
-                "unknown command '{other}'. valid: search|count"
-            )),
+            other => ToolResult::err(format!("unexpected validated command '{other}'")),
         }
     }
 }

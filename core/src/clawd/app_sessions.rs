@@ -286,6 +286,7 @@ pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, B
         app_id: Some(app_id.clone()),
         pending_bind: true,
         start_time_ticks: None,
+        client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
     };
 
     let proc_dir = install_session(uid, home, info).await?;
@@ -335,6 +336,7 @@ pub async fn register_native(params: Value, client: &ClientIdentity) -> Result<V
         app_id: Some(app_id.clone()),
         pending_bind: true,
         start_time_ticks: None,
+        client: crate::session::SessionClient::new(crate::session::SessionSource::App, false, true),
     };
     let proc_dir = install_session(uid, home, info).await?;
     let handle = issue_launch_grant(&session_id, Some(&app_id), uid, &launcher, &caps)?;
@@ -377,6 +379,11 @@ pub async fn register_mcp(params: Value, client: &ClientIdentity) -> Result<Valu
         app_id: None,
         pending_bind: true,
         start_time_ticks: None,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::ExternalMcp,
+            false,
+            true,
+        ),
     };
     let proc_dir = install_session(uid, home, info).await?;
     let handle = issue_launch_grant(&session_id, None, uid, &launcher, &caps)?;

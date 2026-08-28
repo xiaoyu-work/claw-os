@@ -244,6 +244,38 @@ fn submit_round_trips_owner_uid_and_home() {
 }
 
 #[test]
+fn submit_snapshots_trusted_client_metadata() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let client = crate::session::SessionClient::new(
+        crate::session::SessionSource::BrokerTask,
+        true,
+        true,
+    );
+    let job = store
+        .submit_with_context_and_client(
+            "hi".into(),
+            None,
+            None,
+            Some("session-a".into()),
+            None,
+            Some(1001),
+            Some("/home/alice".into()),
+            client,
+        )
+        .unwrap();
+    let persisted = crate::session::SessionClient {
+        attended: false,
+        ..client
+    };
+    assert_eq!(job.client, persisted);
+
+    let path = dir.path().join("pending").join(format!("{}.json", job.id));
+    let parsed: Job = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+    assert_eq!(parsed.client, persisted);
+}
+
+#[test]
 fn legacy_job_file_without_owner_fields_still_loads() {
     // Older clawd installs wrote Job JSON without owner_uid /
     // owner_home. The new fields are #[serde(default)] so those
@@ -264,6 +296,7 @@ fn legacy_job_file_without_owner_fields_still_loads() {
     assert_eq!(parsed.id, id);
     assert!(parsed.owner_uid.is_none());
     assert!(parsed.owner_home.is_none());
+    assert_eq!(parsed.client, crate::session::SessionClient::default());
 }
 #[test]
 fn locate_finds_job_in_pending_bucket() {

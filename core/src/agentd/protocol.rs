@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -163,6 +163,10 @@ pub struct Assignment {
     /// session metadata and installed in the worker as a task-local.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionInfo>,
+    /// Ephemeral, broker-authenticated proof that the submitting client was
+    /// recently present. Never persisted in the task/session record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub presence: Option<crate::session::SessionPresence>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

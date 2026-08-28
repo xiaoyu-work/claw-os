@@ -71,7 +71,10 @@ pub use gc::{archive_path, archive_root, gc_archive, is_archived, GcStats};
 pub use id::{InvalidSessionId, SessionId};
 pub use inverse::{blob_path, delete_blob, inverse_root, new_blob_id, read_blob, write_blob};
 pub use lease::{current as current_lease, try_acquire, AcquireError, LeaseGuard};
-pub use meta::{Budget, Lease, SessionMeta, SessionOrigin, Status};
+pub use meta::{
+    Budget, Lease, SessionClient, SessionMeta, SessionOrigin, SessionPresence, SessionSource,
+    Status,
+};
 pub use mutation::{Mutation, MutationRecord};
 pub use recorder::{record_fs_delete, record_fs_rename, record_fs_write};
 pub use rollback::{rollback, Outcome as RollbackOutcome, Status as RollbackStatus};

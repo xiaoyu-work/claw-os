@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 
 use crate::agent::memory::app_memory::{self, AppMemoryRow};
 use crate::agent::memory::sqlite_fts::MemoryDb;
+use crate::agent::tools::exposure::{MemoryExposure, ToolExposure};
 use crate::agent::tools::{Tool, ToolResult};
 
 const DEFAULT_LIST_LIMIT: usize = 20;
@@ -110,6 +111,13 @@ impl Tool for CosAppMemoryTool {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_memory(
+            [crate::caps::Verb::MEMORY_READ],
+            MemoryExposure::SystemAgentOrApp,
+        )
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let command = match input.get("command").and_then(Value::as_str) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -135,6 +143,51 @@ impl Tool for CosAppMemoryTool {
         let id = input.get("id").and_then(Value::as_i64);
         let limit_raw = input.get("limit").and_then(Value::as_u64).map(|n| n as usize);
 
+        match command.as_str() {
+            "list" => {
+                if let Err(error) = authorize_source(source.as_deref()) {
+                    return ToolResult::err(error);
+                }
+            }
+            "search" => {
+                if query.is_empty() {
+                    return ToolResult::err("'search' requires non-empty 'query'");
+                }
+                if let Err(error) = authorize_source(source.as_deref()) {
+                    return ToolResult::err(error);
+                }
+            }
+            "show" => {
+                let Some(id) = id else {
+                    return ToolResult::err("'show' requires 'id'");
+                };
+                let db = self.db.clone();
+                let row = match tokio::task::spawn_blocking(move || app_memory::show(&db, id)).await
+                {
+                    Ok(Ok(row)) => row,
+                    Ok(Err(error)) => return ToolResult::err(error.to_string()),
+                    Err(error) => {
+                        return ToolResult::err(format!("cos_app_memory panicked: {error}"))
+                    }
+                };
+                let authorization = match row.as_ref() {
+                    Some(row) => authorize_source(Some(&row.source)),
+                    None => authorize_source(None),
+                };
+                if let Err(error) = authorization {
+                    return ToolResult::err(error);
+                }
+                return render_result(json!({
+                    "row": row.as_ref().map(row_to_json).unwrap_or(Value::Null),
+                }));
+            }
+            other => {
+                return ToolResult::err(format!(
+                    "unknown command '{other}'. valid: list|search|show"
+                ))
+            }
+        }
+
         let db = self.db.clone();
         let join = tokio::task::spawn_blocking(move || -> Result<Value, String> {
             match command.as_str() {
@@ -153,9 +206,6 @@ impl Tool for CosAppMemoryTool {
                     }))
                 }
                 "search" => {
-                    if query.is_empty() {
-                        return Err("'search' requires non-empty 'query'".to_string());
-                    }
                     let limit = limit_raw
                         .unwrap_or(DEFAULT_SEARCH_LIMIT)
                         .clamp(1, MAX_LIMIT);
@@ -185,35 +235,40 @@ impl Tool for CosAppMemoryTool {
                         "n": filtered.len(),
                     }))
                 }
-                "show" => {
-                    let id = id.ok_or_else(|| "'show' requires 'id'".to_string())?;
-                    let row = app_memory::show(&db, id).map_err(|e| e.to_string())?;
-                    Ok(match row {
-                        Some(r) => json!({ "row": row_to_json(&r) }),
-                        None => json!({ "row": Value::Null }),
-                    })
-                }
-                other => Err(format!(
-                    "unknown command '{other}'. valid: list|search|show"
-                )),
+                "show" => unreachable!("show returns before the worker closure"),
+                other => Err(format!("unexpected validated command '{other}'")),
             }
         })
         .await;
 
         match join {
-            Ok(Ok(v)) => {
-                // App memory holds content apps recorded from external
-                // sources; wrap as untrusted prior-session data.
-                let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
-                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
-                    crate::agent::safety::untrusted::MEMORY_TAG,
-                    &body,
-                ))
-            }
+            Ok(Ok(v)) => render_result(v),
             Ok(Err(msg)) => ToolResult::err(msg),
             Err(e) => ToolResult::err(format!("cos_app_memory panicked: {e}")),
         }
     }
+}
+
+fn authorize_source(source: Option<&str>) -> Result<(), String> {
+    let scope = match source {
+        Some(source) => {
+            app_memory::validate_source(source)?;
+            crate::agent::tools::MemoryScope::App(source)
+        }
+        None => crate::agent::tools::MemoryScope::SystemAgent,
+    };
+    crate::agent::tools::require_memory(crate::caps::Verb::MEMORY_READ, scope)
+        .map_err(|denial| denial.to_string())
+}
+
+fn render_result(value: Value) -> ToolResult {
+    // App memory holds content apps recorded from external sources; wrap as
+    // untrusted prior-session data.
+    let body = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+    ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+        crate::agent::safety::untrusted::MEMORY_TAG,
+        &body,
+    ))
 }
 
 fn row_to_json(r: &AppMemoryRow) -> Value {

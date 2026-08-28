@@ -59,6 +59,16 @@ group and prompt text confer nothing.
 created before the fork, so the kernel stamps it with the broker's own uid and
 pid. Checking it would prove nothing about the worker.
 
+The signed job grant also binds the broker-derived client source, locality, a
+digest of the effective capability set, and any live presence lease. Attendance
+is never persisted: publication and claim share one lock, so the lease exists
+before a pending job is visible and is removed if persistence fails. It remains
+valid only while a verified submitter pid/start-time is alive, expires after a
+bounded queue delay, and is consumed by the first worker attempt. The worker
+cross-checks the signed lease before building the model-visible tool projection
+and rechecks its process and deadline before advertising or executing an
+attended-only tool.
+
 Capabilities are derived by `clawd` from root-owned session metadata
 (`clawd::session_scope`) and handed to the worker; the worker never authors
 them, and the exact tool/provider checks still run at the execution boundary

@@ -25,6 +25,10 @@ const MAX_CALLBACK_BYTES: usize = 16 * 1024;
 const APP_ACCESS_TOKEN_TIER: u8 = 2;
 const REFRESH_TOKEN_TIER: u8 = 0;
 
+pub(crate) struct AgentOauthAuthorization {
+    _private: (),
+}
+
 pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
     let direct_cli = crate::proc::current_session_info_for_caps()
         .is_some_and(|session| is_direct_oauth_login_session(&session));
@@ -36,16 +40,22 @@ pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
     run_oauth_login(args)
 }
 
-pub(super) fn cmd_agent_oauth_login(args: &[String]) -> Result<Value, String> {
-    let attended_agent = crate::proc::current_session_info_for_caps()
-        .is_some_and(|session| is_attended_agent_oauth_session(&session));
-    if !attended_agent {
+pub(crate) fn authorize_agent_oauth_login() -> Result<AgentOauthAuthorization, String> {
+    let allowed = crate::agent::tools::exposure::current()
+        .is_some_and(|context| context.permits_interactive_authorization());
+    if !allowed {
         return Err(
-            "Agent-initiated OAuth requires an attended local `cos agent ask`, \
-             `cos agent live`, or `cos agent chat` session"
+            "Agent-initiated OAuth requires a trusted attended local Agent session"
                 .to_string(),
         );
     }
+    Ok(AgentOauthAuthorization { _private: () })
+}
+
+pub(crate) fn run_agent_oauth_login_authorized(
+    args: &[String],
+    _authorization: AgentOauthAuthorization,
+) -> Result<Value, String> {
     run_oauth_login(args)
 }
 
@@ -72,13 +82,6 @@ fn is_direct_oauth_login_session(session: &crate::proc::SessionInfo) -> bool {
             .command
             .windows(2)
             .any(|args| args == ["credential", "oauth-login"])
-}
-
-fn is_attended_agent_oauth_session(session: &crate::proc::SessionInfo) -> bool {
-    is_same_pid_admin_cli_session(session)
-        && session.command.windows(2).any(|args| {
-            args[0] == "agent" && matches!(args[1].as_str(), "ask" | "live" | "chat")
-        })
 }
 
 fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {

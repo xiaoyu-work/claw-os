@@ -24,6 +24,7 @@ use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::runtime::semantic_indexer::SemanticIndexer;
 use crate::agent::safety::redact::Redactor;
+use crate::agent::tools::exposure::{ExecutionHost, ToolExposureContext};
 use crate::agent::tools::registry::{default_registry, ToolRegistry};
 use crate::config::AgentConfig;
 
@@ -101,7 +102,28 @@ pub async fn ask_with(
     user_prompt: &str,
     tools: &ToolRegistry,
 ) -> Result<AskResult, AgentError> {
-    ask_inner(provider, cfg, user_prompt, tools, None, None, Vec::new()).await
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_exposure(provider, cfg, user_prompt, tools, &exposure).await
+}
+
+pub async fn ask_with_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+) -> Result<AskResult, AgentError> {
+    ask_inner(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        exposure,
+        None,
+        None,
+        Vec::new(),
+    )
+    .await
 }
 
 /// Same as [`ask_with`] but records every message into `db` under
@@ -115,11 +137,13 @@ pub async fn ask_with_memory(
     db: &MemoryDb,
     session_id: &str,
 ) -> Result<AskResult, AgentError> {
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
     ask_inner(
         provider,
         cfg,
         user_prompt,
         tools,
+        &exposure,
         Some((db, session_id)),
         None,
         Vec::new(),
@@ -139,13 +163,39 @@ pub async fn ask_with_memory_continuation(
     session_id: &str,
     history_limit: usize,
 ) -> Result<AskResult, AgentError> {
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_memory_continuation_exposure(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        &exposure,
+        db,
+        session_id,
+        history_limit,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_memory_continuation_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+) -> Result<AskResult, AgentError> {
     let prior = load_continuation_messages(db, session_id, history_limit);
-    let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
+    let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
     ask_inner(
         provider,
         cfg,
         user_prompt,
         tools,
+        exposure,
         Some((db, session_id)),
         compressor,
         prior,
@@ -170,6 +220,7 @@ pub async fn ask_with_compressor(
         cfg,
         user_prompt,
         tools,
+        &ToolExposureContext::isolated(guardrails_from_cfg(cfg)),
         db,
         Some(compressor),
         Vec::new(),
@@ -199,13 +250,39 @@ pub async fn ask_with_stream(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
-    let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_stream_exposure(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        &exposure,
+        db,
+        sink,
+        progress,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_stream_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    db: Option<(&MemoryDb, &str)>,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<AskResult, AgentError> {
+    let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
     ask_inner_streaming(
         provider,
         cfg,
         user_prompt,
         None,
         tools,
+        exposure,
         db,
         compressor,
         sink,
@@ -227,13 +304,43 @@ pub async fn ask_with_stream_scoped(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
-    let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_stream_scoped_exposure(
+        provider,
+        cfg,
+        user_prompt,
+        transient_context,
+        tools,
+        &exposure,
+        db,
+        sink,
+        progress,
+        interrupt_scope,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_stream_scoped_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    transient_context: Option<&str>,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    db: Option<(&MemoryDb, &str)>,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
+    let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
     ask_inner_streaming(
         provider,
         cfg,
         user_prompt,
         transient_context,
         tools,
+        exposure,
         db,
         compressor,
         sink,
@@ -274,14 +381,44 @@ pub async fn ask_with_stream_continuation(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_stream_continuation_exposure(
+        provider,
+        cfg,
+        user_prompt,
+        tools,
+        &exposure,
+        db,
+        session_id,
+        history_limit,
+        sink,
+        progress,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_stream_continuation_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+) -> Result<AskResult, AgentError> {
     let prior = load_continuation_messages(db, session_id, history_limit);
-    let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
+    let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
     ask_inner_streaming(
         provider,
         cfg,
         user_prompt,
         None,
         tools,
+        exposure,
         Some((db, session_id)),
         compressor,
         sink,
@@ -305,14 +442,48 @@ pub async fn ask_with_stream_continuation_scoped(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(cfg));
+    ask_with_stream_continuation_scoped_exposure(
+        provider,
+        cfg,
+        user_prompt,
+        transient_context,
+        tools,
+        &exposure,
+        db,
+        session_id,
+        history_limit,
+        sink,
+        progress,
+        interrupt_scope,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn ask_with_stream_continuation_scoped_exposure(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    transient_context: Option<&str>,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    db: &MemoryDb,
+    session_id: &str,
+    history_limit: usize,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    interrupt_scope: &str,
+) -> Result<AskResult, AgentError> {
     let prior = load_continuation_messages(db, session_id, history_limit);
-    let compressor = compressor_from_cfg(provider.clone(), cfg, tools);
+    let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
     ask_inner_streaming(
         provider,
         cfg,
         user_prompt,
         transient_context,
         tools,
+        exposure,
         Some((db, session_id)),
         compressor,
         sink,
@@ -571,6 +742,7 @@ async fn ask_inner(
     cfg: &AgentConfig,
     user_prompt: &str,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
     initial_messages: Vec<Message>,
@@ -614,7 +786,6 @@ async fn ask_inner(
 
     let mut messages = initial_messages;
     messages.push(build_request_user_message(user_prompt, None, recorder));
-    let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the
@@ -720,6 +891,7 @@ async fn ask_inner(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let llm_tools = tools.as_llm_tools_for(exposure);
         let retry_policy = retry_policy_from_cfg(cfg);
         let outcome_result = if force_finalize {
             super::turn::run_final_turn_interruptible(
@@ -728,6 +900,7 @@ async fn ask_inner(
                 turn_system,
                 &mut messages,
                 tools,
+                exposure,
                 &llm_tools,
                 cfg.max_tokens,
                 cfg.temperature,
@@ -745,6 +918,7 @@ async fn ask_inner(
                 turn_system,
                 &mut messages,
                 tools,
+                exposure,
                 &llm_tools,
                 cfg.max_tokens,
                 cfg.temperature,
@@ -935,6 +1109,7 @@ async fn ask_inner_streaming(
     user_prompt: &str,
     transient_context: Option<&str>,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
     sink: Arc<dyn StreamSink>,
@@ -985,7 +1160,6 @@ async fn ask_inner_streaming(
         ));
         v
     };
-    let llm_tools = tools.as_llm_tools();
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     let interrupt_handle = if let Some(scope) = interrupt_scope {
@@ -1065,6 +1239,7 @@ async fn ask_inner_streaming(
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
+        let llm_tools = tools.as_llm_tools_for(exposure);
         let outcome_result = if force_finalize {
             super::turn::run_final_turn_streaming_interruptible(
                 provider.clone(),
@@ -1072,6 +1247,7 @@ async fn ask_inner_streaming(
                 turn_system,
                 &mut messages,
                 tools,
+                exposure,
                 &llm_tools,
                 cfg.max_tokens,
                 cfg.temperature,
@@ -1089,6 +1265,7 @@ async fn ask_inner_streaming(
                 turn_system,
                 &mut messages,
                 tools,
+                exposure,
                 &llm_tools,
                 cfg.max_tokens,
                 cfg.temperature,
@@ -1268,19 +1445,24 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
     let cfg = &crate::config::get().agent;
     let provider = crate::ai::gate::build_system_provider(cfg)
         .map_err(|e| AgentError::ProviderUnavailable(e.to_string()))?;
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let mut exposure = ToolExposureContext::from_current_session(
+        Some(&session_id),
+        None,
+        ExecutionHost::Direct,
+        guardrails_from_cfg(cfg),
+    )
+    .map_err(AgentError::Internal)?;
     let mut tools = default_registry();
-    tools.set_guardrails(guardrails_from_cfg(cfg));
     tools.set_approval(approval_from_cfg(cfg));
 
     // Best-effort attach configured MCP servers. `_mcp_handles` MUST
     // outlive the loop — its Drop tears down children and aborts
     // background reader tasks. Failures inside attach_all are already
     // logged and skipped, so this never fails the ask.
-    let _mcp_handles = attach_mcp_servers(&mut tools, cfg).await;
+    let _mcp_handles = attach_mcp_servers(&mut tools, cfg, &mut exposure).await;
 
-    let session_id = uuid::Uuid::new_v4().to_string();
-
-    let compressor = compressor_from_cfg(provider.clone(), cfg, &tools);
+    let compressor = compressor_from_cfg(provider.clone(), cfg, &tools, &exposure);
 
     match MemoryDb::open_default() {
         Ok(db) => {
@@ -1289,6 +1471,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 cfg,
                 user_prompt,
                 &tools,
+                &exposure,
                 Some((&db, session_id.as_str())),
                 compressor,
                 Vec::new(),
@@ -1307,6 +1490,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 cfg,
                 user_prompt,
                 &tools,
+                &exposure,
                 None,
                 compressor,
                 Vec::new(),
@@ -1328,6 +1512,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
 async fn attach_mcp_servers(
     tools: &mut ToolRegistry,
     cfg: &AgentConfig,
+    exposure: &mut ToolExposureContext,
 ) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
     use crate::agent::tools::mcp::discover;
     use crate::agent::tools::mcp::integration::attach_all;
@@ -1346,11 +1531,34 @@ async fn attach_mcp_servers(
         Vec::new()
     };
 
-    let specs = merge_mcp_specs(configured, discovered);
+    let specs: Vec<_> = merge_mcp_specs(configured, discovered)
+        .into_iter()
+        .filter(|spec| {
+            let transport = if spec.url.is_some() {
+                crate::agent::tools::exposure::ToolTransport::McpHttp
+            } else {
+                crate::agent::tools::exposure::ToolTransport::McpStdio
+            };
+            if exposure.has_transport(transport) {
+                true
+            } else {
+                tracing::info!(
+                    server = %spec.name,
+                    ?transport,
+                    "MCP server is unavailable to this execution host"
+                );
+                false
+            }
+        })
+        .collect();
     if specs.is_empty() {
         return Vec::new();
     }
-    attach_all(&specs, tools).await
+    let handles = attach_all(&specs, tools).await;
+    for handle in &handles {
+        exposure.enable_extension(format!("mcp:{}", handle.name()));
+    }
+    handles
 }
 
 /// Build [`McpServerSpec`]s from the `[[agent.mcp_servers]]` config
@@ -1406,6 +1614,7 @@ fn merge_mcp_specs(
 pub async fn attach_mcp_servers_for_cli(
     tools: &mut ToolRegistry,
     cfg: &AgentConfig,
+    exposure: &mut ToolExposureContext,
 ) -> Vec<crate::agent::tools::mcp::integration::McpServerHandle> {
     // MCP clients are model-visible transport the broker must never
     // hold. Fail closed (no servers attached) rather than dialling out
@@ -1414,7 +1623,7 @@ pub async fn attach_mcp_servers_for_cli(
         tracing::error!(error = %error, "refusing to attach MCP servers");
         return Vec::new();
     }
-    attach_mcp_servers(tools, cfg).await
+    attach_mcp_servers(tools, cfg, exposure).await
 }
 
 /// Build a [`LlmCompressor`] from `cfg` when `compress_enabled` is set.
@@ -1424,11 +1633,12 @@ fn compressor_from_cfg(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
 ) -> Option<Arc<dyn Compressor>> {
     if !cfg.compress_enabled {
         return None;
     }
-    let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools());
+    let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools_for(exposure));
     let target_tokens = cfg.compress_target_tokens.saturating_sub(tool_tokens).max(1);
     let trigger_tokens = cfg
         .compress_trigger_tokens
