@@ -529,6 +529,42 @@ async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
 }
 
 #[tokio::test]
+async fn continuation_refuses_a_corrupt_frozen_system_prompt() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "corrupt-frozen-system-prompt";
+    db.record_message(sid, "user", "prior message").unwrap();
+    db.freeze_system_prompt(sid, "trusted prompt", 1).unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+
+    let config = cfg();
+    let provider = Arc::new(MockProvider::new(&config.model, &config));
+    provider.push_response(MockResponse::Text("must not be used".into()));
+    let error = ask_with_stream_continuation(
+        provider.clone(),
+        &config,
+        "continue",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+        crate::agent::llm::accumulate::null_sink(),
+        progress::null_progress(),
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, AgentError::MemoryIntegrity(_)));
+    assert!(
+        provider.last_request().is_none(),
+        "damaged prompt content must never reach the provider"
+    );
+}
+
+#[tokio::test]
 async fn streaming_continuation_honors_configured_compression() {
     let db = MemoryDb::open_in_memory().unwrap();
     let sid = "streaming-compression";

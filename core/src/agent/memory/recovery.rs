@@ -1,0 +1,2048 @@
+//! Health, repair, and quarantine lifecycle for `memory.db`.
+//!
+//! Diagnosis opens the database read-only and treats FTS as a projection over
+//! `messages`. Mutating repair is bracketed in a private append-only log and
+//! takes an exclusive sibling-file lock; normal
+//! [`MemoryDb`](super::sqlite_fts::MemoryDb) handles retain a shared lock for
+//! their lifetime, so a database cannot be replaced beneath an active writer.
+
+use std::collections::{BTreeMap, HashMap};
+use std::ffi::OsString;
+use std::fs::{self, File, OpenOptions};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBehavior};
+use serde::{Deserialize, Serialize};
+
+use super::sqlite_fts::{
+    initialize_connection, system_prompt_hash, MemoryError, BASE_SCHEMA, CONNECTION_PRAGMAS,
+    FTS_SCHEMA,
+};
+
+const REPAIR_LOG_VERSION: u32 = 1;
+const MAX_REPAIR_LOG_BYTES: u64 = 8 * 1024 * 1024;
+const EXPECTED_TABLES: &[(&str, &[&str])] = &[
+    (
+        "messages",
+        &["id", "session_id", "role", "content", "ts_ms"],
+    ),
+    ("session_titles", &["session_id", "title", "ts_ms"]),
+    ("system_prompts", &["hash", "prompt"]),
+    (
+        "session_system_prompts",
+        &["session_id", "prompt_hash", "prompt_version", "ts_ms"],
+    ),
+];
+const EXPECTED_INDEXES: &[&str] = &["messages_session_ts", "messages_ts"];
+const EXPECTED_TRIGGERS: &[&str] = &["messages_ai", "messages_ad", "messages_au"];
+
+#[derive(Debug)]
+pub(super) struct MemoryLifecycleLock {
+    file: File,
+}
+
+impl Drop for MemoryLifecycleLock {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        {
+            use std::os::unix::io::AsRawFd;
+            let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MemoryHealthCheck {
+    pub status: String,
+    pub summary: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub issues: Vec<String>,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub metrics: BTreeMap<String, u64>,
+}
+
+impl MemoryHealthCheck {
+    fn ok(summary: impl Into<String>) -> Self {
+        Self {
+            status: "ok".to_string(),
+            summary: summary.into(),
+            issues: Vec::new(),
+            metrics: BTreeMap::new(),
+        }
+    }
+
+    fn warn(summary: impl Into<String>, issues: Vec<String>) -> Self {
+        Self {
+            status: "warn".to_string(),
+            summary: summary.into(),
+            issues,
+            metrics: BTreeMap::new(),
+        }
+    }
+
+    fn fail(summary: impl Into<String>, issues: Vec<String>) -> Self {
+        Self {
+            status: "fail".to_string(),
+            summary: summary.into(),
+            issues,
+            metrics: BTreeMap::new(),
+        }
+    }
+
+    fn with_metric(mut self, name: &str, value: u64) -> Self {
+        self.metrics.insert(name.to_string(), value);
+        self
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+pub struct MemoryHealthStats {
+    pub total_messages: u64,
+    pub total_sessions: u64,
+    pub titled_sessions: u64,
+    pub messages_last_1d: u64,
+    pub messages_last_7d: u64,
+    pub messages_last_30d: u64,
+    pub oldest_ts_ms: Option<i64>,
+    pub newest_ts_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MemoryHealthReport {
+    pub status: String,
+    pub path: String,
+    pub initialized: bool,
+    pub sqlite: MemoryHealthCheck,
+    pub wal: MemoryHealthCheck,
+    pub schema: MemoryHealthCheck,
+    pub fts: MemoryHealthCheck,
+    pub prompt_references: MemoryHealthCheck,
+    pub prompt_hashes: MemoryHealthCheck,
+    pub titles: MemoryHealthCheck,
+    pub repair_lifecycle: MemoryHealthCheck,
+    pub stats: Option<MemoryHealthStats>,
+    pub repairable_in_place: bool,
+    pub requires_quarantine: bool,
+    pub planned_repairs: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RepairOptions {
+    pub dry_run: bool,
+    pub rebuild_fts: bool,
+    pub allow_quarantine: bool,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RecoveredRecords {
+    pub messages: u64,
+    pub titles: u64,
+    pub prompt_references: u64,
+    pub skipped_prompt_references: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct MemoryRepairReport {
+    pub status: String,
+    pub dry_run: bool,
+    pub changed: bool,
+    pub resumed_interrupted_repair: bool,
+    pub actions: Vec<String>,
+    pub before: MemoryHealthReport,
+    pub after: Option<MemoryHealthReport>,
+    pub quarantine_path: Option<String>,
+    pub quarantined_files: Vec<String>,
+    pub recovered: RecoveredRecords,
+    pub repair_log_path: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RepairMode {
+    InPlace,
+    Quarantine,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum RepairPhase {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RepairEvent {
+    version: u32,
+    attempt_id: String,
+    ts_ms: i64,
+    phase: RepairPhase,
+    mode: RepairMode,
+    #[serde(default)]
+    planned_actions: Vec<String>,
+    #[serde(default)]
+    quarantine_path: Option<String>,
+    #[serde(default)]
+    salvage_source: bool,
+    #[serde(default)]
+    recovered: RecoveredRecords,
+    #[serde(default)]
+    error: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct RepairLogSnapshot {
+    incomplete: Vec<RepairEvent>,
+    last_applied: Option<RepairEvent>,
+    malformed_lines: usize,
+}
+
+#[derive(Debug, Default)]
+struct SchemaInspection {
+    missing: Vec<String>,
+    incompatible: Vec<String>,
+    authoritative_incompatible: bool,
+    missing_triggers: Vec<String>,
+    altered_triggers: Vec<String>,
+    messages_compatible: bool,
+    prompts_compatible: bool,
+    titles_compatible: bool,
+    fts_compatible: bool,
+}
+
+#[derive(Debug, Default)]
+struct QuarantineResult {
+    base: Option<PathBuf>,
+    files: Vec<PathBuf>,
+    recovered: RecoveredRecords,
+}
+
+pub fn diagnose_default() -> Result<MemoryHealthReport, MemoryError> {
+    diagnose(&crate::paths::agent_memory_db_path())
+}
+
+pub fn diagnose(path: &Path) -> Result<MemoryHealthReport, MemoryError> {
+    let _lock = acquire_shared_lifecycle_lock(path, false)?;
+    diagnose_locked(path, true)
+}
+
+pub fn repair_default(options: RepairOptions) -> Result<MemoryRepairReport, MemoryError> {
+    repair(&crate::paths::agent_memory_db_path(), options)
+}
+
+pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport, MemoryError> {
+    if options.dry_run {
+        let before = diagnose(path)?;
+        let mut actions = before.planned_repairs.clone();
+        add_forced_fts_action(&mut actions, options.rebuild_fts);
+        return Ok(MemoryRepairReport {
+            status: if before.requires_quarantine {
+                "requires_quarantine".to_string()
+            } else if actions.is_empty() {
+                "healthy".to_string()
+            } else {
+                "planned".to_string()
+            },
+            dry_run: true,
+            changed: false,
+            resumed_interrupted_repair: before
+                .repair_lifecycle
+                .metrics
+                .get("interrupted_attempts")
+                .copied()
+                .unwrap_or(0)
+                > 0,
+            actions,
+            before,
+            after: None,
+            quarantine_path: None,
+            quarantined_files: Vec::new(),
+            recovered: RecoveredRecords::default(),
+            repair_log_path: repair_log_path(path).display().to_string(),
+        });
+    }
+
+    let parent = path.parent().ok_or_else(|| {
+        MemoryError::Repair(format!("memory database has no parent: {}", path.display()))
+    })?;
+    crate::storage::ensure_private_dir(parent)?;
+    reject_non_regular_file(path)?;
+    reject_non_regular_file(&wal_path(path))?;
+    reject_non_regular_file(&shm_path(path))?;
+
+    let _lock = acquire_exclusive_lifecycle_lock(path)?;
+    let log_snapshot = read_repair_log(path)?;
+    if log_snapshot.malformed_lines > 0 {
+        return Err(MemoryError::Integrity(format!(
+            "repair log {} contains {} malformed line(s); preserve it for inspection before retrying",
+            repair_log_path(path).display(),
+            log_snapshot.malformed_lines
+        )));
+    }
+    if log_snapshot.incomplete.len() > 1 {
+        return Err(MemoryError::Integrity(format!(
+            "repair log {} contains multiple interrupted attempts; preserve it for inspection before retrying",
+            repair_log_path(path).display()
+        )));
+    }
+
+    let before = diagnose_locked(path, true)?;
+    let mut actions = before.planned_repairs.clone();
+    add_forced_fts_action(&mut actions, options.rebuild_fts);
+
+    let interrupted = log_snapshot.incomplete.last().cloned();
+    let resumed_interrupted_repair = interrupted.is_some();
+    if resumed_interrupted_repair
+        && !actions
+            .iter()
+            .any(|action| action == "resume_interrupted_repair")
+    {
+        actions.insert(0, "resume_interrupted_repair".to_string());
+    }
+
+    let required_mode = if before.requires_quarantine {
+        RepairMode::Quarantine
+    } else {
+        RepairMode::InPlace
+    };
+    let mode = interrupted
+        .as_ref()
+        .map(|event| event.mode)
+        .unwrap_or(required_mode);
+    if mode == RepairMode::Quarantine
+        && !actions
+            .iter()
+            .any(|action| action == "quarantine_and_initialize_replacement")
+    {
+        actions.push("quarantine_and_initialize_replacement".to_string());
+    }
+    if required_mode == RepairMode::Quarantine && mode != RepairMode::Quarantine {
+        if let Some(event) = interrupted.as_ref() {
+            append_repair_event(
+                path,
+                &RepairEvent {
+                    phase: RepairPhase::Failed,
+                    error: Some(
+                        "health changed while repair was interrupted; quarantine is now required"
+                            .to_string(),
+                    ),
+                    ..event.clone()
+                },
+            )?;
+        }
+        return Err(MemoryError::Repair(
+            "memory damage now requires quarantine; re-run with `--quarantine --yes`".to_string(),
+        ));
+    }
+    if mode == RepairMode::Quarantine && !options.allow_quarantine {
+        return Err(MemoryError::Repair(
+            "repair requires preserving the damaged database in quarantine; inspect with \
+             `cos agent sessions repair --dry-run`, then re-run with `--quarantine --yes`"
+                .to_string(),
+        ));
+    }
+
+    let salvage_source = if before.sqlite.status == "ok" && before.wal.status != "fail" {
+        schema_supports_message_recovery(path)?
+    } else {
+        false
+    };
+    let attempt = if let Some(event) = interrupted {
+        event
+    } else {
+        let quarantine = (mode == RepairMode::Quarantine)
+            .then(|| quarantine_base(path, &uuid::Uuid::new_v4().simple().to_string()));
+        let event = RepairEvent {
+            version: REPAIR_LOG_VERSION,
+            attempt_id: uuid::Uuid::new_v4().simple().to_string(),
+            ts_ms: current_ts_ms(),
+            phase: RepairPhase::Started,
+            mode,
+            planned_actions: actions.clone(),
+            quarantine_path: quarantine.map(|value| value.display().to_string()),
+            salvage_source,
+            recovered: RecoveredRecords::default(),
+            error: None,
+        };
+        append_repair_event(path, &event)?;
+        event
+    };
+
+    let mut active_attempt = attempt;
+    let mut active_mode = mode;
+    let mut operation = run_repair_operation(path, &actions, &active_attempt);
+    if operation.is_err() && active_mode == RepairMode::InPlace && options.allow_quarantine {
+        let in_place_error = operation.expect_err("checked above");
+        append_repair_event(
+            path,
+            &RepairEvent {
+                phase: RepairPhase::Failed,
+                ts_ms: current_ts_ms(),
+                error: Some(in_place_error.to_string()),
+                ..active_attempt.clone()
+            },
+        )?;
+        if !actions
+            .iter()
+            .any(|action| action == "fallback_to_quarantine")
+        {
+            actions.push("fallback_to_quarantine".to_string());
+        }
+        active_mode = RepairMode::Quarantine;
+        let quarantine = quarantine_base(path, &uuid::Uuid::new_v4().simple().to_string());
+        active_attempt = RepairEvent {
+            version: REPAIR_LOG_VERSION,
+            attempt_id: uuid::Uuid::new_v4().simple().to_string(),
+            ts_ms: current_ts_ms(),
+            phase: RepairPhase::Started,
+            mode: active_mode,
+            planned_actions: actions.clone(),
+            quarantine_path: Some(quarantine.display().to_string()),
+            salvage_source,
+            recovered: RecoveredRecords::default(),
+            error: None,
+        };
+        append_repair_event(path, &active_attempt)?;
+        operation = run_repair_operation(path, &actions, &active_attempt);
+    }
+
+    let quarantine = match operation {
+        Ok(result) => result,
+        Err(error) => {
+            let log_result = append_repair_event(
+                path,
+                &RepairEvent {
+                    phase: RepairPhase::Failed,
+                    ts_ms: current_ts_ms(),
+                    error: Some(error.to_string()),
+                    ..active_attempt.clone()
+                },
+            );
+            return match log_result {
+                Ok(()) => Err(error),
+                Err(log_error) => Err(MemoryError::Repair(format!(
+                    "{error}; additionally failed to record repair failure: {log_error}"
+                ))),
+            };
+        }
+    };
+
+    let after_without_log = diagnose_locked(path, false)?;
+    if after_without_log.status != "ok" {
+        let error = MemoryError::Repair(format!(
+            "post-repair health check failed for {}",
+            path.display()
+        ));
+        append_repair_event(
+            path,
+            &RepairEvent {
+                phase: RepairPhase::Failed,
+                ts_ms: current_ts_ms(),
+                error: Some(error.to_string()),
+                recovered: quarantine.recovered.clone(),
+                ..active_attempt.clone()
+            },
+        )?;
+        return Err(error);
+    }
+
+    append_repair_event(
+        path,
+        &RepairEvent {
+            phase: RepairPhase::Completed,
+            ts_ms: current_ts_ms(),
+            recovered: quarantine.recovered.clone(),
+            error: None,
+            ..active_attempt.clone()
+        },
+    )?;
+    let after = diagnose_locked(path, true)?;
+
+    Ok(MemoryRepairReport {
+        status: "ok".to_string(),
+        dry_run: false,
+        changed: !actions.is_empty(),
+        resumed_interrupted_repair,
+        actions,
+        before,
+        after: Some(after),
+        quarantine_path: quarantine
+            .base
+            .as_ref()
+            .map(|value| value.display().to_string()),
+        quarantined_files: quarantine
+            .files
+            .iter()
+            .map(|value| value.display().to_string())
+            .collect(),
+        recovered: quarantine.recovered,
+        repair_log_path: repair_log_path(path).display().to_string(),
+    })
+}
+
+pub(super) fn acquire_shared_lifecycle_lock(
+    path: &Path,
+    create: bool,
+) -> Result<Option<MemoryLifecycleLock>, MemoryError> {
+    acquire_lifecycle_lock(path, create, false)
+}
+
+pub(super) fn ensure_private_database_file(path: &Path) -> Result<(), MemoryError> {
+    if path.exists() {
+        reject_symlink(path)?;
+        if !fs::metadata(path)?.is_file() {
+            return Err(MemoryError::Repair(format!(
+                "memory database path is not a regular file: {}",
+                path.display()
+            )));
+        }
+        crate::storage::set_private_file(path)?;
+        return Ok(());
+    }
+    let mut options = OpenOptions::new();
+    options.create_new(true).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    match options.open(path) {
+        Ok(file) => {
+            file.sync_all()?;
+            crate::storage::set_private_file(path)?;
+            Ok(())
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            reject_symlink(path)?;
+            crate::storage::set_private_file(path)?;
+            Ok(())
+        }
+        Err(error) => Err(MemoryError::Io(error)),
+    }
+}
+
+fn acquire_exclusive_lifecycle_lock(path: &Path) -> Result<MemoryLifecycleLock, MemoryError> {
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        return Err(MemoryError::Repair(
+            "memory replacement requires Unix flock(2) serialization".to_string(),
+        ));
+    }
+    #[cfg(unix)]
+    {
+        acquire_lifecycle_lock(path, true, true)?.ok_or_else(|| {
+            MemoryError::Repair("failed to create memory lifecycle lock".to_string())
+        })
+    }
+}
+
+fn acquire_lifecycle_lock(
+    path: &Path,
+    create: bool,
+    exclusive: bool,
+) -> Result<Option<MemoryLifecycleLock>, MemoryError> {
+    #[cfg(not(unix))]
+    {
+        let _ = (path, create, exclusive);
+        return Ok(None);
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::io::AsRawFd;
+
+        let lock_path = lifecycle_lock_path(path);
+        if !create && !lock_path.exists() {
+            return Ok(None);
+        }
+        if create {
+            if let Some(parent) = lock_path.parent() {
+                crate::storage::ensure_private_dir(parent)?;
+            }
+        }
+        reject_symlink(&lock_path)?;
+        let mut options = OpenOptions::new();
+        options.read(true).write(true);
+        if create {
+            options.create(true);
+        }
+        options.mode(0o600);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+        let file = options.open(&lock_path)?;
+        crate::storage::set_private_file(&lock_path)?;
+        let operation = if exclusive {
+            libc::LOCK_EX
+        } else {
+            libc::LOCK_SH
+        };
+        if unsafe { libc::flock(file.as_raw_fd(), operation) } != 0 {
+            return Err(MemoryError::Io(std::io::Error::last_os_error()));
+        }
+        Ok(Some(MemoryLifecycleLock { file }))
+    }
+}
+
+pub(super) fn database_has_no_user_schema(conn: &Connection) -> Result<bool, MemoryError> {
+    let count = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_schema
+         WHERE name NOT LIKE 'sqlite_%'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )?;
+    Ok(count == 0)
+}
+
+pub(super) fn runtime_schema_issues(conn: &Connection) -> Result<Vec<String>, MemoryError> {
+    let schema = inspect_schema(conn)?;
+    let mut issues = schema.missing;
+    issues.extend(schema.incompatible);
+    issues.extend(schema.missing_triggers);
+    issues.extend(schema.altered_triggers);
+    Ok(issues)
+}
+
+fn diagnose_locked(
+    path: &Path,
+    inspect_repair_log: bool,
+) -> Result<MemoryHealthReport, MemoryError> {
+    let repair_snapshot = if inspect_repair_log {
+        read_repair_log(path)?
+    } else {
+        RepairLogSnapshot::default()
+    };
+    let repair_lifecycle = repair_lifecycle_check(path, &repair_snapshot);
+
+    let wal_inspection = inspect_wal_files(path);
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+        Err(error) => {
+            return Ok(blocked_health_report(
+                path,
+                format!("cannot inspect database path: {error}"),
+                wal_inspection,
+                repair_lifecycle,
+            ));
+        }
+    };
+
+    if metadata.is_none() {
+        if wal_inspection.status == "fail" {
+            return Ok(blocked_health_report(
+                path,
+                "memory.db is missing while SQLite sidecars remain".to_string(),
+                wal_inspection,
+                repair_lifecycle,
+            ));
+        }
+        let mut report = absent_health_report(path, wal_inspection, repair_lifecycle);
+        if repair_snapshot
+            .incomplete
+            .iter()
+            .any(|event| event.mode == RepairMode::Quarantine)
+        {
+            report.requires_quarantine = true;
+            report.repairable_in_place = false;
+            report.planned_repairs = vec![
+                "resume_interrupted_repair".to_string(),
+                "quarantine_and_initialize_replacement".to_string(),
+            ];
+        }
+        finalize_health_report(&mut report);
+        return Ok(report);
+    }
+
+    let metadata = metadata.expect("checked above");
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(blocked_health_report(
+            path,
+            "memory database path is not a regular file".to_string(),
+            wal_inspection,
+            repair_lifecycle,
+        ));
+    }
+
+    let conn = match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+        Ok(conn) => conn,
+        Err(error) => {
+            return Ok(blocked_health_report(
+                path,
+                format!("SQLite open failed: {error}"),
+                wal_inspection,
+                repair_lifecycle,
+            ));
+        }
+    };
+    if let Err(error) = conn.busy_timeout(Duration::from_secs(5)) {
+        return Ok(blocked_health_report(
+            path,
+            format!("SQLite setup failed: {error}"),
+            wal_inspection,
+            repair_lifecycle,
+        ));
+    }
+    if let Err(error) = conn.execute_batch("PRAGMA temp_store = MEMORY; PRAGMA foreign_keys = ON;")
+    {
+        return Ok(blocked_health_report(
+            path,
+            format!("SQLite setup failed: {error}"),
+            wal_inspection,
+            repair_lifecycle,
+        ));
+    }
+
+    let mut sqlite = check_sqlite_integrity(&conn);
+    let schema_inspection = inspect_schema(&conn).unwrap_or_else(|error| SchemaInspection {
+        incompatible: vec![format!("schema inspection failed: {error}")],
+        authoritative_incompatible: true,
+        ..SchemaInspection::default()
+    });
+    let schema = schema_health_check(&schema_inspection);
+    let mut wal = wal_inspection;
+    if let Ok(mode) = conn.query_row("PRAGMA journal_mode", [], |row| row.get::<_, String>(0)) {
+        if mode.eq_ignore_ascii_case("wal") {
+            wal.metrics.insert("journal_mode_wal".to_string(), 1);
+        } else if wal.status != "fail" {
+            wal = MemoryHealthCheck::warn(
+                "database is not configured for WAL journaling",
+                vec![format!("journal_mode is {mode}, expected wal")],
+            );
+            wal.metrics.insert("journal_mode_wal".to_string(), 0);
+        }
+    }
+
+    let (fts, fts_requires_quarantine) = check_fts(&conn, &schema_inspection);
+    let (prompt_references, prompt_ref_requires_quarantine) =
+        check_prompt_references(&conn, &schema_inspection);
+    let (prompt_hashes, prompt_hash_requires_quarantine) =
+        check_prompt_hashes(&conn, &schema_inspection);
+    let titles = check_titles(&conn, &schema_inspection);
+    let stats = match read_health_stats(&conn, &schema_inspection) {
+        Ok(stats) => Some(stats),
+        Err(error) if schema_inspection.messages_compatible => {
+            sqlite.status = "fail".to_string();
+            sqlite.summary = "authoritative message queries failed".to_string();
+            sqlite.issues.push(error.to_string());
+            None
+        }
+        Err(_) => None,
+    };
+
+    let sqlite_requires_quarantine = sqlite.status == "fail";
+    let schema_requires_quarantine = schema_inspection.authoritative_incompatible;
+    let wal_requires_quarantine = wal.status == "fail";
+    let requires_quarantine = sqlite_requires_quarantine
+        || schema_requires_quarantine
+        || wal_requires_quarantine
+        || fts_requires_quarantine
+        || prompt_ref_requires_quarantine
+        || prompt_hash_requires_quarantine;
+
+    let mut report = MemoryHealthReport {
+        status: "ok".to_string(),
+        path: path.display().to_string(),
+        initialized: true,
+        sqlite,
+        wal,
+        schema,
+        fts,
+        prompt_references,
+        prompt_hashes,
+        titles,
+        repair_lifecycle,
+        stats,
+        repairable_in_place: false,
+        requires_quarantine,
+        planned_repairs: Vec::new(),
+    };
+    populate_planned_repairs(&mut report);
+    finalize_health_report(&mut report);
+    Ok(report)
+}
+
+fn absent_health_report(
+    path: &Path,
+    wal: MemoryHealthCheck,
+    repair_lifecycle: MemoryHealthCheck,
+) -> MemoryHealthReport {
+    let absent = || MemoryHealthCheck::ok("database is not initialized");
+    MemoryHealthReport {
+        status: "ok".to_string(),
+        path: path.display().to_string(),
+        initialized: false,
+        sqlite: absent(),
+        wal,
+        schema: absent(),
+        fts: absent(),
+        prompt_references: absent(),
+        prompt_hashes: absent(),
+        titles: absent(),
+        repair_lifecycle,
+        stats: Some(MemoryHealthStats::default()),
+        repairable_in_place: true,
+        requires_quarantine: false,
+        planned_repairs: vec!["initialize_database".to_string()],
+    }
+}
+
+fn blocked_health_report(
+    path: &Path,
+    error: String,
+    wal: MemoryHealthCheck,
+    repair_lifecycle: MemoryHealthCheck,
+) -> MemoryHealthReport {
+    let blocked = || {
+        MemoryHealthCheck::fail(
+            "check could not run because SQLite is unavailable",
+            vec![error.clone()],
+        )
+    };
+    let mut report = MemoryHealthReport {
+        status: "fail".to_string(),
+        path: path.display().to_string(),
+        initialized: path.exists(),
+        sqlite: MemoryHealthCheck::fail("SQLite database is unavailable", vec![error.clone()]),
+        wal,
+        schema: blocked(),
+        fts: blocked(),
+        prompt_references: blocked(),
+        prompt_hashes: blocked(),
+        titles: blocked(),
+        repair_lifecycle,
+        stats: None,
+        repairable_in_place: false,
+        requires_quarantine: true,
+        planned_repairs: vec!["quarantine_and_initialize_replacement".to_string()],
+    };
+    finalize_health_report(&mut report);
+    report
+}
+
+fn finalize_health_report(report: &mut MemoryHealthReport) {
+    let checks = [
+        &report.sqlite,
+        &report.wal,
+        &report.schema,
+        &report.fts,
+        &report.prompt_references,
+        &report.prompt_hashes,
+        &report.titles,
+        &report.repair_lifecycle,
+    ];
+    report.status = if checks.iter().any(|check| check.status == "fail") {
+        "fail".to_string()
+    } else if checks.iter().any(|check| check.status == "warn") {
+        "warn".to_string()
+    } else {
+        "ok".to_string()
+    };
+    report.repairable_in_place = !report.requires_quarantine
+        && (!report.planned_repairs.is_empty() || report.status != "ok");
+}
+
+fn populate_planned_repairs(report: &mut MemoryHealthReport) {
+    if report.requires_quarantine {
+        report.planned_repairs = vec!["quarantine_and_initialize_replacement".to_string()];
+        return;
+    }
+    let mut actions = Vec::new();
+    if report.initialized
+        && (report.wal.status != "ok"
+            || report.wal.metrics.get("wal_frames").copied().unwrap_or(0) > 0)
+    {
+        actions.push("checkpoint_wal".to_string());
+    } else if !report.initialized {
+        actions.push("initialize_database".to_string());
+    }
+
+    if report.wal.status != "ok" {
+        actions.push("configure_wal".to_string());
+    }
+    if report.schema.status != "ok" {
+        actions.push("restore_schema_objects".to_string());
+    }
+    if report.fts.status != "ok" {
+        actions.push("rebuild_fts_and_triggers".to_string());
+    }
+    if report.titles.metrics.get("orphaned").copied().unwrap_or(0) > 0 {
+        actions.push("remove_orphaned_titles".to_string());
+    }
+    if report.titles.metrics.get("empty").copied().unwrap_or(0) > 0 {
+        actions.push("remove_empty_titles".to_string());
+    }
+    if report
+        .prompt_references
+        .metrics
+        .get("orphaned_sessions")
+        .copied()
+        .unwrap_or(0)
+        > 0
+    {
+        actions.push("remove_orphaned_prompt_references".to_string());
+    }
+    if report
+        .prompt_references
+        .metrics
+        .get("unreferenced_blobs")
+        .copied()
+        .unwrap_or(0)
+        > 0
+    {
+        actions.push("remove_unreferenced_prompt_blobs".to_string());
+    }
+    if report.repair_lifecycle.status == "fail" {
+        actions.insert(0, "resume_interrupted_repair".to_string());
+    }
+    actions.dedup();
+    report.planned_repairs = actions;
+}
+
+fn run_repair_operation(
+    path: &Path,
+    actions: &[String],
+    attempt: &RepairEvent,
+) -> Result<QuarantineResult, MemoryError> {
+    match attempt.mode {
+        RepairMode::InPlace if actions.is_empty() => Ok(QuarantineResult::default()),
+        RepairMode::InPlace => perform_in_place_repair(path, actions),
+        RepairMode::Quarantine => {
+            let base = attempt
+                .quarantine_path
+                .as_deref()
+                .map(PathBuf::from)
+                .ok_or_else(|| {
+                    MemoryError::Repair(
+                        "interrupted quarantine repair has no recorded destination".to_string(),
+                    )
+                })?;
+            quarantine_and_replace(path, &base, attempt.salvage_source)
+        }
+    }
+}
+
+fn check_sqlite_integrity(conn: &Connection) -> MemoryHealthCheck {
+    let result = (|| -> Result<Vec<String>, rusqlite::Error> {
+        let mut stmt = conn.prepare("PRAGMA integrity_check")?;
+        let mut rows = stmt.query([])?;
+        let mut issues = Vec::new();
+        while let Some(row) = rows.next()? {
+            let message: String = row.get(0)?;
+            if message != "ok" && issues.len() < 20 {
+                issues.push(message);
+            }
+        }
+        Ok(issues)
+    })();
+    match result {
+        Ok(issues) if issues.is_empty() => MemoryHealthCheck::ok("SQLite integrity_check passed"),
+        Ok(issues) => MemoryHealthCheck::fail("SQLite integrity_check failed", issues),
+        Err(error) => MemoryHealthCheck::fail(
+            "SQLite integrity_check could not complete",
+            vec![error.to_string()],
+        ),
+    }
+}
+
+fn inspect_schema(conn: &Connection) -> Result<SchemaInspection, MemoryError> {
+    let mut inspection = SchemaInspection::default();
+    for (table, columns) in EXPECTED_TABLES {
+        match schema_object_type(conn, table)? {
+            None => inspection.missing.push(format!("missing table {table}")),
+            Some(kind) if kind != "table" => inspection
+                .incompatible
+                .push(format!("{table} is {kind}, expected table")),
+            Some(_) => {
+                let actual = table_columns(conn, table)?;
+                let absent: Vec<_> = columns
+                    .iter()
+                    .filter(|column| !actual.iter().any(|actual| actual == **column))
+                    .copied()
+                    .collect();
+                if !absent.is_empty() {
+                    inspection.authoritative_incompatible = true;
+                    inspection.incompatible.push(format!(
+                        "table {table} is missing column(s): {}",
+                        absent.join(", ")
+                    ));
+                }
+            }
+        }
+        if schema_object_type(conn, table)?
+            .as_deref()
+            .is_some_and(|kind| kind != "table")
+        {
+            inspection.authoritative_incompatible = true;
+        }
+    }
+    for index in EXPECTED_INDEXES {
+        if schema_object_type(conn, index)?.as_deref() != Some("index") {
+            inspection.missing.push(format!("missing index {index}"));
+        }
+    }
+
+    inspection.messages_compatible = table_has_columns(conn, "messages", EXPECTED_TABLES[0].1)?;
+    inspection.titles_compatible = table_has_columns(conn, "session_titles", EXPECTED_TABLES[1].1)?;
+    inspection.prompts_compatible =
+        table_has_columns(conn, "system_prompts", EXPECTED_TABLES[2].1)?
+            && table_has_columns(conn, "session_system_prompts", EXPECTED_TABLES[3].1)?;
+
+    match schema_object_type(conn, "messages_fts")? {
+        None => inspection
+            .missing
+            .push("missing virtual table messages_fts".to_string()),
+        Some(kind) if kind != "table" => inspection
+            .incompatible
+            .push(format!("messages_fts is {kind}, expected virtual table")),
+        Some(_) => {
+            let sql: Option<String> = conn
+                .query_row(
+                    "SELECT sql FROM sqlite_schema WHERE name = 'messages_fts'",
+                    [],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let normalized = sql.as_deref().map(normalize_sql).unwrap_or_default();
+            inspection.fts_compatible = normalized.contains("usingfts5(")
+                && normalized.contains("content='messages'")
+                && normalized.contains("content_rowid='id'");
+            if !inspection.fts_compatible {
+                inspection.incompatible.push(
+                    "messages_fts definition is not the expected external-content index"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    for trigger in EXPECTED_TRIGGERS {
+        let sql: Option<String> = conn
+            .query_row(
+                "SELECT sql FROM sqlite_schema WHERE type = 'trigger' AND name = ?",
+                params![trigger],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match sql {
+            None => inspection.missing_triggers.push((*trigger).to_string()),
+            Some(sql) if !trigger_definition_matches(trigger, &normalize_sql(&sql)) => {
+                inspection.altered_triggers.push((*trigger).to_string())
+            }
+            Some(_) => {}
+        }
+    }
+    Ok(inspection)
+}
+
+fn schema_health_check(schema: &SchemaInspection) -> MemoryHealthCheck {
+    let mut issues = schema.missing.clone();
+    issues.extend(schema.incompatible.clone());
+    if issues.is_empty() {
+        MemoryHealthCheck::ok("authoritative tables and indexes are present")
+    } else {
+        MemoryHealthCheck::fail("memory schema is incomplete or incompatible", issues)
+    }
+}
+
+fn check_fts(conn: &Connection, schema: &SchemaInspection) -> (MemoryHealthCheck, bool) {
+    let mut issues = Vec::new();
+    if !schema.missing_triggers.is_empty() {
+        issues.push(format!(
+            "missing trigger(s): {}",
+            schema.missing_triggers.join(", ")
+        ));
+    }
+    if !schema.altered_triggers.is_empty() {
+        issues.push(format!(
+            "altered trigger(s): {}",
+            schema.altered_triggers.join(", ")
+        ));
+    }
+    if !schema.messages_compatible || !schema.fts_compatible {
+        issues.push("FTS comparison is blocked by schema damage".to_string());
+        return (
+            MemoryHealthCheck::fail("FTS projection is unavailable", issues),
+            false,
+        );
+    }
+
+    match fts_matches_messages(conn) {
+        Ok(true) => {}
+        Ok(false) => {
+            issues.push("FTS token index differs from authoritative message content".to_string())
+        }
+        Err(error) => {
+            issues.push(format!("FTS projection check failed: {error}"));
+        }
+    }
+    if issues.is_empty() {
+        (
+            MemoryHealthCheck::ok("FTS projection and maintenance triggers match messages"),
+            false,
+        )
+    } else {
+        (
+            MemoryHealthCheck::fail("FTS projection requires an in-place rebuild", issues),
+            false,
+        )
+    }
+}
+
+fn fts_matches_messages(conn: &Connection) -> Result<bool, MemoryError> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS temp.memory_health_actual_vocab;
+         DROP TABLE IF EXISTS temp.memory_health_expected_vocab;
+         DROP TABLE IF EXISTS temp.memory_health_expected_fts;
+         CREATE VIRTUAL TABLE temp.memory_health_expected_fts USING fts5(
+             content,
+             tokenize='unicode61 remove_diacritics 2'
+         );
+         INSERT INTO temp.memory_health_expected_fts(rowid, content)
+             SELECT id, content FROM main.messages;
+         CREATE VIRTUAL TABLE temp.memory_health_actual_vocab
+             USING fts5vocab(main, messages_fts, 'instance');
+         CREATE VIRTUAL TABLE temp.memory_health_expected_vocab
+             USING fts5vocab(temp, memory_health_expected_fts, 'instance');",
+    )?;
+    let actual_has_extra = conn.query_row(
+        "SELECT EXISTS(
+             SELECT term, doc, col, offset FROM temp.memory_health_actual_vocab
+             EXCEPT
+             SELECT term, doc, col, offset FROM temp.memory_health_expected_vocab
+         )",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    let expected_has_extra = conn.query_row(
+        "SELECT EXISTS(
+             SELECT term, doc, col, offset FROM temp.memory_health_expected_vocab
+             EXCEPT
+             SELECT term, doc, col, offset FROM temp.memory_health_actual_vocab
+         )",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? != 0;
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS temp.memory_health_actual_vocab;
+         DROP TABLE IF EXISTS temp.memory_health_expected_vocab;
+         DROP TABLE IF EXISTS temp.memory_health_expected_fts;",
+    )?;
+    Ok(!actual_has_extra && !expected_has_extra)
+}
+
+fn check_prompt_references(
+    conn: &Connection,
+    schema: &SchemaInspection,
+) -> (MemoryHealthCheck, bool) {
+    if !schema.prompts_compatible {
+        return (
+            MemoryHealthCheck::fail(
+                "prompt references could not be checked",
+                vec!["prompt tables are missing or incompatible".to_string()],
+            ),
+            false,
+        );
+    }
+    let result = (|| -> Result<(u64, u64, u64), rusqlite::Error> {
+        let dangling = conn.query_row(
+            "SELECT COUNT(*)
+             FROM session_system_prompts AS s
+             LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+             WHERE p.hash IS NULL",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        let orphaned_sessions = if schema.messages_compatible {
+            conn.query_row(
+                "SELECT COUNT(*)
+                 FROM session_system_prompts AS s
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM messages AS m WHERE m.session_id = s.session_id
+                 )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as u64
+        } else {
+            0
+        };
+        let unreferenced_blobs = conn.query_row(
+            "SELECT COUNT(*)
+             FROM system_prompts AS p
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_system_prompts AS s WHERE s.prompt_hash = p.hash
+             )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        Ok((dangling, orphaned_sessions, unreferenced_blobs))
+    })();
+    match result {
+        Ok((dangling, orphaned_sessions, unreferenced_blobs)) => {
+            let mut check = if dangling > 0 {
+                MemoryHealthCheck::fail(
+                    "session prompt references are unsafe",
+                    vec![format!(
+                        "{dangling} session prompt reference(s) point to missing blobs"
+                    )],
+                )
+            } else if orphaned_sessions > 0 || unreferenced_blobs > 0 {
+                MemoryHealthCheck::warn(
+                    "prompt reference projections contain orphaned rows",
+                    vec![
+                        format!("{orphaned_sessions} prompt reference(s) have no message session"),
+                        format!("{unreferenced_blobs} prompt blob(s) are unreferenced"),
+                    ],
+                )
+            } else {
+                MemoryHealthCheck::ok("session prompt references are complete")
+            };
+            check
+                .metrics
+                .insert("dangling_hashes".to_string(), dangling);
+            check
+                .metrics
+                .insert("orphaned_sessions".to_string(), orphaned_sessions);
+            check
+                .metrics
+                .insert("unreferenced_blobs".to_string(), unreferenced_blobs);
+            (check, dangling > 0)
+        }
+        Err(error) => (
+            MemoryHealthCheck::fail("prompt reference check failed", vec![error.to_string()]),
+            true,
+        ),
+    }
+}
+
+fn check_prompt_hashes(conn: &Connection, schema: &SchemaInspection) -> (MemoryHealthCheck, bool) {
+    if !schema.prompts_compatible {
+        return (
+            MemoryHealthCheck::fail(
+                "prompt hashes could not be checked",
+                vec!["prompt tables are missing or incompatible".to_string()],
+            ),
+            false,
+        );
+    }
+    let result = (|| -> Result<(u64, u64), rusqlite::Error> {
+        let mut stmt = conn.prepare("SELECT hash, prompt FROM system_prompts ORDER BY hash")?;
+        let mut rows = stmt.query([])?;
+        let mut checked = 0_u64;
+        let mut mismatched = 0_u64;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(0)?;
+            let prompt: String = row.get(1)?;
+            checked += 1;
+            if system_prompt_hash(&prompt) != hash {
+                mismatched += 1;
+            }
+        }
+        Ok((checked, mismatched))
+    })();
+    match result {
+        Ok((checked, mismatched)) => {
+            let mut check = if mismatched == 0 {
+                MemoryHealthCheck::ok("all content-addressed prompt blobs match SHA-256")
+            } else {
+                MemoryHealthCheck::fail(
+                    "content-addressed prompt verification failed",
+                    vec![format!(
+                        "{mismatched} of {checked} prompt blob(s) have the wrong SHA-256"
+                    )],
+                )
+            };
+            check.metrics.insert("checked".to_string(), checked);
+            check.metrics.insert("mismatched".to_string(), mismatched);
+            (check, mismatched > 0)
+        }
+        Err(error) => (
+            MemoryHealthCheck::fail("prompt hash check failed", vec![error.to_string()]),
+            true,
+        ),
+    }
+}
+
+fn check_titles(conn: &Connection, schema: &SchemaInspection) -> MemoryHealthCheck {
+    if !schema.titles_compatible || !schema.messages_compatible {
+        return MemoryHealthCheck::fail(
+            "session titles could not be checked",
+            vec!["title or message table is missing or incompatible".to_string()],
+        );
+    }
+    let result = (|| -> Result<(u64, u64), rusqlite::Error> {
+        let orphaned = conn.query_row(
+            "SELECT COUNT(*)
+             FROM session_titles AS t
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM messages AS m WHERE m.session_id = t.session_id
+             )",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        let empty = conn.query_row(
+            "SELECT COUNT(*) FROM session_titles WHERE trim(title) = ''",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
+        Ok((orphaned, empty))
+    })();
+    match result {
+        Ok((orphaned, empty)) => {
+            let mut issues = Vec::new();
+            if orphaned > 0 {
+                issues.push(format!(
+                    "{orphaned} title(s) do not belong to a session with messages"
+                ));
+            }
+            if empty > 0 {
+                issues.push(format!("{empty} title(s) are empty"));
+            }
+            let mut check = if issues.is_empty() {
+                MemoryHealthCheck::ok("session titles belong to authoritative message sessions")
+            } else {
+                MemoryHealthCheck::warn("session title invariants need attention", issues)
+            };
+            check.metrics.insert("orphaned".to_string(), orphaned);
+            check.metrics.insert("empty".to_string(), empty);
+            check
+        }
+        Err(error) => {
+            MemoryHealthCheck::fail("session title check failed", vec![error.to_string()])
+        }
+    }
+}
+
+fn read_health_stats(
+    conn: &Connection,
+    schema: &SchemaInspection,
+) -> Result<MemoryHealthStats, MemoryError> {
+    if !schema.messages_compatible {
+        return Err(MemoryError::Integrity(
+            "messages schema is unavailable".to_string(),
+        ));
+    }
+    const DAY_MS: i64 = 86_400_000;
+    let now = current_ts_ms();
+    let total_messages = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| {
+        row.get::<_, i64>(0)
+    })? as u64;
+    let total_sessions = conn.query_row(
+        "SELECT COUNT(DISTINCT session_id) FROM messages",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as u64;
+    let titled_sessions = if schema.titles_compatible {
+        conn.query_row("SELECT COUNT(*) FROM session_titles", [], |row| {
+            row.get::<_, i64>(0)
+        })? as u64
+    } else {
+        0
+    };
+    let count_since = |cutoff: i64| {
+        conn.query_row(
+            "SELECT COUNT(*) FROM messages WHERE ts_ms >= ?",
+            params![cutoff],
+            |row| row.get::<_, i64>(0).map(|value| value as u64),
+        )
+    };
+    let (oldest_ts_ms, newest_ts_ms) =
+        conn.query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        })?;
+    Ok(MemoryHealthStats {
+        total_messages,
+        total_sessions,
+        titled_sessions,
+        messages_last_1d: count_since(now.saturating_sub(DAY_MS))?,
+        messages_last_7d: count_since(now.saturating_sub(7 * DAY_MS))?,
+        messages_last_30d: count_since(now.saturating_sub(30 * DAY_MS))?,
+        oldest_ts_ms,
+        newest_ts_ms,
+    })
+}
+
+fn inspect_wal_files(path: &Path) -> MemoryHealthCheck {
+    let wal = wal_path(path);
+    let shm = shm_path(path);
+    let mut check = MemoryHealthCheck::ok("WAL sidecars are absent or structurally valid");
+    let mut issues = Vec::new();
+
+    match inspect_wal_header(&wal) {
+        Ok(Some((bytes, frames))) => {
+            check.metrics.insert("wal_bytes".to_string(), bytes);
+            check.metrics.insert("wal_frames".to_string(), frames);
+        }
+        Ok(None) => {
+            check.metrics.insert("wal_bytes".to_string(), 0);
+            check.metrics.insert("wal_frames".to_string(), 0);
+        }
+        Err(error) => issues.push(error),
+    }
+    match fs::symlink_metadata(&shm) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            issues.push(format!("{} is not a regular file", shm.display()));
+        }
+        Ok(metadata) => {
+            check
+                .metrics
+                .insert("shm_bytes".to_string(), metadata.len());
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            check.metrics.insert("shm_bytes".to_string(), 0);
+        }
+        Err(error) => issues.push(format!("cannot inspect {}: {error}", shm.display())),
+    }
+    if !path.exists() && (wal.exists() || shm.exists()) {
+        issues.push("SQLite sidecar exists without memory.db".to_string());
+    }
+    if issues.is_empty() {
+        check
+    } else {
+        MemoryHealthCheck {
+            status: "fail".to_string(),
+            summary: "WAL sidecar validation failed".to_string(),
+            issues,
+            metrics: check.metrics,
+        }
+    }
+}
+
+fn inspect_wal_header(path: &Path) -> Result<Option<(u64, u64)>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("cannot inspect {}: {error}", path.display())),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!("{} is not a regular file", path.display()));
+    }
+    let size = metadata.len();
+    if size == 0 {
+        return Ok(Some((0, 0)));
+    }
+    if size < 32 {
+        return Err(format!("{} is shorter than a WAL header", path.display()));
+    }
+    let mut header = [0_u8; 32];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|error| format!("read {}: {error}", path.display()))?;
+    let magic = u32::from_be_bytes(header[0..4].try_into().expect("four bytes"));
+    if !matches!(magic, 0x377f_0682 | 0x377f_0683) {
+        return Err(format!("{} has an invalid WAL magic", path.display()));
+    }
+    let encoded_page_size =
+        u32::from_be_bytes(header[8..12].try_into().expect("four bytes")) as u64;
+    let page_size = if encoded_page_size == 1 {
+        65_536
+    } else {
+        encoded_page_size
+    };
+    if !(512..=65_536).contains(&page_size) || !page_size.is_power_of_two() {
+        return Err(format!("{} has an invalid WAL page size", path.display()));
+    }
+    let frame_size = page_size + 24;
+    let payload = size - 32;
+    if payload % frame_size != 0 {
+        return Err(format!("{} ends in a partial WAL frame", path.display()));
+    }
+    Ok(Some((size, payload / frame_size)))
+}
+
+fn repair_lifecycle_check(path: &Path, snapshot: &RepairLogSnapshot) -> MemoryHealthCheck {
+    if snapshot.malformed_lines > 0 {
+        return MemoryHealthCheck::fail(
+            "repair lifecycle log is malformed",
+            vec![format!(
+                "{} malformed repair log line(s) in {}",
+                snapshot.malformed_lines,
+                repair_log_path(path).display()
+            )],
+        );
+    }
+    if !snapshot.incomplete.is_empty() {
+        return MemoryHealthCheck::fail(
+            "an interrupted memory repair is recorded",
+            vec![format!(
+                "{} repair attempt(s) started without a terminal result; re-run explicit repair",
+                snapshot.incomplete.len()
+            )],
+        )
+        .with_metric("interrupted_attempts", snapshot.incomplete.len() as u64);
+    }
+    if snapshot
+        .last_applied
+        .as_ref()
+        .is_some_and(|event| event.phase == RepairPhase::Failed)
+    {
+        return MemoryHealthCheck::fail(
+            "the last memory repair failed",
+            vec![snapshot
+                .last_applied
+                .as_ref()
+                .and_then(|event| event.error.clone())
+                .unwrap_or_else(|| "repair failed without an error detail".to_string())],
+        );
+    }
+    MemoryHealthCheck::ok("no interrupted or failed repair is pending")
+}
+
+fn perform_in_place_repair(
+    path: &Path,
+    actions: &[String],
+) -> Result<QuarantineResult, MemoryError> {
+    ensure_private_database_file(path)?;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
+    )?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    conn.execute_batch(CONNECTION_PRAGMAS)?;
+    checkpoint_wal(&conn)?;
+
+    let mut conn = conn;
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(BASE_SCHEMA)?;
+    validate_prompt_integrity(&tx)?;
+
+    tx.execute(
+        "DELETE FROM session_titles
+         WHERE trim(title) = ''
+            OR NOT EXISTS (
+                SELECT 1 FROM messages WHERE messages.session_id = session_titles.session_id
+            )",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM session_system_prompts
+         WHERE NOT EXISTS (
+             SELECT 1 FROM messages
+             WHERE messages.session_id = session_system_prompts.session_id
+         )",
+        [],
+    )?;
+    tx.execute(
+        "DELETE FROM system_prompts
+         WHERE NOT EXISTS (
+             SELECT 1 FROM session_system_prompts
+             WHERE session_system_prompts.prompt_hash = system_prompts.hash
+         )",
+        [],
+    )?;
+
+    if actions
+        .iter()
+        .any(|action| action == "rebuild_fts_and_triggers")
+        || schema_object_type(&tx, "messages_fts")?.is_none()
+    {
+        tx.execute_batch(
+            "DROP TRIGGER IF EXISTS messages_ai;
+             DROP TRIGGER IF EXISTS messages_ad;
+             DROP TRIGGER IF EXISTS messages_au;
+             DROP TABLE IF EXISTS messages_fts;",
+        )?;
+        tx.execute_batch(FTS_SCHEMA)?;
+        tx.execute(
+            "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+            [],
+        )?;
+    } else {
+        tx.execute_batch(FTS_SCHEMA)?;
+    }
+    tx.commit()?;
+    checkpoint_wal(&conn)?;
+    harden_sqlite_files(path)?;
+    Ok(QuarantineResult::default())
+}
+
+fn validate_prompt_integrity(conn: &Connection) -> Result<(), MemoryError> {
+    let dangling = conn.query_row(
+        "SELECT COUNT(*)
+         FROM session_system_prompts AS s
+         LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+         WHERE p.hash IS NULL",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? as u64;
+    if dangling > 0 {
+        return Err(MemoryError::Integrity(format!(
+            "{dangling} session prompt reference(s) point to missing blobs"
+        )));
+    }
+    let mut stmt = conn.prepare("SELECT hash, prompt FROM system_prompts")?;
+    let mut rows = stmt.query([])?;
+    let mut mismatched = 0_u64;
+    while let Some(row) = rows.next()? {
+        let hash: String = row.get(0)?;
+        let prompt: String = row.get(1)?;
+        if system_prompt_hash(&prompt) != hash {
+            mismatched += 1;
+        }
+    }
+    if mismatched > 0 {
+        return Err(MemoryError::Integrity(format!(
+            "{mismatched} system prompt blob(s) failed SHA-256 verification"
+        )));
+    }
+    Ok(())
+}
+
+fn quarantine_and_replace(
+    path: &Path,
+    quarantine: &Path,
+    salvage_source: bool,
+) -> Result<QuarantineResult, MemoryError> {
+    if path.exists() && quarantine.exists() {
+        let replacement_health = diagnose_locked(path, false)?;
+        if replacement_health.status == "ok" {
+            return Ok(QuarantineResult {
+                base: Some(quarantine.to_path_buf()),
+                files: existing_quarantine_files(quarantine),
+                recovered: RecoveredRecords::default(),
+            });
+        }
+        let failed = suffix_path(
+            quarantine,
+            &format!(".replacement-failed-{}", uuid::Uuid::new_v4().simple()),
+        );
+        fs::rename(path, &failed)?;
+        crate::storage::set_private_file(&failed)?;
+    }
+
+    if path.exists() && !quarantine.exists() && salvage_source {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+        conn.busy_timeout(Duration::from_secs(5))?;
+        checkpoint_wal(&conn)?;
+        drop(conn);
+    }
+
+    let mut files = Vec::new();
+    move_if_present(path, quarantine, &mut files)?;
+    move_if_present(&wal_path(path), &wal_path(quarantine), &mut files)?;
+    move_if_present(&shm_path(path), &shm_path(quarantine), &mut files)?;
+    sync_parent(path)?;
+
+    let replacement = suffix_path(
+        path,
+        &format!(".replacement-{}", uuid::Uuid::new_v4().simple()),
+    );
+    remove_replacement_scratch(&replacement)?;
+    ensure_private_database_file(&replacement)?;
+    let mut target = Connection::open_with_flags(&replacement, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    initialize_connection(&target)?;
+    let recovered = if salvage_source && quarantine.exists() {
+        recover_authoritative_rows(quarantine, &mut target)?
+    } else {
+        RecoveredRecords::default()
+    };
+    checkpoint_wal(&target)?;
+    drop(target);
+    crate::storage::set_private_file(&replacement)?;
+    fs::rename(&replacement, path)?;
+    crate::storage::set_private_file(path)?;
+    remove_replacement_scratch(&replacement)?;
+    harden_sqlite_files(path)?;
+    sync_parent(path)?;
+
+    Ok(QuarantineResult {
+        base: Some(quarantine.to_path_buf()),
+        files,
+        recovered,
+    })
+}
+
+fn recover_authoritative_rows(
+    source_path: &Path,
+    target: &mut Connection,
+) -> Result<RecoveredRecords, MemoryError> {
+    let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    source.busy_timeout(Duration::from_secs(5))?;
+    let schema = inspect_schema(&source)?;
+    if !schema.messages_compatible {
+        return Ok(RecoveredRecords::default());
+    }
+
+    let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut recovered = RecoveredRecords::default();
+    {
+        let mut stmt = source
+            .prepare("SELECT id, session_id, role, content, ts_ms FROM messages ORDER BY id")?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            tx.execute(
+                "INSERT INTO messages(id, session_id, role, content, ts_ms)
+                 VALUES (?, ?, ?, ?, ?)",
+                params![
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(4)?,
+                ],
+            )?;
+            recovered.messages += 1;
+        }
+    }
+    if schema.titles_compatible {
+        let mut stmt = source.prepare(
+            "SELECT t.session_id, t.title, t.ts_ms
+             FROM session_titles AS t
+             WHERE EXISTS (
+                 SELECT 1 FROM messages AS m WHERE m.session_id = t.session_id
+             )
+             ORDER BY t.session_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            tx.execute(
+                "INSERT INTO session_titles(session_id, title, ts_ms) VALUES (?, ?, ?)",
+                params![
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ],
+            )?;
+            recovered.titles += 1;
+        }
+    }
+    if schema.prompts_compatible {
+        let mut stmt = source.prepare(
+            "SELECT s.session_id, s.prompt_hash, s.prompt_version, s.ts_ms, p.prompt
+             FROM session_system_prompts AS s
+             LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+             WHERE EXISTS (
+                 SELECT 1 FROM messages AS m WHERE m.session_id = s.session_id
+             )
+             ORDER BY s.session_id",
+        )?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            let hash: String = row.get(1)?;
+            let prompt: Option<String> = row.get(4)?;
+            let Some(prompt) = prompt.filter(|value| system_prompt_hash(value) == hash) else {
+                recovered.skipped_prompt_references += 1;
+                continue;
+            };
+            tx.execute(
+                "INSERT OR IGNORE INTO system_prompts(hash, prompt) VALUES (?, ?)",
+                params![hash, prompt],
+            )?;
+            tx.execute(
+                "INSERT INTO session_system_prompts(
+                     session_id, prompt_hash, prompt_version, ts_ms
+                 ) VALUES (?, ?, ?, ?)",
+                params![
+                    row.get::<_, String>(0)?,
+                    hash,
+                    row.get::<_, u32>(2)?,
+                    row.get::<_, i64>(3)?,
+                ],
+            )?;
+            recovered.prompt_references += 1;
+        }
+    }
+    tx.commit()?;
+    Ok(recovered)
+}
+
+fn checkpoint_wal(conn: &Connection) -> Result<(), MemoryError> {
+    let (busy, _frames, _checkpointed) =
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?;
+    if busy != 0 {
+        return Err(MemoryError::Repair(
+            "WAL checkpoint is busy; an uncoordinated SQLite writer may still be active"
+                .to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn schema_supports_message_recovery(path: &Path) -> Result<bool, MemoryError> {
+    if !path.exists() {
+        return Ok(false);
+    }
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    Ok(inspect_schema(&conn)?.messages_compatible)
+}
+
+fn read_repair_log(path: &Path) -> Result<RepairLogSnapshot, MemoryError> {
+    let log_path = repair_log_path(path);
+    let metadata = match fs::symlink_metadata(&log_path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(RepairLogSnapshot::default())
+        }
+        Err(error) => return Err(MemoryError::Io(error)),
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Ok(RepairLogSnapshot {
+            malformed_lines: 1,
+            ..RepairLogSnapshot::default()
+        });
+    }
+    if metadata.len() > MAX_REPAIR_LOG_BYTES {
+        return Ok(RepairLogSnapshot {
+            malformed_lines: 1,
+            ..RepairLogSnapshot::default()
+        });
+    }
+
+    let file = File::open(&log_path)?;
+    let mut active: HashMap<String, RepairEvent> = HashMap::new();
+    let mut last_applied = None;
+    let mut malformed_lines = 0;
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event: RepairEvent = match serde_json::from_str::<RepairEvent>(&line) {
+            Ok(event) if event.version == REPAIR_LOG_VERSION => event,
+            Ok(_) | Err(_) => {
+                malformed_lines += 1;
+                continue;
+            }
+        };
+        match event.phase {
+            RepairPhase::Started => {
+                active.insert(event.attempt_id.clone(), event);
+            }
+            RepairPhase::Completed | RepairPhase::Failed => {
+                active.remove(&event.attempt_id);
+                last_applied = Some(event);
+            }
+        }
+    }
+    let mut incomplete: Vec<_> = active.into_values().collect();
+    incomplete.sort_by_key(|event| event.ts_ms);
+    Ok(RepairLogSnapshot {
+        incomplete,
+        last_applied,
+        malformed_lines,
+    })
+}
+
+fn append_repair_event(path: &Path, event: &RepairEvent) -> Result<(), MemoryError> {
+    let log_path = repair_log_path(path);
+    reject_symlink(&log_path)?;
+    let line = serde_json::to_string(event)
+        .map_err(|error| MemoryError::Repair(format!("serialize repair event: {error}")))?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+        options.custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW);
+    }
+    let mut file = options.open(&log_path)?;
+    crate::storage::set_private_file(&log_path)?;
+    file.write_all(line.as_bytes())?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    sync_parent(&log_path)?;
+    Ok(())
+}
+
+fn add_forced_fts_action(actions: &mut Vec<String>, force: bool) {
+    if force
+        && !actions
+            .iter()
+            .any(|action| action == "rebuild_fts_and_triggers")
+    {
+        actions.push("rebuild_fts_and_triggers".to_string());
+    }
+}
+
+fn schema_object_type(conn: &Connection, name: &str) -> Result<Option<String>, MemoryError> {
+    conn.query_row(
+        "SELECT type FROM sqlite_schema WHERE name = ?",
+        params![name],
+        |row| row.get(0),
+    )
+    .optional()
+    .map_err(MemoryError::from)
+}
+
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, MemoryError> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let columns = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(columns)
+}
+
+fn table_has_columns(
+    conn: &Connection,
+    table: &str,
+    expected: &[&str],
+) -> Result<bool, MemoryError> {
+    if schema_object_type(conn, table)?.as_deref() != Some("table") {
+        return Ok(false);
+    }
+    let actual = table_columns(conn, table)?;
+    Ok(expected
+        .iter()
+        .all(|column| actual.iter().any(|actual| actual == *column)))
+}
+
+fn normalize_sql(sql: &str) -> String {
+    sql.chars()
+        .filter(|character| !character.is_whitespace() && *character != '"')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+fn trigger_definition_matches(name: &str, sql: &str) -> bool {
+    match name {
+        "messages_ai" => {
+            sql.contains("afterinsertonmessages")
+                && sql.contains("insertintomessages_fts(rowid,content)values(new.id,new.content)")
+        }
+        "messages_ad" => {
+            sql.contains("afterdeleteonmessages")
+                && sql.contains("values('delete',old.id,old.content)")
+        }
+        "messages_au" => {
+            sql.contains("afterupdateonmessages")
+                && sql.contains("values('delete',old.id,old.content)")
+                && sql.contains("values(new.id,new.content)")
+        }
+        _ => false,
+    }
+}
+
+fn reject_symlink(path: &Path) -> Result<(), MemoryError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(MemoryError::Repair(format!(
+            "refusing symlink in memory repair path: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(MemoryError::Io(error)),
+    }
+}
+
+fn reject_non_regular_file(path: &Path) -> Result<(), MemoryError> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(MemoryError::Repair(format!(
+                "refusing non-regular memory repair path: {}",
+                path.display()
+            )))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(MemoryError::Io(error)),
+    }
+}
+
+fn move_if_present(
+    source: &Path,
+    destination: &Path,
+    moved: &mut Vec<PathBuf>,
+) -> Result<(), MemoryError> {
+    if !source.exists() {
+        return Ok(());
+    }
+    reject_symlink(source)?;
+    if destination.exists() {
+        return Err(MemoryError::Repair(format!(
+            "quarantine destination already exists: {}",
+            destination.display()
+        )));
+    }
+    fs::rename(source, destination)?;
+    crate::storage::set_private_file(destination)?;
+    moved.push(destination.to_path_buf());
+    Ok(())
+}
+
+fn existing_quarantine_files(base: &Path) -> Vec<PathBuf> {
+    [base.to_path_buf(), wal_path(base), shm_path(base)]
+        .into_iter()
+        .filter(|path| path.exists())
+        .collect()
+}
+
+fn remove_replacement_scratch(path: &Path) -> Result<(), MemoryError> {
+    for candidate in [path.to_path_buf(), wal_path(path), shm_path(path)] {
+        if candidate.exists() {
+            reject_symlink(&candidate)?;
+            fs::remove_file(candidate)?;
+        }
+    }
+    Ok(())
+}
+
+fn harden_sqlite_files(path: &Path) -> Result<(), MemoryError> {
+    for candidate in [path.to_path_buf(), wal_path(path), shm_path(path)] {
+        if candidate.exists() {
+            reject_symlink(&candidate)?;
+            crate::storage::set_private_file(&candidate)?;
+        }
+    }
+    Ok(())
+}
+
+fn sync_parent(path: &Path) -> Result<(), MemoryError> {
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
+fn lifecycle_lock_path(path: &Path) -> PathBuf {
+    suffix_path(path, ".lifecycle.lock")
+}
+
+fn repair_log_path(path: &Path) -> PathBuf {
+    suffix_path(path, ".repair.jsonl")
+}
+
+fn wal_path(path: &Path) -> PathBuf {
+    suffix_path(path, "-wal")
+}
+
+fn shm_path(path: &Path) -> PathBuf {
+    suffix_path(path, "-shm")
+}
+
+fn quarantine_base(path: &Path, attempt_id: &str) -> PathBuf {
+    suffix_path(path, &format!(".quarantine-{attempt_id}"))
+}
+
+fn suffix_path(path: &Path, suffix: &str) -> PathBuf {
+    let mut value: OsString = path.as_os_str().to_os_string();
+    value.push(suffix);
+    PathBuf::from(value)
+}
+
+fn current_ts_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/agent/memory/recovery.rs"
+    ));
+}

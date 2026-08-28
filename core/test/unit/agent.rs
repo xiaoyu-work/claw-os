@@ -3183,6 +3183,42 @@ fn sessions_stats_dispatched_via_sessions_cmd() {
     assert!(v.get("by_role").is_some());
 }
 
+#[test]
+fn sessions_health_with_path_reports_focused_checks() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("memory.db");
+    let v = sessions_health_with_path(&path).expect("health");
+    assert_eq!(v["initialized"], json!(false));
+    assert!(v.get("sqlite").is_some());
+    assert!(v.get("fts").is_some());
+    assert!(v.get("prompt_hashes").is_some());
+}
+
+#[test]
+fn sessions_repair_requires_confirmation_for_mutation() {
+    let error = sessions_repair(&[]).unwrap_err();
+    assert!(error.contains("--yes"));
+    let error = sessions_repair(&["--unknown".into()]).unwrap_err();
+    assert!(error.contains("unknown repair arg"));
+}
+
+#[test]
+fn sessions_repair_with_path_supports_non_mutating_preview() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("memory.db");
+    let v = sessions_repair_with_path(
+        &path,
+        memory::recovery::RepairOptions {
+            dry_run: true,
+            ..memory::recovery::RepairOptions::default()
+        },
+    )
+    .expect("preview");
+    assert_eq!(v["status"], json!("planned"));
+    assert_eq!(v["dry_run"], json!(true));
+    assert!(!path.exists());
+}
+
 // ---- sessions_top ----
 
 #[test]

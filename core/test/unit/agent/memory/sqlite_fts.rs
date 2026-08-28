@@ -123,6 +123,38 @@ fn system_prompt_freeze_is_content_addressed_and_first_writer_wins() {
 }
 
 #[test]
+fn system_prompt_lookup_rejects_wrong_content_hash() {
+    let db = db();
+    db.freeze_system_prompt("s1", "trusted prompt", 1).unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+    let error = db.system_prompt_for("s1", 1).unwrap_err();
+    assert!(error.is_integrity_failure());
+}
+
+#[test]
+fn system_prompt_lookup_rejects_dangling_reference() {
+    let db = db();
+    db.freeze_system_prompt("s1", "trusted prompt", 1).unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = OFF;").unwrap();
+        conn.execute(
+            "UPDATE session_system_prompts
+             SET prompt_hash = 'missing'
+             WHERE session_id = 's1'",
+            [],
+        )
+        .unwrap();
+    }
+    let error = db.system_prompt_for("s1", 1).unwrap_err();
+    assert!(error.is_integrity_failure());
+}
+
+#[test]
 fn search_finds_substring_match_via_fts() {
     let db = db();
     db.record_message("s", "user", "I love pineapples on pizza")

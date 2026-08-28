@@ -13,12 +13,15 @@ results, and curates durable notes from completed work.
 - Curate notes with crash-safe run bracketing.
 - Redact sensitive model-visible memory where required.
 - Preserve schema, transaction, and recovery behavior.
+- Diagnose corruption and serialize explicit repair against active database
+  handles without deleting the damaged evidence.
 
 ## Key Files
 
 | Path | Role |
 | --- | --- |
 | `sqlite_fts.rs` | SQLite/WAL/FTS persistence |
+| `recovery.rs` | Read-only health checks, FTS rebuild, repair logging, quarantine, and safe replacement |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable note storage |
@@ -35,5 +38,9 @@ coverage.
 ## Tests
 
 ```bash
+cargo test -p cos agent::memory::recovery::tests -- --test-threads=1
 cargo test -p cos agent::memory:: -- --test-threads=1
 ```
+
+Operator commands and recovery limits are documented in
+[`../../../../docs/memory-recovery.md`](../../../../docs/memory-recovery.md).

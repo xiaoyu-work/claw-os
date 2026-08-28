@@ -24,7 +24,9 @@ files on disk. The curator also performs exact duplicate and correction
 handling before writing facts.
 
 SQLite memory already exposes explicit count/purge operations. What is still
-missing is automated retention policy and fuzzy duplicate handling.
+missing is automated retention policy and fuzzy duplicate handling. Supported
+corruption diagnosis, FTS rebuild, and evidence-preserving quarantine are
+documented in [`memory-recovery.md`](memory-recovery.md).
 
 ### M1 — Semantic deduplication before curator append
 

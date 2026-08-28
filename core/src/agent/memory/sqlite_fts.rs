@@ -11,9 +11,10 @@
 //! The DB lives at `data_dir/agent/memory.db` by default and uses WAL mode so
 //! concurrent readers (e.g. the `cos_recall` tool) don't block writers.
 //!
-//! Failures are designed to be non-fatal: if `record_message` errors, the
-//! caller is expected to log and continue — losing a memory record is better
-//! than crashing the agent loop.
+//! Transient recording failures are non-fatal: callers log and continue when
+//! a new message cannot be appended. Integrity failures are different:
+//! damaged content-addressed prompts are never returned to the model, and
+//! schema corruption requires explicit diagnosis/repair.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -21,6 +22,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
+
+use super::recovery::{self, MemoryLifecycleLock};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
 
@@ -34,6 +37,35 @@ pub enum MemoryError {
 
     #[error("memory db poisoned: {0}")]
     Poisoned(String),
+
+    #[error("memory integrity failure: {0}")]
+    Integrity(String),
+
+    #[error("memory repair failed: {0}")]
+    Repair(String),
+}
+
+impl MemoryError {
+    pub fn is_integrity_failure(&self) -> bool {
+        match self {
+            Self::Integrity(_) => true,
+            Self::Sqlite(error) => {
+                if let rusqlite::Error::SqliteFailure(code, _) = error {
+                    if matches!(
+                        code.code,
+                        rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase
+                    ) {
+                        return true;
+                    }
+                }
+                let message = error.to_string().to_ascii_lowercase();
+                message.contains("database disk image is malformed")
+                    || message.contains("not a database")
+                    || message.contains("database corruption")
+            }
+            Self::Io(_) | Self::Poisoned(_) | Self::Repair(_) => false,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +145,7 @@ pub struct SessionStats {
     pub newest_ts_ms: Option<i64>,
 }
 
-const SCHEMA: &str = r#"
+pub(super) const CONNECTION_PRAGMAS: &str = r#"
 PRAGMA journal_mode = WAL;
 PRAGMA synchronous = NORMAL;
 PRAGMA busy_timeout = 5000;
@@ -124,7 +156,9 @@ PRAGMA foreign_keys = ON;
 -- page size, which is small enough not to stall writers and large
 -- enough to avoid checkpointing every transaction.
 PRAGMA wal_autocheckpoint = 1000;
+"#;
 
+pub(super) const BASE_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS messages (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id  TEXT NOT NULL,
@@ -139,6 +173,27 @@ CREATE INDEX IF NOT EXISTS messages_session_ts
 CREATE INDEX IF NOT EXISTS messages_ts
     ON messages(ts_ms);
 
+CREATE TABLE IF NOT EXISTS session_titles (
+    session_id  TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    ts_ms       INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS system_prompts (
+    hash        TEXT PRIMARY KEY,
+    prompt      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS session_system_prompts (
+    session_id     TEXT PRIMARY KEY,
+    prompt_hash    TEXT NOT NULL,
+    prompt_version INTEGER NOT NULL,
+    ts_ms          INTEGER NOT NULL,
+    FOREIGN KEY(prompt_hash) REFERENCES system_prompts(hash) ON DELETE RESTRICT
+);
+"#;
+
+pub(super) const FTS_SCHEMA: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
     content='messages',
@@ -163,30 +218,12 @@ AFTER UPDATE ON messages BEGIN
     VALUES('delete', old.id, old.content);
     INSERT INTO messages_fts(rowid, content) VALUES (new.id, new.content);
 END;
-
-CREATE TABLE IF NOT EXISTS session_titles (
-    session_id  TEXT PRIMARY KEY,
-    title       TEXT NOT NULL,
-    ts_ms       INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS system_prompts (
-    hash        TEXT PRIMARY KEY,
-    prompt      TEXT NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS session_system_prompts (
-    session_id     TEXT PRIMARY KEY,
-    prompt_hash    TEXT NOT NULL,
-    prompt_version INTEGER NOT NULL,
-    ts_ms          INTEGER NOT NULL,
-    FOREIGN KEY(prompt_hash) REFERENCES system_prompts(hash) ON DELETE RESTRICT
-);
 "#;
 
 #[derive(Debug, Clone)]
 pub struct MemoryDb {
     conn: Arc<Mutex<Connection>>,
+    _lifecycle_lock: Option<Arc<MemoryLifecycleLock>>,
 }
 
 impl MemoryDb {
@@ -195,15 +232,34 @@ impl MemoryDb {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, MemoryError> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
+            crate::storage::ensure_private_dir(parent)?;
         }
+        let lifecycle_lock = recovery::acquire_shared_lifecycle_lock(path, true)?;
+        let initialize = !path.exists()
+            || std::fs::metadata(path)
+                .map(|metadata| metadata.len() == 0)
+                .unwrap_or(false);
+        recovery::ensure_private_database_file(path)?;
         let conn = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_CREATE,
         )?;
-        conn.execute_batch(SCHEMA)?;
+        if initialize || recovery::database_has_no_user_schema(&conn)? {
+            initialize_connection(&conn)?;
+        } else {
+            let issues = recovery::runtime_schema_issues(&conn)?;
+            if !issues.is_empty() {
+                return Err(MemoryError::Integrity(format!(
+                    "{}; run `cos agent sessions repair --dry-run`",
+                    issues.join("; ")
+                )));
+            }
+            conn.execute_batch(CONNECTION_PRAGMAS)?;
+        }
+        crate::storage::set_private_file(path)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            _lifecycle_lock: lifecycle_lock.map(Arc::new),
         })
     }
 
@@ -211,9 +267,10 @@ impl MemoryDb {
     #[allow(dead_code)]
     pub fn open_in_memory() -> Result<Self, MemoryError> {
         let conn = Connection::open_in_memory()?;
-        conn.execute_batch(SCHEMA)?;
+        initialize_connection(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            _lifecycle_lock: None,
         })
     }
 
@@ -299,16 +356,35 @@ impl MemoryDb {
         minimum_version: u32,
     ) -> Result<Option<String>, MemoryError> {
         let conn = self.lock_conn()?;
-        conn.query_row(
-            "SELECT p.prompt
+        let stored = conn
+            .query_row(
+                "SELECT s.prompt_hash, s.prompt_version, p.prompt
              FROM session_system_prompts AS s
-             JOIN system_prompts AS p ON p.hash = s.prompt_hash
-             WHERE s.session_id = ? AND s.prompt_version >= ?",
-            params![session_id, minimum_version],
-            |row| row.get(0),
-        )
-        .optional()
-        .map_err(MemoryError::from)
+             LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+             WHERE s.session_id = ?",
+                params![session_id],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u32>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((hash, version, prompt)) = stored else {
+            return Ok(None);
+        };
+        let prompt = prompt.ok_or_else(|| {
+            MemoryError::Integrity(format!(
+                "session {session_id} references missing system prompt {hash}"
+            ))
+        })?;
+        verify_system_prompt_hash(&hash, &prompt)?;
+        if version < minimum_version {
+            return Ok(None);
+        }
+        Ok(Some(prompt))
     }
 
     /// Freeze the first canonical system prompt for a session.
@@ -331,6 +407,24 @@ impl MemoryDb {
         let hash = system_prompt_hash(prompt);
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction()?;
+        let existing = tx
+            .query_row(
+                "SELECT s.prompt_hash, p.prompt
+                 FROM session_system_prompts AS s
+                 LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
+                 WHERE s.session_id = ?",
+                params![session_id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
+            )
+            .optional()?;
+        if let Some((existing_hash, existing_prompt)) = existing {
+            let existing_prompt = existing_prompt.ok_or_else(|| {
+                MemoryError::Integrity(format!(
+                    "session {session_id} references missing system prompt {existing_hash}"
+                ))
+            })?;
+            verify_system_prompt_hash(&existing_hash, &existing_prompt)?;
+        }
         tx.execute(
             "INSERT OR IGNORE INTO system_prompts(hash, prompt) VALUES (?, ?)",
             params![hash, prompt],
@@ -341,7 +435,7 @@ impl MemoryDb {
             |row| row.get(0),
         )?;
         if stored_for_hash != prompt {
-            return Err(MemoryError::Poisoned(
+            return Err(MemoryError::Integrity(
                 "system prompt hash collision detected".to_string(),
             ));
         }
@@ -357,14 +451,15 @@ impl MemoryDb {
              WHERE session_system_prompts.prompt_version < excluded.prompt_version",
             params![session_id, hash, prompt_version, current_ts_ms()],
         )? == 1;
-        let (frozen, frozen_version): (String, u32) = tx.query_row(
-            "SELECT p.prompt, s.prompt_version
+        let (frozen_hash, frozen, frozen_version): (String, String, u32) = tx.query_row(
+            "SELECT s.prompt_hash, p.prompt, s.prompt_version
              FROM session_system_prompts AS s
              JOIN system_prompts AS p ON p.hash = s.prompt_hash
              WHERE s.session_id = ?",
             params![session_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )?;
+        verify_system_prompt_hash(&frozen_hash, &frozen)?;
         tx.execute(
             "DELETE FROM system_prompts
              WHERE NOT EXISTS (
@@ -702,13 +797,12 @@ impl MemoryDb {
         let (oldest_ts_ms, newest_ts_ms) = if total_messages == 0 {
             (None, None)
         } else {
-            conn
-                .query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
-                    let lo: Option<i64> = r.get(0)?;
-                    let hi: Option<i64> = r.get(1)?;
-                    Ok((lo, hi))
-                })
-                .unwrap_or((None, None))
+            conn.query_row("SELECT MIN(ts_ms), MAX(ts_ms) FROM messages", [], |r| {
+                let lo: Option<i64> = r.get(0)?;
+                let hi: Option<i64> = r.get(1)?;
+                Ok((lo, hi))
+            })
+            .unwrap_or((None, None))
         };
         Ok(MemoryStats {
             total_messages,
@@ -929,8 +1023,26 @@ fn current_ts_ms() -> i64 {
         .unwrap_or(0)
 }
 
-fn system_prompt_hash(prompt: &str) -> String {
+pub(super) fn system_prompt_hash(prompt: &str) -> String {
     hex::encode(Sha256::digest(prompt.as_bytes()))
+}
+
+fn verify_system_prompt_hash(hash: &str, prompt: &str) -> Result<(), MemoryError> {
+    let actual = system_prompt_hash(prompt);
+    if actual == hash {
+        Ok(())
+    } else {
+        Err(MemoryError::Integrity(format!(
+            "system prompt blob {hash} failed SHA-256 verification (computed {actual})"
+        )))
+    }
+}
+
+pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError> {
+    conn.execute_batch(CONNECTION_PRAGMAS)?;
+    conn.execute_batch(BASE_SCHEMA)?;
+    conn.execute_batch(FTS_SCHEMA)?;
+    Ok(())
 }
 
 fn default_path() -> PathBuf {
