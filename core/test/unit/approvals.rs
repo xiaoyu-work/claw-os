@@ -562,6 +562,7 @@ fn an_approval_carries_a_bounded_grant() {
     );
     assert_eq!(authorization.risk, crate::caps::Risk::Critical);
     assert_eq!(authorization.context, None);
+    assert_eq!(authorization.execution, None);
 }
 
 #[test]
@@ -618,6 +619,85 @@ fn attended_high_and_critical_defaults_refuse_overbroad_durations() {
     )
     .unwrap_err();
     assert!(error.contains("may not be approved forever"), "{error}");
+}
+
+#[test]
+fn unattended_context_cannot_create_an_interactive_request() {
+    let _tmp = isolated_env();
+    let error = submit_owned_with_context(
+        Verb::FS_DELETE,
+        Scope::path("/tmp/unattended"),
+        "agent-unattended",
+        "delete",
+        None,
+        Some(1000),
+        Some(crate::caps::ConsentContext::Unattended),
+    )
+    .unwrap_err();
+    assert!(error.contains("unattended"), "{error}");
+    assert!(list_pending().is_empty());
+}
+
+#[test]
+fn expired_execution_request_cannot_be_approved() {
+    let _tmp = isolated_env();
+    let id = submit_owned_with_context(
+        Verb::FS_DELETE,
+        Scope::path("/tmp/expired-request"),
+        "agent-expired",
+        "delete",
+        None,
+        Some(1000),
+        Some(crate::caps::ConsentContext::Attended),
+    )
+    .unwrap();
+    let path = pending_dir().join(format!("{id}.json"));
+    let mut request: Request =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    request.execution.as_mut().unwrap().expires_at = 1;
+    std::fs::write(&path, serde_json::to_string_pretty(&request).unwrap()).unwrap();
+
+    let error = approve_for_owner(
+        &id,
+        GrantDuration::Once,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap_err();
+    assert!(error.contains("no longer matches a live execution"), "{error}");
+    assert_eq!(status_for_owner(&id, Some(1000)), RequestStatus::Denied);
+}
+
+#[test]
+fn generation_change_after_request_invalidates_the_decision() {
+    let _tmp = isolated_env();
+    let id = submit_owned_with_context(
+        Verb::FS_DELETE,
+        Scope::path("/tmp/stale-request"),
+        "agent-stale",
+        "delete",
+        None,
+        Some(1000),
+        Some(crate::caps::ConsentContext::Attended),
+    )
+    .unwrap();
+    generations::revoke(&RevocationScope::Session {
+        uid: Some(1000),
+        session: "agent-stale".to_string(),
+    })
+    .unwrap();
+
+    let error = approve_for_owner(
+        &id,
+        GrantDuration::Once,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap_err();
+    assert!(error.contains("no longer matches a live execution"), "{error}");
+    assert_eq!(status_for_owner(&id, Some(1000)), RequestStatus::Denied);
 }
 
 #[test]
@@ -818,6 +898,47 @@ fn an_approval_captures_the_current_revocation_generation() {
         resolved.decision.grant.unwrap().generation,
         Some(1),
         "the binding records the generation in force when it was approved"
+    );
+}
+
+#[test]
+fn owner_revoke_advances_past_a_session_generation_and_kills_newer_grants() {
+    let _tmp = isolated_env();
+    let session_generation = generations::revoke(&RevocationScope::Session {
+        uid: Some(1000),
+        session: "sess-owner-floor".to_string(),
+    })
+    .unwrap();
+    let id = submit_owned(
+        Verb::SYS_PACKAGE,
+        Scope::name("git"),
+        "sess-owner-floor",
+        "install git",
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    approve_for_owner(
+        &id,
+        GrantDuration::Session,
+        None,
+        None,
+        Some(1000),
+    )
+    .unwrap();
+
+    let owner_generation =
+        generations::revoke(&RevocationScope::Owner { uid: Some(1000) }).unwrap();
+    assert!(owner_generation > session_generation);
+    assert_eq!(
+        consume_matching_grant_for_owner(
+            "sess-owner-floor",
+            Verb::SYS_PACKAGE,
+            &Scope::name("git"),
+            Some(1000),
+        )
+        .unwrap(),
+        None
     );
 }
 

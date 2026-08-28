@@ -161,12 +161,17 @@ pub struct Assignment {
     /// Broker-derived execution context. The worker uses this only to
     /// explain denials; the broker independently enforces it whenever
     /// consent is requested.
+    #[serde(default = "unattended_consent")]
     pub consent_context: ConsentContext,
     /// Session scope the *broker* derived. Capabilities are never taken
     /// from the worker; they are re-derived by `clawd` from root-owned
     /// session metadata and installed in the worker as a task-local.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<SessionInfo>,
+}
+
+fn unattended_consent() -> ConsentContext {
+    ConsentContext::Unattended
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

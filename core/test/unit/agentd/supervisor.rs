@@ -11,6 +11,8 @@ fn new_lease() -> Lease {
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         deadline: Instant::now() + Duration::from_secs(60),
+        approval_expires_at: approval_deadline(Duration::from_secs(60)),
+        approval_nonce: "0123456789abcdef".to_string(),
         consent_context: crate::caps::ConsentContext::Attended,
     }
 }
@@ -303,19 +305,30 @@ impl Drop for ConsentStore {
 }
 
 fn approve_once(
-    session: &str,
-    owner_uid: u32,
+    lease: &Lease,
     verb: crate::caps::Verb,
     scope: &crate::caps::Scope,
 ) {
-    let id = crate::approvals::submit_owned_with_context(
+    let session = lease.session_id.as_deref().expect("session");
+    let execution = crate::approvals::ApprovalExecutionBinding::for_worker(
+        lease.task_id.clone(),
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
+        lease.approval_nonce.clone(),
+        lease.approval_expires_at,
+        Some(lease.owner_uid),
+        session,
+    )
+    .expect("execution binding");
+    let id = crate::approvals::submit_owned_with_execution(
         verb,
         scope.clone(),
         session,
         "test".to_string(),
         Some("test".to_string()),
-        Some(owner_uid),
+        Some(lease.owner_uid),
         Some(crate::caps::ConsentContext::Attended),
+        Some(execution),
     )
     .expect("submit");
     crate::approvals::approve_for_owner(
@@ -323,7 +336,7 @@ fn approve_once(
         crate::approvals::GrantDuration::Once,
         Some("test".to_string()),
         None,
-        Some(owner_uid),
+        Some(lease.owner_uid),
     )
     .expect("approve");
 }
@@ -340,13 +353,7 @@ fn an_approved_grant_is_spent_once_for_the_leased_session_and_owner() {
     let _store = ConsentStore::new();
     let scope = crate::caps::Scope::path("/home/user/notes.txt");
     let lease = new_lease();
-    let session = lease.session_id.clone().expect("session");
-    approve_once(
-        &session,
-        lease.owner_uid,
-        crate::caps::Verb::FS_READ,
-        &scope,
-    );
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
 
     let mut used = 0;
     assert_eq!(
@@ -366,18 +373,13 @@ fn approval_redemption_mints_an_exact_worker_bound_authority_grant() {
     let scope = crate::caps::Scope::path("/home/user/notes.txt");
     let lease = new_lease();
     let session = lease.session_id.clone().expect("session");
-    approve_once(
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
+    let consumed = crate::approvals::redeem_matching_worker_grant_for_owner(
         &session,
+        crate::caps::Verb::FS_READ,
+        &scope,
         lease.owner_uid,
-        crate::caps::Verb::FS_READ,
-        &scope,
-    );
-    let consumed = crate::approvals::redeem_matching_grant_for_owner(
-        &session,
-        crate::caps::Verb::FS_READ,
-        &scope,
-        Some(lease.owner_uid),
-        Some(crate::caps::ConsentContext::Attended),
+        &lease.approval_identity(),
     )
     .unwrap()
     .expect("approved consent");
@@ -387,6 +389,7 @@ fn approval_redemption_mints_an_exact_worker_bound_authority_grant() {
         &session,
         lease.worker_pid,
         lease.worker_start_time_ticks,
+        &lease.approval_nonce,
         lease.deadline.saturating_duration_since(Instant::now()),
         &consumed,
     )
@@ -419,18 +422,13 @@ fn revocation_between_durable_spend_and_worker_grant_fails_closed() {
     let scope = crate::caps::Scope::path("/home/user/notes.txt");
     let lease = new_lease();
     let session = lease.session_id.clone().expect("session");
-    approve_once(
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
+    let consumed = crate::approvals::redeem_matching_worker_grant_for_owner(
         &session,
+        crate::caps::Verb::FS_READ,
+        &scope,
         lease.owner_uid,
-        crate::caps::Verb::FS_READ,
-        &scope,
-    );
-    let consumed = crate::approvals::redeem_matching_grant_for_owner(
-        &session,
-        crate::caps::Verb::FS_READ,
-        &scope,
-        Some(lease.owner_uid),
-        Some(crate::caps::ConsentContext::Attended),
+        &lease.approval_identity(),
     )
     .unwrap()
     .expect("approved consent");
@@ -446,6 +444,7 @@ fn revocation_between_durable_spend_and_worker_grant_fails_closed() {
         &session,
         lease.worker_pid,
         lease.worker_start_time_ticks,
+        &lease.approval_nonce,
         lease.deadline.saturating_duration_since(Instant::now()),
         &consumed,
     )
@@ -458,13 +457,7 @@ fn a_worker_cannot_spend_another_sessions_or_owners_grant() {
     let _store = ConsentStore::new();
     let scope = crate::caps::Scope::path("/home/user/notes.txt");
     let lease = new_lease();
-    let session = lease.session_id.clone().expect("session");
-    approve_once(
-        &session,
-        lease.owner_uid,
-        crate::caps::Verb::FS_READ,
-        &scope,
-    );
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
 
     // Identity comes from the lease, so a worker whose lease names a
     // different session or owner simply finds no grant — there is no
@@ -492,17 +485,120 @@ fn a_worker_cannot_spend_another_sessions_or_owners_grant() {
 }
 
 #[test]
+fn concurrent_same_session_workers_cannot_cross_spend() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::path("/home/user/notes.txt");
+    let lease = new_lease();
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
+
+    let mut concurrent = new_lease();
+    concurrent.session_id = lease.session_id.clone();
+    concurrent.owner_uid = lease.owner_uid;
+    concurrent.task_id = "task-b".to_string();
+    concurrent.approval_nonce = "fedcba9876543210".to_string();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let approved_scope = scope.clone();
+    let approved_barrier = std::sync::Arc::clone(&barrier);
+    let approved = std::thread::spawn(move || {
+        approved_barrier.wait();
+        let mut used = 0;
+        mediate_approval(&mut used, &lease, &consume_ask(&approved_scope))
+    });
+    let other_barrier = std::sync::Arc::clone(&barrier);
+    let other = std::thread::spawn(move || {
+        other_barrier.wait();
+        let mut used = 0;
+        mediate_approval(&mut used, &concurrent, &consume_ask(&scope))
+    });
+    barrier.wait();
+
+    assert_eq!(approved.join().unwrap(), ApprovalReply::Granted);
+    assert_eq!(
+        other.join().unwrap(),
+        ApprovalReply::Pending { request_id: None }
+    );
+}
+
+#[test]
+fn replacement_worker_with_same_task_cannot_reuse_old_lease_approval() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::path("/home/user/notes.txt");
+    let lease = new_lease();
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
+
+    let mut replacement = new_lease();
+    replacement.session_id = lease.session_id.clone();
+    replacement.owner_uid = lease.owner_uid;
+    replacement.task_id = lease.task_id.clone();
+    replacement.approval_nonce = "replacement-lease".to_string();
+    let mut used = 0;
+    assert_eq!(
+        mediate_approval(&mut used, &replacement, &consume_ask(&scope)),
+        ApprovalReply::Pending { request_id: None }
+    );
+    assert_eq!(
+        mediate_approval(&mut used, &lease, &consume_ask(&scope)),
+        ApprovalReply::Granted
+    );
+}
+
+#[test]
+fn task_teardown_generation_invalidates_pending_worker_consent() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::path("/home/user/notes.txt");
+    let lease = new_lease();
+    approve_once(&lease, crate::caps::Verb::FS_READ, &scope);
+    let session = lease.session_id.as_deref().unwrap();
+    crate::clawd::authority::revoke_session_for_owner(session, lease.owner_uid);
+
+    let mut used = 0;
+    assert_eq!(
+        mediate_approval(&mut used, &lease, &consume_ask(&scope)),
+        ApprovalReply::Pending { request_id: None }
+    );
+}
+
+#[test]
+fn task_teardown_invalidates_an_undecided_request() {
+    let _store = ConsentStore::new();
+    let scope = crate::caps::Scope::path("/home/user/notes.txt");
+    let lease = new_lease();
+    let ask = ApprovalAsk::Request {
+        verb: crate::caps::Verb::FS_READ.as_str().to_string(),
+        scope,
+    };
+    let mut used = 0;
+    let ApprovalReply::Pending {
+        request_id: Some(id),
+    } = mediate_approval(&mut used, &lease, &ask)
+    else {
+        panic!("expected pending approval");
+    };
+    let session = lease.session_id.as_deref().unwrap();
+    assert_eq!(
+        crate::approvals::invalidate_pending_for_execution(
+            Some(lease.owner_uid),
+            session,
+            &lease.approval_identity(),
+            "worker lease ended",
+        )
+        .unwrap(),
+        1
+    );
+    crate::clawd::authority::revoke_session_for_owner(session, lease.owner_uid);
+
+    assert_eq!(
+        crate::approvals::status_for_owner(&id, Some(lease.owner_uid)),
+        crate::approvals::RequestStatus::Denied
+    );
+}
+
+#[test]
 fn a_grant_for_a_different_verb_or_scope_is_not_spent() {
     let _store = ConsentStore::new();
     let approved = crate::caps::Scope::path("/home/user/notes.txt");
     let lease = new_lease();
-    let session = lease.session_id.clone().expect("session");
-    approve_once(
-        &session,
-        lease.owner_uid,
-        crate::caps::Verb::FS_READ,
-        &approved,
-    );
+    approve_once(&lease, crate::caps::Verb::FS_READ, &approved);
 
     let mut used = 0;
     let other_scope = consume_ask(&crate::caps::Scope::path("/etc/shadow"));
@@ -617,6 +713,19 @@ fn filing_a_request_dedupes_and_records_only_broker_composed_text() {
     assert_eq!(
         request.context,
         Some(crate::caps::ConsentContext::Attended)
+    );
+    let execution = request.execution.as_ref().expect("worker binding");
+    assert_eq!(execution.identity.task_id, lease.task_id);
+    assert_eq!(execution.identity.worker_pid, lease.worker_pid);
+    assert_eq!(
+        execution.identity.worker_start_time_ticks,
+        lease.worker_start_time_ticks
+    );
+    assert_eq!(execution.identity.lease_nonce, lease.approval_nonce);
+    assert_eq!(execution.expires_at, lease.approval_expires_at);
+    assert_eq!(
+        execution.generation,
+        crate::approvals::generations::current(Some(lease.owner_uid), &request.session).unwrap()
     );
     assert!(request.reason.contains(&scope.to_string()));
 }

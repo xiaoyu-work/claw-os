@@ -449,13 +449,29 @@ pub(crate) fn authorize_worker_approval(
     session_id: &str,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
+    lease_nonce: &str,
     lease_remaining: std::time::Duration,
     approval: &crate::approvals::ConsumedGrant,
 ) -> Result<GrantView, String> {
     if approval.authorization.owner_uid != Some(owner_uid)
         || approval.authorization.session != session_id
+        || approval.authorization.context != Some(crate::caps::ConsentContext::Attended)
     {
-        return Err("approval does not match the worker owner and session".to_string());
+        return Err(
+            "approval does not match the worker owner, session, and attended context".to_string(),
+        );
+    }
+    let execution = approval
+        .authorization
+        .execution
+        .as_ref()
+        .ok_or_else(|| "approval has no worker execution binding".to_string())?;
+    if execution.identity.task_id != task_id
+        || execution.identity.worker_pid != worker_pid
+        || execution.identity.worker_start_time_ticks != worker_start_time_ticks
+        || execution.identity.lease_nonce != lease_nonce
+    {
+        return Err("approval does not match the active task and worker lease".to_string());
     }
     let principal = Principal::of_process(owner_uid, worker_pid)
         .ok_or_else(|| "approval worker identity is no longer live".to_string())?;

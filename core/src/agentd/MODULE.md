@@ -79,8 +79,9 @@ installs one.
   attended/unattended context from trusted lease/session state. It re-parses
   the verb and scope against the catalog and composes the reason itself.
 - Attended `Request` files or dedupes a pending record bound to the exact
-  capability, catalog risk, owner, session, and consent context. Unattended
-  requests fail closed with a scheduling/delegation hint.
+  capability, catalog risk, owner, session, task, worker pid/start time, lease
+  nonce/deadline, request generation, and consent context. Unattended requests
+  fail closed with a scheduling/delegation hint.
 - `Consume` atomically spends an exactly matching, live decision, then mints
   and exercises a one-use `clawd::authority` grant bound to this task and
   worker. A replay finds nothing.

@@ -6,6 +6,7 @@ const FORBIDDEN: &[&str] = &[
     "d34db33f-launch-handle",
     "ya29.oauth-access-token",
     "hunter2-password",
+    "0123456789abcdef",
     "approval_requests",
 ];
 
@@ -151,6 +152,16 @@ fn approval_reasons_are_journalled_as_metadata() {
         owner_uid: Some(1000),
         risk: Some(crate::caps::Risk::High),
         context: Some(crate::caps::ConsentContext::Attended),
+        execution: Some(crate::approvals::ApprovalExecutionBinding {
+            identity: crate::approvals::ApprovalExecutionIdentity {
+                task_id: "task-1".to_string(),
+                worker_pid: 42,
+                worker_start_time_ticks: Some(7),
+                lease_nonce: "0123456789abcdef".to_string(),
+            },
+            expires_at: 10,
+            generation: 0,
+        }),
         requester: Some("uid:1000".to_string()),
     };
     let record = approval_request_record(&request);
@@ -161,6 +172,10 @@ fn approval_reasons_are_journalled_as_metadata() {
     assert_eq!(record["verb"], json!("secret.read"));
     assert_eq!(record["risk"], json!("high"));
     assert_eq!(record["consent_context"], json!("attended"));
+    assert_eq!(record["task_id"], json!("task-1"));
+    assert_eq!(record["worker_pid"], json!(42));
+    assert_eq!(record["request_expires_at"], json!(10));
+    assert_eq!(record["request_generation"], json!(0));
     assert_eq!(record["reason"]["bytes"], json!(request.reason.len()));
 }
 

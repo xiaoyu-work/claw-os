@@ -268,7 +268,20 @@ struct Lease {
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
+    approval_expires_at: u64,
+    approval_nonce: String,
     consent_context: ConsentContext,
+}
+
+impl Lease {
+    fn approval_identity(&self) -> crate::approvals::ApprovalExecutionIdentity {
+        crate::approvals::ApprovalExecutionIdentity {
+            task_id: self.task_id.clone(),
+            worker_pid: self.worker_pid,
+            worker_start_time_ticks: self.worker_start_time_ticks,
+            lease_nonce: self.approval_nonce.clone(),
+        }
+    }
 }
 
 async fn supervise(
@@ -368,8 +381,11 @@ async fn supervise(
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
+        approval_expires_at: approval_deadline(config.lease),
+        approval_nonce: uuid::Uuid::new_v4().to_string(),
         consent_context,
     };
+    let approval_identity = lease.approval_identity();
 
     let outcome = pump(
         &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child,
@@ -383,6 +399,18 @@ async fn supervise(
     // "for this session". A grant outliving the process it was bound to
     // is exactly what the authority exists to prevent.
     if let Some(session_id) = job.session_id.as_deref() {
+        if let Err(error) = crate::approvals::invalidate_pending_for_execution(
+            Some(owner_uid),
+            session_id,
+            &approval_identity,
+            "agent task or worker lease ended before approval",
+        ) {
+            tracing::error!(
+                task = %job.id,
+                error = %error,
+                "could not invalidate pending approvals for a finished worker"
+            );
+        }
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
 
@@ -517,6 +545,7 @@ async fn pump(
                         }
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
+                            lease.approval_expires_at = approval_deadline(config.lease);
                         }
                         WorkerFrame::Result { outcome, .. } => {
                             return TaskOutcome::Reported(outcome);
@@ -607,6 +636,14 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
     }
 }
 
+fn approval_deadline(ttl: Duration) -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
+        .saturating_add(ttl.as_secs())
+}
+
 /// Route and binding check applied to every frame, not just the
 /// handshake: task, owner, worker identity and lease are all re-checked
 /// before the frame is allowed to touch broker state.
@@ -691,16 +728,16 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
         Err(error) => return refuse(lease, ask, &error),
     };
     let scope = &cap.scope;
-    let owner = Some(lease.owner_uid);
+    let execution = lease.approval_identity();
 
     match ask {
         ApprovalAsk::Consume { .. } => {
-            match crate::approvals::redeem_matching_grant_for_owner(
+            match crate::approvals::redeem_matching_worker_grant_for_owner(
                 session_id,
                 verb,
                 scope,
-                owner,
-                Some(lease.consent_context),
+                lease.owner_uid,
+                &execution,
             ) {
                 Ok(Some(grant)) => {
                     let lease_remaining = lease.deadline.saturating_duration_since(Instant::now());
@@ -710,6 +747,7 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                         session_id,
                         lease.worker_pid,
                         lease.worker_start_time_ticks,
+                        &lease.approval_nonce,
                         lease_remaining,
                         &grant,
                     ) {
@@ -758,11 +796,11 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                     "unattended tasks cannot request interactive consent; delegate the exact capability when scheduling the task",
                 );
             }
-            let existing = crate::approvals::find_pending_exact(
+            let existing = crate::approvals::find_pending_worker_request(
                 session_id,
                 &cap,
-                owner,
-                Some(lease.consent_context),
+                lease.owner_uid,
+                &execution,
             );
             if let Some(request) = existing {
                 return ApprovalReply::Pending {
@@ -774,14 +812,18 @@ fn mediate_approval(used: &mut u32, lease: &Lease, ask: &ApprovalAsk) -> Approva
                 .unwrap_or_else(|| verb.as_str().to_string());
             // Reason text is composed here from the catalog and the
             // canonical scope; no worker-authored string is persisted.
-            match crate::approvals::submit_owned_with_context(
+            match crate::approvals::submit_worker_request(
                 verb,
                 scope.clone(),
                 session_id,
                 format!("{label}: {scope}"),
                 Some("agentd-worker".to_string()),
-                owner,
-                Some(lease.consent_context),
+                lease.owner_uid,
+                lease.task_id.clone(),
+                lease.worker_pid,
+                lease.worker_start_time_ticks,
+                lease.approval_nonce.clone(),
+                lease.approval_expires_at,
             ) {
                 Ok(id) => {
                     audit_approval(lease, verb, scope, risk, "requested", None, None);
@@ -829,6 +871,7 @@ fn audit_approval(
         lease.owner_uid,
         lease.worker_pid,
         lease.worker_start_time_ticks,
+        &lease.approval_nonce,
         lease.session_id.as_deref().unwrap_or_default(),
         verb.as_str(),
         scope,

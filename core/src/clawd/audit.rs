@@ -269,6 +269,7 @@ struct WorkerApprovalAudit<'a> {
     worker_pid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     worker_start_time_ticks: Option<u64>,
+    lease: audit_policy::TextDigest,
     session_id: String,
     verb: String,
     scope: String,
@@ -294,6 +295,7 @@ pub fn record_worker_approval(
     owner_uid: u32,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
+    lease_nonce: &str,
     session_id: &str,
     verb: &str,
     scope: &crate::caps::Scope,
@@ -312,6 +314,7 @@ pub fn record_worker_approval(
         owner_uid,
         worker_pid,
         worker_start_time_ticks,
+        lease: audit_policy::text_digest(lease_nonce),
         session_id: audit_policy::safe_identity(session_id),
         verb: audit_policy::safe_identity(verb),
         scope: audit_policy::safe_reference(&scope.to_string()),

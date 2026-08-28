@@ -117,6 +117,18 @@ fn approval_request_record(request: &ApprovalRequest) -> Value {
         "scope": &request.scope,
         "risk": request.risk,
         "consent_context": request.context,
+        "task_id": request.execution.as_ref()
+            .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
+        "worker_pid": request.execution.as_ref()
+            .map(|execution| execution.identity.worker_pid),
+        "worker_start_time_ticks": request.execution.as_ref()
+            .and_then(|execution| execution.identity.worker_start_time_ticks),
+        "lease": request.execution.as_ref()
+            .map(|execution| audit_policy::text_digest(&execution.identity.lease_nonce)),
+        "request_expires_at": request.execution.as_ref()
+            .map(|execution| execution.expires_at),
+        "request_generation": request.execution.as_ref()
+            .map(|execution| execution.generation),
         // Free text the requester supplied for the user's prompt; the
         // approvals store keeps it, this projection does not.
         "reason": audit_policy::text_digest(&request.reason),
@@ -145,6 +157,18 @@ fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
         "decided_by": &resolved.decision.decided_by,
         "risk": resolved.request.risk,
         "consent_context": resolved.request.context,
+        "task_id": resolved.request.execution.as_ref()
+            .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
+        "worker_pid": resolved.request.execution.as_ref()
+            .map(|execution| execution.identity.worker_pid),
+        "worker_start_time_ticks": resolved.request.execution.as_ref()
+            .and_then(|execution| execution.identity.worker_start_time_ticks),
+        "lease": resolved.request.execution.as_ref()
+            .map(|execution| audit_policy::text_digest(&execution.identity.lease_nonce)),
+        "request_expires_at": resolved.request.execution.as_ref()
+            .map(|execution| execution.expires_at),
+        "request_generation": resolved.request.execution.as_ref()
+            .map(|execution| execution.generation),
         "grant": resolved.decision.grant.as_ref().map(|grant| json!({
             "reference": grant.reference,
             "expires_at": grant.expires_at,
