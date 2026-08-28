@@ -48,6 +48,11 @@ a five-second deadline; failures kill and reap the exact child. No context
 content enters argv, D-Bus, audit records, a process registry, the environment,
 or the filesystem.
 
+Production launches use only the packaged absolute
+`/usr/local/bin/cos-agent-ui`. The runtime rejects missing, symlinked,
+non-regular, non-executable, non-root-owned, or group/other-writable targets.
+There is no environment or `PATH` override and no shell evaluation.
+
 The Agent UI imports the same activation type and CLI parser from this module.
 It reads stdin only when `--context-stdin` is explicitly present, enforces the
 activation and context bounds, validates the typed activation and embedded
@@ -70,8 +75,7 @@ lines first and then truncate at a UTF-8 boundary, retaining `app`, `mode`,
 `cwd`, and `truncated` metadata while still opening the overlay.
 
 The Ask Claw path does not alter or depend on the generic `cos_runtime::exec`
-start/stop behavior. Its `StartResult` type only mirrors the existing
-`apps/exec` `{pid, command}` response.
+start/stop contract.
 
 ## Relationship to `claw-os-sdk`
 

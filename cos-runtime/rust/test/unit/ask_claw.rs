@@ -33,7 +33,7 @@ impl TestEnvironment {
 
 impl Drop for TestEnvironment {
     fn drop(&mut self) {
-        for name in ["CLAW_COS_BIN", AGENT_UI_ENV, "ASK_CLAW_TEST_CAPTURE"] {
+        for name in ["CLAW_COS_BIN", "ASK_CLAW_TEST_CAPTURE"] {
             std::env::remove_var(name);
         }
     }
@@ -90,13 +90,11 @@ fn context_at_limit_is_accepted_and_larger_context_is_rejected() {
 }
 
 #[test]
-fn launcher_selects_executable_and_uses_only_stdin_flag_in_arguments() {
-    let _environment = TestEnvironment::new();
-    std::env::set_var(AGENT_UI_ENV, "/opt/claw/custom-agent-ui");
+fn packaged_launcher_argv_is_fixed_and_contains_no_payload() {
     assert_eq!(
-        launch_argv(),
+        launch_argv(Path::new(PACKAGED_AGENT_UI)),
         [
-            "/opt/claw/custom-agent-ui",
+            "/usr/local/bin/cos-agent-ui",
             "--overlay",
             "--context-stdin",
             "--ready-fd",
@@ -106,9 +104,31 @@ fn launcher_selects_executable_and_uses_only_stdin_flag_in_arguments() {
 }
 
 #[test]
-fn launcher_uses_path_lookup_by_default() {
-    let _environment = TestEnvironment::new();
-    assert_eq!(agent_ui_executable(), DEFAULT_AGENT_UI);
+#[cfg(unix)]
+fn executable_validation_rejects_missing_and_non_regular_targets() {
+    let environment = TestEnvironment::new();
+    let missing = environment.directory.path().join("missing-agent");
+    assert!(matches!(
+        validate_executable(&missing, false),
+        Err(LaunchError::ExecutableUnavailable(_))
+    ));
+
+    let directory = environment.directory.path().join("agent-directory");
+    std::fs::create_dir(&directory).unwrap();
+    assert!(matches!(
+        validate_executable(&directory, false),
+        Err(LaunchError::UntrustedExecutable(_))
+    ));
+
+    use std::os::unix::fs::symlink;
+    let target = environment.directory.path().join("target");
+    std::fs::write(&target, "target").unwrap();
+    let link = environment.directory.path().join("agent-link");
+    symlink(&target, &link).unwrap();
+    assert!(matches!(
+        validate_executable(&link, false),
+        Err(LaunchError::UntrustedExecutable(_))
+    ));
 }
 
 #[test]
@@ -211,19 +231,16 @@ fn reserved_app_field_is_rejected() {
 
 #[test]
 fn process_spawn_failures_are_preserved() {
-    let _environment = TestEnvironment::new();
-    std::env::set_var(
-        AGENT_UI_ENV,
-        "/nonexistent/definitely-not-a-real-agent-ui-issue-47",
-    );
+    let environment = TestEnvironment::new();
+    let missing = environment.directory.path().join("missing-agent");
     let payload = prepare_launch(&TestContext {
         mode: "inspect",
         path: None,
     })
     .unwrap();
-    let error = launch_prepared(&payload).unwrap_err();
+    let error = launch_prepared_for_test(&payload, Duration::from_secs(1), &missing).unwrap_err();
 
-    assert!(matches!(error, LaunchError::Spawn(_)));
+    assert!(matches!(error, LaunchError::ExecutableUnavailable(_)));
 }
 
 #[test]
@@ -243,16 +260,15 @@ fn missing_ready_signal_times_out_and_reaps_child() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var(AGENT_UI_ENV, &fake_cos);
-
     assert!(matches!(
-        launch_prepared_with_timeout(
+        launch_prepared_for_test(
             &prepare_launch(&TestContext {
                 mode: "inspect",
                 path: None,
             })
             .unwrap(),
             Duration::from_secs(2),
+            &fake_cos,
         ),
         Err(LaunchError::Timeout(_))
     ));
@@ -277,15 +293,13 @@ fn child_crash_before_ready_is_reaped() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var(AGENT_UI_ENV, &fake_ui);
-
     let payload = prepare_launch(&TestContext {
         mode: "inspect",
         path: None,
     })
     .unwrap();
     assert!(matches!(
-        launch_prepared_with_timeout(&payload, Duration::from_secs(1)),
+        launch_prepared_for_test(&payload, Duration::from_secs(1), &fake_ui),
         Err(LaunchError::ChildExited(Some(7)))
     ));
     let pid = std::fs::read_to_string(pid_file).unwrap();
@@ -320,7 +334,6 @@ fn parent_waits_for_ready_before_writing_private_context() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var(AGENT_UI_ENV, &fake_ui);
     std::env::set_var("ASK_CLAW_TEST_CAPTURE", &capture_base);
 
     let secret = "nested-secret-value";
@@ -329,7 +342,7 @@ fn parent_waits_for_ready_before_writing_private_context() {
         path: Some("/private/input"),
     })
     .unwrap();
-    launch_prepared_with_timeout(&payload, Duration::from_secs(2)).unwrap();
+    launch_prepared_for_test(&payload, Duration::from_secs(2), &fake_ui).unwrap();
 
     assert_eq!(
         std::fs::read_to_string(capture_base.with_extension("before")).unwrap(),
@@ -376,15 +389,13 @@ fn launcher_worker_does_not_block_the_calling_thread() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var(AGENT_UI_ENV, &fake_cos);
-
     let payload = prepare_launch(&TestContext {
         mode: "inspect",
         path: None,
     })
     .unwrap();
     let started = Instant::now();
-    let worker = spawn_prepared(payload).unwrap();
+    let worker = spawn_prepared_for_test(payload, fake_cos).unwrap();
     assert!(started.elapsed() < Duration::from_millis(500));
     worker.join().unwrap();
 }
@@ -406,11 +417,9 @@ fn partial_context_write_kills_and_reaps_child() {
     )
     .unwrap();
     std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var(AGENT_UI_ENV, &fake_ui);
-
     let payload = vec![b'x'; MAX_ACTIVATION_BYTES];
     assert!(matches!(
-        launch_prepared_with_timeout(&payload, Duration::from_secs(2)),
+        launch_prepared_for_test(&payload, Duration::from_secs(2), &fake_ui),
         Err(LaunchError::Write(_))
     ));
     let pid = std::fs::read_to_string(pid_file).unwrap();

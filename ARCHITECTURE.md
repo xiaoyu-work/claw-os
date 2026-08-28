@@ -527,6 +527,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   the child signals that Yama isolation, non-dumpable state, and private
   overlay mode are ready. The exact child is killed/reaped on startup failure
   and reaped after successful use.
+- Production resolves no executable input: the validated package target is
+  fixed at `/usr/local/bin/cos-agent-ui`, and tests inject binaries only through
+  a private compile-time test seam.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.

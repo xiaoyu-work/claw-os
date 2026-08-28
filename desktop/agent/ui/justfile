@@ -1,7 +1,7 @@
 name := 'cos-agent-ui'
 
 rootdir := ''
-prefix := '/usr'
+prefix := '/usr/local'
 
 base-dir := absolute_path(clean(rootdir / prefix))
 
@@ -32,4 +32,3 @@ install:
 
 uninstall:
     rm -f {{bin-dst}}
-

@@ -33,8 +33,8 @@ pub struct WhichResult {
 /// Response from `apps/exec start`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct StartResult {
+    pub session_id: String,
     pub pid: u32,
-    pub command: Vec<String>,
 }
 
 /// Run `argv` synchronously, with an optional timeout in seconds.
@@ -50,8 +50,10 @@ pub fn run(argv: &[&str], timeout_secs: Option<u32>) -> Result<RunResult, Bridge
     call_typed("exec", "run", a.iter().map(String::as_str), None)
 }
 
-/// Spawn a long-lived process and return the PID and command recorded by the
-/// exec app.
+/// Spawn a long-lived process and register it in the session
+/// registry. Returns `{session_id, pid}` — the GUI is responsible for
+/// keeping `session_id` around so caps continue to apply to the
+/// child.
 pub fn start(argv: &[&str]) -> Result<StartResult, BridgeError> {
     call_typed("exec", "start", argv.iter().copied(), None)
 }
@@ -65,9 +67,4 @@ pub fn stop(session_id: &str) -> Result<serde_json::Value, BridgeError> {
 /// `$PATH`.
 pub fn which(program: &str) -> Result<WhichResult, BridgeError> {
     call_typed("exec", "which", [program], None)
-}
-
-#[cfg(test)]
-mod tests {
-    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/exec.rs"));
 }

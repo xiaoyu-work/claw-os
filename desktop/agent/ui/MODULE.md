@@ -42,6 +42,9 @@ single-instance forwarding. Payload-bearing `--context` and `--query` are
 rejected; `--context-stdin` plus the inherited readiness descriptor is the only
 private activation path.
 
+The install target and runtime launch target are both fixed at
+`/usr/local/bin/cos-agent-ui`.
+
 ## Tests
 
 Private-access unit tests mirror production modules under `test/unit/`.

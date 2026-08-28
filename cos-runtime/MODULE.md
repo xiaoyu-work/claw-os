@@ -41,6 +41,10 @@ Yama ptrace isolation and marks parent and child non-dumpable; startup failure
 or timeout kills and reaps the exact child, while the launcher thread reaps a
 successfully activated UI when it exits.
 
+The production executable is fixed at `/usr/local/bin/cos-agent-ui` and must
+pass regular-file, root-owner, executable, and non-writable checks. Test
+injection is private to the runtime's `cfg(test)` module.
+
 ## Tests
 
 Rust runtime unit tests live under `rust/test/unit/`.

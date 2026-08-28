@@ -15,6 +15,7 @@ use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
@@ -36,8 +37,7 @@ pub const MAX_ACTIVATION_BYTES: usize = MAX_CONTEXT_BYTES * 2 + 1024;
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
 const READY_FD: i32 = 3;
 const READY_MESSAGE: &[u8] = b"READY\n";
-const AGENT_UI_ENV: &str = "COS_AGENT_UI_BIN";
-const DEFAULT_AGENT_UI: &str = "cos-agent-ui";
+const PACKAGED_AGENT_UI: &str = "/usr/local/bin/cos-agent-ui";
 const OVERLAY_FLAG: &str = "--overlay";
 const VOICE_FLAG: &str = "--voice";
 const QUERY_FLAG: &str = "--query";
@@ -146,6 +146,12 @@ pub enum LaunchError {
 
     #[error("failed to create Ask Claw readiness channel: {0}")]
     ReadyChannel(#[source] io::Error),
+
+    #[error("packaged Ask Claw executable is unavailable: {0}")]
+    ExecutableUnavailable(#[source] io::Error),
+
+    #[error("packaged Ask Claw executable failed trust validation: {0}")]
+    UntrustedExecutable(PathBuf),
 
     #[error("failed to spawn Ask Claw: {0}")]
     Spawn(#[source] io::Error),
@@ -494,13 +500,37 @@ fn signal_ready(_fd: i32) -> Result<(), ActivationInputError> {
     ))
 }
 
-fn agent_ui_executable() -> String {
-    std::env::var(AGENT_UI_ENV).unwrap_or_else(|_| DEFAULT_AGENT_UI.to_string())
+fn packaged_agent_ui() -> Result<PathBuf, LaunchError> {
+    let path = PathBuf::from(PACKAGED_AGENT_UI);
+    validate_executable(&path, true)?;
+    Ok(path)
 }
 
-fn launch_argv() -> Vec<String> {
+fn validate_executable(path: &Path, require_packaged_owner: bool) -> Result<(), LaunchError> {
+    if !path.is_absolute() {
+        return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
+    }
+    let metadata = std::fs::symlink_metadata(path).map_err(LaunchError::ExecutableUnavailable)?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+
+        let mode = metadata.mode();
+        if mode & 0o111 == 0
+            || (require_packaged_owner && (metadata.uid() != 0 || mode & 0o022 != 0))
+        {
+            return Err(LaunchError::UntrustedExecutable(path.to_path_buf()));
+        }
+    }
+    Ok(())
+}
+
+fn launch_argv(program: &Path) -> Vec<String> {
     vec![
-        agent_ui_executable(),
+        program.to_string_lossy().into_owned(),
         OVERLAY_FLAG.to_string(),
         CONTEXT_STDIN_FLAG.to_string(),
         READY_FD_FLAG.to_string(),
@@ -522,13 +552,12 @@ fn prepare_launch<C: Context>(context: &C) -> Result<Vec<u8>, LaunchError> {
 }
 
 #[cfg(target_os = "linux")]
-fn launch_prepared(payload: &[u8]) -> Result<(), LaunchError> {
-    launch_prepared_with_timeout(payload, HANDSHAKE_TIMEOUT)
-}
-
-#[cfg(target_os = "linux")]
-fn launch_prepared_with_timeout(payload: &[u8], timeout: Duration) -> Result<(), LaunchError> {
-    let argv = launch_argv();
+fn launch_prepared_with_program(
+    payload: &[u8],
+    timeout: Duration,
+    program: &Path,
+) -> Result<(), LaunchError> {
+    let argv = launch_argv(program);
     let (mut ready_parent, ready_child) = UnixStream::pair().map_err(LaunchError::ReadyChannel)?;
     let ready_child_fd = ready_child.as_raw_fd();
     let mut command = Command::new(&argv[0]);
@@ -662,11 +691,6 @@ fn launch_prepared_with_timeout(payload: &[u8], timeout: Duration) -> Result<(),
     Ok(())
 }
 
-#[cfg(not(target_os = "linux"))]
-fn launch_prepared(_payload: &[u8]) -> Result<(), LaunchError> {
-    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
-}
-
 #[cfg(target_os = "linux")]
 fn terminate_child(mut child: Child, error: LaunchError) -> Result<(), LaunchError> {
     match child.kill() {
@@ -684,19 +708,52 @@ fn terminate_child(mut child: Child, error: LaunchError) -> Result<(), LaunchErr
 /// Process launch failures are logged by the worker with their typed error.
 pub fn launch<C: Context>(context: &C) -> Result<(), LaunchError> {
     require_process_handoff_isolation()?;
+    let program = packaged_agent_ui()?;
     let payload = prepare_launch(context)?;
-    spawn_prepared(payload).map(|_| ())
+    spawn_prepared(payload, program).map(|_| ())
 }
 
-fn spawn_prepared(payload: Vec<u8>) -> Result<thread::JoinHandle<()>, LaunchError> {
+#[cfg(target_os = "linux")]
+fn spawn_prepared(
+    payload: Vec<u8>,
+    program: PathBuf,
+) -> Result<thread::JoinHandle<()>, LaunchError> {
     thread::Builder::new()
         .name("ask-claw-launch".to_string())
         .spawn(move || {
-            if let Err(error) = launch_prepared(&payload) {
+            if let Err(error) = launch_prepared_with_program(&payload, HANDSHAKE_TIMEOUT, &program)
+            {
                 eprintln!("Ask Claw launch failed: {error}");
             }
         })
         .map_err(LaunchError::ThreadSpawn)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn spawn_prepared(
+    _payload: Vec<u8>,
+    _program: PathBuf,
+) -> Result<thread::JoinHandle<()>, LaunchError> {
+    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn launch_prepared_for_test(
+    payload: &[u8],
+    timeout: Duration,
+    program: &Path,
+) -> Result<(), LaunchError> {
+    validate_executable(program, false)?;
+    launch_prepared_with_program(payload, timeout, program)
+}
+
+#[cfg(all(test, target_os = "linux"))]
+fn spawn_prepared_for_test(
+    payload: Vec<u8>,
+    program: PathBuf,
+) -> Result<thread::JoinHandle<()>, LaunchError> {
+    validate_executable(&program, false)?;
+    spawn_prepared(payload, program)
 }
 
 #[cfg(test)]
