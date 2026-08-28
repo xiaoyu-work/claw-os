@@ -1,10 +1,14 @@
 """Tests for exec app cmd_start scratch naming and shell scope."""
 
+import io
+import json
 import os
 import pathlib
 import sys
 import tempfile
+import time
 import unittest
+import warnings
 from unittest import mock
 
 from test_support import load_local_module
@@ -85,7 +89,9 @@ class TestCmdStartScratchNaming(unittest.TestCase):
 
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
             "claw_test_exec_main.subprocess.Popen", return_value=FakeProc()
-        ), mock.patch("builtins.open", side_effect=tracking_open):
+        ), mock.patch("builtins.open", side_effect=tracking_open), mock.patch.object(
+            main, "_read_start_stdin", return_value=b""
+        ):
             out = main.cmd_start(["/usr/bin/true"])
 
         self.assertEqual(out.get("pid"), 424242)
@@ -146,6 +152,8 @@ class TestCmdStartScratchNaming(unittest.TestCase):
 
         with mock.patch.object(main.policy, "require", return_value=None), mock.patch(
             "builtins.open", side_effect=tracking_open
+        ), mock.patch.object(
+            main, "_read_start_stdin", return_value=b""
         ):
             with mock.patch("claw_test_exec_main.subprocess.Popen", return_value=FakeProc1()):
                 main.cmd_start(["/usr/bin/true"])
@@ -162,6 +170,57 @@ class TestCmdStartScratchNaming(unittest.TestCase):
             4,
             f"scratch names collided across cmd_start calls: {scratch_names}",
         )
+
+    @unittest.skipUnless(hasattr(os, "memfd_create"), "requires Linux memfd")
+    def test_start_forwards_stdin_once_without_persisting_payload(self) -> None:
+        main = self._import_main()
+        payload = b'{"context":"nested-secret-value"}'
+        received = pathlib.Path(self.tmp.name) / "received.bin"
+        stdin_kind = pathlib.Path(self.tmp.name) / "stdin-kind.txt"
+        command = [
+            sys.executable,
+            "-c",
+            (
+                "import os,pathlib,sys;"
+                f"pathlib.Path({str(stdin_kind)!r}).write_text("
+                "os.readlink('/proc/self/fd/0'),encoding='utf-8');"
+                f"pathlib.Path({str(received)!r}).write_bytes(sys.stdin.buffer.read())"
+            ),
+        ]
+
+        stdin = mock.Mock()
+        stdin.buffer = io.BytesIO(payload)
+
+        with warnings.catch_warnings(), mock.patch.object(
+            main.policy, "require", return_value=None
+        ), mock.patch.object(main.sys, "stdin", stdin):
+            warnings.simplefilter("ignore", ResourceWarning)
+            result = main.cmd_start(command)
+
+        deadline = time.monotonic() + 5
+        while not received.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        os.waitpid(result["pid"], 0)
+        self.assertEqual(received.read_bytes(), payload)
+        self.assertTrue(stdin_kind.read_text(encoding="utf-8").startswith("/memfd:"))
+        self.assertEqual(result["command"], command)
+        registry = pathlib.Path(main.REGISTRY_FILE).read_text(encoding="utf-8")
+        self.assertNotIn(payload.decode(), registry)
+        self.assertEqual(json.loads(registry)[0]["command"], command)
+
+    def test_start_rejects_oversize_stdin_before_spawning(self) -> None:
+        main = self._import_main()
+
+        stdin = mock.Mock()
+        stdin.buffer = io.BytesIO(b"x" * (main.MAX_START_STDIN_BYTES + 1))
+
+        with mock.patch.object(main.policy, "require", return_value=None), mock.patch.object(
+            main.sys, "stdin", stdin
+        ), mock.patch("claw_test_exec_main.subprocess.Popen") as popen:
+            result = main.cmd_start(["/usr/bin/true"])
+
+        self.assertIn("exceeds configured", result["error"])
+        popen.assert_not_called()
 
 
 class TestShellScope(unittest.TestCase):

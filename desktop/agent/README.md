@@ -104,10 +104,11 @@ client stream also triggers bridge-side cancellation.
 
 Voice uploads are staged as private runtime files and transcribed via
 the configured `cos model transcribe` provider. App/window context is
-likewise handed to the UI through a bounded `0600` runtime file rather
-than argv; the UI validates, unlinks, and reads it once before sending
-the context through a transient, untrusted-data system boundary. It is
-not stored as the visible user prompt.
+handed to the UI through explicit bounded stdin backed by a sealed anonymous
+memfd rather than argv, environment, or a pathname. The new process validates
+the typed activation before single-instance forwarding and sends the context
+through a transient, untrusted-data system boundary. It is not stored as the
+visible user prompt.
 
 ## Endpoint discovery
 

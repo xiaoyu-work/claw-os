@@ -18,7 +18,7 @@ with Claw OS.
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
 | `rust/` | Rust internal runtime crate |
-| `rust/src/ask_claw.rs` | Typed context serialization, private read-once file handoff, activation arguments, executable selection, and supervised overlay launch |
+| `rust/src/ask_claw.rs` | Typed context serialization, bounded stdin activation, executable selection, and supervised overlay launch |
 | `README.md` | Boundary and usage |
 
 ## Dependencies
@@ -33,11 +33,11 @@ name the Agent UI executable, construct activation flags, or assemble JSON.
 The Agent UI consumes the same runtime-owned activation type, so launch and
 single-instance D-Bus activation cannot drift.
 
-Context payloads are capped at 32 KiB and staged as `0600` files beneath a
-private `XDG_RUNTIME_DIR` child. Only the path crosses argv/audit/process
-registry boundaries. The UI validates, unlinks, and reads the file once;
-failed launches clean up immediately and later launches reap files older than
-ten minutes.
+Context payloads are capped at 32 KiB and serialized inside a typed activation.
+The runtime requests the bounded app-stdin route explicitly; `apps/exec`
+forwards the bytes once through a sealed anonymous memfd to the UI. No payload
+crosses argv, audit, registry, environment, or filesystem boundaries, and
+ordinary `exec.start` calls retain closed stdin.
 
 ## Tests
 

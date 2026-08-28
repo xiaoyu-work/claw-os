@@ -83,3 +83,7 @@ short/long flags and destination positionals must use manifest `aliases` or
 The parser preserves post-`--` positional classification; never strip the
 delimiter and re-run local flag detection. Stdin is closed unless the
 top-level CLI explicitly supplies `--stdin` and the operation opts in.
+`exec.start` is the only background-launch operation that accepts invocation
+stdin: it enforces its own 128-KiB bound and forwards non-empty input through a
+sealed anonymous memfd attached to the child's stdin. The payload is never
+copied into the process registry, argv, environment, or a pathname.

@@ -2,41 +2,30 @@
 //!
 //! Bundled desktop apps own small, app-specific context structs and implement
 //! [`Context`] for them. This module owns the stable envelope, JSON encoding,
-//! context bound, private context-file handoff, Agent UI discovery, activation
-//! arguments, and supervised process launch.
+//! bounds, anonymous stdin handoff, Agent UI discovery, activation arguments,
+//! and supervised process launch.
 
 use std::fmt::{self, Display, Formatter};
-use std::fs::{self, DirBuilder, File, OpenOptions};
-use std::io::{self, Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::{self, Read};
 use std::str::FromStr;
-#[cfg(not(unix))]
-use std::sync::atomic::{AtomicU64, Ordering};
-#[cfg(not(unix))]
-use std::time::UNIX_EPOCH;
-use std::time::{Duration, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{exec, BridgeError};
+use crate::exec;
 
-/// Maximum serialized context accepted by the Agent UI.
+/// Maximum serialized host context accepted by the Agent UI.
 pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 
-/// Maximum age of an abandoned context file before a later launch removes it.
-pub const STALE_CONTEXT_AGE: Duration = Duration::from_secs(10 * 60);
+/// Maximum serialized activation accepted from the Agent UI's stdin.
+pub const MAX_ACTIVATION_BYTES: usize = MAX_CONTEXT_BYTES * 2 + 1024;
 
 const AGENT_UI_ENV: &str = "COS_AGENT_UI_BIN";
 const DEFAULT_AGENT_UI: &str = "cos-agent-ui";
-const CONTEXT_DIRECTORY: &str = "claw-os-ask-claw";
-const CONTEXT_PREFIX: &str = ".context-";
-const CONTEXT_SUFFIX: &str = ".json";
-const CREATE_ATTEMPTS: usize = 16;
 const OVERLAY_FLAG: &str = "--overlay";
 const VOICE_FLAG: &str = "--voice";
 const QUERY_FLAG: &str = "--query";
 const CONTEXT_FLAG: &str = "--context";
-const CONTEXT_FILE_FLAG: &str = "--context-file";
+const CONTEXT_STDIN_FLAG: &str = "--context-stdin";
 
 /// A host-owned, typed description of the context for an Ask Claw request.
 ///
@@ -69,41 +58,23 @@ pub enum ContextError {
     NoRoomForText,
 }
 
-/// Errors produced by the private context-file handoff.
+/// Errors while reading and validating an explicit stdin activation.
 #[derive(Debug, thiserror::Error)]
-pub enum ContextFileError {
-    #[error("XDG_RUNTIME_DIR is required for Ask Claw context handoff")]
-    MissingRuntimeDirectory,
-
-    #[error("XDG_RUNTIME_DIR must be absolute")]
-    RelativeRuntimeDirectory,
-
-    #[error("Ask Claw runtime path is not a private real directory: {0}")]
-    InsecureDirectory(PathBuf),
-
-    #[error("Ask Claw context path is outside the private runtime directory: {0}")]
-    InvalidPath(PathBuf),
-
-    #[error("Ask Claw context file is not a private owned regular file: {0}")]
-    InsecureFile(PathBuf),
-
-    #[error("Ask Claw activation cannot contain both inline and file context")]
+pub enum ActivationInputError {
+    #[error("Ask Claw activation cannot contain both inline and stdin context")]
     ConflictingContext,
 
-    #[error("Ask Claw context file is {actual} bytes; the limit is {limit} bytes")]
-    TooLarge { actual: u64, limit: usize },
+    #[error("Ask Claw activation is {actual} bytes; the limit is {limit} bytes")]
+    TooLarge { actual: usize, limit: usize },
 
-    #[error("Ask Claw context file is not UTF-8")]
-    InvalidUtf8(#[from] std::string::FromUtf8Error),
-
-    #[error("Ask Claw context file is not valid context JSON: {0}")]
-    InvalidJson(#[from] serde_json::Error),
-
-    #[error("Ask Claw context file has no string `app` field")]
-    MissingApp,
-
-    #[error("Ask Claw context file operation failed: {0}")]
+    #[error("failed to read Ask Claw activation stdin: {0}")]
     Io(#[from] io::Error),
+
+    #[error("Ask Claw activation is malformed: {0}")]
+    Malformed(#[from] serde_json::Error),
+
+    #[error("Ask Claw activation context is invalid: {0}")]
+    InvalidContext(&'static str),
 }
 
 /// Errors from context preparation or the supervised process launch.
@@ -112,69 +83,35 @@ pub enum LaunchError {
     #[error(transparent)]
     Context(#[from] ContextError),
 
-    #[error(transparent)]
-    ContextFile(#[from] ContextFileError),
+    #[error("Ask Claw activation serialization failed: {0}")]
+    ActivationSerialization(#[source] serde_json::Error),
+
+    #[error("Ask Claw activation is {actual} bytes; the limit is {limit} bytes")]
+    ActivationTooLarge { actual: usize, limit: usize },
 
     #[error("failed to launch Ask Claw: {0}")]
-    Process(#[source] BridgeError),
+    Process(#[from] exec::StartError),
 }
 
 /// Single-instance activation sent to the Agent UI.
 ///
-/// The same type is used for initial CLI activation and libcosmic's
-/// subsequent D-Bus activation payload. Shared launchers populate
-/// `context_file`; `context` remains only for legacy external callers and is
-/// never populated by [`launch`].
+/// Shared launchers serialize this value to the child process's anonymous
+/// stdin. The new UI process reads it before libcosmic forwards the same value
+/// through its existing single-instance D-Bus activation mechanism.
 #[derive(Debug, Clone, Default, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Activation {
     pub voice: bool,
     pub query: Option<String>,
     pub context: Option<String>,
-    pub context_file: Option<PathBuf>,
 }
 
 impl Activation {
-    fn overlay_with_context_file(context_file: PathBuf) -> Self {
+    fn overlay_with_context(context: String) -> Self {
         Self {
-            context_file: Some(context_file),
+            context: Some(context),
             ..Self::default()
         }
-    }
-
-    fn arguments(&self) -> Vec<String> {
-        let mut args = vec![OVERLAY_FLAG.to_string()];
-        if self.voice {
-            args.push(VOICE_FLAG.to_string());
-        }
-        if let Some(query) = &self.query {
-            args.push(QUERY_FLAG.to_string());
-            args.push(query.clone());
-        }
-        if let Some(context_file) = &self.context_file {
-            args.push(CONTEXT_FILE_FLAG.to_string());
-            args.push(context_file.to_string_lossy().into_owned());
-        } else if let Some(context) = &self.context {
-            args.push(CONTEXT_FLAG.to_string());
-            args.push(context.clone());
-        }
-        args
-    }
-
-    /// Read, validate, and unlink a private context file exactly once.
-    ///
-    /// Legacy inline context needs no resolution. A conflicting activation is
-    /// rejected rather than allowing one source to shadow the other.
-    pub fn resolve_context_file(&mut self) -> Result<(), ContextFileError> {
-        let Some(path) = self.context_file.take() else {
-            return Ok(());
-        };
-        if self.context.is_some() {
-            remove_if_expected_context_path(&path);
-            return Err(ContextFileError::ConflictingContext);
-        }
-        self.context = Some(read_context_file_once(&path)?);
-        Ok(())
     }
 }
 
@@ -200,19 +137,56 @@ pub struct UiArguments {
     pub voice: bool,
     pub query: Option<String>,
     pub context: Option<String>,
-    pub context_file: Option<PathBuf>,
+    pub context_stdin: bool,
     pub help: bool,
     pub unknown: Vec<String>,
 }
 
 impl UiArguments {
-    pub fn activation(&self) -> Option<Activation> {
-        self.overlay.then(|| Activation {
+    /// Resolve this invocation into the activation sent to the UI instance.
+    ///
+    /// Stdin is read only when the explicit `--context-stdin` flag is present,
+    /// so ordinary `exec.start` callers cannot block waiting for input.
+    pub fn activation<R: Read>(
+        &self,
+        stdin: R,
+    ) -> Result<Option<Activation>, ActivationInputError> {
+        if self.context_stdin {
+            if self.context.is_some() {
+                return Err(ActivationInputError::ConflictingContext);
+            }
+            let activation = read_activation(stdin)?;
+            return Ok(self.overlay.then_some(activation));
+        }
+        Ok(self.overlay.then(|| Activation {
             voice: self.voice,
             query: self.query.clone(),
             context: self.context.clone(),
-            context_file: self.context_file.clone(),
-        })
+        }))
+    }
+
+    /// Resolve activation from process stdin and close that descriptor.
+    pub fn activation_from_process_stdin(
+        &self,
+    ) -> Result<Option<Activation>, ActivationInputError> {
+        if !self.context_stdin {
+            return self.activation(io::empty());
+        }
+        #[cfg(unix)]
+        {
+            use std::fs::File;
+            use std::os::fd::FromRawFd;
+
+            // SAFETY: this is called once during process argument parsing,
+            // before any other UI code borrows stdin. File takes ownership so
+            // fd 0 is closed immediately after the bounded read (or conflict).
+            let stdin = unsafe { File::from_raw_fd(0) };
+            self.activation(stdin)
+        }
+        #[cfg(not(unix))]
+        {
+            self.activation(std::io::stdin().lock())
+        }
     }
 }
 
@@ -230,7 +204,7 @@ where
             VOICE_FLAG => parsed.voice = true,
             QUERY_FLAG => parsed.query = arguments.next(),
             CONTEXT_FLAG => parsed.context = arguments.next(),
-            CONTEXT_FILE_FLAG => parsed.context_file = arguments.next().map(PathBuf::from),
+            CONTEXT_STDIN_FLAG => parsed.context_stdin = true,
             "-h" | "--help" => parsed.help = true,
             _ => parsed.unknown.push(argument),
         }
@@ -240,7 +214,7 @@ where
 
 /// Usage text for the shared Agent UI activation contract.
 pub const UI_USAGE: &str =
-    "cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context-file PATH] [--context TEXT]";
+    "cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context-stdin] [--context TEXT]";
 
 fn encode_context<C: Context>(context: &C) -> Result<String, ContextError> {
     if C::APP_ID.trim().is_empty() {
@@ -260,12 +234,17 @@ fn encode_context<C: Context>(context: &C) -> Result<String, ContextError> {
     serde_json::to_string(&fields).map_err(ContextError::Serialization)
 }
 
-/// Return whether a typed context fits the encoded context-file bound.
+/// Return whether a typed context fits the encoded context bound.
 pub fn context_fits<C: Context>(context: &C) -> Result<bool, ContextError> {
-    Ok(encode_context(context)?.len() <= MAX_CONTEXT_BYTES)
+    let context = encode_context(context)?;
+    if context.len() > MAX_CONTEXT_BYTES {
+        return Ok(false);
+    }
+    let activation = Activation::overlay_with_context(context);
+    Ok(serde_json::to_vec(&activation)?.len() <= MAX_ACTIVATION_BYTES)
 }
 
-/// Serialize a typed app context into the stable, bounded wire representation.
+/// Serialize a typed app context into the stable, bounded representation.
 pub fn serialize_context<C: Context>(context: &C) -> Result<String, ContextError> {
     let serialized = encode_context(context)?;
     let actual = serialized.len();
@@ -321,336 +300,71 @@ where
     Ok(Some(&text[boundaries[low]..]))
 }
 
+fn read_activation<R: Read>(reader: R) -> Result<Activation, ActivationInputError> {
+    let mut payload = Vec::new();
+    reader
+        .take(MAX_ACTIVATION_BYTES as u64 + 1)
+        .read_to_end(&mut payload)?;
+    if payload.len() > MAX_ACTIVATION_BYTES {
+        return Err(ActivationInputError::TooLarge {
+            actual: payload.len(),
+            limit: MAX_ACTIVATION_BYTES,
+        });
+    }
+    let activation: Activation = serde_json::from_slice(&payload)?;
+    if let Some(context) = &activation.context {
+        validate_activation_context(context)?;
+    }
+    Ok(activation)
+}
+
+fn validate_activation_context(context: &str) -> Result<(), ActivationInputError> {
+    if context.len() > MAX_CONTEXT_BYTES {
+        return Err(ActivationInputError::TooLarge {
+            actual: context.len(),
+            limit: MAX_CONTEXT_BYTES,
+        });
+    }
+    let value: serde_json::Value = serde_json::from_str(context)?;
+    let app = value
+        .as_object()
+        .and_then(|object| object.get("app"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|app| !app.trim().is_empty());
+    if app.is_none() {
+        return Err(ActivationInputError::InvalidContext(
+            "expected an object with a non-empty string `app` field",
+        ));
+    }
+    Ok(())
+}
+
 fn agent_ui_executable() -> String {
     std::env::var(AGENT_UI_ENV).unwrap_or_else(|_| DEFAULT_AGENT_UI.to_string())
 }
 
-fn launch_argv(activation: &Activation) -> Vec<String> {
-    let mut argv = Vec::with_capacity(1 + activation.arguments().len());
-    argv.push(agent_ui_executable());
-    argv.extend(activation.arguments());
-    argv
-}
-
-struct StagedContextFile {
-    path: PathBuf,
-    cleanup: bool,
-}
-
-impl StagedContextFile {
-    fn persist(mut self) {
-        self.cleanup = false;
-    }
-}
-
-impl Drop for StagedContextFile {
-    fn drop(&mut self) {
-        if self.cleanup {
-            let _ = fs::remove_file(&self.path);
-        }
-    }
-}
-
-fn stage_context_file(contents: &str) -> Result<StagedContextFile, ContextFileError> {
-    let directory = context_directory(true)?;
-    let (path, mut file) = create_unique_context_file(&directory)?;
-    let staged = StagedContextFile {
-        path,
-        cleanup: true,
-    };
-    file.write_all(contents.as_bytes())?;
-    file.sync_all()?;
-    drop(file);
-    Ok(staged)
-}
-
-fn context_directory(create: bool) -> Result<PathBuf, ContextFileError> {
-    let runtime_root =
-        std::env::var_os("XDG_RUNTIME_DIR").ok_or(ContextFileError::MissingRuntimeDirectory)?;
-    let runtime_root = PathBuf::from(runtime_root);
-    if !runtime_root.is_absolute() {
-        return Err(ContextFileError::RelativeRuntimeDirectory);
-    }
-    validate_private_directory(&runtime_root)?;
-
-    let directory = runtime_root.join(CONTEXT_DIRECTORY);
-    if create {
-        let mut builder = DirBuilder::new();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::DirBuilderExt;
-            builder.mode(0o700);
-        }
-        match builder.create(&directory) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(ContextFileError::Io(error)),
-        }
-    }
-    validate_private_directory(&directory)?;
-    if create {
-        cleanup_stale_context_files(&directory, SystemTime::now(), STALE_CONTEXT_AGE)?;
-    }
-    Ok(directory)
-}
-
-fn validate_private_directory(path: &Path) -> Result<(), ContextFileError> {
-    let metadata = fs::symlink_metadata(path)?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(ContextFileError::InsecureDirectory(path.to_path_buf()));
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != current_uid()
-            || (!skip_test_mode_validation() && metadata.mode() & 0o077 != 0)
-        {
-            return Err(ContextFileError::InsecureDirectory(path.to_path_buf()));
-        }
-    }
-    Ok(())
-}
-
-fn create_unique_context_file(directory: &Path) -> Result<(PathBuf, File), ContextFileError> {
-    for _ in 0..CREATE_ATTEMPTS {
-        let token = context_token()?;
-        let path = directory.join(format!("{CONTEXT_PREFIX}{token}{CONTEXT_SUFFIX}"));
-        match open_private_new_file(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(ContextFileError::Io(error)),
-        }
-    }
-    Err(ContextFileError::Io(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not allocate a unique Ask Claw context file",
-    )))
-}
-
-#[cfg(unix)]
-fn context_token() -> io::Result<String> {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut random = [0_u8; 16];
-    File::open("/dev/urandom")?.read_exact(&mut random)?;
-    let mut token = String::with_capacity(random.len() * 2);
-    for byte in random {
-        token.push(HEX[(byte >> 4) as usize] as char);
-        token.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    Ok(token)
-}
-
-#[cfg(not(unix))]
-fn context_token() -> io::Result<String> {
-    static NEXT_FILE: AtomicU64 = AtomicU64::new(0);
-    let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
-    let nonce = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_nanos())
-        .unwrap_or(0);
-    Ok(format!("{}-{nonce}-{sequence}", std::process::id()))
-}
-
-fn open_private_new_file(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    }
-    options.open(path)
-}
-
-fn open_private_context_file(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.custom_flags(libc::O_NOFOLLOW);
-    }
-    options.open(path)
-}
-
-fn validate_context_path(path: &Path) -> Result<(), ContextFileError> {
-    let directory = context_directory(false)?;
-    if path.parent() != Some(directory.as_path()) || !is_context_file_name(path) {
-        return Err(ContextFileError::InvalidPath(path.to_path_buf()));
-    }
-    Ok(())
-}
-
-fn is_context_file_name(path: &Path) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return false;
-    };
-    let Some(token) = name
-        .strip_prefix(CONTEXT_PREFIX)
-        .and_then(|name| name.strip_suffix(CONTEXT_SUFFIX))
-    else {
-        return false;
-    };
-    !token.is_empty()
-        && token
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-}
-
-fn read_context_file_once(path: &Path) -> Result<String, ContextFileError> {
-    validate_context_path(path)?;
-    let claimed_path = claim_context_file(path)?;
-    let mut file = match open_private_context_file(&claimed_path) {
-        Ok(file) => file,
-        Err(error) => {
-            let _ = fs::remove_file(&claimed_path);
-            return Err(ContextFileError::Io(error));
-        }
-    };
-    let metadata = match file.metadata() {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            let _ = fs::remove_file(&claimed_path);
-            return Err(ContextFileError::Io(error));
-        }
-    };
-    let validation = validate_private_context_file(&claimed_path, &metadata);
-    let unlink = fs::remove_file(&claimed_path);
-    validation?;
-    unlink?;
-
-    let mut bytes = Vec::with_capacity(metadata.len().min(MAX_CONTEXT_BYTES as u64) as usize);
-    Read::by_ref(&mut file)
-        .take(MAX_CONTEXT_BYTES as u64 + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() > MAX_CONTEXT_BYTES {
-        return Err(ContextFileError::TooLarge {
-            actual: bytes.len() as u64,
-            limit: MAX_CONTEXT_BYTES,
-        });
-    }
-    let context = String::from_utf8(bytes)?;
-    let value: serde_json::Value = serde_json::from_str(&context)?;
-    if !value
-        .as_object()
-        .and_then(|object| object.get("app"))
-        .is_some_and(serde_json::Value::is_string)
-    {
-        return Err(ContextFileError::MissingApp);
-    }
-    Ok(context)
-}
-
-fn claim_context_file(path: &Path) -> Result<PathBuf, ContextFileError> {
-    let directory = path
-        .parent()
-        .ok_or_else(|| ContextFileError::InvalidPath(path.to_path_buf()))?;
-    for _ in 0..CREATE_ATTEMPTS {
-        let claimed_path = directory.join(format!(
-            "{CONTEXT_PREFIX}claim-{}{CONTEXT_SUFFIX}",
-            context_token()?
-        ));
-        if claimed_path.exists() {
-            continue;
-        }
-        match fs::rename(path, &claimed_path) {
-            Ok(()) => return Ok(claimed_path),
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(ContextFileError::Io(error)),
-        }
-    }
-    Err(ContextFileError::Io(io::Error::new(
-        io::ErrorKind::AlreadyExists,
-        "could not atomically claim Ask Claw context file",
-    )))
-}
-
-fn validate_private_context_file(
-    path: &Path,
-    metadata: &fs::Metadata,
-) -> Result<(), ContextFileError> {
-    if !metadata.is_file() || metadata.len() > MAX_CONTEXT_BYTES as u64 {
-        return if metadata.len() > MAX_CONTEXT_BYTES as u64 {
-            Err(ContextFileError::TooLarge {
-                actual: metadata.len(),
-                limit: MAX_CONTEXT_BYTES,
-            })
-        } else {
-            Err(ContextFileError::InsecureFile(path.to_path_buf()))
-        };
-    }
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != current_uid()
-            || (!skip_test_mode_validation() && metadata.mode() & 0o777 != 0o600)
-        {
-            return Err(ContextFileError::InsecureFile(path.to_path_buf()));
-        }
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn current_uid() -> u32 {
-    // SAFETY: geteuid has no preconditions and does not dereference pointers.
-    unsafe { libc::geteuid() }
-}
-
-#[cfg(all(unix, test))]
-fn skip_test_mode_validation() -> bool {
-    std::env::var_os("COS_ASK_CLAW_TEST_PERMISSIVE_FS").is_some()
-}
-
-#[cfg(all(unix, not(test)))]
-fn skip_test_mode_validation() -> bool {
-    false
-}
-
-fn remove_if_expected_context_path(path: &Path) {
-    if validate_context_path(path).is_ok() {
-        let _ = fs::remove_file(path);
-    }
-}
-
-fn cleanup_stale_context_files(
-    directory: &Path,
-    now: SystemTime,
-    max_age: Duration,
-) -> Result<(), ContextFileError> {
-    for entry in fs::read_dir(directory)? {
-        let entry = entry?;
-        let path = entry.path();
-        if !is_context_file_name(&path) {
-            continue;
-        }
-        let metadata = fs::symlink_metadata(&path)?;
-        let stale = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age >= max_age);
-        if stale && (metadata.is_file() || metadata.file_type().is_symlink()) {
-            match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Err(error) => return Err(ContextFileError::Io(error)),
-            }
-        }
-    }
-    Ok(())
+fn launch_argv() -> Vec<String> {
+    vec![
+        agent_ui_executable(),
+        OVERLAY_FLAG.to_string(),
+        CONTEXT_STDIN_FLAG.to_string(),
+    ]
 }
 
 /// Launch Ask Claw through the runtime's supervised process boundary.
 pub fn launch<C: Context>(context: &C) -> Result<exec::LaunchHandle, LaunchError> {
     let context = serialize_context(context)?;
-    let staged = stage_context_file(&context)?;
-    let activation = Activation::overlay_with_context_file(staged.path.clone());
-    let argv = launch_argv(&activation);
+    let activation = Activation::overlay_with_context(context);
+    let payload = serde_json::to_vec(&activation).map_err(LaunchError::ActivationSerialization)?;
+    if payload.len() > MAX_ACTIVATION_BYTES {
+        return Err(LaunchError::ActivationTooLarge {
+            actual: payload.len(),
+            limit: MAX_ACTIVATION_BYTES,
+        });
+    }
+    let argv = launch_argv();
     let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
-    let handle = exec::start(&argv).map_err(LaunchError::Process)?;
-    staged.persist();
-    Ok(handle)
+    exec::start_with_stdin(&argv, &payload).map_err(LaunchError::Process)
 }
 
 #[cfg(test)]

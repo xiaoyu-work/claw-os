@@ -23,6 +23,7 @@ MAX_OUTPUT_BYTES = 1_000_000  # 1 MB output limit for stdout/stderr
 # path below. Larger than the 1 MB MAX_OUTPUT_BYTES so the truncation
 # marker can be inserted without further loss.
 HARD_OUTPUT_CAP = 8 * 1024 * 1024  # 8 MiB per stream
+MAX_START_STDIN_BYTES = 128 * 1024
 WHICH_TIMEOUT = 10
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 PROC_DIR = os.path.join(DATA_DIR, "proc")
@@ -360,6 +361,46 @@ def _with_registry_lock(fn):
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
 
 
+def _read_start_stdin():
+    """Read only the invocation stdin explicitly forwarded by ``cos``."""
+    data = sys.stdin.buffer.read(MAX_START_STDIN_BYTES + 1)
+    if len(data) > MAX_START_STDIN_BYTES:
+        raise ValueError(
+            f"start stdin exceeds configured {MAX_START_STDIN_BYTES}-byte limit"
+        )
+    return data
+
+
+def _anonymous_stdin(data):
+    """Return a sealed anonymous fd positioned for one child read."""
+    if not data:
+        return None
+    if not hasattr(os, "memfd_create"):
+        raise OSError("anonymous start stdin is unavailable on this platform")
+    flags = getattr(os, "MFD_CLOEXEC", 0) | getattr(os, "MFD_ALLOW_SEALING", 0)
+    fd = os.memfd_create("cos-exec-stdin", flags)
+    try:
+        view = memoryview(data)
+        while view:
+            written = os.write(fd, view)
+            if written <= 0:
+                raise OSError("short write to anonymous start stdin")
+            view = view[written:]
+        os.lseek(fd, 0, os.SEEK_SET)
+        if hasattr(fcntl, "F_ADD_SEALS"):
+            seals = (
+                fcntl.F_SEAL_SEAL
+                | fcntl.F_SEAL_SHRINK
+                | fcntl.F_SEAL_GROW
+                | fcntl.F_SEAL_WRITE
+            )
+            fcntl.fcntl(fd, fcntl.F_ADD_SEALS, seals)
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
 def cmd_start(args):
     """Run a command in the background."""
     from canonical_argv import parse_canonical_argv
@@ -369,6 +410,11 @@ def cmd_start(args):
         return {"error": str(error)}
     if not args:
         return {"error": "no command specified"}
+
+    try:
+        stdin_data = _read_start_stdin()
+    except (OSError, ValueError) as error:
+        return {"error": f"failed to read start stdin: {error}"}
 
     policy.require("proc.spawn", name=args[0])
 
@@ -386,6 +432,7 @@ def cmd_start(args):
     scratch = uuid.uuid4().hex[:12]
     stdout_tmp = os.path.join(PROC_DIR, f".stdout.{scratch}")
     stderr_tmp = os.path.join(PROC_DIR, f".stderr.{scratch}")
+    stdin_fd = None
 
     try:
         # `with open(...)` closes the parent-side file handles
@@ -394,10 +441,14 @@ def cmd_start(args):
         # Scrub the environment so the background process can't
         # exfiltrate credentials the agent owns.
         env = scrub_env()
+        child_stdin = subprocess.DEVNULL
+        if stdin_data:
+            stdin_fd = _anonymous_stdin(stdin_data)
+            child_stdin = stdin_fd
         with open(stdout_tmp, "w") as stdout_f, open(stderr_tmp, "w") as stderr_f:
             proc = subprocess.Popen(
                 args,
-                stdin=subprocess.DEVNULL,
+                stdin=child_stdin,
                 stdout=stdout_f,
                 stderr=stderr_f,
                 env=env,
@@ -417,6 +468,9 @@ def cmd_start(args):
             except OSError:
                 pass
         return {"error": str(e)}
+    finally:
+        if stdin_fd is not None:
+            os.close(stdin_fd)
 
     pid = proc.pid
     stdout_path = os.path.join(PROC_DIR, f"stdout.{pid}")

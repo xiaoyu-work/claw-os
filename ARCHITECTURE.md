@@ -89,11 +89,11 @@ remain owned by the core agent.
 
 Bundled desktop apps launch Ask Claw through `cos_runtime::ask_claw`. Their
 thin `claw_glue` adapters define only typed, app-specific context fields; the
-runtime owns bounded JSON serialization, private read-once context-file
+runtime owns bounded JSON serialization, anonymous process-bound stdin
 handoff, executable selection, overlay activation arguments, supervised launch
-errors, and the activation contract consumed by the Agent UI. Process argv,
-audit entries, and the exec registry contain only the transient path, never
-the context payload.
+errors, and the activation contract consumed by the Agent UI. Context payloads
+never enter process argv, audit entries, the exec registry, environment, or
+filesystem.
 
 ### Persistence and observability
 
@@ -520,9 +520,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   versioned presentation contract and rejects incompatible versions explicitly.
 - Desktop Ask Claw launchers and the Agent UI share the
   `cos_runtime::ask_claw` activation contract; host reducers never name the
-  Agent UI executable or hand-build context JSON. Context files are private,
-  bounded, no-follow, owner/mode checked, unlinked before their one read, and
-  stale files are reaped on later launches.
+  Agent UI executable or hand-build context JSON. The runtime uses the
+  manifest-gated app stdin route and `apps/exec` forwards the bounded payload
+  through a sealed anonymous memfd for one UI read.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.

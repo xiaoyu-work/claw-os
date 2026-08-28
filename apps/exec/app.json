@@ -133,6 +133,7 @@
       "label": {
         "en": "Start a command in the background"
       },
+      "stdin": true,
       "args": [
         {
           "name": "command",
