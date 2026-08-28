@@ -264,12 +264,21 @@ impl Drop for StandaloneMainCopy {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct WalValidation {
     bytes: u64,
     frames: u64,
+    physical_frames: u64,
     commits: u64,
     page_size: u64,
+    stale_tail_bytes: u64,
+    wal_index_issue: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct WalIndexHint {
+    mx_frame: u64,
+    frame_checksum: [u32; 2],
 }
 
 pub fn diagnose_default() -> Result<MemoryHealthReport, MemoryError> {
@@ -408,7 +417,7 @@ pub fn repair(path: &Path, options: RepairOptions) -> Result<MemoryRepairReport,
     }
 
     let checkpoint_source =
-        before.sqlite.status == "ok" && before.wal.status == "ok" && path.exists();
+        before.sqlite.status == "ok" && before.wal.status != "fail" && path.exists();
     let attempt = if let Some(event) = interrupted {
         event
     } else {
@@ -1599,12 +1608,23 @@ fn inspect_wal_files(path: &Path, display_path: &Path) -> MemoryHealthCheck {
             check
                 .metrics
                 .insert("wal_frames".to_string(), validation.frames);
+            check.metrics.insert(
+                "wal_physical_frames".to_string(),
+                validation.physical_frames,
+            );
             check
                 .metrics
                 .insert("wal_commits".to_string(), validation.commits);
             check
                 .metrics
                 .insert("wal_page_size".to_string(), validation.page_size);
+            check.metrics.insert(
+                "wal_stale_tail_bytes".to_string(),
+                validation.stale_tail_bytes,
+            );
+            if let Some(issue) = validation.wal_index_issue {
+                issues.push(issue);
+            }
         }
         Ok(None) => {
             check.metrics.insert("wal_bytes".to_string(), 0);
@@ -1642,6 +1662,16 @@ fn inspect_wal_files(path: &Path, display_path: &Path) -> MemoryHealthCheck {
     }
     if issues.is_empty() {
         check
+    } else if issues
+        .iter()
+        .all(|issue| issue.contains("WAL index") || issue.contains("SHM"))
+    {
+        MemoryHealthCheck {
+            status: "warn".to_string(),
+            summary: "WAL data is valid but its rebuildable index needs repair".to_string(),
+            issues,
+            metrics: check.metrics,
+        }
     } else {
         MemoryHealthCheck {
             status: "fail".to_string(),
@@ -1666,8 +1696,11 @@ fn inspect_wal(path: &Path, database_path: &Path) -> Result<Option<WalValidation
         return Ok(Some(WalValidation {
             bytes: 0,
             frames: 0,
+            physical_frames: 0,
             commits: 0,
             page_size: 0,
+            stale_tail_bytes: 0,
+            wal_index_issue: None,
         }));
     }
     if size < 32 {
@@ -1724,66 +1757,228 @@ fn inspect_wal(path: &Path, database_path: &Path) -> Result<Option<WalValidation
 
     let frame_size = page_size + 24;
     let payload = size - 32;
-    if payload % frame_size != 0 {
-        return Err(format!("{} ends in a partial WAL frame", path.display()));
+    let physical_frames = payload / frame_size;
+    let trailing_bytes = payload % frame_size;
+    let salt: [u8; 8] = header[16..24].try_into().expect("eight bytes");
+    let (wal_index, wal_index_issue) =
+        match read_wal_index_hint(&shm_path(database_path), magic, page_size, &salt) {
+            Ok(hint) => (hint, None),
+            Err(error) => (None, Some(error)),
+        };
+    if let Some(hint) = wal_index {
+        if hint.mx_frame > physical_frames {
+            return Err(format!(
+                "{} contains {physical_frames} complete frame(s), but the WAL index requires {}",
+                path.display(),
+                hint.mx_frame
+            ));
+        }
     }
-    let frames = payload / frame_size;
-    let salt = &header[16..24];
+
     let mut rolling_checksum = header_checksum;
     let mut frame = vec![0_u8; frame_size as usize];
     let mut commits = 0_u64;
-    for frame_index in 0..frames {
+    let mut last_commit = 0_u64;
+    let scan_frames = wal_index
+        .map(|hint| hint.mx_frame)
+        .unwrap_or(physical_frames);
+    for frame_index in 0..scan_frames {
         file.read_exact(&mut frame).map_err(|error| {
             format!("read {} frame {}: {error}", path.display(), frame_index + 1)
         })?;
-        let page_number = u32::from_be_bytes(frame[0..4].try_into().expect("four bytes"));
-        if page_number == 0 || page_number > SQLITE_MAX_PAGE_NUMBER {
-            return Err(format!(
-                "{} frame {} has invalid page number {page_number}",
-                path.display(),
-                frame_index + 1
-            ));
-        }
-        let commit_size = u32::from_be_bytes(frame[4..8].try_into().expect("four bytes"));
-        if commit_size > SQLITE_MAX_PAGE_NUMBER {
-            return Err(format!(
-                "{} frame {} has invalid commit size {commit_size}",
-                path.display(),
-                frame_index + 1
-            ));
-        }
-        if &frame[8..16] != salt {
-            return Err(format!(
-                "{} frame {} has salts that do not match the WAL header",
-                path.display(),
-                frame_index + 1
-            ));
-        }
-        // SQLite chains each frame over its page/commit words and page bytes;
-        // the salt and stored checksum fields are deliberately excluded.
-        rolling_checksum = wal_checksum(&frame[..8], checksum_big_endian, rolling_checksum);
-        rolling_checksum = wal_checksum(&frame[24..], checksum_big_endian, rolling_checksum);
-        let stored_frame_checksum = [
-            u32::from_be_bytes(frame[16..20].try_into().expect("four bytes")),
-            u32::from_be_bytes(frame[20..24].try_into().expect("four bytes")),
-        ];
-        if rolling_checksum != stored_frame_checksum {
-            return Err(format!(
-                "{} frame {} has an invalid rolling checksum",
-                path.display(),
-                frame_index + 1
-            ));
-        }
+        let frame_number = frame_index + 1;
+        let validated = validate_wal_frame(
+            &frame,
+            frame_number,
+            &salt,
+            checksum_big_endian,
+            rolling_checksum,
+            path,
+        );
+        let (commit_size, checksum) = match validated {
+            Ok(validated) => validated,
+            Err(_error) if wal_index.is_none() => break,
+            Err(error) => return Err(error),
+        };
+        rolling_checksum = checksum;
         if commit_size != 0 {
             commits += 1;
+            last_commit = frame_number;
         }
     }
+
+    let logical_frames = if let Some(hint) = wal_index {
+        if hint.mx_frame > 0 {
+            if last_commit != hint.mx_frame {
+                return Err(format!(
+                    "{} WAL index points to frame {}, but that frame is not a commit",
+                    path.display(),
+                    hint.mx_frame
+                ));
+            }
+            if rolling_checksum != hint.frame_checksum {
+                return Err(format!(
+                    "{} WAL index checksum does not match logical frame {}",
+                    path.display(),
+                    hint.mx_frame
+                ));
+            }
+        }
+        hint.mx_frame
+    } else {
+        last_commit
+    };
+    let logical_bytes = 32 + logical_frames * frame_size;
+    let stale_tail_bytes = size.saturating_sub(logical_bytes);
     Ok(Some(WalValidation {
         bytes: size,
-        frames,
+        frames: logical_frames,
+        physical_frames,
         commits,
         page_size,
+        stale_tail_bytes: stale_tail_bytes.max(trailing_bytes),
+        wal_index_issue,
     }))
+}
+
+fn validate_wal_frame(
+    frame: &[u8],
+    frame_number: u64,
+    salt: &[u8; 8],
+    checksum_big_endian: bool,
+    seed: [u32; 2],
+    path: &Path,
+) -> Result<(u32, [u32; 2]), String> {
+    let page_number = u32::from_be_bytes(frame[0..4].try_into().expect("four bytes"));
+    if page_number == 0 || page_number > SQLITE_MAX_PAGE_NUMBER {
+        return Err(format!(
+            "{} frame {frame_number} has invalid page number {page_number}",
+            path.display()
+        ));
+    }
+    let commit_size = u32::from_be_bytes(frame[4..8].try_into().expect("four bytes"));
+    if commit_size > SQLITE_MAX_PAGE_NUMBER {
+        return Err(format!(
+            "{} frame {frame_number} has invalid commit size {commit_size}",
+            path.display()
+        ));
+    }
+    if &frame[8..16] != salt {
+        return Err(format!(
+            "{} frame {frame_number} has salts that do not match the WAL header",
+            path.display()
+        ));
+    }
+    // SQLite chains each frame over its page/commit words and page bytes;
+    // the salt and stored checksum fields are deliberately excluded.
+    let checksum = wal_checksum(&frame[..8], checksum_big_endian, seed);
+    let checksum = wal_checksum(&frame[24..], checksum_big_endian, checksum);
+    let stored_checksum = [
+        u32::from_be_bytes(frame[16..20].try_into().expect("four bytes")),
+        u32::from_be_bytes(frame[20..24].try_into().expect("four bytes")),
+    ];
+    if checksum != stored_checksum {
+        return Err(format!(
+            "{} frame {frame_number} has an invalid rolling checksum",
+            path.display()
+        ));
+    }
+    Ok((commit_size, checksum))
+}
+
+fn read_wal_index_hint(
+    path: &Path,
+    wal_magic: u32,
+    wal_page_size: u64,
+    wal_salt: &[u8; 8],
+) -> Result<Option<WalIndexHint>, String> {
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => {
+            return Err(format!(
+                "cannot inspect WAL index {}: {error}",
+                path.display()
+            ))
+        }
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(format!(
+            "WAL index {} is not a regular file",
+            path.display()
+        ));
+    }
+    if metadata.len() < 96 {
+        return Err(format!(
+            "WAL index {} is shorter than its headers",
+            path.display()
+        ));
+    }
+    let mut headers = [0_u8; 96];
+    File::open(path)
+        .and_then(|mut file| file.read_exact(&mut headers))
+        .map_err(|error| format!("read WAL index {}: {error}", path.display()))?;
+    if headers[..48] != headers[48..96] {
+        return Err(format!(
+            "WAL index {} header copies disagree",
+            path.display()
+        ));
+    }
+    let header = &headers[..48];
+    let version = native_u32(&header[0..4]);
+    if version != WAL_FORMAT_VERSION {
+        return Err(format!(
+            "WAL index {} has unsupported version {version}",
+            path.display()
+        ));
+    }
+    if header[12] != 1 {
+        return Err(format!("WAL index {} is not initialized", path.display()));
+    }
+    if header[13] != (wal_magic & 1) as u8 {
+        return Err(format!(
+            "WAL index {} checksum byte order disagrees with WAL header",
+            path.display()
+        ));
+    }
+    let encoded_page_size = native_u16(&header[14..16]) as u64;
+    let page_size = if encoded_page_size == 1 {
+        65_536
+    } else {
+        encoded_page_size
+    };
+    if page_size != wal_page_size {
+        return Err(format!(
+            "WAL index {} page size does not match WAL header",
+            path.display()
+        ));
+    }
+    if &header[32..40] != wal_salt {
+        return Err(format!(
+            "WAL index {} salts do not match WAL header",
+            path.display()
+        ));
+    }
+    let expected = wal_checksum(&header[..40], cfg!(target_endian = "big"), [0, 0]);
+    let stored = [native_u32(&header[40..44]), native_u32(&header[44..48])];
+    if expected != stored {
+        return Err(format!(
+            "WAL index {} header checksum is invalid",
+            path.display()
+        ));
+    }
+    Ok(Some(WalIndexHint {
+        mx_frame: native_u32(&header[16..20]) as u64,
+        frame_checksum: [native_u32(&header[24..28]), native_u32(&header[28..32])],
+    }))
+}
+
+fn native_u32(bytes: &[u8]) -> u32 {
+    u32::from_ne_bytes(bytes.try_into().expect("four bytes"))
+}
+
+fn native_u16(bytes: &[u8]) -> u16 {
+    u16::from_ne_bytes(bytes.try_into().expect("two bytes"))
 }
 
 fn wal_checksum(bytes: &[u8], big_endian_words: bool, seed: [u32; 2]) -> [u32; 2] {
@@ -2012,27 +2207,7 @@ fn quarantine_and_replace(
     }
 
     if path.exists() && !quarantine.exists() && checkpoint_source {
-        match inspect_wal(&wal_path(path), path) {
-            Ok(_) => match Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE) {
-                Ok(conn) => {
-                    conn.busy_timeout(Duration::from_secs(5))?;
-                    if let Err(error) = checkpoint_wal(&conn) {
-                        warnings.push(format!(
-                            "WAL checkpoint failed before quarantine; preserving the complete \
-                             family and attempting standalone-main recovery: {error}"
-                        ));
-                    }
-                }
-                Err(error) => warnings.push(format!(
-                    "SQLite could not open for checkpoint before quarantine; preserving the \
-                     complete family and attempting standalone-main recovery: {error}"
-                )),
-            },
-            Err(error) => warnings.push(format!(
-                "WAL validation changed before quarantine; preserving the complete family and \
-                 attempting standalone-main recovery: {error}"
-            )),
-        }
+        ensure_wal_fully_checkpointed(path)?;
     }
 
     move_if_present(path, quarantine, &mut files)?;
@@ -2160,12 +2335,26 @@ fn build_staged_replacement(
         marker.recovery_warning =
             Some("quarantine contains no main database; replacement is empty".to_string());
     }
+    write_replacement_marker(&target, &marker)?;
+    checkpoint_wal(&target)?;
     marker.complete = true;
     write_replacement_marker(&target, &marker)?;
     checkpoint_wal(&target)?;
     drop(target);
     harden_sqlite_files(replacement)?;
-    Ok(marker)
+    let durable = read_replacement_marker(replacement)?.ok_or_else(|| {
+        MemoryError::Integrity(format!(
+            "staged replacement {} has no durable repair marker",
+            replacement.display()
+        ))
+    })?;
+    if durable != marker {
+        return Err(MemoryError::Integrity(format!(
+            "staged replacement {} marker or recovered counts were not checkpointed",
+            replacement.display()
+        )));
+    }
+    Ok(durable)
 }
 
 fn recover_from_standalone_main(
@@ -2255,10 +2444,16 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
     if !path.exists() {
         return Ok(None);
     }
-    let snapshot = create_diagnostic_snapshot(path)?.ok_or_else(|| {
-        MemoryError::Repair(format!("cannot snapshot replacement {}", path.display()))
-    })?;
-    let conn = Connection::open_with_flags(&snapshot.database, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let standalone_path = suffix_path(
+        path,
+        &format!(".marker-check-{}", uuid::Uuid::new_v4().simple()),
+    );
+    remove_replacement_scratch(&standalone_path)?;
+    copy_snapshot_file(path, &standalone_path)?;
+    let standalone = StandaloneMainCopy {
+        path: standalone_path,
+    };
+    let conn = Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     if schema_object_type(&conn, REPLACEMENT_MARKER_TABLE)?.is_none() {
         return Ok(None);
     }
@@ -2459,7 +2654,7 @@ fn recover_authoritative_rows(
 }
 
 fn checkpoint_wal(conn: &Connection) -> Result<(), MemoryError> {
-    let (busy, _frames, _checkpointed) =
+    let (busy, frames, checkpointed) =
         conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -2467,13 +2662,31 @@ fn checkpoint_wal(conn: &Connection) -> Result<(), MemoryError> {
                 row.get::<_, i64>(2)?,
             ))
         })?;
-    if busy != 0 {
+    if busy != 0 || (frames >= 0 && checkpointed < frames) {
         return Err(MemoryError::Repair(
-            "WAL checkpoint is busy; an uncoordinated SQLite writer may still be active"
+            "WAL checkpoint did not fully complete; an uncoordinated SQLite reader or writer may still be active"
                 .to_string(),
         ));
     }
     Ok(())
+}
+
+fn ensure_wal_fully_checkpointed(path: &Path) -> Result<(), MemoryError> {
+    inspect_wal(&wal_path(path), path)
+        .map_err(|error| MemoryError::Integrity(format!("refusing WAL checkpoint: {error}")))?;
+    let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
+    conn.busy_timeout(Duration::from_secs(5))?;
+    checkpoint_wal(&conn)?;
+    drop(conn);
+    match fs::metadata(wal_path(path)) {
+        Ok(metadata) if metadata.len() != 0 => Err(MemoryError::Repair(format!(
+            "WAL checkpoint returned without truncating {}",
+            wal_path(path).display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(MemoryError::Io(error)),
+    }
 }
 
 fn read_repair_log(path: &Path) -> Result<RepairLogSnapshot, MemoryError> {

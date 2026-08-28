@@ -345,6 +345,78 @@ fn malformed_wal_is_quarantined_without_trusting_its_contents() {
 }
 
 #[test]
+fn wal_restart_ignores_stale_physical_and_partial_tail() {
+    let (_directory, path) = database_path();
+    let connection = create_live_wal(&path);
+    let old_wal = fs::read(wal_path(&path)).expect("old wal");
+    checkpoint_wal(&connection).expect("checkpoint old wal");
+    connection
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('wal-session', 'user', 'after restart', 2)",
+            [],
+        )
+        .expect("insert after restart");
+
+    let current = inspect_wal(&wal_path(&path), &path)
+        .expect("current wal")
+        .expect("wal");
+    let stale_frame_len = 24 + current.page_size as usize;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(wal_path(&path))
+        .expect("open wal for stale tail");
+    file.write_all(&old_wal[32..32 + stale_frame_len])
+        .expect("append stale frame");
+    file.write_all(&old_wal[32..45])
+        .expect("append partial stale frame");
+    file.sync_all().expect("sync stale tail");
+
+    let validation = inspect_wal(&wal_path(&path), &path)
+        .expect("stale tail is valid")
+        .expect("wal");
+    assert_eq!(validation.frames, current.frames);
+    assert!(validation.physical_frames > validation.frames);
+    assert!(validation.stale_tail_bytes > 0);
+    let health = diagnose(&path).expect("diagnose stale tail");
+    assert_ne!(health.wal.status, "fail");
+    repair(&path, RepairOptions::default()).expect("checkpoint logical WAL prefix");
+    drop(connection);
+    let reopened = MemoryDb::open(&path).expect("reopen");
+    assert_eq!(reopened.count_total().expect("count"), 2);
+    assert_eq!(reopened.search("restart", 10).expect("search").len(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn wal_scan_without_shm_uses_last_committed_prefix() {
+    let (_directory, path) = database_path();
+    let connection = create_live_wal(&path);
+    let original = fs::read(wal_path(&path)).expect("original wal");
+    let logical = inspect_wal(&wal_path(&path), &path)
+        .expect("validate wal")
+        .expect("wal");
+    let stale_frame_len = 24 + logical.page_size as usize;
+    let mut file = OpenOptions::new()
+        .append(true)
+        .open(wal_path(&path))
+        .expect("open wal");
+    file.write_all(&original[32..32 + stale_frame_len])
+        .expect("append stale frame");
+    file.write_all(&original[32..41])
+        .expect("append partial tail");
+    file.sync_all().expect("sync tail");
+    fs::remove_file(shm_path(&path)).expect("remove wal index");
+
+    let recovered = inspect_wal(&wal_path(&path), &path)
+        .expect("recover logical prefix")
+        .expect("wal");
+    assert_eq!(recovered.frames, logical.frames);
+    assert!(recovered.stale_tail_bytes > 0);
+    drop(connection);
+}
+
+#[test]
 fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
     let (_directory, path) = database_path();
     let connection = create_live_wal(&path);
@@ -354,11 +426,9 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .expect("wal");
     assert!(validation.frames > 0);
     assert!(validation.commits > 0);
-    let frame_size = validation.page_size as usize + 24;
-    let single_frame = original[..32 + frame_size].to_vec();
     let directory = path.parent().expect("parent");
 
-    let mut bad_version = single_frame.clone();
+    let mut bad_version = original.clone();
     bad_version[4..8].copy_from_slice(&(WAL_FORMAT_VERSION + 1).to_be_bytes());
     let candidate = directory.join("bad-version.wal");
     fs::write(&candidate, bad_version).unwrap();
@@ -366,7 +436,7 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("format version"));
 
-    let mut bad_header_checksum = single_frame.clone();
+    let mut bad_header_checksum = original.clone();
     bad_header_checksum[24] ^= 1;
     let candidate = directory.join("bad-header-checksum.wal");
     fs::write(&candidate, bad_header_checksum).unwrap();
@@ -374,7 +444,7 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("header checksum"));
 
-    let mut bad_salt = single_frame.clone();
+    let mut bad_salt = original.clone();
     bad_salt[40] ^= 1;
     let candidate = directory.join("bad-salt.wal");
     fs::write(&candidate, bad_salt).unwrap();
@@ -382,7 +452,7 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("salts"));
 
-    let mut bad_page = single_frame.clone();
+    let mut bad_page = original.clone();
     bad_page[32..36].copy_from_slice(&0_u32.to_be_bytes());
     rewrite_first_frame_checksum(&mut bad_page);
     let candidate = directory.join("bad-page.wal");
@@ -391,7 +461,7 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("page number"));
 
-    let mut bad_commit = single_frame.clone();
+    let mut bad_commit = original.clone();
     bad_commit[36..40].copy_from_slice(&u32::MAX.to_be_bytes());
     rewrite_first_frame_checksum(&mut bad_commit);
     let candidate = directory.join("bad-commit.wal");
@@ -400,7 +470,7 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("commit size"));
 
-    let mut bad_frame_checksum = single_frame;
+    let mut bad_frame_checksum = original;
     bad_frame_checksum[48] ^= 1;
     let candidate = directory.join("bad-frame-checksum.wal");
     fs::write(&candidate, bad_frame_checksum).unwrap();
@@ -408,6 +478,109 @@ fn wal_validation_rejects_version_checksum_salt_page_and_commit_damage() {
         .unwrap_err()
         .contains("rolling checksum"));
     drop(connection);
+}
+
+fn create_quarantine_required_writer(path: &Path) -> Connection {
+    let db = MemoryDb::open(path).expect("open memory db");
+    db.record_message("session", "user", "checkpointed base")
+        .expect("record");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .expect("freeze");
+    {
+        let conn = db.lock_conn().expect("connection");
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .expect("damage prompt");
+    }
+    drop(db);
+
+    let writer = Connection::open(path).expect("open raw writer");
+    writer
+        .execute_batch("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;")
+        .expect("configure writer");
+    checkpoint_wal(&writer).expect("checkpoint base");
+    writer
+}
+
+fn assert_failed_quarantine_did_not_move_database(path: &Path) {
+    assert!(path.exists(), "live database must remain in place");
+    let log = read_repair_log(path).expect("repair log");
+    let failed = log.last_applied.expect("failed repair event");
+    assert_eq!(failed.phase, RepairPhase::Failed);
+    assert_eq!(failed.mode, RepairMode::Quarantine);
+    let quarantine = PathBuf::from(failed.quarantine_path.expect("quarantine path"));
+    assert!(
+        !quarantine.exists(),
+        "checkpoint failure must happen before quarantine rename"
+    );
+}
+
+#[test]
+fn quarantine_aborts_before_rename_when_reader_blocks_checkpoint() {
+    let (_directory, path) = database_path();
+    let writer = create_quarantine_required_writer(&path);
+    let reader = Connection::open(&path).expect("open reader");
+    reader.execute_batch("BEGIN").expect("begin read");
+    let _: i64 = reader
+        .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+        .expect("establish read snapshot");
+    writer
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('session', 'user', 'committed wal row', 2)",
+            [],
+        )
+        .expect("commit wal row");
+
+    let error = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect_err("reader must block truncate checkpoint");
+    assert!(error.to_string().contains("checkpoint"));
+    assert_failed_quarantine_did_not_move_database(&path);
+    reader.execute_batch("ROLLBACK").expect("end read");
+    assert_eq!(
+        writer
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| {
+                row.get::<_, i64>(0)
+            })
+            .expect("count"),
+        2
+    );
+}
+
+#[test]
+fn quarantine_aborts_before_rename_when_writer_is_active() {
+    let (_directory, path) = database_path();
+    let writer = create_quarantine_required_writer(&path);
+    writer
+        .execute_batch("BEGIN IMMEDIATE")
+        .expect("begin write");
+    writer
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('session', 'user', 'uncommitted row', 2)",
+            [],
+        )
+        .expect("write uncommitted row");
+
+    let error = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect_err("writer must block truncate checkpoint");
+    assert!(
+        error.to_string().contains("locked") || error.to_string().contains("checkpoint"),
+        "unexpected error: {error}"
+    );
+    assert_failed_quarantine_did_not_move_database(&path);
+    writer.execute_batch("ROLLBACK").expect("rollback writer");
 }
 
 fn rewrite_first_frame_checksum(wal: &mut [u8]) {
@@ -580,6 +753,98 @@ fn interrupted_quarantine_blocks_open_and_rejects_unbound_live_database() {
             .len(),
         1
     );
+}
+
+#[test]
+fn staged_replacement_marker_in_wal_is_not_treated_as_durable() {
+    let (_directory, path) = database_path();
+    create_message_database(&path, "quarantined authoritative row");
+    let attempt_id = "staged-wal-window";
+    let quarantine = quarantine_base(&path, attempt_id);
+    let attempt = RepairEvent {
+        version: REPAIR_LOG_VERSION,
+        attempt_id: attempt_id.to_string(),
+        ts_ms: current_ts_ms(),
+        phase: RepairPhase::Started,
+        mode: RepairMode::Quarantine,
+        planned_actions: vec!["quarantine_and_initialize_replacement".to_string()],
+        quarantine_path: Some(quarantine.display().to_string()),
+        checkpoint_source: true,
+        recovered: RecoveredRecords::default(),
+        recovery_warning: None,
+        error: None,
+    };
+    {
+        let _lock = acquire_exclusive_lifecycle_lock(&path).expect("lifecycle lock");
+        append_repair_event(&path, &attempt).expect("repair start");
+        let mut moved = Vec::new();
+        move_family(&path, &quarantine, &mut moved).expect("move to quarantine");
+    }
+
+    let donor = path.with_extension("staged-donor");
+    ensure_private_database_file(&donor).expect("create donor");
+    let donor_connection = Connection::open(&donor).expect("open donor");
+    initialize_connection(&donor_connection).expect("initialize donor");
+    checkpoint_wal(&donor_connection).expect("checkpoint donor schema");
+    donor_connection
+        .execute_batch("PRAGMA wal_autocheckpoint = 0;")
+        .expect("disable donor checkpoint");
+    donor_connection
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('fake', 'user', 'sidecar-only fake row', 1)",
+            [],
+        )
+        .expect("write sidecar-only row");
+    write_replacement_marker(
+        &donor_connection,
+        &ReplacementMarker {
+            attempt_id: attempt_id.to_string(),
+            quarantine_path: quarantine.display().to_string(),
+            source_main_sha256: file_sha256_optional(&quarantine).unwrap(),
+            complete: true,
+            salvage_succeeded: true,
+            recovered: RecoveredRecords {
+                messages: 1,
+                ..RecoveredRecords::default()
+            },
+            recovery_warning: None,
+        },
+    )
+    .expect("write sidecar-only marker");
+
+    let staged = staged_replacement_path(&path, attempt_id);
+    copy_snapshot_file(&donor, &staged).expect("copy staged main");
+    copy_snapshot_file(&wal_path(&donor), &wal_path(&staged)).expect("copy staged wal");
+    copy_snapshot_file(&shm_path(&donor), &shm_path(&staged)).expect("copy staged shm");
+    drop(donor_connection);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("resume quarantine");
+    assert_eq!(report.recovered.messages, 1);
+    assert!(report
+        .quarantined_files
+        .iter()
+        .any(|value| { value.contains("unbound-staged") && value.ends_with("-wal") }));
+
+    let replacement = MemoryDb::open(&path).expect("replacement");
+    assert_eq!(
+        replacement
+            .search("authoritative", 10)
+            .expect("search")
+            .len(),
+        1
+    );
+    assert!(replacement
+        .search("sidecar-only", 10)
+        .expect("search")
+        .is_empty());
 }
 
 #[test]

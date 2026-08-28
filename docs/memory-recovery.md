@@ -76,6 +76,8 @@ hash-verified prompts are copied into the replacement; damaged prompt blobs
 are not trusted. If the WAL is malformed, repair first quarantines the complete
 family, then validates and salvages a separate main-database-only copy so
 already-checkpointed rows are retained without interpreting the suspect WAL.
+If a valid WAL cannot be fully checkpointed because an uncoordinated SQLite
+reader or writer is active, repair aborts before renaming any live file.
 
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains
@@ -84,8 +86,10 @@ memory handles keep a shared lifecycle lock, while repair requires the
 exclusive lock, so replacement cannot race an active Claw writer. An
 incomplete quarantine attempt blocks normal database startup. Replacement
 files use an attempt-specific staging name and carry an internal completion
-marker bound to the attempt and quarantined source; a retry never accepts an
-unrelated empty database as the replacement.
+marker bound to the attempt and quarantined source. The marker and recovered
+row counts must be visible in the standalone staged main database after a
+checkpoint before installation, so a retry never accepts an unrelated empty
+database or deletes sidecars that hold the only copy of recovered rows.
 
 ## Recovery Limit
 

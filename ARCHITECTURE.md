@@ -260,7 +260,9 @@ trusting suspect prompt or SQLite bytes is renamed to a restrictive
 same-filesystem quarantine before an attempt-bound staged replacement is
 installed. A malformed WAL is never replayed during salvage; repair validates a
 separate copy of the quarantined main database and retains its checkpointed
-authoritative rows when possible.
+authoritative rows when possible. A valid WAL must checkpoint completely before
+any rename, and staged replacements are accepted only after their attempt
+marker and recovered counts are durable in the standalone main database.
 See [`docs/memory-recovery.md`](docs/memory-recovery.md).
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
