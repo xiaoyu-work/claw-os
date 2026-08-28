@@ -18,8 +18,7 @@ with Claw OS.
 | --- | --- |
 | `python/src/cos_runtime/` | Python policy/runtime helpers |
 | `rust/` | Rust internal runtime crate |
-| `rust/src/ask_claw.rs` | Typed context serialization, process isolation, bounded stdin activation, executable selection, and asynchronous overlay launch |
-| `rust/src/exec.rs` | Registered launch handles, canonical argv, bounded transient stdin, and launch deadlines |
+| `rust/src/ask_claw.rs` | Typed context serialization, readiness-gated anonymous stdin, process isolation, and asynchronous child supervision |
 | `README.md` | Boundary and usage |
 
 ## Dependencies
@@ -35,12 +34,12 @@ The Agent UI consumes the same runtime-owned activation type; context-bearing
 launches remain transient while context-free activation may use D-Bus.
 
 Context payloads are capped at 32 KiB and serialized inside a typed activation.
-The runtime requests the bounded app-stdin route explicitly; `apps/exec`
-forwards the bytes once through a sealed anonymous memfd to a transient UI
-process. No payload crosses argv, D-Bus, audit, registry, environment, or
-filesystem boundaries, and ordinary `exec.start` calls retain closed stdin.
-The handoff requires Yama ptrace isolation and marks every participating
-process non-dumpable before reading or forwarding bytes.
+The runtime directly spawns a transient UI and waits on an inherited readiness
+channel before writing to its anonymous stdin. No payload crosses argv, D-Bus,
+audit, registry, environment, or filesystem boundaries. The handoff requires
+Yama ptrace isolation and marks parent and child non-dumpable; startup failure
+or timeout kills and reaps the exact child, while the launcher thread reaps a
+successfully activated UI when it exits.
 
 ## Tests
 

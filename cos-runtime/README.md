@@ -18,7 +18,7 @@ detail:
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |
 | `cos_runtime::notify` | (not applicable) | Route `notify.*` ops similarly |
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
-| `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and launch the Agent overlay through supervised `exec.start` with explicit stdin |
+| `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and directly supervise a transient Agent overlay |
 | (not applicable) | `cos_runtime.snapshot` | Copy-on-write before every gated fs mutation |
 
 These modules talk wire-v1 too, but they're the *kernel side* of that wire —
@@ -40,13 +40,13 @@ Bundled desktop apps implement `cos_runtime::ask_claw::Context` on a narrow
 app-local `Serialize` type, then call `ask_claw::launch`. The runtime inserts
 the app identity, serializes with `serde_json`, rejects non-object/reserved or
 larger-than-32-KiB contexts, wraps it in a typed activation, and sends it over
-the explicit bounded `exec.start` stdin channel. The call runs on a dedicated
-launcher thread and the intermediary `cos` process has a five-second deadline
-with kill/reap on timeout. The exec app forwards the payload once through a
-sealed anonymous memfd connected to a transient Agent UI's stdin, without
-creating process-registry rows or stdout/stderr artifacts. No context content
-enters argv, audit records, the process registry, the environment, or the
-filesystem.
+an anonymous pipe directly to a transient Agent UI. The call runs on a
+dedicated launcher/reaper thread. A readiness channel prevents the parent from
+writing any payload until the child has configured private-overlay mode,
+verified process isolation, and become non-dumpable. Startup and writes share
+a five-second deadline; failures kill and reap the exact child. No context
+content enters argv, D-Bus, audit records, a process registry, the environment,
+or the filesystem.
 
 The Agent UI imports the same activation type and CLI parser from this module.
 It reads stdin only when `--context-stdin` is explicitly present, enforces the
@@ -54,15 +54,13 @@ activation and context bounds, validates the typed activation and embedded
 context, and closes stdin. Context-bearing overlays deliberately run as
 independent transient instances rather than forwarding plaintext through the
 unauthenticated well-known D-Bus name; context-free global shortcut activation
-continues to use the single instance. Legacy external `--context` input remains
-accepted in the same transient mode, but the shared launcher only emits
-`--context-stdin`. Supplying both sources rejects the entire activation.
+continues to use the single instance. Payload-bearing `--context` and `--query`
+arguments are rejected; `--context-stdin` is the only supported private input
+path, and combining context sources rejects the entire activation.
 
 Anonymous handoff fails closed unless Linux Yama
-`kernel.yama.ptrace_scope >= 2`. The host, `cos`, exec app, and Agent UI are
-marked non-dumpable before they read or forward the payload. This is required
-because memfd seals prevent mutation, not reads by an otherwise ptrace-capable
-same-UID peer.
+`kernel.yama.ptrace_scope >= 2`. The host and Agent UI are marked non-dumpable;
+the parent withholds bytes until the child confirms that hardening is complete.
 
 Keep these typed adapters in each app's `claw_glue` module. Reducers should
 only select the user intent and pass the already-visible page, query, path, or
@@ -71,12 +69,9 @@ The Terminal adapter uses the runtime's encoded-size predicate to drop oldest
 lines first and then truncate at a UTF-8 boundary, retaining `app`, `mode`,
 `cwd`, and `truncated` metadata while still opening the overlay.
 
-Normal `cos_runtime::exec::start` remains registry-backed and returns an opaque
-launch id plus PID/start-time metadata. Stops resolve that identity, verify the
-live process start time, and signal through pidfd; numeric PID arguments remain
-a compatibility input but are subject to the same registry and identity checks.
-Both normal and stdin-bearing start APIs insert `--` before child argv so child
-flags cannot be consumed by the `cos` or exec option parsers.
+The Ask Claw path does not alter or depend on the generic `cos_runtime::exec`
+start/stop behavior. Its `StartResult` type only mirrors the existing
+`apps/exec` `{pid, command}` response.
 
 ## Relationship to `claw-os-sdk`
 

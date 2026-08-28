@@ -93,42 +93,6 @@ fn read_requested_stdin<R: Read>(reader: R, limit: usize) -> Result<Vec<u8>, Str
     Ok(data)
 }
 
-fn is_sensitive_exec_start(args: &[String]) -> bool {
-    matches!(
-        args,
-        [family, app, operation, ..]
-            if family == "app" && app == "exec" && operation == "start"
-    )
-}
-
-#[cfg(target_os = "linux")]
-fn require_sensitive_stdin_isolation() -> Result<(), String> {
-    let value = std::fs::read_to_string("/proc/sys/kernel/yama/ptrace_scope")
-        .map_err(|error| format!("read kernel.yama.ptrace_scope: {error}"))?;
-    let level = value
-        .trim()
-        .parse::<u32>()
-        .map_err(|error| format!("parse kernel.yama.ptrace_scope: {error}"))?;
-    if level < 2 {
-        return Err(
-            "exec.start stdin requires kernel.yama.ptrace_scope=2 or stronger".to_string(),
-        );
-    }
-    // SAFETY: prctl with PR_SET_DUMPABLE has no pointer arguments.
-    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
-        return Err(format!(
-            "mark cos non-dumpable: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    Ok(())
-}
-
-#[cfg(not(target_os = "linux"))]
-fn require_sensitive_stdin_isolation() -> Result<(), String> {
-    Err("exec.start private stdin requires Linux".to_string())
-}
-
 /// Render a primitive's response string in the chosen format. If the
 /// string parses as JSON we re-serialize it; if it doesn't (some
 /// commands return plain text), we pass it through unchanged.
@@ -159,13 +123,9 @@ fn main() {
     let _session_guard = caps::bootstrap_user_cli_session(&args);
 
     let result = if stdin_requested {
-        match (|| {
-            if is_sensitive_exec_start(&args) {
-                require_sensitive_stdin_isolation()?;
-            }
-            app_stdin_max_bytes()
-                .and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
-        })() {
+        match app_stdin_max_bytes()
+            .and_then(|limit| read_requested_stdin(std::io::stdin(), limit))
+        {
             Ok(stdin_data) => router::dispatch_with_stdin(&args, Some(stdin_data)),
             Err(error) => Err(error),
         }

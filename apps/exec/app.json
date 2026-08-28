@@ -133,7 +133,6 @@
       "label": {
         "en": "Start a command in the background"
       },
-      "stdin": true,
       "args": [
         {
           "name": "command",
@@ -162,12 +161,12 @@
     },
     "stop": {
       "label": {
-        "en": "Stop a registered background process"
+        "en": "Stop a background process by PID"
       },
       "args": [
         {
-          "name": "launch",
-          "kind": "name",
+          "name": "pid",
+          "kind": "integer",
           "required": true
         }
       ],
@@ -175,8 +174,7 @@
         {
           "verb": "proc.signal",
           "scope": {
-            "kind": "from-arg",
-            "arg": "launch"
+            "kind": "wild"
           },
           "why": {
             "en": "Send a termination signal to the process you asked to stop."

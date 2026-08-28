@@ -17,7 +17,13 @@ fn stdin_context_becomes_private_transient_activation() {
         ..OverlayActivation::default()
     };
     let input = serde_json::to_vec(&expected).unwrap();
-    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay", "--context-stdin"]);
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments([
+        "--overlay",
+        "--context-stdin",
+        "--ready-fd",
+        "3",
+    ]);
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
     let activation = parsed
         .activation(std::io::Cursor::new(input))
         .unwrap()
@@ -26,7 +32,6 @@ fn stdin_context_becomes_private_transient_activation() {
         overlay: true,
         context: activation.context.clone(),
         activation: Some(activation),
-        private_activation: true,
         ..Flags::default()
     };
 
@@ -34,7 +39,8 @@ fn stdin_context_becomes_private_transient_activation() {
         flags.action().and_then(|value| value.context.as_deref()),
         Some(r#"{"app":"cosmic-files"}"#)
     );
-    assert!(!uses_single_instance(&flags));
+    assert_eq!(launch_mode, UiLaunchMode::PrivateOverlay);
+    assert!(launch_mode.exits_on_close());
 }
 
 #[test]
@@ -76,10 +82,8 @@ fn malformed_and_oversize_stdin_do_not_produce_activation() {
 
 #[test]
 fn context_free_overlay_keeps_single_instance_behavior() {
-    let flags = Flags {
-        overlay: true,
-        activation: Some(OverlayActivation::default()),
-        ..Flags::default()
-    };
-    assert!(uses_single_instance(&flags));
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(["--overlay"]);
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
+    assert_eq!(launch_mode, UiLaunchMode::SharedOverlay);
+    assert!(!launch_mode.exits_on_close());
 }

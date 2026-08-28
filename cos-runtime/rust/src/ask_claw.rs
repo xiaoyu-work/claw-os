@@ -6,13 +6,26 @@
 //! and bounded transient process launch.
 
 use std::fmt::{self, Display, Formatter};
+#[cfg(target_os = "linux")]
+use std::io::Write;
 use std::io::{self, Read};
+#[cfg(target_os = "linux")]
+use std::os::fd::{AsRawFd, FromRawFd};
+#[cfg(target_os = "linux")]
+use std::os::unix::net::UnixStream;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
+#[cfg(target_os = "linux")]
+use std::process::{Child, Command, Stdio};
 use std::str::FromStr;
+#[cfg(target_os = "linux")]
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
-
-use crate::exec;
 
 /// Maximum serialized host context accepted by the Agent UI.
 pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
@@ -20,6 +33,9 @@ pub const MAX_CONTEXT_BYTES: usize = 32 * 1024;
 /// Maximum serialized activation accepted from the Agent UI's stdin.
 pub const MAX_ACTIVATION_BYTES: usize = MAX_CONTEXT_BYTES * 2 + 1024;
 
+const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(5);
+const READY_FD: i32 = 3;
+const READY_MESSAGE: &[u8] = b"READY\n";
 const AGENT_UI_ENV: &str = "COS_AGENT_UI_BIN";
 const DEFAULT_AGENT_UI: &str = "cos-agent-ui";
 const OVERLAY_FLAG: &str = "--overlay";
@@ -27,6 +43,7 @@ const VOICE_FLAG: &str = "--voice";
 const QUERY_FLAG: &str = "--query";
 const CONTEXT_FLAG: &str = "--context";
 const CONTEXT_STDIN_FLAG: &str = "--context-stdin";
+const READY_FD_FLAG: &str = "--ready-fd";
 
 /// A host-owned, typed description of the context for an Ask Claw request.
 ///
@@ -77,6 +94,15 @@ pub enum ActivationInputError {
     #[error("Ask Claw activation context is invalid: {0}")]
     InvalidContext(&'static str),
 
+    #[error("Ask Claw does not accept payload-bearing {0} arguments")]
+    ProhibitedArgument(&'static str),
+
+    #[error("Ask Claw stdin activation requires a valid readiness descriptor")]
+    MissingReadyChannel,
+
+    #[error("failed to signal Ask Claw readiness: {0}")]
+    ReadyIo(#[source] io::Error),
+
     #[error(transparent)]
     Isolation(#[from] IsolationError),
 }
@@ -118,8 +144,26 @@ pub enum LaunchError {
     #[error("failed to start Ask Claw launcher worker: {0}")]
     ThreadSpawn(#[source] io::Error),
 
-    #[error("failed to launch Ask Claw: {0}")]
-    Process(#[from] exec::StartError),
+    #[error("failed to create Ask Claw readiness channel: {0}")]
+    ReadyChannel(#[source] io::Error),
+
+    #[error("failed to spawn Ask Claw: {0}")]
+    Spawn(#[source] io::Error),
+
+    #[error("Ask Claw exited before readiness with status {0:?}")]
+    ChildExited(Option<i32>),
+
+    #[error("Ask Claw readiness handshake failed: {0}")]
+    Ready(#[source] io::Error),
+
+    #[error("Ask Claw readiness or context write timed out after {0:?}")]
+    Timeout(Duration),
+
+    #[error("failed to write Ask Claw context: {0}")]
+    Write(#[source] io::Error),
+
+    #[error("failed while reaping Ask Claw: {0}")]
+    Wait(#[source] io::Error),
 }
 
 /// Single-instance activation sent to the Agent UI.
@@ -167,6 +211,7 @@ pub struct UiArguments {
     pub query: Option<String>,
     pub context: Option<String>,
     pub context_stdin: bool,
+    pub ready_fd: Option<i32>,
     pub help: bool,
     pub unknown: Vec<String>,
 }
@@ -180,10 +225,16 @@ impl UiArguments {
         &self,
         stdin: R,
     ) -> Result<Option<Activation>, ActivationInputError> {
-        if self.context_stdin {
-            if self.context.is_some() {
+        if self.context.is_some() {
+            if self.context_stdin {
                 return Err(ActivationInputError::ConflictingContext);
             }
+            return Err(ActivationInputError::ProhibitedArgument("--context"));
+        }
+        if self.query.is_some() {
+            return Err(ActivationInputError::ProhibitedArgument("--query"));
+        }
+        if self.context_stdin {
             let activation = read_activation(stdin)?;
             return Ok(self.overlay.then_some(activation));
         }
@@ -199,9 +250,22 @@ impl UiArguments {
         &self,
     ) -> Result<Option<Activation>, ActivationInputError> {
         if !self.context_stdin {
+            if self.ready_fd.is_some() {
+                return Err(ActivationInputError::MissingReadyChannel);
+            }
             return self.activation(io::empty());
         }
+        if self.context.is_some() {
+            return Err(ActivationInputError::ConflictingContext);
+        }
+        if self.query.is_some() {
+            return Err(ActivationInputError::ProhibitedArgument("--query"));
+        }
+        let ready_fd = self
+            .ready_fd
+            .ok_or(ActivationInputError::MissingReadyChannel)?;
         require_process_handoff_isolation()?;
+        signal_ready(ready_fd)?;
         #[cfg(unix)]
         {
             use std::fs::File;
@@ -235,6 +299,12 @@ where
             QUERY_FLAG => parsed.query = arguments.next(),
             CONTEXT_FLAG => parsed.context = arguments.next(),
             CONTEXT_STDIN_FLAG => parsed.context_stdin = true,
+            READY_FD_FLAG => {
+                parsed.ready_fd = arguments
+                    .next()
+                    .and_then(|value| value.parse::<i32>().ok())
+                    .filter(|fd| *fd >= 3);
+            }
             "-h" | "--help" => parsed.help = true,
             _ => parsed.unknown.push(argument),
         }
@@ -243,8 +313,7 @@ where
 }
 
 /// Usage text for the shared Agent UI activation contract.
-pub const UI_USAGE: &str =
-    "cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context-stdin] [--context TEXT]";
+pub const UI_USAGE: &str = "cos-agent-ui [--overlay] [--voice] [--context-stdin --ready-fd FD]";
 
 fn encode_context<C: Context>(context: &C) -> Result<String, ContextError> {
     if C::APP_ID.trim().is_empty() {
@@ -405,6 +474,26 @@ fn set_current_process_non_dumpable() -> Result<(), IsolationError> {
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn signal_ready(fd: i32) -> Result<(), ActivationInputError> {
+    use std::fs::File;
+
+    // SAFETY: the descriptor is supplied by the direct parent specifically
+    // for this one-shot handshake and ownership is transferred to File.
+    let mut ready = unsafe { File::from_raw_fd(fd) };
+    ready
+        .write_all(READY_MESSAGE)
+        .and_then(|_| ready.flush())
+        .map_err(ActivationInputError::ReadyIo)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn signal_ready(_fd: i32) -> Result<(), ActivationInputError> {
+    Err(ActivationInputError::Isolation(
+        IsolationError::UnsupportedPlatform,
+    ))
+}
+
 fn agent_ui_executable() -> String {
     std::env::var(AGENT_UI_ENV).unwrap_or_else(|_| DEFAULT_AGENT_UI.to_string())
 }
@@ -414,6 +503,8 @@ fn launch_argv() -> Vec<String> {
         agent_ui_executable(),
         OVERLAY_FLAG.to_string(),
         CONTEXT_STDIN_FLAG.to_string(),
+        READY_FD_FLAG.to_string(),
+        READY_FD.to_string(),
     ]
 }
 
@@ -430,10 +521,161 @@ fn prepare_launch<C: Context>(context: &C) -> Result<Vec<u8>, LaunchError> {
     Ok(payload)
 }
 
-fn launch_prepared(payload: &[u8]) -> Result<exec::TransientLaunch, LaunchError> {
+#[cfg(target_os = "linux")]
+fn launch_prepared(payload: &[u8]) -> Result<(), LaunchError> {
+    launch_prepared_with_timeout(payload, HANDSHAKE_TIMEOUT)
+}
+
+#[cfg(target_os = "linux")]
+fn launch_prepared_with_timeout(payload: &[u8], timeout: Duration) -> Result<(), LaunchError> {
     let argv = launch_argv();
-    let argv = argv.iter().map(String::as_str).collect::<Vec<_>>();
-    exec::start_transient_with_stdin(&argv, payload).map_err(LaunchError::Process)
+    let (mut ready_parent, ready_child) = UnixStream::pair().map_err(LaunchError::ReadyChannel)?;
+    let ready_child_fd = ready_child.as_raw_fd();
+    let mut command = Command::new(&argv[0]);
+    command
+        .args(&argv[1..])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    // SAFETY: pre_exec performs only async-signal-safe libc calls.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if ready_child_fd == READY_FD {
+                if libc::fcntl(READY_FD, libc::F_SETFD, 0) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            } else {
+                if libc::dup2(ready_child_fd, READY_FD) < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                libc::close(ready_child_fd);
+            }
+            Ok(())
+        });
+    }
+
+    let started = Instant::now();
+    let mut child = command.spawn().map_err(LaunchError::Spawn)?;
+    drop(ready_child);
+    let remaining = timeout
+        .checked_sub(started.elapsed())
+        .ok_or(LaunchError::Timeout(timeout));
+    let remaining = match remaining {
+        Ok(remaining) => remaining,
+        Err(error) => return terminate_child(child, error),
+    };
+    if let Err(error) = ready_parent.set_read_timeout(Some(remaining)) {
+        return terminate_child(child, LaunchError::Ready(error));
+    }
+    let mut ready = [0_u8; READY_MESSAGE.len()];
+    if let Err(error) = ready_parent.read_exact(&mut ready) {
+        let failure = if matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ) {
+            LaunchError::Timeout(timeout)
+        } else if error.kind() == io::ErrorKind::UnexpectedEof {
+            loop {
+                match child.try_wait() {
+                    Ok(Some(status)) => break LaunchError::ChildExited(status.code()),
+                    Ok(None) if started.elapsed() < timeout => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Ok(None) => break LaunchError::Timeout(timeout),
+                    Err(wait_error) => break LaunchError::Wait(wait_error),
+                }
+            }
+        } else {
+            LaunchError::Ready(error)
+        };
+        return terminate_child(child, failure);
+    }
+    if ready != READY_MESSAGE {
+        return terminate_child(
+            child,
+            LaunchError::Ready(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "invalid readiness response",
+            )),
+        );
+    }
+
+    let Some(mut stdin) = child.stdin.take() else {
+        return terminate_child(
+            child,
+            LaunchError::Write(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Ask Claw stdin is unavailable",
+            )),
+        );
+    };
+    let payload = payload.to_vec();
+    let (sender, receiver) = mpsc::sync_channel(1);
+    let writer = match thread::Builder::new()
+        .name("ask-claw-stdin".to_string())
+        .spawn(move || {
+            let result = stdin.write_all(&payload).and_then(|_| stdin.flush());
+            drop(stdin);
+            let _ = sender.send(result);
+        }) {
+        Ok(writer) => writer,
+        Err(error) => return terminate_child(child, LaunchError::ThreadSpawn(error)),
+    };
+    let remaining = timeout
+        .checked_sub(started.elapsed())
+        .ok_or(LaunchError::Timeout(timeout));
+    let write_result = match remaining {
+        Ok(remaining) => receiver.recv_timeout(remaining),
+        Err(error) => {
+            let result = terminate_child(child, error);
+            let _ = writer.join();
+            return result;
+        }
+    };
+    match write_result {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            let result = terminate_child(child, LaunchError::Write(error));
+            let _ = writer.join();
+            return result;
+        }
+        Err(mpsc::RecvTimeoutError::Timeout) => {
+            let result = terminate_child(child, LaunchError::Timeout(timeout));
+            let _ = writer.join();
+            return result;
+        }
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            let result = terminate_child(
+                child,
+                LaunchError::Write(io::Error::other("Ask Claw stdin writer disconnected")),
+            );
+            let _ = writer.join();
+            return result;
+        }
+    }
+    let _ = writer.join();
+
+    child.wait().map_err(LaunchError::Wait)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn launch_prepared(_payload: &[u8]) -> Result<(), LaunchError> {
+    Err(LaunchError::Isolation(IsolationError::UnsupportedPlatform))
+}
+
+#[cfg(target_os = "linux")]
+fn terminate_child(mut child: Child, error: LaunchError) -> Result<(), LaunchError> {
+    match child.kill() {
+        Ok(()) => {}
+        Err(kill_error) if kill_error.kind() == io::ErrorKind::InvalidInput => {}
+        Err(kill_error) => return Err(LaunchError::Wait(kill_error)),
+    }
+    child.wait().map_err(LaunchError::Wait)?;
+    Err(error)
 }
 
 /// Schedule Ask Claw without blocking the caller's UI thread.

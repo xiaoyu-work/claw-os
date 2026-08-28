@@ -106,14 +106,14 @@ client stream also triggers bridge-side cancellation.
 
 Voice uploads are staged as private runtime files and transcribed via
 the configured `cos model transcribe` provider. App/window context is
-handed to the UI through explicit bounded stdin backed by a sealed anonymous
-memfd rather than argv, environment, or a pathname. The host and each
-intermediary fail closed without strong Yama ptrace isolation and become
-non-dumpable before handling the payload. The new process validates the typed
-activation and runs a dedicated transient overlay, avoiding plaintext context
-on the unauthenticated single-instance D-Bus path. It then sends context
-through an untrusted-data system boundary without storing it as the visible
-user prompt.
+handed to the UI through an anonymous pipe rather than argv, environment, or a
+pathname. The host and UI fail closed
+without strong Yama ptrace isolation and become non-dumpable. A readiness
+handshake ensures the parent writes nothing until the UI is hardened. The new
+process validates the typed activation and runs a dedicated transient overlay,
+avoiding plaintext context on the unauthenticated single-instance D-Bus path.
+It then sends context through an untrusted-data system boundary without
+storing it as the visible user prompt.
 
 ## Endpoint discovery
 

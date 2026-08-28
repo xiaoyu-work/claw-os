@@ -53,8 +53,6 @@ pub struct Flags {
     pub context: Option<String>,
     #[serde(skip)]
     activation: Option<OverlayActivation>,
-    #[serde(skip)]
-    private_activation: bool,
 }
 
 impl CosmicFlags for Flags {
@@ -795,7 +793,7 @@ fn open_uri(uri: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-fn parse_flags() -> Flags {
+fn parse_arguments() -> cos_runtime::ask_claw::UiArguments {
     let parsed = cos_runtime::ask_claw::parse_ui_arguments(env::args().skip(1));
     if parsed.help {
         eprintln!("{}", cos_runtime::ask_claw::UI_USAGE);
@@ -804,6 +802,10 @@ fn parse_flags() -> Flags {
     for argument in &parsed.unknown {
         eprintln!("warning: ignoring unknown flag: {argument}");
     }
+    parsed
+}
+
+fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
     let activation = match parsed.activation_from_process_stdin() {
         Ok(activation) => activation,
         Err(error) => {
@@ -823,22 +825,67 @@ fn parse_flags() -> Flags {
         .as_ref()
         .and_then(|activation| activation.context.clone())
         .or(parsed.context);
-    let private_activation = parsed.context_stdin || context.is_some() || query.is_some();
     Flags {
         overlay: parsed.overlay,
         voice,
         query,
         context,
         activation,
-        private_activation,
     }
 }
 
-fn uses_single_instance(flags: &Flags) -> bool {
-    flags.overlay && !flags.private_activation
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UiLaunchMode {
+    Window,
+    SharedOverlay,
+    PrivateOverlay,
+}
+
+impl UiLaunchMode {
+    fn from_arguments(arguments: &cos_runtime::ask_claw::UiArguments) -> Self {
+        if !arguments.overlay {
+            Self::Window
+        } else if arguments.context_stdin
+            || arguments.context.is_some()
+            || arguments.query.is_some()
+        {
+            Self::PrivateOverlay
+        } else {
+            Self::SharedOverlay
+        }
+    }
+
+    fn exits_on_close(self) -> bool {
+        self == Self::PrivateOverlay
+    }
+}
+
+fn overlay_settings(exit_on_close: bool) -> Settings {
+    Settings::default()
+        .no_main_window(true)
+        .exit_on_close(exit_on_close)
+        .size_limits(
+            Limits::NONE
+                .min_width(1.0)
+                .min_height(120.0)
+                .max_width(560.0)
+                .max_height(560.0),
+        )
 }
 
 fn main() -> cosmic::iced::Result {
+    let parsed = parse_arguments();
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
+    let settings = match launch_mode {
+        UiLaunchMode::Window => {
+            Settings::default().size_limits(Limits::NONE.min_width(640.0).min_height(420.0))
+        }
+        UiLaunchMode::SharedOverlay | UiLaunchMode::PrivateOverlay => {
+            overlay_settings(launch_mode.exits_on_close())
+        }
+    };
+    let flags = flags_from_arguments(parsed);
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -847,26 +894,10 @@ fn main() -> cosmic::iced::Result {
         .with_writer(std::io::stderr)
         .try_init();
     localize::localize();
-    let flags = parse_flags();
-    if uses_single_instance(&flags) {
-        cosmic::app::run_single_instance::<App>(
-            Settings::default()
-                .no_main_window(true)
-                .exit_on_close(false)
-                .size_limits(
-                    Limits::NONE
-                        .min_width(1.0)
-                        .min_height(120.0)
-                        .max_width(560.0)
-                        .max_height(560.0),
-                ),
-            flags,
-        )
+    if launch_mode == UiLaunchMode::SharedOverlay {
+        cosmic::app::run_single_instance::<App>(settings, flags)
     } else {
-        cosmic::app::run::<App>(
-            Settings::default().size_limits(Limits::NONE.min_width(640.0).min_height(420.0)),
-            flags,
-        )
+        cosmic::app::run::<App>(settings, flags)
     }
 }
 

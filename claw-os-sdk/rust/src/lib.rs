@@ -48,8 +48,7 @@
 
 use std::ffi::OsStr;
 use std::io::Write;
-use std::process::{Command, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
 
 use serde::de::DeserializeOwned;
 
@@ -100,15 +99,6 @@ pub enum BridgeError {
     /// Bare IO failure spawning the subprocess or writing stdin.
     #[error("io: {0}")]
     Io(#[from] std::io::Error),
-
-    /// The `cos` subprocess exceeded a caller-supplied deadline and was
-    /// killed and reaped.
-    #[error("cos app {app} {verb} timed out after {timeout_ms} ms")]
-    Timeout {
-        app: String,
-        verb: String,
-        timeout_ms: u128,
-    },
 }
 
 impl BridgeError {
@@ -191,41 +181,10 @@ where
     A: IntoIterator,
     A::Item: AsRef<OsStr>,
 {
-    let cmd = build_command(app, verb, args);
-    execute_call(cmd, app, verb, stdin, None, false)
-}
-
-#[doc(hidden)]
-pub fn call_sensitive_with_timeout<A>(
-    app: &str,
-    verb: &str,
-    args: A,
-    stdin: &[u8],
-    timeout: Duration,
-) -> Result<serde_json::Value, BridgeError>
-where
-    A: IntoIterator,
-    A::Item: AsRef<OsStr>,
-{
-    let cmd = build_command(app, verb, args);
-    execute_call(cmd, app, verb, Some(stdin), Some(timeout), true)
-}
-
-fn execute_call(
-    mut cmd: Command,
-    app: &str,
-    verb: &str,
-    stdin: Option<&[u8]>,
-    timeout: Option<Duration>,
-    sensitive: bool,
-) -> Result<serde_json::Value, BridgeError> {
-    let started = Instant::now();
+    let mut cmd = build_command(app, verb, args);
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     if stdin.is_some() {
         cmd.stdin(Stdio::piped());
-    }
-    if sensitive {
-        harden_child_before_exec(&mut cmd);
     }
 
     let mut child = cmd
@@ -235,44 +194,19 @@ fn execute_call(
             _ => BridgeError::Io(e),
         })?;
 
-    let mut stdin_writer = None;
     if let Some(bytes) = stdin {
-        if let Some(mut pipe) = child.stdin.take() {
-            if timeout.is_some() {
-                let bytes = bytes.to_vec();
-                stdin_writer = Some(std::thread::spawn(move || {
-                    pipe.write_all(&bytes)?;
-                    drop(pipe);
-                    Ok::<(), std::io::Error>(())
-                }));
-            } else {
-                pipe.write_all(bytes)?;
-                // Explicitly drop the stdin handle so the subprocess sees
-                // EOF and can shut down its read side. Without this drop
-                // `wait_with_output` below would deadlock on subprocesses
-                // that read all of stdin before producing any output
-                // (which is exactly what the Python apps do).
-                drop(pipe);
-            }
+        if let Some(mut s) = child.stdin.take() {
+            s.write_all(bytes)?;
+            // Explicitly drop the stdin handle so the subprocess sees
+            // EOF and can shut down its read side. Without this drop
+            // `wait_with_output` below would deadlock on subprocesses
+            // that read all of stdin before producing any output
+            // (which is exactly what the Python apps do).
+            drop(s);
         }
     }
 
-    let output = match timeout {
-        Some(timeout) => wait_with_output_timeout(child, app, verb, started, timeout),
-        None => child.wait_with_output().map_err(BridgeError::Io),
-    };
-    let stdin_result = stdin_writer
-        .map(|writer| {
-            writer
-                .join()
-                .map_err(|_| BridgeError::Io(std::io::Error::other("stdin writer panicked")))?
-                .map_err(BridgeError::Io)
-        })
-        .transpose();
-    let out = output?;
-    if out.status.success() {
-        stdin_result?;
-    }
+    let out = child.wait_with_output()?;
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
 
@@ -331,52 +265,6 @@ fn execute_call(
     })
 }
 
-fn wait_with_output_timeout(
-    mut child: std::process::Child,
-    app: &str,
-    verb: &str,
-    started: Instant,
-    timeout: Duration,
-) -> Result<Output, BridgeError> {
-    loop {
-        if child.try_wait()?.is_some() {
-            return child.wait_with_output().map_err(BridgeError::Io);
-        }
-        if started.elapsed() >= timeout {
-            match child.kill() {
-                Ok(()) => {}
-                Err(error) if error.kind() == std::io::ErrorKind::InvalidInput => {}
-                Err(error) => return Err(BridgeError::Io(error)),
-            }
-            let _ = child.wait();
-            return Err(BridgeError::Timeout {
-                app: app.to_string(),
-                verb: verb.to_string(),
-                timeout_ms: timeout.as_millis(),
-            });
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn harden_child_before_exec(command: &mut Command) {
-    #[cfg(target_os = "linux")]
-    {
-        use std::os::unix::process::CommandExt;
-
-        // SAFETY: pre_exec runs after fork and before exec. prctl is
-        // async-signal-safe and uses no borrowed parent state.
-        unsafe {
-            command.pre_exec(|| {
-                if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-    }
-}
-
 /// Typed variant of [`call`] — deserialises stdout into the caller's
 /// chosen struct. Used by the typed app wrappers (`fs::read`,
 /// `pkg::has`, …) — both inside this crate and inside the internal
@@ -400,30 +288,6 @@ where
         message: format!(
             "type mismatch ({e}): {}",
             truncate_diag(&v.to_string(), DIAG_LIMIT)
-        ),
-    })
-}
-
-#[doc(hidden)]
-pub fn call_typed_sensitive_with_timeout<A, R>(
-    app: &str,
-    verb: &str,
-    args: A,
-    stdin: &[u8],
-    timeout: Duration,
-) -> Result<R, BridgeError>
-where
-    A: IntoIterator,
-    A::Item: AsRef<OsStr>,
-    R: DeserializeOwned,
-{
-    let value = call_sensitive_with_timeout(app, verb, args, stdin, timeout)?;
-    serde_json::from_value(value.clone()).map_err(|error| BridgeError::Decode {
-        app: app.to_string(),
-        verb: verb.to_string(),
-        message: format!(
-            "type mismatch ({error}): {}",
-            truncate_diag(&value.to_string(), DIAG_LIMIT)
         ),
     })
 }

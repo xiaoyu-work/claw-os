@@ -38,9 +38,9 @@ launches carry a bounded serialized activation over stdin only when
 `--context-stdin` is explicit; the new process reads and validates it before
 starting a dedicated transient overlay. Context-bearing activation never uses
 the unauthenticated well-known D-Bus name; only context-free overlays retain
-single-instance forwarding. Inline `--context` remains a legacy external
-compatibility input in transient mode, and combining context sources is
-rejected.
+single-instance forwarding. Payload-bearing `--context` and `--query` are
+rejected; `--context-stdin` plus the inherited readiness descriptor is the only
+private activation path.
 
 ## Tests
 

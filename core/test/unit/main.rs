@@ -102,30 +102,6 @@ fn requested_stdin_is_streamed_with_a_hard_limit() {
 }
 
 #[test]
-fn only_exec_start_uses_sensitive_stdin_isolation() {
-    assert!(is_sensitive_exec_start(&[
-        "app".into(),
-        "exec".into(),
-        "start".into(),
-        "--stdin".into(),
-        "--".into(),
-        "cos-agent-ui".into(),
-    ]));
-    assert!(!is_sensitive_exec_start(&[
-        "app".into(),
-        "exec".into(),
-        "run".into(),
-        "--stdin".into(),
-    ]));
-    assert!(!is_sensitive_exec_start(&[
-        "app".into(),
-        "fs".into(),
-        "write".into(),
-        "--stdin".into(),
-    ]));
-}
-
-#[test]
 fn render_pretty_indents_json() {
     let out = render("{\"a\":1,\"b\":[2,3]}", OutputFormat::Pretty);
     assert!(out.contains("\n"));

@@ -83,12 +83,3 @@ short/long flags and destination positionals must use manifest `aliases` or
 The parser preserves post-`--` positional classification; never strip the
 delimiter and re-run local flag detection. Stdin is closed unless the
 top-level CLI explicitly supplies `--stdin` and the operation opts in.
-`exec.start` is the only background-launch operation that accepts invocation
-stdin: it enforces its own 128-KiB bound and forwards non-empty input through a
-sealed anonymous memfd attached to a non-dumpable transient child's stdin.
-This path fails closed without Yama ptrace isolation and creates no process
-registry row or output files. The payload is never copied into argv, audit
-records, environment, or a pathname. Registered starts return an opaque launch
-id and process start time; stop verifies both through pidfd before signaling.
-Runtime callers place `--` before every child argv, including the explicit
-`--stdin -- <child...>` form, so child flags remain positional data.

@@ -1,5 +1,4 @@
 use super::*;
-use crate::BridgeError;
 use std::io::Cursor;
 use std::sync::{Mutex, MutexGuard};
 
@@ -96,7 +95,13 @@ fn launcher_selects_executable_and_uses_only_stdin_flag_in_arguments() {
     std::env::set_var(AGENT_UI_ENV, "/opt/claw/custom-agent-ui");
     assert_eq!(
         launch_argv(),
-        ["/opt/claw/custom-agent-ui", "--overlay", "--context-stdin"]
+        [
+            "/opt/claw/custom-agent-ui",
+            "--overlay",
+            "--context-stdin",
+            "--ready-fd",
+            "3",
+        ]
     );
 }
 
@@ -165,7 +170,7 @@ fn ui_stdin_rejects_oversize_malformed_and_invalid_context() {
 }
 
 #[test]
-fn legacy_inline_context_is_still_parsed_without_reading_stdin() {
+fn payload_bearing_argv_is_rejected_without_reading_stdin() {
     struct PanicReader;
 
     impl Read for PanicReader {
@@ -175,8 +180,16 @@ fn legacy_inline_context_is_still_parsed_without_reading_stdin() {
     }
 
     let parsed = parse_ui_arguments(["--overlay", "--context", r#"{"app":"legacy"}"#]);
-    let activation = parsed.activation(PanicReader).unwrap().unwrap();
-    assert_eq!(activation.context.as_deref(), Some(r#"{"app":"legacy"}"#));
+    assert!(matches!(
+        parsed.activation(PanicReader),
+        Err(ActivationInputError::ProhibitedArgument("--context"))
+    ));
+
+    let parsed = parse_ui_arguments(["--overlay", "--query", "private prompt"]);
+    assert!(matches!(
+        parsed.activation(PanicReader),
+        Err(ActivationInputError::ProhibitedArgument("--query"))
+    ));
 }
 
 #[test]
@@ -200,8 +213,8 @@ fn reserved_app_field_is_rejected() {
 fn process_spawn_failures_are_preserved() {
     let _environment = TestEnvironment::new();
     std::env::set_var(
-        "CLAW_COS_BIN",
-        "/nonexistent/definitely-not-a-real-cos-binary-issue-47",
+        AGENT_UI_ENV,
+        "/nonexistent/definitely-not-a-real-agent-ui-issue-47",
     );
     let payload = prepare_launch(&TestContext {
         mode: "inspect",
@@ -210,61 +223,104 @@ fn process_spawn_failures_are_preserved() {
     .unwrap();
     let error = launch_prepared(&payload).unwrap_err();
 
-    assert!(matches!(
-        error,
-        LaunchError::Process(exec::StartError::Bridge(BridgeError::BinaryNotFound(_)))
-    ));
+    assert!(matches!(error, LaunchError::Spawn(_)));
 }
 
 #[test]
 #[cfg(unix)]
-fn reported_launch_timeout_is_preserved() {
+fn missing_ready_signal_times_out_and_reaps_child() {
     use std::os::unix::fs::PermissionsExt;
 
     let environment = TestEnvironment::new();
-    let fake_cos = environment.directory.path().join("fake-cos-timeout");
+    let fake_cos = environment.directory.path().join("fake-agent-timeout");
+    let pid_file = environment.directory.path().join("pid");
     std::fs::write(
         &fake_cos,
-        "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' \
-         '{\"error\":\"command timed out\",\"code\":\"timeout\"}'\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var("CLAW_COS_BIN", &fake_cos);
-
-    assert!(matches!(
-        launch_prepared(&prepare_launch(&TestContext {
-            mode: "inspect",
-            path: None,
-        }).unwrap()),
-        Err(LaunchError::Process(exec::StartError::Bridge(
-            BridgeError::AppError { code, .. }
-        ))) if code.as_deref() == Some("timeout")
-    ));
-}
-
-#[test]
-#[cfg(unix)]
-fn successful_exec_response_captures_stdin_without_payload_in_request() {
-    use std::os::unix::fs::PermissionsExt;
-
-    let environment = TestEnvironment::new();
-    let fake_cos = environment.directory.path().join("fake-cos");
-    let capture_base = environment.directory.path().join("capture");
-    std::fs::write(
-        &fake_cos,
-        concat!(
-            "#!/bin/sh\n",
-            "cat > \"${ASK_CLAW_TEST_CAPTURE}.stdin\"\n",
-            "printf '%s\\n' \"$@\" > \"${ASK_CLAW_TEST_CAPTURE}.argv\"\n",
-            "printf '%s\\n' '{\"pid\":4242,\"command\":[\"cos-agent-ui\",",
-            "\"--overlay\",\"--context-stdin\"],\"transient\":true}'\n",
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec sleep 30\n",
+            pid_file.display()
         ),
     )
     .unwrap();
     std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var("CLAW_COS_BIN", &fake_cos);
-    std::env::set_var(AGENT_UI_ENV, "/opt/claw/cos-agent-ui");
+    std::env::set_var(AGENT_UI_ENV, &fake_cos);
+
+    assert!(matches!(
+        launch_prepared_with_timeout(
+            &prepare_launch(&TestContext {
+                mode: "inspect",
+                path: None,
+            })
+            .unwrap(),
+            Duration::from_secs(2),
+        ),
+        Err(LaunchError::Timeout(_))
+    ));
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    assert!(!std::path::Path::new("/proc").join(pid).exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn child_crash_before_ready_is_reaped() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let environment = TestEnvironment::new();
+    let fake_ui = environment.directory.path().join("fake-agent-crash");
+    let pid_file = environment.directory.path().join("pid");
+    std::fs::write(
+        &fake_ui,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexit 7\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var(AGENT_UI_ENV, &fake_ui);
+
+    let payload = prepare_launch(&TestContext {
+        mode: "inspect",
+        path: None,
+    })
+    .unwrap();
+    assert!(matches!(
+        launch_prepared_with_timeout(&payload, Duration::from_secs(1)),
+        Err(LaunchError::ChildExited(Some(7)))
+    ));
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    assert!(!std::path::Path::new("/proc").join(pid).exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn parent_waits_for_ready_before_writing_private_context() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let environment = TestEnvironment::new();
+    let fake_ui = environment.directory.path().join("fake agent;not-a-shell");
+    let capture_base = environment.directory.path().join("capture");
+    std::fs::write(
+        &fake_ui,
+        concat!(
+            "#!/usr/bin/python3\n",
+            "import ctypes, json, os, select, sys\n",
+            "base = os.environ['ASK_CLAW_TEST_CAPTURE']\n",
+            "libc = ctypes.CDLL(None)\n",
+            "libc.prctl(4, 0, 0, 0, 0)\n",
+            "open(base + '.dumpable', 'w').write(str(libc.prctl(3, 0, 0, 0, 0)))\n",
+            "readable = bool(select.select([sys.stdin], [], [], 0)[0])\n",
+            "open(base + '.before', 'w').write(str(readable))\n",
+            "os.write(3, b'READY\\n')\n",
+            "payload = sys.stdin.buffer.read()\n",
+            "open(base + '.stdin', 'wb').write(payload)\n",
+            "open(base + '.argv', 'w').write(json.dumps(sys.argv[1:]))\n",
+            "open(base + '.env', 'w').write(json.dumps(dict(os.environ)))\n",
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var(AGENT_UI_ENV, &fake_ui);
     std::env::set_var("ASK_CLAW_TEST_CAPTURE", &capture_base);
 
     let secret = "nested-secret-value";
@@ -273,26 +329,32 @@ fn successful_exec_response_captures_stdin_without_payload_in_request() {
         path: Some("/private/input"),
     })
     .unwrap();
-    let handle = launch_prepared(&payload).unwrap();
-    assert_eq!(handle.pid, 4242);
+    launch_prepared_with_timeout(&payload, Duration::from_secs(2)).unwrap();
+
     assert_eq!(
-        handle.command,
-        ["cos-agent-ui", "--overlay", "--context-stdin"]
+        std::fs::read_to_string(capture_base.with_extension("before")).unwrap(),
+        "False"
     );
+    assert_eq!(
+        std::fs::read_to_string(capture_base.with_extension("dumpable")).unwrap(),
+        "0"
+    );
+    let argv = std::fs::read_to_string(capture_base.with_extension("argv")).unwrap();
+    let child_environment = std::fs::read_to_string(capture_base.with_extension("env")).unwrap();
+    assert!(!argv.contains(secret));
+    assert!(!argv.contains("/private/input"));
+    assert!(!child_environment.contains(secret));
+    assert!(!child_environment.contains("/private/input"));
+    assert!(argv.contains("--context-stdin"));
+    assert!(argv.contains("--ready-fd"));
 
-    let request = std::fs::read_to_string(capture_base.with_extension("argv")).unwrap();
-    assert!(!request.contains(secret));
-    assert!(!request.contains("/private/input"));
-    assert!(request.contains("--stdin"));
-    assert!(request.contains("--\n"));
-    assert!(request.contains("--context-stdin"));
-    assert!(!request.contains("--context\n"));
-
-    let payload = std::fs::read(capture_base.with_extension("stdin")).unwrap();
-    let activation = read_activation(Cursor::new(payload)).unwrap();
+    let received = std::fs::read(capture_base.with_extension("stdin")).unwrap();
+    assert_eq!(received, payload);
+    let activation = read_activation(Cursor::new(received)).unwrap();
     let context = activation.context.unwrap();
     assert!(context.contains(secret));
     assert!(context.contains("/private/input"));
+    assert!(!environment.directory.path().join("not-a-shell").exists());
 }
 
 #[test]
@@ -302,20 +364,19 @@ fn launcher_worker_does_not_block_the_calling_thread() {
     use std::time::{Duration, Instant};
 
     let environment = TestEnvironment::new();
-    let fake_cos = environment.directory.path().join("slow-success-cos");
+    let fake_cos = environment.directory.path().join("slow-success-agent");
     std::fs::write(
         &fake_cos,
         concat!(
             "#!/bin/sh\n",
+            "printf 'READY\\n' >&3\n",
             "cat >/dev/null\n",
             "sleep 1\n",
-            "printf '%s\\n' '{\"pid\":4242,\"command\":[\"cos-agent-ui\",",
-            "\"--overlay\",\"--context-stdin\"],\"transient\":true}'\n",
         ),
     )
     .unwrap();
     std::fs::set_permissions(&fake_cos, std::fs::Permissions::from_mode(0o700)).unwrap();
-    std::env::set_var("CLAW_COS_BIN", &fake_cos);
+    std::env::set_var(AGENT_UI_ENV, &fake_cos);
 
     let payload = prepare_launch(&TestContext {
         mode: "inspect",
@@ -326,6 +387,34 @@ fn launcher_worker_does_not_block_the_calling_thread() {
     let worker = spawn_prepared(payload).unwrap();
     assert!(started.elapsed() < Duration::from_millis(500));
     worker.join().unwrap();
+}
+
+#[test]
+#[cfg(unix)]
+fn partial_context_write_kills_and_reaps_child() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let environment = TestEnvironment::new();
+    let fake_ui = environment.directory.path().join("partial-reader");
+    let pid_file = environment.directory.path().join("pid");
+    std::fs::write(
+        &fake_ui,
+        format!(
+            "#!/bin/sh\nprintf '%s' \"$$\" > '{}'\nexec 0<&-\nprintf 'READY\\n' >&3\nsleep 1\n",
+            pid_file.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake_ui, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::env::set_var(AGENT_UI_ENV, &fake_ui);
+
+    let payload = vec![b'x'; MAX_ACTIVATION_BYTES];
+    assert!(matches!(
+        launch_prepared_with_timeout(&payload, Duration::from_secs(2)),
+        Err(LaunchError::Write(_))
+    ));
+    let pid = std::fs::read_to_string(pid_file).unwrap();
+    assert!(!std::path::Path::new("/proc").join(pid).exists());
 }
 
 #[test]
