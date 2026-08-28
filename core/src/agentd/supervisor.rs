@@ -37,6 +37,7 @@ const DEFAULT_POLL_MS: u64 = 500;
 const DEFAULT_LEASE_SECS: u64 = 900;
 const DEFAULT_HEARTBEAT_GRACE_SECS: u64 = 120;
 const RECONCILE_INTERVAL: Duration = Duration::from_secs(60);
+const APPROVAL_RECONCILE_INTERVAL: Duration = Duration::from_secs(1);
 const PUMP_TICK: Duration = Duration::from_millis(250);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 /// How long a cancelled worker gets to unwind its provider call and
@@ -143,7 +144,9 @@ pub async fn run_with_store(
     // belongs to a dead worker. Reconciling before the first claim is
     // what makes a restart or upgrade self-healing.
     reconcile(&store);
+    reconcile_approvals(&store);
     let mut last_reconcile = Instant::now();
+    let mut last_approval_reconcile = Instant::now();
 
     tracing::info!(
         max_workers = config.max_workers,
@@ -156,29 +159,38 @@ pub async fn run_with_store(
         if shutdown.load(Ordering::SeqCst) {
             break;
         }
+        if last_approval_reconcile.elapsed() >= APPROVAL_RECONCILE_INTERVAL {
+            reconcile_approvals(&store);
+            last_approval_reconcile = Instant::now();
+        }
         if last_reconcile.elapsed() >= RECONCILE_INTERVAL {
             reconcile(&store);
             last_reconcile = Instant::now();
         }
         if let Some(wait) = throttle.lock().map(|t| t.wait()).unwrap_or(None) {
-            sleep_interruptible(wait, &shutdown).await;
+            sleep_interruptible(wait.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
             continue;
         }
-        let Ok(permit) = permits.clone().acquire_owned().await else {
-            break;
+        let permit = match permits.clone().try_acquire_owned() {
+            Ok(permit) => permit,
+            Err(tokio::sync::TryAcquireError::NoPermits) => {
+                sleep_interruptible(config.poll.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
+                continue;
+            }
+            Err(tokio::sync::TryAcquireError::Closed) => break,
         };
         let claimed = match store.claim_one() {
             Ok(claimed) => claimed,
             Err(error) => {
                 tracing::warn!(error = %error, "agentd supervisor failed to claim a task");
                 drop(permit);
-                sleep_interruptible(config.poll, &shutdown).await;
+                sleep_interruptible(config.poll.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
                 continue;
             }
         };
         let Some(job) = claimed else {
             drop(permit);
-            sleep_interruptible(config.poll, &shutdown).await;
+            sleep_interruptible(config.poll.min(APPROVAL_RECONCILE_INTERVAL), &shutdown).await;
             continue;
         };
 
@@ -228,6 +240,22 @@ fn reconcile(store: &Store) {
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "agentd lease reconciliation failed"),
+    }
+}
+
+fn reconcile_approvals(store: &Store) {
+    match store.reconcile_waiting_approvals() {
+        Ok((resumed, failed)) if resumed > 0 || failed > 0 => {
+            tracing::info!(
+                resumed,
+                failed,
+                "agentd reconciled tasks waiting for approval"
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            tracing::warn!(error = %error, "agentd approval reconciliation failed");
+        }
     }
 }
 
@@ -334,7 +362,7 @@ async fn supervise(
             if let Ok(mut throttle) = throttle.lock() {
                 throttle.record_failure();
             }
-            release_or_fail(
+            let _ = release_or_fail(
                 &store,
                 &job,
                 &format!("failed to start agent worker: {error}"),
@@ -375,32 +403,43 @@ async fn supervise(
 
     reap(&mut child, pid).await;
 
-    // The worker's lease is over, so every grant its session accrued
-    // goes with it — including any reusable approval the user made
-    // "for this session". A grant outliving the process it was bound to
-    // is exactly what the authority exists to prevent.
-    if let Some(session_id) = job.session_id.as_deref() {
-        crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
-    }
-
-    match outcome {
+    let resulting_status = match outcome {
         TaskOutcome::Reported(outcome) => {
             let finish: FinishOutcome = (*outcome).into();
-            if let Err(error) = store.finish(job.clone(), finish) {
-                tracing::warn!(task = %job.id, error = %error, "failed to persist agent task result");
+            match store.finish(job.clone(), finish) {
+                Ok(finished) => Some(finished.status),
+                Err(error) => {
+                    tracing::warn!(task = %job.id, error = %error, "failed to persist agent task result");
+                    None
+                }
             }
         }
-        TaskOutcome::Cancelled => {
-            if let Err(error) = store.finish(job.clone(), FinishOutcome::Cancelled) {
+        TaskOutcome::Cancelled => match store.finish(job.clone(), FinishOutcome::Cancelled) {
+            Ok(finished) => Some(finished.status),
+            Err(error) => {
                 tracing::warn!(task = %job.id, error = %error, "failed to persist agent task cancellation");
+                None
             }
-        }
+        },
         TaskOutcome::Failed(message) => {
-            if let Err(error) = store.finish(job.clone(), FinishOutcome::Error(message)) {
-                tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
+            match store.finish(job.clone(), FinishOutcome::Error(message)) {
+                Ok(finished) => Some(finished.status),
+                Err(error) => {
+                    tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
+                    None
+                }
             }
         }
         TaskOutcome::Retry(reason) => release_or_fail(&store, &job, &reason),
+    };
+
+    // A parked task keeps its session alive. Decide after persistence so
+    // a worker crash with a broker-recorded approval request also skips
+    // revocation.
+    if resulting_status != Some(crate::agent::service::JobStatus::WaitingApproval) {
+        if let Some(session_id) = job.session_id.as_deref() {
+            crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
+        }
     }
     Ok(())
 }
@@ -439,11 +478,12 @@ async fn pump(
         grant: signer.issue(claims_for(broker_pid, &lease, config.lease)),
         job: JobSpec {
             id: job.id.clone(),
-            prompt: job.prompt.clone(),
+            prompt: execution_prompt(job),
             context: job.context.clone(),
             branch_context: job.branch_context.clone(),
             session_id: job.session_id.clone(),
             max_turns: job.max_turns,
+            use_memory: job.use_memory,
             owner_uid: lease.owner_uid,
             owner_home: job.owner_home.clone().unwrap_or_default(),
         },
@@ -502,7 +542,30 @@ async fn pump(
                             ask,
                             ..
                         } => {
-                            let reply = mediate_approval(&mut approvals_used, &lease, &ask);
+                            let mut reply = mediate_approval(&mut approvals_used, &lease, &ask);
+                            if let ApprovalReply::Pending {
+                                request_id: Some(request_id),
+                            } = &reply
+                            {
+                                if let Err(error) =
+                                    store.record_waiting_approval(&job.id, request_id)
+                                {
+                                    let _ = crate::approvals::deny_for_owner(
+                                        request_id,
+                                        Some("clawd".to_string()),
+                                        Some(
+                                            "The task could not persist its approval wait."
+                                                .to_string(),
+                                        ),
+                                        Some(lease.owner_uid),
+                                    );
+                                    reply = ApprovalReply::Refused {
+                                        message: format!(
+                                            "could not persist task approval state: {error}"
+                                        ),
+                                    };
+                                }
+                            }
                             let _ = send(
                                 &mut writer,
                                 &BrokerFrame::ApprovalReply {
@@ -842,7 +905,7 @@ fn journal_prompt_snapshot(lease: &Lease, job: &Job) {
     };
     let mut assembled = Vec::new();
     let mut segments = 1u32;
-    assembled.extend_from_slice(job.prompt.as_bytes());
+    assembled.extend_from_slice(execution_prompt(job).as_bytes());
     for extra in [job.context.as_deref(), job.branch_context.as_deref()]
         .into_iter()
         .flatten()
@@ -851,6 +914,7 @@ fn journal_prompt_snapshot(lease: &Lease, job: &Job) {
         assembled.extend_from_slice(extra.as_bytes());
         segments += 1;
     }
+
     journal::record_best_effort(
         &journal::Partition::Session(sid),
         lease.owner_uid,
@@ -861,6 +925,22 @@ fn journal_prompt_snapshot(lease: &Lease, job: &Job) {
             segments,
         },
     );
+}
+
+fn execution_prompt(job: &Job) -> String {
+    if job.resumed_after_approval.is_empty() {
+        return job.prompt.clone();
+    }
+    let resume = format!(
+        "Continue the current task. The user approved permission request(s) {}. \
+         Retry the blocked operation and complete the original request.",
+        job.resumed_after_approval.join(", ")
+    );
+    if job.use_memory {
+        resume
+    } else {
+        format!("{resume}\n\nOriginal request:\n{}", job.prompt)
+    }
 }
 
 fn check_hello(hello: &WorkerHello, lease: &Lease) -> Result<(), String> {
@@ -1096,16 +1176,27 @@ fn finish_error(store: &Store, job: Job, message: &str) {
 
 /// Retryable failure: hand the task back to the queue, or fail it once
 /// it has burned through its recovery budget.
-fn release_or_fail(store: &Store, job: &Job, reason: &str) {
+fn release_or_fail(
+    store: &Store,
+    job: &Job,
+    reason: &str,
+) -> Option<crate::agent::service::JobStatus> {
     match store.release_for_retry(&job.id, reason) {
-        Ok(Some(released)) => tracing::warn!(
-            task = %job.id,
-            status = released.status.as_str(),
-            "agent task released after worker failure: {reason}"
-        ),
-        Ok(None) => tracing::warn!(task = %job.id, "agent task was already resolved: {reason}"),
+        Ok(Some(released)) => {
+            tracing::warn!(
+                task = %job.id,
+                status = released.status.as_str(),
+                "agent task released after worker failure: {reason}"
+            );
+            Some(released.status)
+        }
+        Ok(None) => {
+            tracing::warn!(task = %job.id, "agent task was already resolved: {reason}");
+            None
+        }
         Err(error) => {
-            tracing::warn!(task = %job.id, error = %error, "failed to release agent task")
+            tracing::warn!(task = %job.id, error = %error, "failed to release agent task");
+            None
         }
     }
 }

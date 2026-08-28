@@ -528,6 +528,16 @@ routes! {
         audit: &[("id", FieldRule::Token)],
         run: |c| tasks::cancel(c.params, c.client).map_err(BrokerError::from),
     }
+    TaskRetry {
+        name: "task.retry",
+        access: Access::User,
+        kind: Kind::Mutation,
+        budget: Budget::mutation(),
+        authority: peer(Audience::Task),
+        body: body::TaskId,
+        audit: &[("id", FieldRule::Token)],
+        run: |c| tasks::retry(c.params, c.client).map_err(BrokerError::from),
+    }
     TaskStream {
         name: "task.stream",
         access: Access::User,

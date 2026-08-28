@@ -18,7 +18,7 @@ import { navigate, useRoute } from "@/lib/router";
 import { ChatPage } from "@/pages/chat";
 import { TasksPage } from "@/pages/tasks";
 import { ApprovalsPage } from "@/pages/approvals";
-import { InboxPage } from "@/pages/inbox";
+import { EventsPage } from "@/pages/inbox";
 import { NotificationsPage } from "@/pages/notifications";
 import { SystemPage } from "@/pages/system";
 import { SettingsPage } from "@/pages/settings";
@@ -58,7 +58,7 @@ function Header() {
         type="button"
         className="relative ml-auto rounded-md p-2 hover:bg-muted"
         title="Notifications"
-        onClick={() => navigate("/notifications")}
+        onClick={() => navigate("/inbox")}
       >
         <Bell className="h-4 w-4" />
         {unreadCount > 0 && (
@@ -75,7 +75,8 @@ function routeTitle(route: string): string {
   if (route.startsWith("/tasks")) return "Tasks";
   if (route.startsWith("/approvals")) return "Approvals";
   if (route.startsWith("/inbox")) return "Inbox";
-  if (route.startsWith("/notifications")) return "Notifications";
+  if (route.startsWith("/notifications")) return "Inbox";
+  if (route.startsWith("/events")) return "System Events";
   if (route.startsWith("/system")) return "System";
   if (route.startsWith("/settings")) return "Settings";
   return "Chat";
@@ -85,8 +86,9 @@ function Router({ meta }: { meta: any }) {
   const route = useRoute();
   if (route.startsWith("/tasks")) return <TasksPage />;
   if (route.startsWith("/approvals")) return <ApprovalsPage />;
-  if (route.startsWith("/inbox")) return <InboxPage />;
+  if (route.startsWith("/inbox")) return <NotificationsPage />;
   if (route.startsWith("/notifications")) return <NotificationsPage />;
+  if (route.startsWith("/events")) return <EventsPage />;
   if (route.startsWith("/system")) return <SystemPage />;
   if (route.startsWith("/settings")) return <SettingsPage meta={meta} />;
   return <ChatPage meta={meta} />;

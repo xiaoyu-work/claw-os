@@ -11,6 +11,24 @@ fn open_in_memory_is_clean() {
 }
 
 #[test]
+fn read_only_open_never_mutates_an_existing_database() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("memory.db");
+    {
+        let writable = MemoryDb::open(&path).unwrap();
+        writable
+            .record_message("session-a", "user", "hello")
+            .unwrap();
+    }
+
+    let readonly = MemoryDb::open_read_only(&path).unwrap();
+    assert_eq!(readonly.recent("session-a", 10).unwrap().len(), 1);
+    assert!(readonly
+        .record_message("session-a", "assistant", "no")
+        .is_err());
+}
+
+#[test]
 fn record_then_recent_returns_in_order() {
     let db = db();
     db.record_message("s1", "user", "first").unwrap();

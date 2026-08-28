@@ -111,10 +111,9 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|error| format!("tokio runtime: {error}"))?;
 
-    let cancelled = io.state.cancelled.clone();
     let tx = io.state.tx.clone();
-    let outcome = runtime.block_on(execute(assignment, tx.clone(), cancelled.clone()));
-    let outcome = if cancelled.load(Ordering::SeqCst) {
+    let outcome = runtime.block_on(execute(assignment, io.state.clone()));
+    let outcome = if io.state.cancelled.load(Ordering::SeqCst) {
         WorkerOutcome::Cancelled
     } else {
         outcome
@@ -243,6 +242,7 @@ struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
     waiters: Mutex<HashMap<u64, SyncSender<ApprovalReply>>>,
+    pending_approvals: Mutex<Vec<String>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
 }
@@ -287,6 +287,21 @@ impl ChannelState {
             });
         }
     }
+
+    fn record_pending_approval(&self, request_id: String) {
+        if let Ok(mut pending) = self.pending_approvals.lock() {
+            if !pending.contains(&request_id) {
+                pending.push(request_id);
+            }
+        }
+    }
+
+    fn pending_approvals(&self) -> Vec<String> {
+        self.pending_approvals
+            .lock()
+            .map(|pending| pending.clone())
+            .unwrap_or_default()
+    }
 }
 
 struct ChannelIo {
@@ -305,6 +320,7 @@ impl ChannelIo {
             tx,
             cancelled: Arc::new(AtomicBool::new(false)),
             waiters: Mutex::new(HashMap::new()),
+            pending_approvals: Mutex::new(Vec::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
         });
@@ -596,17 +612,22 @@ impl ApprovalGateway for ChannelApprovalGateway {
     }
 
     fn request(&self, verb: Verb, scope: &Scope) -> Result<PendingApproval, String> {
-        match self.ask(ApprovalAsk::Request {
+        let pending = match self.ask(ApprovalAsk::Request {
             verb: verb.as_str().to_string(),
             scope: scope.clone(),
         })? {
             // A grant approved between the check and the ask is reported
             // as a pending request with no id; the retry spends it
             // through `consume`.
-            ApprovalReply::Granted => Ok(PendingApproval { request_id: None }),
-            ApprovalReply::Pending { request_id } => Ok(PendingApproval { request_id }),
-            ApprovalReply::Refused { message } => Err(message),
+            ApprovalReply::Granted => PendingApproval { request_id: None },
+            ApprovalReply::Pending { request_id } => PendingApproval { request_id },
+            ApprovalReply::Refused { message } => return Err(message),
+        };
+        if let Some(request_id) = pending.request_id.as_ref() {
+            self.state.record_pending_approval(request_id.clone());
+            crate::agent::runtime::interrupt::signal(&self.task_id);
         }
+        Ok(pending)
     }
 }
 
@@ -614,13 +635,10 @@ impl ApprovalGateway for ChannelApprovalGateway {
 // Execution
 // ---------------------------------------------------------------------------
 
-async fn execute(
-    assignment: Assignment,
-    tx: UnboundedSender<WorkerFrame>,
-    cancelled: Arc<AtomicBool>,
-) -> WorkerOutcome {
+async fn execute(assignment: Assignment, state: Arc<ChannelState>) -> WorkerOutcome {
     let job = assignment.job;
     let task_id = job.id.clone();
+    let tx = state.tx.clone();
 
     hooks::global_registry().register(Arc::new(WorkerAuditHook {
         task_id: task_id.clone(),
@@ -636,6 +654,7 @@ async fn execute(
         tx: tx.clone(),
     });
 
+    let home = std::path::PathBuf::from(&job.owner_home);
     let request = JobExecution {
         id: task_id.clone(),
         prompt: job.prompt,
@@ -643,9 +662,9 @@ async fn execute(
         branch_context: job.branch_context,
         session_id: job.session_id,
         max_turns: job.max_turns,
+        use_memory: job.use_memory,
     };
 
-    let home = std::path::PathBuf::from(&job.owner_home);
     let config = crate::config::intern_for_home(&home);
     let scoped = crate::agent::service::execute_job(request, stream_sink, progress_sink);
     let scoped = with_session(assignment.session, scoped);
@@ -675,8 +694,12 @@ async fn execute(
         }
     };
 
-    if cancelled.load(Ordering::SeqCst) {
+    if state.cancelled.load(Ordering::SeqCst) {
         return WorkerOutcome::Cancelled;
+    }
+    let request_ids = state.pending_approvals();
+    if !request_ids.is_empty() {
+        return WorkerOutcome::WaitingApproval { request_ids };
     }
     match outcome {
         FinishOutcome::Ok {
@@ -696,6 +719,9 @@ async fn execute(
         })),
         FinishOutcome::Error(message) => WorkerOutcome::Error { message },
         FinishOutcome::Cancelled => WorkerOutcome::Cancelled,
+        FinishOutcome::WaitingApproval { request_ids } => {
+            WorkerOutcome::WaitingApproval { request_ids }
+        }
     }
 }
 

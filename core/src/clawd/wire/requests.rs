@@ -50,6 +50,8 @@ pub struct TaskSubmit {
     pub session_id: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_memory: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -59,6 +61,8 @@ pub struct TaskList {
     pub status: Option<Token>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub limit: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

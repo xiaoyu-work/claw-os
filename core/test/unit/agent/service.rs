@@ -195,10 +195,10 @@ impl Drop for EnvGuard {
 }
 
 #[test]
-fn store_creates_three_buckets() {
+fn store_creates_all_state_buckets() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    for sub in ["pending", "running", "done"] {
+    for sub in ["pending", "running", "waiting", "done"] {
         assert!(dir.path().join(sub).is_dir(), "missing {sub}");
     }
     let _ = store; // silence
@@ -244,6 +244,40 @@ fn submit_round_trips_owner_uid_and_home() {
 }
 
 #[test]
+fn one_session_cannot_have_two_active_tasks() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let first = store
+        .submit(
+            "first".into(),
+            Some(session_id.clone()),
+            None,
+            Some(1000),
+            None,
+        )
+        .unwrap();
+    let error = store
+        .submit(
+            "second".into(),
+            Some(session_id.clone()),
+            None,
+            Some(1000),
+            None,
+        )
+        .expect_err("parallel session task must be rejected");
+    assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists);
+    let claimed = store.claim_one().unwrap().unwrap();
+    assert_eq!(claimed.id, first.id);
+    store
+        .finish(claimed, FinishOutcome::Error("done".into()))
+        .unwrap();
+    assert!(store
+        .submit("second".into(), Some(session_id), None, Some(1000), None)
+        .is_ok());
+}
+
+#[test]
 fn legacy_job_file_without_owner_fields_still_loads() {
     // Older clawd installs wrote Job JSON without owner_uid /
     // owner_home. The new fields are #[serde(default)] so those
@@ -264,6 +298,31 @@ fn legacy_job_file_without_owner_fields_still_loads() {
     assert_eq!(parsed.id, id);
     assert!(parsed.owner_uid.is_none());
     assert!(parsed.owner_home.is_none());
+    assert!(parsed.use_memory);
+}
+
+#[test]
+fn task_can_explicitly_disable_conversation_memory() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit_with_context_and_memory(
+            "private turn".into(),
+            None,
+            None,
+            Some("session-a".into()),
+            None,
+            false,
+            Some(1000),
+            Some("/home/test".into()),
+        )
+        .unwrap();
+    assert!(!job.use_memory);
+    let parsed: Job = serde_json::from_str(
+        &fs::read_to_string(dir.path().join("pending").join(format!("{}.json", job.id))).unwrap(),
+    )
+    .unwrap();
+    assert!(!parsed.use_memory);
 }
 #[test]
 fn locate_finds_job_in_pending_bucket() {
@@ -471,6 +530,286 @@ fn finish_error_records_message() {
 }
 
 #[test]
+fn approval_wait_is_durable_and_requeues_after_approval() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_READ,
+        crate::caps::Scope::path("/tmp/report"),
+        &session_id,
+        "Read report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit(
+            "read the report".into(),
+            Some(session_id),
+            None,
+            Some(1000),
+            Some("/home/test".into()),
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let waiting = store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![approval_id.clone(), approval_id.clone()],
+            },
+        )
+        .unwrap();
+    assert_eq!(waiting.status, JobStatus::WaitingApproval);
+    assert_eq!(waiting.waiting_on, vec![approval_id.clone()]);
+    assert!(store.path_for(JobStatus::WaitingApproval, &job.id).exists());
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (0, 0));
+
+    crate::approvals::approve_for_owner(
+        &approval_id,
+        crate::approvals::GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (1, 0));
+    let (bucket, resumed) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Pending);
+    assert_eq!(resumed.status, JobStatus::Pending);
+    assert!(resumed.waiting_on.is_empty());
+    assert_eq!(resumed.resumed_after_approval, vec![approval_id]);
+    assert!(resumed.worker_pid.is_none());
+}
+
+#[test]
+fn denied_approval_finishes_waiting_task_with_error() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_WRITE,
+        crate::caps::Scope::path("/tmp/report"),
+        &session_id,
+        "Write report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit(
+            "write the report".into(),
+            Some(session_id),
+            None,
+            Some(1000),
+            Some("/home/test".into()),
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![approval_id.clone()],
+            },
+        )
+        .unwrap();
+    crate::approvals::deny_for_owner(&approval_id, Some("test".to_string()), None, Some(1000))
+        .unwrap();
+
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (0, 1));
+    let (bucket, denied) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(denied.status, JobStatus::Error);
+    assert!(denied.error.unwrap().contains("denied"));
+}
+
+#[test]
+fn consumed_approval_still_requeues_the_waiting_task() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let scope = crate::caps::Scope::path("/tmp/report");
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_READ,
+        scope.clone(),
+        &session_id,
+        "Read report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit(
+            "read".into(),
+            Some(session_id.clone()),
+            None,
+            Some(1000),
+            None,
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![approval_id.clone()],
+            },
+        )
+        .unwrap();
+    crate::approvals::approve_for_owner(
+        &approval_id,
+        crate::approvals::GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(1000),
+    )
+    .unwrap();
+    crate::approvals::consume_matching_grant_for_owner(
+        &session_id,
+        crate::caps::Verb::FS_READ,
+        &scope,
+        Some(1000),
+    )
+    .unwrap()
+    .expect("consume");
+
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (1, 0));
+    assert_eq!(
+        store.locate(&job.id).unwrap().unwrap().1.status,
+        JobStatus::Pending
+    );
+}
+
+#[test]
+fn approval_wait_expires_and_retires_pending_requests() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_READ,
+        crate::caps::Scope::path("/tmp/report"),
+        &session_id,
+        "Read report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit("read".into(), Some(session_id), None, Some(1000), None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![approval_id.clone()],
+            },
+        )
+        .unwrap();
+    let waiting_path = store.path_for(JobStatus::WaitingApproval, &job.id);
+    let mut waiting: Job =
+        serde_json::from_str(&fs::read_to_string(&waiting_path).unwrap()).unwrap();
+    waiting.waiting_since = Some(
+        (chrono::Utc::now() - chrono::Duration::hours(9))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+    );
+    write_json_atomic(&waiting_path, &waiting).unwrap();
+
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (0, 1));
+    let finished = store.locate(&job.id).unwrap().unwrap().1;
+    assert_eq!(finished.status, JobStatus::Error);
+    assert!(finished.error.unwrap().contains("expired"));
+    assert_eq!(
+        crate::approvals::status_for_owner(&approval_id, Some(1000)),
+        crate::approvals::RequestStatus::Denied
+    );
+}
+
+#[test]
+fn cancelling_a_waiting_task_is_immediate() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = uuid::Uuid::new_v4().to_string();
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_READ,
+        crate::caps::Scope::path("/tmp/report"),
+        &session_id,
+        "Read report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit("wait".into(), Some(session_id), None, Some(1000), None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![approval_id.clone()],
+            },
+        )
+        .unwrap();
+
+    let (cancelled, immediate) = store
+        .request_cancel_for_owner(&job.id, Some(1000))
+        .unwrap()
+        .expect("waiting job");
+    assert!(immediate);
+    assert_eq!(cancelled.status, JobStatus::Cancelled);
+    assert_eq!(
+        store.locate(&job.id).unwrap().unwrap().1.status,
+        JobStatus::Cancelled
+    );
+    assert_eq!(
+        crate::approvals::status_for_owner(&approval_id, Some(1000)),
+        crate::approvals::RequestStatus::Denied
+    );
+}
+
+#[test]
+fn cancelling_a_running_task_retires_its_persisted_approval() {
+    let dir = fresh_root();
+    let _guard = EnvGuard::set(dir.path());
+    let store = Store::with_root(dir.path().join("jobs")).unwrap();
+    let session_id = crate::session::SessionId::generate().into_string();
+    let approval_id = crate::approvals::submit_owned(
+        crate::caps::Verb::FS_READ,
+        crate::caps::Scope::path("/tmp/report"),
+        &session_id,
+        "Read report".to_string(),
+        Some("test".to_string()),
+        Some(1000),
+    )
+    .unwrap();
+    let job = store
+        .submit("wait".into(), Some(session_id), None, Some(1000), None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .record_waiting_approval(&job.id, &approval_id)
+        .unwrap();
+    store
+        .request_cancel_for_owner(&job.id, Some(1000))
+        .unwrap()
+        .expect("running task");
+    store.finish(claimed, FinishOutcome::Cancelled).unwrap();
+
+    assert_eq!(
+        crate::approvals::status_for_owner(&approval_id, Some(1000)),
+        crate::approvals::RequestStatus::Denied
+    );
+}
+
+#[test]
 fn cancel_pending_moves_to_done_with_cancelled_status() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
@@ -622,9 +961,10 @@ fn counts_reflect_per_bucket_state() {
             },
         )
         .unwrap();
-    let (p, r, d) = store.counts().unwrap();
+    let (p, r, w, d) = store.counts().unwrap();
     assert_eq!(p, 1);
     assert_eq!(r, 0);
+    assert_eq!(w, 0);
     assert_eq!(d, 1);
 }
 
@@ -658,7 +998,7 @@ fn prune_drops_aged_files_beyond_keep_last() {
     // keep_last = 1, older_than = 0 → should drop the 2 oldest.
     let removed = store.prune(Duration::from_secs(0), 1).unwrap();
     assert_eq!(removed, 2);
-    let (_, _, d) = store.counts().unwrap();
+    let (_, _, _, d) = store.counts().unwrap();
     assert_eq!(d, 1);
 
     let mut retained = 0;
@@ -768,10 +1108,10 @@ fn prune_recovers_stream_staged_before_interruption() {
 
 #[test]
 fn job_preview_truncates_with_ellipsis() {
-    let mut j = Job::new_pending("a".repeat(100), None, None, None, None, None, None);
+    let mut j = Job::new_pending("a".repeat(100), None, None, None, None, true, None, None);
     j.id = "fixed".into();
     assert_eq!(j.preview(10), "aaaaaaaaaa…");
-    let short = Job::new_pending("hi".into(), None, None, None, None, None, None);
+    let short = Job::new_pending("hi".into(), None, None, None, None, true, None, None);
     assert_eq!(short.preview(10), "hi");
 }
 

@@ -2,6 +2,29 @@ use super::*;
 use crate::test_env::{lock_env, TestEnvVarGuard};
 
 #[test]
+fn task_list_summary_omits_heavy_and_private_fields() {
+    let summary = task_summary_value(&json!({
+        "id": "task-a",
+        "prompt": "summarize this report",
+        "status": "ok",
+        "session_id": "session-a",
+        "created_at": "2026-01-01T00:00:00Z",
+        "response": "large response",
+        "evidence": {"large": true},
+        "owner_home": "/home/alice",
+        "owner_uid": 1000,
+    }));
+    assert_eq!(summary["title"], "summarize this report");
+    assert_eq!(summary["session_id"], "session-a");
+    for hidden in ["prompt", "response", "evidence", "owner_home", "owner_uid"] {
+        assert!(
+            summary.get(hidden).is_none(),
+            "{hidden} leaked into summary"
+        );
+    }
+}
+
+#[test]
 fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let _lock = lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -10,6 +33,8 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
     std::fs::create_dir_all(&home).unwrap();
 
     let session_id = create_task_session("test", 1001, &home).unwrap();
+    prepare_task_session(&session_id, 1001, &home)
+        .expect("an empty task session must be reusable after an early worker failure");
     let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
         crate::paths::clawd_user_memory_db_path(1001),
     )
@@ -73,4 +98,52 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         .expect_err("a root-owned task must be refused");
     assert_eq!(error, crate::agentd::spawn::ROOT_OWNER_REFUSAL);
     assert!(error.contains("non-root"), "{error}");
+}
+
+#[test]
+fn retry_creates_a_new_pending_task_for_the_same_session() {
+    let _lock = lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let owner_uid = unsafe { libc::geteuid() } as u32;
+    if owner_uid == 0 {
+        return;
+    }
+    let owner_home = crate::clawd::system_caps::verified_owner_home(owner_uid).unwrap();
+    let session_id = create_task_session("retry test", owner_uid, &owner_home).unwrap();
+    let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
+        crate::paths::clawd_user_memory_db_path(owner_uid),
+    )
+    .unwrap();
+    db.record_message(&session_id, "user", "retry me").unwrap();
+
+    let store = Store::open_default().unwrap();
+    let original = store
+        .submit(
+            "retry me".to_string(),
+            Some(session_id.clone()),
+            None,
+            Some(owner_uid),
+            Some(owner_home.to_string_lossy().into_owned()),
+        )
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    store
+        .finish(
+            claimed,
+            crate::agent::service::FinishOutcome::Error("failed".into()),
+        )
+        .unwrap();
+    let client = ClientIdentity {
+        pid: Some(std::process::id()),
+        uid: Some(owner_uid),
+        gid: Some(unsafe { libc::getegid() } as u32),
+        start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+    };
+
+    let retried = retry(json!({ "id": original.id }), &client).unwrap();
+    assert_ne!(retried["id"], original.id);
+    assert_eq!(retried["status"], "pending");
+    assert_eq!(retried["session_id"], session_id);
+    assert_eq!(retried["prompt"], "retry me");
 }

@@ -56,6 +56,17 @@ export type NotificationPreferences = {
   ntfy_topic?: string;
 };
 
+export function notificationActionRoute(uri: string, taskId?: string) {
+  if (uri === "clawos://agent/approvals") return "/approvals";
+  const sessionPrefix = "clawos://agent/session/";
+  if (uri.startsWith(sessionPrefix)) {
+    const sessionId = uri.slice(sessionPrefix.length);
+    if (/^[A-Za-z0-9_-]+$/.test(sessionId)) return `/chat/${sessionId}`;
+  }
+  if (taskId) return "/tasks";
+  return null;
+}
+
 type NotificationContextValue = {
   notifications: NotificationRecord[];
   unreadCount: number;
@@ -111,7 +122,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     const [list, prefs] = await Promise.all([
-      api.get<{ cursor: number; notifications: NotificationRecord[] }>("/api/notifications"),
+      api.get<{ cursor: number; notifications: NotificationRecord[] }>("/api/inbox"),
       api.get<NotificationPreferences>("/api/notifications/preferences"),
     ]);
     cursorRef.current = list.cursor || 0;
@@ -147,7 +158,7 @@ export function NotificationProvider({ children }: { children: ReactNode }) {
           });
           popup.onclick = () => {
             window.focus();
-            navigate("/notifications");
+            navigate("/inbox");
           };
         }
         await api.post(

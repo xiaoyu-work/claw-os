@@ -174,7 +174,7 @@ so neither path accepts a caller-supplied owner identifier.
 
 ```text
 client (cos / bridge / rollback / approval helper)
-  -> one length-prefixed v1 frame on /run/cos/clawd.sock
+  -> one length-prefixed v2 envelope in a CBK1 frame on /run/cos/clawd.sock
   -> connection slot for the peer's accounting bucket
   -> recvmsg: kernel SCM_CREDENTIALS, SCM_RIGHTS closed and refused
   -> /proc re-verification of the sending process
@@ -268,6 +268,9 @@ CLI / web UI / bridge
   -> compact tool registry / guardrails / hooks
      (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
   -> parallel-safe or serial tool execution
+  -> denied capability files an approval and releases the worker
+  -> task waits durably in waiting_approval
+  -> approval resumes the same task/session; denial ends it
   -> tool results appended to conversation
   -> repeat until final response or max_turns
   -> final no-tools synthesis when the work limit is reached
@@ -283,6 +286,25 @@ session memory, audit records, and evidence verifier. Canonical prompt snapshots
 live in content-addressed memory tables and are restored byte-for-byte across
 continuations. Dynamic due/App context is logged separately as injected audit
 data and never becomes user-authored history.
+
+The embedded Agent Web app uses this same queue rather than running an
+in-process model loop. Chat submits and streams durable tasks, Tasks lists and
+cancels those records and creates explicit retries, and Approvals can wake a
+waiting task without requiring the user to repeat the request. The user-owned
+Web process reads session lists and history from the owner-partitioned memory
+database; decisions cross the existing `pkexec` approval helper rather than
+granting the Web process direct decision authority. The Inbox is the
+Notification Service projection; raw `context.event` records remain available
+separately as System Events.
+
+Closing or losing a Web SSE connection detaches the viewer but does not cancel
+the durable task. The Chat Stop control uses the task id returned at submission
+and calls `task.cancel` explicitly; completion remains observable through Tasks,
+session history, and notifications after a reconnect.
+
+Pre-queue Web conversations remain readable from their user-owned memory
+database, while new durable conversations use the owner task partition. Root
+`clawd` never opens the user-home compatibility database.
 
 ### Proactive notification
 
@@ -337,8 +359,12 @@ Consent still works. `core/src/caps/approval_gateway.rs` is the seam
 names the exact verb and canonical scope it was denied and nothing else, and
 `clawd` supplies owner, session and task from the verified grant, spends an
 exactly-matching approved grant one-shot or files a deduped pending request
-under that identity. There is no route to decide a request or to obtain a
-reusable capability.
+under that identity. A filed request interrupts the current turn, moves the
+task from `running/` to `waiting/`, and releases the worker lease. The
+supervisor watches the durable decision: approval requeues the same task and
+session with a reconstructable continuation prompt, while denial or a missing
+request terminates it. Undecided requests expire after eight hours. There is no
+worker route to decide a request or obtain a reusable capability.
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one

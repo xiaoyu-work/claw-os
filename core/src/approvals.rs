@@ -516,6 +516,19 @@ fn resolve(
     note: Option<String>,
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
+    crate::filelock::with_exclusive_path_lock(&resolution_lock_path(id), || {
+        resolve_locked(id, outcome, duration, decided_by, note, owner_uid)
+    })
+}
+
+fn resolve_locked(
+    id: &str,
+    outcome: Outcome,
+    duration: Option<GrantDuration>,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Resolved, String> {
     validate_approval_id(id)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let pending = pending_dir().join(format!("{id}.json"));
@@ -646,6 +659,24 @@ fn resolve(
     }
 
     Ok(resolved)
+}
+
+pub fn deny_if_pending_for_owner(
+    id: &str,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<RequestStatus, String> {
+    validate_approval_id(id)?;
+    crate::filelock::with_exclusive_path_lock(&resolution_lock_path(id), || match status_for_owner(
+        id, owner_uid,
+    ) {
+        RequestStatus::Pending => {
+            resolve_locked(id, Outcome::Denied, None, decided_by, note, owner_uid)?;
+            Ok(RequestStatus::Denied)
+        }
+        status => Ok(status),
+    })
 }
 
 fn outcome_dir_name(o: Outcome) -> &'static str {
@@ -789,6 +820,7 @@ pub fn has_approved_grant_for_owner(
 #[serde(rename_all = "snake_case")]
 pub enum RequestStatus {
     Pending,
+    Resolving,
     Approved,
     /// Approved earlier and already spent.
     Consumed,
@@ -801,6 +833,7 @@ impl RequestStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             RequestStatus::Pending => "pending",
+            RequestStatus::Resolving => "resolving",
             RequestStatus::Approved => "approved",
             RequestStatus::Consumed => "consumed",
             RequestStatus::Denied => "denied",
@@ -815,8 +848,10 @@ pub fn status_for_owner(id: &str, owner_uid: Option<u32>) -> RequestStatus {
         return RequestStatus::Unknown;
     }
     let file = format!("{id}.json");
+    if request_file_visible(&pending_dir().join(&file), owner_uid) {
+        return RequestStatus::Pending;
+    }
     for (dir, status) in [
-        (pending_dir(), RequestStatus::Pending),
         (approved_dir(), RequestStatus::Approved),
         (consumed_dir(), RequestStatus::Consumed),
         (denied_dir(), RequestStatus::Denied),
@@ -824,19 +859,38 @@ pub fn status_for_owner(id: &str, owner_uid: Option<u32>) -> RequestStatus {
         let Ok(data) = fs::read_to_string(dir.join(&file)) else {
             continue;
         };
-        let visible = match status {
-            RequestStatus::Pending => serde_json::from_str::<Request>(&data)
-                .map(|request| request_visible_to(&request, owner_uid))
-                .unwrap_or(false),
-            _ => serde_json::from_str::<Resolved>(&data)
-                .map(|resolved| request_visible_to(&resolved.request, owner_uid))
-                .unwrap_or(false),
-        };
+        let visible = serde_json::from_str::<Resolved>(&data)
+            .map(|resolved| request_visible_to(&resolved.request, owner_uid))
+            .unwrap_or(false);
         if visible {
             return status;
         }
     }
+    if scratch_request_visible(id, owner_uid) {
+        return RequestStatus::Resolving;
+    }
     RequestStatus::Unknown
+}
+
+fn request_file_visible(path: &Path, owner_uid: Option<u32>) -> bool {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|data| serde_json::from_str::<Request>(&data).ok())
+        .is_some_and(|request| request_visible_to(&request, owner_uid))
+}
+
+fn scratch_request_visible(id: &str, owner_uid: Option<u32>) -> bool {
+    let Ok(entries) = fs::read_dir(scratch_dir()) else {
+        return false;
+    };
+    let prefix = format!("{id}.");
+    entries.flatten().map(|entry| entry.path()).any(|path| {
+        let matches = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(&prefix) && name.ends_with(".json"));
+        matches && request_file_visible(&path, owner_uid)
+    })
 }
 
 /// Retire a whole set of approved grants for one action, all or none.
@@ -906,6 +960,10 @@ fn rollback_consumed(moved: &[(PathBuf, PathBuf)]) {
 
 fn grant_lock_path() -> PathBuf {
     root().join("grants")
+}
+
+fn resolution_lock_path(id: &str) -> PathBuf {
+    root().join("resolution").join(id)
 }
 
 /// Load `path` when it holds an approved grant covering this exact

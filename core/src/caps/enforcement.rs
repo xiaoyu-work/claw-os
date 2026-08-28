@@ -389,9 +389,9 @@ fn attach_approval_request(denial: &mut Denial, mode: Mode, session_id: Option<&
             match gateway.request(denial.verb, &denial.requested_scope) {
                 Ok(pending) => match pending.request_id {
                     Some(id) => format!(
-                        "approval request {id} is pending; approve it in Claw OS, then retry"
+                        "approval request {id} is pending; the task will resume after approval"
                     ),
-                    None => "an approval request is pending; approve it in Claw OS, then retry"
+                    None => "an approval request is pending; the task will resume after approval"
                         .to_string(),
                 },
                 Err(error) => format!("could not create approval request: {error}"),

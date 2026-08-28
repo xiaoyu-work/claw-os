@@ -81,7 +81,9 @@ installs one.
   label.
 - `Consume` spends one exactly-matching approved grant, one-shot; a replay
   finds nothing. `Request` files or dedupes a pending request under the
-  grant-bound session and owner and returns a bounded id.
+  grant-bound session and owner and returns a bounded id. The worker records
+  that id, interrupts its turn, and reports a waiting outcome instead of
+  converting the denial into a terminal task error.
 - There is no decide route. A worker can never approve anything, name another
   session or owner, or receive a reusable capability.
 - Mediation is bounded on both sides (`protocol::MAX_APPROVAL_ASKS`), refused
@@ -89,9 +91,11 @@ installs one.
   is audited by the broker.
 
 Channel I/O runs on its own thread inside the worker. `caps::require` is
-synchronous, so the gateway blocks its caller while it waits; keeping the
-reader off the agent runtime's threads is what stops that from deadlocking
-against streaming or tool execution.
+synchronous, so the gateway blocks its caller while it waits for the broker's
+immediate filing response; keeping the reader off the agent runtime's threads
+is what stops that from deadlocking against streaming or tool execution. Human
+wait time does not hold a worker: the queue persists the task under `waiting/`,
+and the supervisor requeues it after approval.
 
 ## Residual Same-UID Boundary
 
@@ -151,6 +155,12 @@ so no App, MCP server or shell it started survives — reaps it, then either
 releases the task for retry (bounded by the same recovery budget as orphan
 recovery) or fails it, and `clawd` keeps serving. `clawd` treats no worker exit
 — normal or not — as fatal.
+
+Approval waits are a separate durable lifecycle, not crash retries. A waiting
+task holds no worker slot or lease, survives daemon restarts, can be cancelled
+immediately, and resumes under a fresh worker with the same task and session
+identity after all linked approvals are granted. An undecided wait expires
+after eight hours so abandoned consent prompts cannot retain tasks forever.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
 report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker

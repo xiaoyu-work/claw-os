@@ -10,7 +10,10 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
-- Own task ownership/lease and expose task lifecycle RPC.
+- Own task ownership/lease, durable approval waits, retry, and task
+  lifecycle RPC.
+- Expose owner-scoped approval views used by the Agent Web control center;
+  permission decisions still cross the polkit helper.
 - Expose owner-scoped notification publication, subscription, state, and
   delivery-leasing RPC.
 - Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
@@ -28,7 +31,7 @@ and agent tasks.
 | `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
 | `authority/` | The capability authority: grants, opaque handles, attenuation, the route middleware and its audit facts |
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
-| `tasks.rs` | Task queue and lifecycle |
+| `tasks.rs` | Task queue, summary/list, cancel, retry, and session continuity |
 | `usage.rs` | Peer-UID-scoped Agent token usage queries |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
@@ -39,7 +42,7 @@ and agent tasks.
 
 ## Wire Protocol
 
-`/run/cos/clawd.sock` carries broker protocol v1: one length-prefixed frame per
+`/run/cos/clawd.sock` carries broker protocol v2 over the `CBK1` framing: one length-prefixed frame per
 message, one request per connection, then close. The header is `CBK1`, a kind
 byte, a reserved flag byte that must be zero, and a big-endian `u32` length. The
 length is checked against the direction's ceiling before a body buffer exists,

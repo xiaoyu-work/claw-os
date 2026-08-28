@@ -923,7 +923,7 @@ fn wait_for_approvals(ids: &[String]) -> Result<(), String> {
                 .unwrap_or("");
             match entry.get("status").and_then(serde_json::Value::as_str) {
                 Some("approved") => {}
-                Some("pending") => pending = true,
+                Some("pending" | "resolving") => pending = true,
                 Some("denied") => {
                     return Err(format!("App launch approval {id} was denied"));
                 }

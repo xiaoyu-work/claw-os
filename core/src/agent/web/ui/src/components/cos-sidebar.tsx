@@ -10,8 +10,8 @@
  */
 
 import {
+  Activity,
   ChevronDown,
-  Bell,
   Inbox,
   ListTodo,
   MessageSquare,
@@ -63,7 +63,7 @@ const NAV_ITEMS: Array<{
   { key: "tasks", label: "Tasks", icon: ListTodo, href: "/tasks" },
   { key: "approvals", label: "Approvals", icon: ShieldCheck, href: "/approvals" },
   { key: "inbox", label: "Inbox", icon: Inbox, href: "/inbox" },
-  { key: "notifications", label: "Notifications", icon: Bell, href: "/notifications" },
+  { key: "events", label: "System Events", icon: Activity, href: "/events" },
   { key: "system", label: "System", icon: Monitor, href: "/system" },
   { key: "settings", label: "Settings", icon: Settings, href: "/settings" },
 ];
@@ -163,7 +163,7 @@ export function CosSidebar({ meta }: { meta: any }) {
                       >
                         <Icon className="h-4 w-4" />
                         <span>{item.label}</span>
-                        {item.key === "notifications" && unreadCount > 0 && (
+                        {item.key === "inbox" && unreadCount > 0 && (
                           <span className="ml-auto min-w-5 rounded-full bg-destructive px-1 text-center text-[10px] leading-5 text-destructive-foreground">
                             {unreadCount > 99 ? "99+" : unreadCount}
                           </span>

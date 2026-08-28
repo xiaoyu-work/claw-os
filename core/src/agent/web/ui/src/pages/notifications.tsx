@@ -6,8 +6,10 @@ import { Card } from "@/components/ui/card";
 import {
   type NotificationPreferences,
   type NotificationRecord,
+  notificationActionRoute,
   useNotifications,
 } from "@/lib/notifications";
+import { navigate } from "@/lib/router";
 
 export function NotificationsPage() {
   const notifications = useNotifications();
@@ -37,7 +39,7 @@ export function NotificationsPage() {
     <div className="flex h-full flex-col gap-4 overflow-y-auto p-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">Notifications</h1>
+          <h1 className="text-xl font-semibold">Inbox</h1>
           <p className="text-xs text-muted-foreground">
             Live Agent, scheduled-task, reminder, and system alerts.
           </p>
@@ -320,6 +322,26 @@ function NotificationCard({ notification }: { notification: NotificationRecord }
                 ? ` · repeated ${notification.occurrences} times`
                 : ""}
             </p>
+            {notification.actions.length > 0 ? (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {notification.actions.map((action) => {
+                  const route = notificationActionRoute(action.uri, notification.task_id);
+                  return route ? (
+                    <Button
+                      key={action.id}
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        void actions.markRead(notification.id);
+                        navigate(route);
+                      }}
+                    >
+                      {action.label}
+                    </Button>
+                  ) : null;
+                })}
+              </div>
+            ) : null}
           </div>
         </div>
         <div className="flex shrink-0 gap-1">

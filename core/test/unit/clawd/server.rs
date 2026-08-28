@@ -84,7 +84,7 @@ async fn a_privileged_provider_request_without_a_grant_is_refused() {
 async fn an_envelope_from_another_protocol_version_fails_closed() {
     let admission = admission();
     let body = serde_json::to_vec(&json!({
-        "v": 2,
+        "v": PROTOCOL_VERSION + 1,
         "id": "r-1",
         "command": "daemon.health",
         "params": {},
@@ -128,7 +128,7 @@ async fn deeply_nested_json_is_refused_before_a_route_sees_it() {
     let admission = admission();
     let deep = format!(
         "{}{}{}",
-        r#"{"v":1,"id":"r-1","command":"context.update","params":{"source":"s","payload":"#,
+        r#"{"v":2,"id":"r-1","command":"context.update","params":{"source":"s","payload":"#,
         "[".repeat(400),
         "]".repeat(400)
     ) + "}}";

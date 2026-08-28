@@ -16,9 +16,11 @@ surfaces.
 - Publish deterministic task and approval lifecycle notifications after durable
   state transitions.
 - Attach built-in, app, and MCP tools to one guarded registry.
-- Expose CLI, task-queue, and authenticated local web surfaces. The queue's
-  execution side runs in `claw-agentd`, never in the `clawd` broker — see
-  [`../agentd/MODULE.md`](../agentd/MODULE.md).
+- Expose CLI, task-queue, and authenticated local web surfaces. Web Chat and
+  Tasks use the same durable `clawd` queue, while Inbox projects the
+  Notification Service and keeps raw context events in a separate diagnostic
+  view. The queue's execution side runs in `claw-agentd`, never in the `clawd`
+  broker — see [`../agentd/MODULE.md`](../agentd/MODULE.md).
 - Keep CLI parsing and presentation grouped by command responsibility while
   `mod.rs` remains the composition and top-level routing boundary.
 
@@ -45,7 +47,7 @@ surfaces.
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
-| `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
+| `service.rs`, `../../test/unit/agent/service.rs` | Task queue, approval-wait state, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
@@ -71,6 +73,13 @@ CLI/web -> clawd task queue -> claw-agentd worker
   -> guarded tool registry
   -> tool result history
 ```
+
+A denied capability moves a task to the durable `waiting_approval` state after
+the worker exits. The `clawd` supervisor requeues the same task and session
+when every linked request is approved, or finishes it with an error when a
+request is denied, disappears, or remains undecided for eight hours. The Web
+surface reads owner-owned task memory directly, reads approval state through
+`clawd`, and requires the installed `pkexec` helper for decisions.
 
 `runtime/turn.rs` is the contract seam between providers and tools. Provider
 changes must preserve equivalent streaming/non-streaming text, tools, opaque

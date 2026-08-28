@@ -11,6 +11,7 @@ const EXPECTED_USER_COMMANDS: &[&str] = &[
     "task.get",
     "task.status",
     "task.cancel",
+    "task.retry",
     "task.stream",
     "task.result",
     "task.count",
@@ -307,6 +308,7 @@ fn state_changing_routes_are_classified_as_mutations() {
     for name in [
         "task.submit",
         "task.cancel",
+        "task.retry",
         "context.update",
         "context.event.append",
         "permission.request",

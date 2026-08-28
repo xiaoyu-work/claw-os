@@ -57,6 +57,9 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
   parsing, authorizing or dispatching anything. There is no compatibility
   listener, so the fix is to finish the upgrade — reinstall `claw-os-agent` and
   re-run the command.
+- Broker envelope v1 and v2 clients also fail closed when paired with the
+  other version. Protocol v2 adds the durable Web task-control fields, so
+  `cos`, `clawd`, and `cos-agent-bridge` must come from the same package set.
 - A mismatched pair (an old `clawd` with a new `claw-agentd`, or the reverse)
   fails closed: both sides check the worker protocol version and report
   `agentd protocol mismatch`, naming reinstallation as the fix. No task runs

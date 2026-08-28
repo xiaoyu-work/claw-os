@@ -423,7 +423,7 @@ pub fn agent_notes_dir() -> PathBuf {
 }
 
 /// Path to the agent's SQLite FTS5 conversation history database.
-/// A clawd-routed user job uses a root-owned, UID-partitioned database under
+/// A clawd-routed user job uses an owner-owned, UID-partitioned database under
 /// `data_dir/users/<uid>/agent/`; a non-daemon home-only override uses the
 /// user's XDG data directory. Otherwise it remains under `data_dir/agent/`.
 /// Created on first write.
@@ -449,6 +449,24 @@ pub fn clawd_user_memory_db_path(uid: u32) -> PathBuf {
     clawd_user_agent_state_dir(uid).join("memory.db")
 }
 
+/// Owner-readable system-agent memory from a non-daemon process.
+///
+/// Tests that redirect `COS_DATA_DIR` keep using that explicit root;
+/// installed user processes otherwise address the daemon partition at
+/// `/var/lib/cos/users/<uid>/agent`.
+pub fn system_agent_memory_db_path(uid: u32) -> PathBuf {
+    #[cfg(test)]
+    let root = std::env::var_os("COS_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/var/lib/cos"));
+    #[cfg(not(test))]
+    let root = PathBuf::from("/var/lib/cos");
+    root.join("users")
+        .join(uid.to_string())
+        .join("agent")
+        .join("memory.db")
+}
+
 pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
     clawd_user_state_dir(uid).join("agent")
 }
@@ -458,7 +476,7 @@ pub fn clawd_user_agent_state_dir(uid: u32) -> PathBuf {
 /// Owned by that account and `0700`, because the agent runtime now
 /// executes as the task owner in `claw-agentd` and has to be able to
 /// write its own conversation memory, notes and budget counters. The
-/// daemon (root) still reads it; no other account can.
+/// user-owned Web surfaces can read it; no other unprivileged account can.
 pub fn clawd_user_state_dir(uid: u32) -> PathBuf {
     data_dir().join("users").join(uid.to_string())
 }

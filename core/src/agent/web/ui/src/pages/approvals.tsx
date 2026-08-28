@@ -24,8 +24,10 @@ type Approval = {
   scope?: any;
   summary?: string;
   reason?: string;
-  decision?: string;
-  decided_at?: number | string;
+  decision?: {
+    outcome?: string;
+    decided_at?: number | string;
+  };
   requested_at?: number | string;
 };
 
@@ -39,9 +41,11 @@ export function ApprovalsPage() {
   const [duration, setDuration] = useState<Record<string, Duration>>({});
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setErr(null);
+  const load = useCallback(async (foreground = true) => {
+    if (foreground) {
+      setLoading(true);
+      setErr(null);
+    }
     try {
       const [p, r] = await Promise.all([
         api.get<{ requests?: Approval[]; approvals?: Approval[] } | Approval[]>("/api/approvals/pending"),
@@ -56,22 +60,30 @@ export function ApprovalsPage() {
     } catch (e: any) {
       setErr(e?.message || "Failed to load approvals");
     } finally {
-      setLoading(false);
+      if (foreground) setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    load();
-    window.addEventListener("cos:notifications-changed", load);
-    return () => window.removeEventListener("cos:notifications-changed", load);
+    void load();
+    const refresh = () => void load(false);
+    const timer = window.setInterval(refresh, 3_000);
+    window.addEventListener("cos:notifications-changed", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("cos:notifications-changed", refresh);
+    };
   }, [load]);
 
   async function decide(id: string, action: "approve" | "deny") {
     setBusy(id);
     try {
       const dur = duration[id] || "once";
-      await api.post(`/api/approvals/${id}/${action}`, { duration: dur });
-      await load();
+      await api.post(
+        `/api/approvals/${id}/${action}`,
+        action === "approve" ? { duration: dur } : {},
+      );
+      await load(false);
     } catch (e: any) {
       setErr(e?.message || `Failed to ${action}`);
     } finally {
@@ -85,10 +97,10 @@ export function ApprovalsPage() {
         <div>
           <h1 className="text-xl font-semibold">Approvals</h1>
           <p className="text-xs text-muted-foreground">
-            Capability grants requested by the agent.
+            Capability grants requested by the agent. Waiting tasks resume automatically.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={load} disabled={loading}>
+        <Button variant="outline" size="sm" onClick={() => void load()} disabled={loading}>
           {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Refresh"}
         </Button>
       </div>
@@ -175,8 +187,9 @@ export function ApprovalsPage() {
               No recent decisions.
             </p>
           ) : (
-            recent.map((a) => (
-              <Card key={a.id} className="px-3 py-2">
+            recent.map((a) => {
+              const outcome = a.decision?.outcome;
+              return <Card key={a.id} className="px-3 py-2">
                 <div className="flex items-center justify-between text-sm">
                   <div>
                     <span className="font-mono">{a.verb || "?"}</span>
@@ -192,18 +205,18 @@ export function ApprovalsPage() {
                   </div>
                   <span
                     className={
-                      a.decision === "approved"
+                      outcome === "approved"
                         ? "text-xs text-emerald-500"
-                        : a.decision === "denied"
+                        : outcome === "denied"
                           ? "text-xs text-destructive"
                           : "text-xs text-muted-foreground"
                     }
                   >
-                    {a.decision || "—"}
+                    {outcome || "—"}
                   </span>
                 </div>
-              </Card>
-            ))
+              </Card>;
+            })
           )}
         </TabsContent>
       </Tabs>

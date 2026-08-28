@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use crate::agent::web::sse;
-use crate::clawd::protocol::Request;
 use crate::clawd::routes::Command;
 
 type ApiError = (StatusCode, Json<Value>);
@@ -188,27 +187,11 @@ pub async fn set_preferences(
 }
 
 async fn request(command: Command, params: Value) -> Result<Value, ApiError> {
-    let request = Request::build(command, params);
-    let response = crate::clawd::client::request(crate::paths::clawd_socket_path(), request)
+    super::clawd::request(command, params)
         .await
-        .map_err(|error| bad_gateway(format!("notification service unavailable: {error}")))?;
-    if response.ok {
-        response
-            .result
-            .ok_or_else(|| bad_gateway("notification service returned no result".to_string()))
-    } else {
-        let error = response
-            .error
-            .map(|error| error.message)
-            .unwrap_or_else(|| "notification service request failed".to_string());
-        Err(bad_request(error))
-    }
+        .map_err(super::clawd::RpcError::into_api_error)
 }
 
 fn bad_request(message: String) -> ApiError {
     (StatusCode::BAD_REQUEST, Json(json!({ "error": message })))
-}
-
-fn bad_gateway(message: String) -> ApiError {
-    (StatusCode::BAD_GATEWAY, Json(json!({ "error": message })))
 }

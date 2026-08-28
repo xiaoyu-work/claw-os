@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   mergeNotificationRecords,
+  notificationActionRoute,
   type NotificationRecord,
 } from "../src/lib/notifications";
 
@@ -40,5 +41,14 @@ describe("notification state", () => {
     expect(
       mergeNotificationRecords([record()], record({ state: "dismissed" })),
     ).toEqual([]);
+  });
+
+  test("maps trusted notification actions into local routes", () => {
+    expect(notificationActionRoute("clawos://agent/approvals")).toBe("/approvals");
+    expect(notificationActionRoute("clawos://agent/session/session-1")).toBe(
+      "/chat/session-1",
+    );
+    expect(notificationActionRoute("https://example.com", "task-1")).toBe("/tasks");
+    expect(notificationActionRoute("clawos://agent/session/../bad")).toBeNull();
   });
 });

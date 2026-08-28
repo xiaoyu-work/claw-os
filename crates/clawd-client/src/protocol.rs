@@ -3,7 +3,7 @@ use serde_json::Value;
 
 use crate::{ClientError, Error, RemoteError};
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAGIC: [u8; 4] = *b"CBK1";
 pub const KIND_REQUEST: u8 = 0x01;
 pub const KIND_RESPONSE: u8 = 0x02;

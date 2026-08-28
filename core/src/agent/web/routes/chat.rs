@@ -1,22 +1,8 @@
-//! `POST /api/chat` — agentic turn over Server-Sent Events.
-//!
-//! Request body:
-//! ```json
-//! { "prompt": "…", "session_id": "…", "use_memory": true, "stream": true }
-//! ```
-//!
-//! Response is `text/event-stream` with the following named events:
-//!
-//! * `text` — `{ "delta": "…" }` — incremental text delta from the model.
-//! * `tool_use_start` — `{ "id": "…", "name": "…" }` — a tool call is forming.
-//! * `tool_use` — `{ "id": "…", "name": "…" }` — fully-formed call.
-//! * `tool_result` — `{ "id": "…", "name": "…", "ok": bool }`.
-//! * `warning` — `{ "message": "…" }`
-//! * `evidence` — structural citation binding and confidence metadata.
-//! * `done` — `{ "session_id": "…", "model": "…", "turns": N, "answer": "…", "evidence": …, "fallback": …, "finish": "…" }`
-//! * `error` — `{ "error": "…" }`
+//! `POST /api/chat` — a durable `clawd` task projected as Web SSE.
 
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use axum::body::Body;
 use axum::extract::State;
@@ -28,18 +14,18 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
-use crate::agent::llm::accumulate::{SinkReady, StreamSink};
-use crate::agent::llm::types::StreamEvent;
-use crate::agent::runtime;
-use crate::agent::runtime::progress::{ProgressReady, ProgressSink};
+use crate::agent::llm::types::ContentBlock;
+use crate::agent::llm::StreamEvent;
 use crate::agent::runtime::turn_lease::TurnLease;
 use crate::agent::web::sse;
 use crate::agent::web::state::AppState;
+use crate::clawd::routes::Command;
 
 type SseFrame = Result<bytes::Bytes, std::io::Error>;
 
 const SSE_CHANNEL_CAPACITY: usize = 64;
-const HEARTBEAT_INTERVAL: std::time::Duration = std::time::Duration::from_secs(15);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_STREAM_DURATION: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Debug, Deserialize)]
 pub struct ChatRequest {
@@ -54,10 +40,7 @@ fn default_true() -> bool {
     true
 }
 
-pub async fn handler(
-    State(state): State<AppState>,
-    Json(req): Json<ChatRequest>,
-) -> Response {
+pub async fn handler(State(state): State<AppState>, Json(req): Json<ChatRequest>) -> Response {
     if req.prompt.trim().is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -67,7 +50,12 @@ pub async fn handler(
             .into_response();
     }
 
-    let (session_id, turn_lease) = match begin_turn(&state, req.session_id.as_deref()) {
+    let requested_session = req
+        .session_id
+        .as_deref()
+        .filter(|session_id| !session_id.trim().is_empty())
+        .map(str::to_string);
+    let (lease_key, turn_lease) = match begin_turn(&state, requested_session.as_deref()) {
         Ok(turn) => turn,
         Err(conflict) => {
             return (
@@ -81,46 +69,34 @@ pub async fn handler(
                 .into_response();
         }
     };
-    let interrupt_scope = format!("web-{}", uuid::Uuid::new_v4().simple());
 
     let (tx, rx) = mpsc::channel::<SseFrame>(SSE_CHANNEL_CAPACITY);
-
-    // Spawn the runtime drive loop on a separate task so the HTTP
-    // response stream returns immediately and we can push SSE frames
-    // as the model produces them. The response stream owns the join
-    // handle and aborts it on drop, so this task cannot outlive a
-    // disconnected client.
-    let state_cloned = state.clone();
-    let prompt = req.prompt.clone();
-    let sid_for_task = session_id.clone();
-    let scope_for_task = interrupt_scope.clone();
-    let use_memory = req.use_memory;
+    let disconnected = Arc::new(AtomicBool::new(false));
+    let drive_disconnected = disconnected.clone();
+    let drive_state = state.clone();
     let drive_task = tokio::spawn(async move {
-        if let Err(e) = drive_chat(
-            state_cloned,
-            prompt,
-            sid_for_task.clone(),
-            scope_for_task.clone(),
-            use_memory,
+        if let Err(error) = drive_chat(
+            drive_state,
+            req.prompt,
+            requested_session,
+            lease_key,
+            req.use_memory,
             tx.clone(),
+            drive_disconnected,
             turn_lease,
         )
         .await
         {
-            let payload = match serde_json::from_str::<serde_json::Value>(&e) {
-                Ok(v) => v,
-                Err(_) => json!({ "error": e }),
-            };
-            let _ = send_frame(
-                &tx,
-                &scope_for_task,
-                sse::encode_event("error", &payload),
-            )
-            .await;
+            let _ = tx
+                .send(Ok(bytes::Bytes::from(sse::encode_event(
+                    "error",
+                    &json!({ "error": error }),
+                ))))
+                .await;
         }
     });
 
-    let stream = ReceiverStream::new(rx, CancelOnDrop::new(interrupt_scope, drive_task));
+    let stream = ReceiverStream::new(rx, DisconnectOnDrop::new(disconnected, drive_task));
     let body = Body::from_stream(stream);
 
     Response::builder()
@@ -139,7 +115,6 @@ fn begin_turn(
     requested_session_id: Option<&str>,
 ) -> Result<(String, TurnLease), TurnConflict> {
     let session_id = requested_session_id
-        .filter(|session_id| !session_id.trim().is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     match state.try_acquire_turn(session_id.clone()) {
@@ -148,388 +123,361 @@ fn begin_turn(
     }
 }
 
+#[derive(Debug)]
 struct TurnConflict {
     session_id: String,
 }
 
-// ---------------------------------------------------------------------------
-// Drive task: builds provider + tools + memory, runs ask_with_stream,
-// and pipes events through SseSink (which writes SSE frames into the
-// mpsc channel feeding the HTTP body).
-// ---------------------------------------------------------------------------
-
 async fn drive_chat(
     state: AppState,
     prompt: String,
-    session_id: String,
-    interrupt_scope: String,
+    requested_session: Option<String>,
+    provisional_session: String,
     use_memory: bool,
     tx: mpsc::Sender<SseFrame>,
-    _turn_lease: TurnLease,
+    disconnected: Arc<AtomicBool>,
+    turn_lease: TurnLease,
 ) -> Result<(), String> {
-    use crate::agent::{memory, setup};
-
-    // Re-read the agent config from disk on every chat request. The
-    // server captures a snapshot of `state.inner.cfg` at startup, but
-    // long-running daemons keep running across `cos agent setup …`
-    // writes (Copilot OAuth, provider switches, …). If we trusted the
-    // startup snapshot a daemon launched before the user signed in
-    // would forever report "agent not configured" — even after the
-    // config file on disk has been fully populated.
-    //
-    // Falls back to the startup snapshot if disk-read returns an
-    // empty provider AND the snapshot has one (paranoia for a config
-    // file truncated mid-write).
-    let cfg = {
-        let fresh = crate::config::intern_user_config().agent.clone();
-        if fresh.provider.is_empty() && !state.inner.cfg.provider.is_empty() {
-            state.inner.cfg.clone()
-        } else {
-            fresh
-        }
-    };
-    setup::is_ready(&cfg)?;
-
-    let provider = crate::ai::gate::build_system_provider(&cfg)
-        .map_err(|e| format!("provider unavailable: {e}"))?;
-
-    let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(&cfg));
-    tools.set_approval(runtime::loop_::approval_from_cfg(&cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
-
-    let memory_db = if use_memory {
-        match memory::sqlite_fts::MemoryDb::open_default() {
-            Ok(db) => Some(db),
-            Err(e) => {
-                tracing::warn!("web: memory unavailable ({e}); chat will run without history");
-                None
+    let mut turn_lease = Some(turn_lease);
+    if requested_session
+        .as_deref()
+        .is_some_and(|session_id| session_id.parse::<crate::session::SessionId>().is_err())
+    {
+        return Err(
+            "This pre-queue conversation is read-only. Start a new chat to continue with durable tasks."
+                .to_string(),
+        );
+    }
+    let mut params = json!({ "prompt": prompt, "use_memory": use_memory });
+    if let Some(session_id) = requested_session {
+        params["session_id"] = json!(session_id);
+    }
+    let submitted = super::clawd::request(Command::TaskSubmit, params)
+        .await
+        .map_err(|error| format!("task submission failed: {}", error.message()))?;
+    let task_id = required_field(&submitted, "id")?.to_string();
+    let session_id = submitted
+        .get("session_id")
+        .and_then(Value::as_str)
+        .unwrap_or(&provisional_session)
+        .to_string();
+    if session_id != provisional_session {
+        let actual_lease = match state.try_acquire_turn(session_id.clone()) {
+            Ok(lease) => lease,
+            Err(_) => {
+                cancel_task(&task_id).await;
+                return Err("clawd assigned a session that already has an active turn".to_string());
             }
-        }
-    } else {
-        None
-    };
+        };
+        turn_lease = Some(actual_lease);
+    }
 
-    let sink_obj = Arc::new(SseSink::new(tx.clone(), interrupt_scope.clone()));
-    let sink: Arc<dyn StreamSink> = sink_obj.clone();
-    let progress: Arc<dyn ProgressSink> = sink_obj.clone();
-
-    // Announce the session id up front so the client can update its
-    // route and show this conversation in the sidebar before the model
-    // produces a single token. The `done` event also carries the id at
-    // the very end, but emitting `session` early means navigation /
-    // refresh / stop mid-stream all preserve the conversation.
+    if disconnected.load(Ordering::SeqCst) {
+        return Ok(());
+    }
     if !send_frame(
         &tx,
-        &interrupt_scope,
-        sse::encode_event("session", &json!({ "session_id": session_id })),
+        sse::encode_event(
+            "task",
+            &json!({ "task_id": task_id, "session_id": session_id }),
+        ),
     )
     .await
+        || !send_frame(
+            &tx,
+            sse::encode_event("session", &json!({ "session_id": session_id })),
+        )
+        .await
     {
         return Ok(());
     }
 
-    // When memory is enabled, replay this session's prior turns into
-    // the LLM context so multi-turn chat actually *feels* multi-turn.
-    // Without this, `ask_with_stream` seeds `messages` with only the
-    // current prompt, so the user's follow-ups arrive context-free
-    // and the assistant treats every send like a fresh conversation.
-    // Cap replay at 100 rows (≈50 exchanges) to stay well under
-    // typical context windows; `ask_with_stream_continuation`
-    // truncates long tool-result bodies before replay.
-    let result = match memory_db.as_ref() {
-        Some(db) => {
-            runtime::loop_::ask_with_stream_continuation_scoped(
-                provider.clone(),
-                &cfg,
-                &prompt,
-                None,
-                &tools,
-                db,
-                &session_id,
-                100,
-                sink,
-                progress,
-                &interrupt_scope,
-            )
-            .await
+    let mut cursor = 0u64;
+    let mut emitted_text = false;
+    let mut turn_emitted_text = false;
+    let mut last_finish: Option<String> = None;
+    let deadline = Instant::now() + MAX_STREAM_DURATION;
+    let final_job = loop {
+        if disconnected.load(Ordering::SeqCst) {
+            return Ok(());
         }
-        None => {
-            runtime::loop_::ask_with_stream_scoped(
-                provider.clone(),
-                &cfg,
-                &prompt,
-                None,
-                &tools,
-                None,
-                sink,
-                progress,
-                &interrupt_scope,
-            )
-            .await
+        if Instant::now() >= deadline {
+            return Err(
+                "live stream ended after 30 minutes; the durable task is still available in Tasks"
+                    .to_string(),
+            );
+        }
+        let frame = super::clawd::request(
+            Command::TaskStream,
+            json!({
+                "id": task_id,
+                "cursor": cursor,
+                "timeout_ms": 1_000u64,
+            }),
+        )
+        .await
+        .map_err(|error| format!("task stream failed: {}", error.message()))?;
+        cursor = frame
+            .get("cursor")
+            .and_then(Value::as_u64)
+            .ok_or_else(|| "task stream returned no cursor".to_string())?;
+        for record in frame
+            .get("events")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+        {
+            for outgoing in project_stream_record(
+                record,
+                &mut turn_emitted_text,
+                &mut emitted_text,
+                &mut last_finish,
+            )? {
+                if !send_frame(&tx, outgoing).await {
+                    return Ok(());
+                }
+            }
+        }
+        if frame
+            .get("terminal")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            break frame
+                .get("job")
+                .cloned()
+                .ok_or_else(|| "terminal task stream returned no job".to_string())?;
         }
     };
 
-    match result {
-        Ok(ask) => {
-            let finish = sink_obj.snapshot_finish();
-            if !send_frame(
-                &tx,
-                &interrupt_scope,
-                sse::encode_event("evidence", &ask.evidence),
-            )
-            .await
-            {
-                return Ok(());
-            }
-            let frame = sse::encode_event(
-                "done",
-                &json!({
-                    "session_id": if ask.session_id.is_empty() { session_id.clone() } else { ask.session_id },
-                    "model": ask.model,
-                    "provider": ask.provider,
-                    "turns": ask.turns,
-                    "answer": ask.answer,
-                    "evidence": ask.evidence,
-                    "fallback": ask.fallback,
-                    "finish": finish,
-                }),
-            );
-            let _ = send_frame(&tx, &interrupt_scope, frame).await;
+    match final_job.get("status").and_then(Value::as_str) {
+        Some("ok") => {}
+        Some("cancelled") => return Err("agent task was cancelled".to_string()),
+        Some("error") => {
+            return Err(final_job
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("agent task failed")
+                .to_string());
         }
-        Err(e) => {
-            let frame = sse::encode_event("error", &json!({ "error": e.to_string() }));
-            let _ = send_frame(&tx, &interrupt_scope, frame).await;
+        Some(status) => return Err(format!("agent task ended in unexpected state: {status}")),
+        None => return Err("terminal task has no status".to_string()),
+    }
+
+    let answer = final_job
+        .get("response")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !emitted_text && !answer.is_empty() && !send_frame(&tx, text_frame(answer)).await {
+        return Ok(());
+    }
+    if let Some(evidence) = final_job.get("evidence").filter(|value| !value.is_null()) {
+        if !send_frame(&tx, sse::encode_event("evidence", evidence)).await {
+            return Ok(());
         }
     }
+    let done = json!({
+        "session_id": final_job
+            .get("session_id")
+            .and_then(Value::as_str)
+            .unwrap_or(&session_id),
+        "model": final_job.get("model").cloned().unwrap_or(Value::Null),
+        "provider": final_job.get("provider").cloned().unwrap_or(Value::Null),
+        "turns": final_job.get("turns_used").cloned().unwrap_or(Value::Null),
+        "answer": final_job.get("response").cloned().unwrap_or(Value::Null),
+        "evidence": final_job.get("evidence").cloned().unwrap_or(Value::Null),
+        "fallback": final_job.get("fallback").cloned().unwrap_or(Value::Null),
+        "finish": last_finish,
+    });
+    let _ = send_frame(&tx, sse::encode_event("done", &done)).await;
+    drop(turn_lease);
     Ok(())
 }
 
-fn cancel_scope(interrupt_scope: &str) {
-    let _ = runtime::interrupt::signal(interrupt_scope);
-}
-
-async fn send_frame(tx: &mpsc::Sender<SseFrame>, interrupt_scope: &str, frame: String) -> bool {
-    if tx.send(Ok(bytes::Bytes::from(frame))).await.is_ok() {
-        true
-    } else {
-        cancel_scope(interrupt_scope);
-        false
+fn project_stream_record(
+    record: Value,
+    turn_emitted_text: &mut bool,
+    emitted_text: &mut bool,
+    last_finish: &mut Option<String>,
+) -> Result<Vec<String>, String> {
+    if let Some(progress) = record.get("progress") {
+        return Ok(project_progress(progress));
     }
-}
-
-fn try_send_frame(tx: &mpsc::Sender<SseFrame>, interrupt_scope: &str, frame: String) -> bool {
-    match tx.try_send(Ok(bytes::Bytes::from(frame))) {
-        Ok(()) => true,
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            tracing::debug!(
-                interrupt_scope,
-                capacity = SSE_CHANNEL_CAPACITY,
-                "web chat SSE client fell behind; cancelling request"
-            );
-            cancel_scope(interrupt_scope);
-            false
+    let Some(event) = record.get("event") else {
+        return Ok(Vec::new());
+    };
+    let event = match serde_json::from_value::<StreamEvent>(event.clone()) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(%error, "skipping unsupported task stream event");
+            return Ok(Vec::new());
         }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            cancel_scope(interrupt_scope);
-            false
+    };
+    Ok(match event {
+        StreamEvent::TextDelta { text } => {
+            *turn_emitted_text = true;
+            *emitted_text = true;
+            vec![text_frame(&text)]
         }
-    }
-}
-
-/// Stream sink that serializes provider events as SSE frames.
-struct SseSink {
-    tx: mpsc::Sender<SseFrame>,
-    interrupt_scope: String,
-    last_finish: Mutex<Option<String>>,
-}
-
-impl SseSink {
-    fn new(tx: mpsc::Sender<SseFrame>, interrupt_scope: String) -> Self {
-        Self {
-            tx,
-            interrupt_scope,
-            last_finish: Mutex::new(None),
-        }
-    }
-    fn snapshot_finish(&self) -> Option<String> {
-        self.last_finish.lock().ok().and_then(|g| g.clone())
-    }
-    fn send(&self, frame: String) {
-        let _ = try_send_frame(&self.tx, &self.interrupt_scope, frame);
-    }
-}
-
-impl StreamSink for SseSink {
-    fn wait_ready(&self) -> Option<SinkReady<'_>> {
-        Some(Box::pin(async move {
-            match self.tx.reserve().await {
-                Ok(permit) => {
-                    drop(permit);
-                    true
-                }
-                Err(_) => {
-                    cancel_scope(&self.interrupt_scope);
-                    false
-                }
-            }
-        }))
-    }
-
-    fn on_event(&self, event: &StreamEvent) {
-        match event {
-            StreamEvent::TextDelta { text } => {
-                self.send(sse::encode_event("text", &json!({ "delta": text })));
-            }
-            StreamEvent::ToolUseStart { id, name } => {
-                self.send(sse::encode_event(
-                    "tool_use_start",
-                    &json!({ "id": id, "name": name }),
-                ));
-            }
-            StreamEvent::ToolInputDelta { .. } => {}
-            StreamEvent::ToolUse(call) => {
-                self.send(sse::encode_event(
-                    "tool_use",
-                    &json!({
-                        "id": call.id,
-                        "name": call.name,
-                    }),
-                ));
-            }
-            StreamEvent::Reasoning { summary, .. } => {
-                if !summary.is_empty() {
-                    self.send(sse::encode_event(
-                        "reasoning",
-                        &json!({ "summary": summary }),
-                    ));
-                }
-            }
-            StreamEvent::ToolState { .. } => {}
-            StreamEvent::Message(resp) => {
-                let mut frames = String::new();
-                let mut text = String::new();
-                for block in &resp.content {
-                    if let crate::agent::llm::types::ContentBlock::Text { text: t } = block {
-                        text.push_str(t);
-                    }
-                }
+        StreamEvent::ToolUseStart { id, name } => vec![sse::encode_event(
+            "tool_use_start",
+            &json!({ "id": id, "name": name }),
+        )],
+        StreamEvent::ToolInputDelta { .. } | StreamEvent::ToolState { .. } => Vec::new(),
+        StreamEvent::ToolUse(call) => vec![sse::encode_event(
+            "tool_use",
+            &json!({ "id": call.id, "name": call.name }),
+        )],
+        StreamEvent::Reasoning { summary, .. } if !summary.is_empty() => vec![sse::encode_event(
+            "reasoning",
+            &json!({ "summary": summary }),
+        )],
+        StreamEvent::Reasoning { .. } => Vec::new(),
+        StreamEvent::Message(response) => {
+            let mut frames = Vec::new();
+            if !*turn_emitted_text {
+                let text = response
+                    .content
+                    .iter()
+                    .filter_map(|block| match block {
+                        ContentBlock::Text { text } => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<String>();
                 if !text.is_empty() {
-                    frames.push_str(&sse::encode_event("text", &json!({ "delta": text })));
-                }
-                for call in &resp.tool_calls {
-                    frames.push_str(&sse::encode_event(
-                        "tool_use",
-                        &json!({
-                            "id": call.id,
-                            "name": call.name,
-                        }),
-                    ));
-                }
-                if !frames.is_empty() {
-                    self.send(frames);
+                    *emitted_text = true;
+                    frames.push(text_frame(&text));
                 }
             }
-            StreamEvent::Done { finish, usage } => {
-                let finish_str = format!("{finish:?}").to_ascii_lowercase();
-                if let Ok(mut g) = self.last_finish.lock() {
-                    *g = Some(finish_str.clone());
-                }
-                self.send(sse::encode_event(
-                    "turn_done",
-                    &json!({
-                        "finish": finish_str,
-                        "usage": {
-                            "input_tokens": usage.input_tokens,
-                            "output_tokens": usage.output_tokens,
-                            "cache_read_tokens": usage.cache_read_tokens,
-                            "cache_write_tokens": usage.cache_write_tokens,
-                        }
-                    }),
-                ));
-            }
-            StreamEvent::Warning { message } => {
-                self.send(sse::encode_event(
-                    "warning",
-                    &json!({ "message": message }),
-                ));
-            }
+            frames.extend(response.tool_calls.into_iter().map(|call| {
+                sse::encode_event("tool_use", &json!({ "id": call.id, "name": call.name }))
+            }));
+            frames
         }
-    }
+        StreamEvent::Done { finish, usage } => {
+            let finish = format!("{finish:?}").to_ascii_lowercase();
+            *last_finish = Some(finish.clone());
+            *turn_emitted_text = false;
+            vec![sse::encode_event(
+                "turn_done",
+                &json!({
+                    "finish": finish,
+                    "usage": {
+                        "input_tokens": usage.input_tokens,
+                        "output_tokens": usage.output_tokens,
+                        "cache_read_tokens": usage.cache_read_tokens,
+                        "cache_write_tokens": usage.cache_write_tokens,
+                    },
+                }),
+            )]
+        }
+        StreamEvent::Warning { message } => vec![warning_frame(&message)],
+    })
 }
 
-impl ProgressSink for SseSink {
-    fn wait_ready(&self) -> Option<ProgressReady<'_>> {
-        <Self as StreamSink>::wait_ready(self)
-    }
-
-    fn on_tool_start(&self, id: &str, name: &str, _input: &Value) {
-        self.send(sse::encode_event(
+fn project_progress(progress: &Value) -> Vec<String> {
+    let id = progress
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let name = progress
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    match progress.get("kind").and_then(Value::as_str) {
+        Some("tool_start") => vec![sse::encode_event(
             "tool_start",
             &json!({ "id": id, "name": name }),
-        ));
-    }
-    fn on_tool_result(
-        &self,
-        id: &str,
-        name: &str,
-        ok: bool,
-        _latency_ms: u64,
-        _bytes_returned: usize,
-        _content_preview: &str,
-    ) {
-        self.send(sse::encode_event(
+        )],
+        Some("tool_result") => vec![sse::encode_event(
             "tool_result",
             &json!({
                 "id": id,
                 "name": name,
-                "ok": ok,
+                "ok": progress.get("ok").and_then(Value::as_bool).unwrap_or(false),
             }),
-        ));
+        )],
+        Some("waiting_approval") => {
+            let ids = progress
+                .get("request_ids")
+                .and_then(Value::as_array)
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .unwrap_or_default();
+            vec![warning_frame(&format!("Waiting for approval: {ids}"))]
+        }
+        Some("approval_resumed") => vec![warning_frame(
+            "Approval granted. The task is resuming automatically.",
+        )],
+        _ => Vec::new(),
     }
 }
 
-// ---------------------------------------------------------------------------
-// Stream adapter: wraps the bounded receiver as a futures Stream and
-// owns the runtime task for exactly as long as axum owns the body.
-// ---------------------------------------------------------------------------
-
-struct CancelOnDrop {
-    interrupt_scope: String,
-    task: tokio::task::JoinHandle<()>,
+fn text_frame(text: &str) -> String {
+    sse::encode_event("text", &json!({ "delta": text }))
 }
 
-impl CancelOnDrop {
-    fn new(interrupt_scope: String, task: tokio::task::JoinHandle<()>) -> Self {
+fn warning_frame(message: &str) -> String {
+    sse::encode_event("warning", &json!({ "message": message }))
+}
+
+fn required_field<'a>(value: &'a Value, key: &str) -> Result<&'a str, String> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| format!("task response is missing {key}"))
+}
+
+async fn cancel_task(task_id: &str) {
+    if let Err(error) = super::clawd::request(Command::TaskCancel, json!({ "id": task_id })).await {
+        tracing::warn!(task = task_id, error = %error.message(), "failed to cancel Web task");
+    }
+}
+
+async fn send_frame(tx: &mpsc::Sender<SseFrame>, frame: String) -> bool {
+    tx.send(Ok(bytes::Bytes::from(frame))).await.is_ok()
+}
+
+struct DisconnectOnDrop {
+    disconnected: Arc<AtomicBool>,
+    _task: tokio::task::JoinHandle<()>,
+}
+
+impl DisconnectOnDrop {
+    fn new(disconnected: Arc<AtomicBool>, task: tokio::task::JoinHandle<()>) -> Self {
         Self {
-            interrupt_scope,
-            task,
+            disconnected,
+            _task: task,
         }
     }
 }
 
-impl Drop for CancelOnDrop {
+impl Drop for DisconnectOnDrop {
     fn drop(&mut self) {
-        cancel_scope(&self.interrupt_scope);
-        self.task.abort();
+        self.disconnected.store(true, Ordering::SeqCst);
     }
 }
 
 struct ReceiverStream {
     rx: mpsc::Receiver<SseFrame>,
     heartbeat: tokio::time::Interval,
-    _cancel: CancelOnDrop,
+    _disconnect: DisconnectOnDrop,
 }
 
 impl ReceiverStream {
-    fn new(rx: mpsc::Receiver<SseFrame>, cancel: CancelOnDrop) -> Self {
+    fn new(rx: mpsc::Receiver<SseFrame>, disconnect: DisconnectOnDrop) -> Self {
         let start = tokio::time::Instant::now() + HEARTBEAT_INTERVAL;
         let mut heartbeat = tokio::time::interval_at(start, HEARTBEAT_INTERVAL);
         heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         Self {
             rx,
             heartbeat,
-            _cancel: cancel,
+            _disconnect: disconnect,
         }
     }
 }
@@ -546,10 +494,9 @@ impl Stream for ReceiverStream {
             std::task::Poll::Ready(item) => std::task::Poll::Ready(item),
             std::task::Poll::Pending => {
                 match std::pin::Pin::new(&mut this.heartbeat).poll_tick(cx) {
-                    std::task::Poll::Ready(_) => {
-                        let ping = bytes::Bytes::from(sse::encode_comment("ping"));
-                        std::task::Poll::Ready(Some(Ok(ping)))
-                    }
+                    std::task::Poll::Ready(_) => std::task::Poll::Ready(Some(Ok(
+                        bytes::Bytes::from(sse::encode_comment("ping")),
+                    ))),
                     std::task::Poll::Pending => std::task::Poll::Pending,
                 }
             }

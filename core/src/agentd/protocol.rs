@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -177,8 +177,14 @@ pub struct JobSpec {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
+    #[serde(default = "default_true")]
+    pub use_memory: bool,
     pub owner_uid: u32,
     pub owner_home: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +389,7 @@ pub enum WorkerOutcome {
     Ok(Box<CompletedRun>),
     Error { message: String },
     Cancelled,
+    WaitingApproval { request_ids: Vec<String> },
 }
 
 impl From<WorkerOutcome> for FinishOutcome {
@@ -408,6 +415,9 @@ impl From<WorkerOutcome> for FinishOutcome {
             }
             WorkerOutcome::Error { message } => FinishOutcome::Error(message),
             WorkerOutcome::Cancelled => FinishOutcome::Cancelled,
+            WorkerOutcome::WaitingApproval { request_ids } => {
+                FinishOutcome::WaitingApproval { request_ids }
+            }
         }
     }
 }

@@ -56,7 +56,7 @@ async fn serve_once(
     let ReadOutcome::Frame(frame) = outcome else {
         panic!("expected a framed request");
     };
-    let envelope: InboundRequest = serde_json::from_slice(&frame.body).expect("v1 envelope");
+    let envelope: InboundRequest = serde_json::from_slice(&frame.body).expect("broker envelope");
     let response = reply(envelope.clone());
     let body = encode_response(&response).expect("encode");
     peer_stream.write_response(&body).await.expect("write");

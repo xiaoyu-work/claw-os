@@ -60,6 +60,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         tx,
         cancelled: Arc::new(AtomicBool::new(false)),
         waiters: Mutex::new(HashMap::new()),
+        pending_approvals: Mutex::new(Vec::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
     });
@@ -149,6 +150,34 @@ fn a_pending_request_does_not_grant_anything() {
     };
     state.deliver(correlation_id, ApprovalReply::Pending { request_id: None });
     assert_eq!(handle.join().expect("join"), Ok(false));
+}
+
+#[test]
+fn a_filed_request_marks_the_worker_for_durable_suspension() {
+    let (gateway, mut rx) = gateway();
+    let state = gateway.state.clone();
+    let interrupt = crate::agent::runtime::interrupt::register("task-a");
+    let handle = std::thread::spawn(move || gateway.request(Verb::FS_READ, &scope()));
+    let correlation_id = loop {
+        if let Ok(WorkerFrame::Approval { correlation_id, .. }) = rx.try_recv() {
+            break correlation_id;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    state.deliver(
+        correlation_id,
+        ApprovalReply::Pending {
+            request_id: Some("approval-a".to_string()),
+        },
+    );
+
+    let pending = handle.join().expect("join").expect("request");
+    assert_eq!(pending.request_id.as_deref(), Some("approval-a"));
+    assert_eq!(state.pending_approvals(), vec!["approval-a"]);
+    assert!(
+        interrupt.check(),
+        "filing an approval must interrupt the active runtime turn"
+    );
 }
 
 #[test]

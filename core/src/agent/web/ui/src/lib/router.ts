@@ -9,8 +9,9 @@
  *   #/chat                   → chat
  *   #/tasks                  → tasks
  *   #/approvals              → approvals
- *   #/inbox                  → inbox
- *   #/notifications          → notification center
+ *   #/inbox                  → notification inbox
+ *   #/events                 → raw context-event diagnostics
+ *   #/notifications          → legacy alias for inbox
  *   #/system                 → sysinfo
  *   #/settings               → settings overview (text model)
  *   #/settings/text          → settings :: text modality

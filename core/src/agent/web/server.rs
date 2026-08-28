@@ -35,14 +35,14 @@ pub fn build_app(state: AppState) -> Router {
         .route("/api/tasks", get(routes::tasks::list))
         .route("/api/tasks/{id}", get(routes::tasks::show))
         .route("/api/tasks/{id}/stop", post(routes::tasks::stop))
-        .route("/api/tasks/{id}/undo", post(routes::tasks::undo))
         .route("/api/tasks/{id}/resume", post(routes::tasks::resume))
         .route("/api/approvals/pending", get(routes::approvals::pending))
         .route("/api/approvals/recent", get(routes::approvals::recent))
         .route("/api/approvals/{id}/approve", post(routes::approvals::approve))
         .route("/api/approvals/{id}/deny", post(routes::approvals::deny))
         .route("/api/sysinfo/{command}", get(routes::sysinfo::command))
-        .route("/api/inbox", get(routes::inbox::list))
+        .route("/api/inbox", get(routes::notifications::list))
+        .route("/api/events", get(routes::inbox::list))
         .route("/api/notifications", get(routes::notifications::list))
         .route(
             "/api/notifications/stream",

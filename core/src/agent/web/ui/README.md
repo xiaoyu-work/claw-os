@@ -34,5 +34,10 @@ via include_dir!. Commit the regenerated dist/.
 - src/lib/router.ts     — hash-based router (no HTML5 history)
 - src/components/       — sidebar, token gate
 - src/components/ui/    — shadcn primitives (copied verbatim from OA)
-- src/pages/            — chat, tasks, approvals, inbox, notifications, system, settings
+- src/pages/            — durable chat/tasks, approvals, notification Inbox, raw system events, settings
 - src/app/globals.css   — OA's oklch tokens (light + dark + sidebar)
+
+Chat, Tasks, approvals, and Inbox use owner-scoped `clawd` routes. Session
+history is read by the user-owned Web process from the same owner partition
+the worker writes. Approval decisions invoke the installed polkit helper; the
+Web process never gains direct permission-decision authority.

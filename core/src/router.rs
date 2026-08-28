@@ -176,7 +176,7 @@ fn wait_for_scheduler_approvals(ids: &[String]) -> Result<(), String> {
             let id = entry.get("id").and_then(Value::as_str).unwrap_or("");
             match entry.get("status").and_then(Value::as_str) {
                 Some("approved") => {}
-                Some("pending") => pending = true,
+                Some("pending" | "resolving") => pending = true,
                 Some("denied") => return Err(format!("scheduler approval {id} was denied")),
                 other => {
                     return Err(format!(

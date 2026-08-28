@@ -178,6 +178,27 @@ fn a_worker_that_dies_without_a_result_returns_its_task_to_the_queue() {
 }
 
 #[test]
+fn a_worker_that_dies_after_filing_approval_parks_instead_of_retrying() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let store = Store::with_root(root.path().to_path_buf()).expect("store");
+    let job = store
+        .submit("hello".to_string(), None, None, Some(1000), None)
+        .expect("submit");
+    store.claim_one().expect("claim").expect("job");
+    store
+        .record_waiting_approval(&job.id, "approval-a")
+        .expect("record approval");
+
+    let released = store
+        .release_for_retry(&job.id, "worker exited")
+        .expect("release")
+        .expect("job");
+    assert_eq!(released.status, JobStatus::WaitingApproval);
+    assert_eq!(released.waiting_on, vec!["approval-a"]);
+    assert!(store.claim_one().expect("claim").is_none());
+}
+
+#[test]
 fn a_task_that_keeps_killing_workers_is_failed_not_retried_forever() {
     let root = tempfile::tempdir().expect("tempdir");
     let store = Store::with_root(root.path().to_path_buf()).expect("store");
@@ -266,6 +287,42 @@ fn concurrent_workers_and_spawn_retries_are_bounded() {
     assert!(wait <= SPAWN_BACKOFF_MAX);
     throttle.record_success();
     assert!(throttle.wait().is_none());
+}
+
+#[test]
+fn approval_resume_prompt_does_not_repeat_the_original_user_prompt() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let store = Store::with_root(root.path().to_path_buf()).expect("store");
+    let job = store
+        .submit(
+            "original secret prompt".to_string(),
+            None,
+            None,
+            Some(1000),
+            None,
+        )
+        .expect("submit");
+    assert_eq!(execution_prompt(&job), "original secret prompt");
+
+    let claimed = store.claim_one().expect("claim").expect("job");
+    let waiting = store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec!["approval-a".to_string()],
+            },
+        )
+        .expect("wait");
+    let mut resumed = waiting;
+    resumed.resumed_after_approval = vec!["approval-a".to_string()];
+    let prompt = execution_prompt(&resumed);
+    assert!(prompt.contains("approval-a"));
+    assert!(!prompt.contains("original secret prompt"));
+
+    resumed.use_memory = false;
+    let prompt = execution_prompt(&resumed);
+    assert!(prompt.contains("approval-a"));
+    assert!(prompt.contains("original secret prompt"));
 }
 
 // ---------------------------------------------------------------------------
@@ -498,6 +555,62 @@ fn filing_a_request_dedupes_and_records_only_broker_composed_text() {
     assert_eq!(request.owner_uid, Some(lease.owner_uid));
     assert_eq!(request.requester.as_deref(), Some("agentd-worker"));
     assert!(request.reason.contains(&scope.to_string()));
+}
+
+#[test]
+fn approved_request_requeues_the_same_task_and_is_consumed_on_resume() {
+    let _consent = ConsentStore::new();
+    let root = tempfile::tempdir().expect("tempdir");
+    let store = Store::with_root(root.path().to_path_buf()).expect("store");
+    let mut lease = new_lease();
+    let job = store
+        .submit(
+            "read the report".to_string(),
+            lease.session_id.clone(),
+            None,
+            Some(lease.owner_uid),
+            Some("/home/user".to_string()),
+        )
+        .expect("submit");
+    lease.task_id = job.id.clone();
+    let claimed = store.claim_one().expect("claim").expect("job");
+    let scope = crate::caps::Scope::path("/home/user/report.txt");
+    let ask = ApprovalAsk::Request {
+        verb: crate::caps::Verb::FS_READ.as_str().to_string(),
+        scope: scope.clone(),
+    };
+    let mut used = 0;
+    let ApprovalReply::Pending {
+        request_id: Some(request_id),
+    } = mediate_approval(&mut used, &lease, &ask)
+    else {
+        panic!("expected an approval request");
+    };
+    store
+        .finish(
+            claimed,
+            FinishOutcome::WaitingApproval {
+                request_ids: vec![request_id.clone()],
+            },
+        )
+        .expect("persist wait");
+
+    crate::approvals::approve_for_owner(
+        &request_id,
+        crate::approvals::GrantDuration::Once,
+        Some("test".to_string()),
+        None,
+        Some(lease.owner_uid),
+    )
+    .expect("approve");
+    assert_eq!(store.reconcile_waiting_approvals().unwrap(), (1, 0));
+    let (bucket, resumed) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Pending);
+    assert_eq!(resumed.id, job.id);
+    assert_eq!(
+        mediate_approval(&mut used, &lease, &consume_ask(&scope)),
+        ApprovalReply::Granted
+    );
 }
 
 #[test]

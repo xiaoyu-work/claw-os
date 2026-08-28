@@ -22,6 +22,11 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
     // system-agent policy derivation uses, so the capabilities stamped
     // here and the ceiling applied at execution cannot disagree.
     let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    let owner_gid = client
+        .gid
+        .ok_or_else(|| "clawd peer gid is unavailable".to_string())?;
+    crate::storage::ensure_owner_agent_state_dir(owner_uid, owner_gid)
+        .map_err(|err| format!("prepare owner agent state: {err}"))?;
     let prompt = required_string(&params, "prompt")?;
     let context = params
         .get("context")
@@ -46,6 +51,10 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .and_then(Value::as_u64)
         .map(|value| u32::try_from(value).map_err(|_| format!("max_turns is too large: {value}")))
         .transpose()?;
+    let use_memory = params
+        .get("use_memory")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let session_id = match session_id {
         Some(session_id) => {
@@ -55,12 +64,13 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         None => Some(create_task_session(&prompt, owner_uid, &owner_home)?),
     };
     let job = store
-        .submit_with_context(
+        .submit_with_context_and_memory(
             prompt,
             context,
             branch_context,
             session_id,
             max_turns,
+            use_memory,
             Some(owner_uid),
             Some(owner_home.to_string_lossy().into_owned()),
         )
@@ -75,7 +85,16 @@ fn create_task_session(
 ) -> Result<String, String> {
     let purpose = format!("agent task: {}", preview(prompt, 80));
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
-    session::update_meta(&sid, |meta| {
+    configure_task_session(&sid, owner_uid, owner_home)?;
+    Ok(sid.into_string())
+}
+
+fn configure_task_session(
+    sid: &session::SessionId,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+) -> Result<(), String> {
+    session::update_meta(sid, |meta| {
         meta.creator_runtime = Some("clawd".to_string());
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
@@ -83,8 +102,8 @@ fn create_task_session(
     })
     .map_err(|err| err.to_string())?;
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
-    session::set_caps(&sid, &caps).map_err(|err| err.to_string())?;
-    Ok(sid.into_string())
+    session::set_caps(sid, &caps).map_err(|err| err.to_string())?;
+    Ok(())
 }
 
 fn prepare_task_session(
@@ -113,19 +132,6 @@ fn prepare_task_session(
         return Err(format!("session is not a system-agent task: {session_id}"));
     }
 
-    let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
-        crate::paths::clawd_user_memory_db_path(owner_uid),
-    )
-    .map_err(|err| format!("open memory: {err}"))?;
-    if !db
-        .has_session(session_id)
-        .map_err(|err| format!("read memory session: {err}"))?
-    {
-        return Err(format!(
-            "task session has no conversation history: {session_id}"
-        ));
-    }
-
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
     session::set_caps(&sid, &caps).map_err(|err| format!("refresh task capabilities: {err}"))?;
     // A resumed task is ambient conversation, never an unattended
@@ -151,6 +157,10 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let owner_uid = owner_filter(client)?;
     let status = optional_status(&params)?;
     let limit = optional_limit(&params)?;
+    let summary = params
+        .get("summary")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     let mut jobs = Vec::new();
 
     match status {
@@ -165,6 +175,14 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         Some(JobStatus::Running) => collect_jobs(
             &store,
             JobStatus::Running,
+            status,
+            limit,
+            owner_uid,
+            &mut jobs,
+        )?,
+        Some(JobStatus::WaitingApproval) => collect_jobs(
+            &store,
+            JobStatus::WaitingApproval,
             status,
             limit,
             owner_uid,
@@ -190,12 +208,30 @@ pub fn list(params: Value, client: &ClientIdentity) -> Result<Value, String> {
                 owner_uid,
                 &mut jobs,
             )?;
+            collect_jobs(
+                &store,
+                JobStatus::WaitingApproval,
+                None,
+                limit,
+                owner_uid,
+                &mut jobs,
+            )?;
             collect_jobs(&store, JobStatus::Ok, None, limit, owner_uid, &mut jobs)?;
         }
     }
 
-    if jobs.len() > limit {
-        jobs.truncate(limit);
+    jobs.sort_by(|left, right| {
+        right
+            .get("created_at")
+            .and_then(Value::as_str)
+            .cmp(&left.get("created_at").and_then(Value::as_str))
+    });
+    jobs.truncate(limit);
+    if summary {
+        jobs = jobs
+            .into_iter()
+            .map(|job| task_summary_value(&job))
+            .collect();
     }
 
     Ok(json!({ "jobs": jobs }))
@@ -337,6 +373,49 @@ pub fn cancel(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     }))
 }
 
+pub fn retry(params: Value, client: &ClientIdentity) -> Result<Value, String> {
+    let id = required_string(&params, "id")?;
+    let store = Store::open_default().map_err(|err| err.to_string())?;
+    let Some((_bucket, original)) = store
+        .locate_for_owner(&id, owner_filter(client)?)
+        .map_err(|err| err.to_string())?
+    else {
+        return Err(format!("task not found: {id}"));
+    };
+    if !matches!(
+        original.status,
+        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+    ) {
+        return Err(format!(
+            "task is not terminal and cannot be retried: {}",
+            original.status.as_str()
+        ));
+    }
+    let owner_uid = original
+        .owner_uid
+        .ok_or_else(|| "task has no recorded owner and cannot be retried".to_string())?;
+    if owner_uid == 0 {
+        return Err(crate::agentd::spawn::ROOT_OWNER_REFUSAL.to_string());
+    }
+    let owner_home = super::system_caps::verified_owner_home(owner_uid)?;
+    if let Some(session_id) = original.session_id.as_deref() {
+        prepare_task_session(session_id, owner_uid, &owner_home)?;
+    }
+    let retried = store
+        .submit_with_context_and_memory(
+            original.prompt,
+            original.context,
+            original.branch_context,
+            original.session_id,
+            original.max_turns,
+            original.use_memory,
+            Some(owner_uid),
+            Some(owner_home.to_string_lossy().into_owned()),
+        )
+        .map_err(|err| err.to_string())?;
+    Ok(job_value(retried))
+}
+
 pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
     let store = Store::open_default().map_err(|err| err.to_string())?;
     let owner_uid = owner_filter(client)?;
@@ -346,6 +425,10 @@ pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
         .len();
     let running = store
         .list_bucket_for_owner(JobStatus::Running, None, owner_uid)
+        .map_err(|err| err.to_string())?
+        .len();
+    let waiting_approval = store
+        .list_bucket_for_owner(JobStatus::WaitingApproval, None, owner_uid)
         .map_err(|err| err.to_string())?
         .len();
     let done = store
@@ -368,6 +451,7 @@ pub fn counts(client: &ClientIdentity) -> Result<Value, String> {
     Ok(json!({
         "pending": pending,
         "running": running,
+        "waiting_approval": waiting_approval,
         "done": done_total,
         "ok": ok,
         "error": error,
@@ -417,6 +501,30 @@ fn job_value(job: Job) -> Value {
     })
 }
 
+fn task_summary_value(job: &Value) -> Value {
+    json!({
+        "id": job.get("id").cloned().unwrap_or(Value::Null),
+        "title": job
+            .get("prompt")
+            .and_then(Value::as_str)
+            .map(|prompt| preview(prompt, 80))
+            .unwrap_or_else(|| "Agent task".to_string()),
+        "status": job.get("status").cloned().unwrap_or(Value::Null),
+        "created_at": job.get("created_at").cloned().unwrap_or(Value::Null),
+        "started_at": job.get("started_at").cloned().unwrap_or(Value::Null),
+        "finished_at": job.get("finished_at").cloned().unwrap_or(Value::Null),
+        "session_id": job.get("session_id").cloned().unwrap_or(Value::Null),
+        "waiting_on": job.get("waiting_on").cloned().unwrap_or_else(|| json!([])),
+        "cancel_requested": job
+            .get("cancel_requested_at")
+            .is_some_and(|value| !value.is_null()),
+        "error": job
+            .get("error")
+            .and_then(Value::as_str)
+            .map(|error| preview(error, 512)),
+    })
+}
+
 fn optional_limit(params: &Value) -> Result<usize, String> {
     params
         .get("limit")
@@ -437,6 +545,7 @@ fn optional_status(params: &Value) -> Result<Option<JobStatus>, String> {
     match raw.trim().to_ascii_lowercase().as_str() {
         "pending" => Ok(Some(JobStatus::Pending)),
         "running" => Ok(Some(JobStatus::Running)),
+        "waiting" | "waiting_approval" | "approval" => Ok(Some(JobStatus::WaitingApproval)),
         "ok" | "done" | "success" => Ok(Some(JobStatus::Ok)),
         "error" | "failed" => Ok(Some(JobStatus::Error)),
         "cancelled" | "canceled" => Ok(Some(JobStatus::Cancelled)),

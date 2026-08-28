@@ -100,6 +100,7 @@ fn assignment(
             branch_context: None,
             session_id: None,
             max_turns: Some(1),
+            use_memory: true,
             owner_uid,
             owner_home: home.to_string_lossy().into_owned(),
         },
