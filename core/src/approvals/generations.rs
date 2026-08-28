@@ -21,9 +21,10 @@
 //!
 //! Counters are kept per `(owner, scope)`, where the scope is either
 //! one grant session or the owner as a whole. An owner-wide revocation
-//! raises a floor every session counter is compared against, so "retire
-//! everything this user approved" is one atomic increment rather than a
-//! walk over records that could race a concurrent approval.
+//! raises a floor strictly above every existing session counter for that
+//! owner, so "retire everything this user approved" is one atomic update
+//! rather than a walk over records that could leave a newer per-session
+//! generation live.
 //!
 //! ## Failure policy
 //!
@@ -257,17 +258,26 @@ pub fn revoke(scope: &RevocationScope) -> Result<u32, String> {
         let mut generations = load()?;
         let next = match scope {
             RevocationScope::Owner { uid } => {
-                let entry = generations.owners.entry(owner_key(*uid)).or_insert(0);
-                *entry = entry.saturating_add(1);
-                let raised = *entry;
-                // Session counters at or below the new floor are
-                // redundant; dropping them bounds the file's growth and
-                // can lower nothing, because `resolve` takes the
-                // maximum of the two.
-                let prefix = format!("{}/", owner_key(*uid));
+                let owner = owner_key(*uid);
+                let prefix = format!("{owner}/");
+                let session_floor = generations
+                    .sessions
+                    .iter()
+                    .filter(|(key, _)| key.starts_with(&prefix))
+                    .map(|(_, generation)| *generation)
+                    .max()
+                    .unwrap_or(0);
+                let current_owner = generations.owners.get(&owner).copied().unwrap_or(0);
+                let raised = current_owner
+                    .max(session_floor)
+                    .checked_add(1)
+                    .ok_or_else(|| "approval owner generation is exhausted".to_string())?;
+                generations.owners.insert(owner, raised);
+                // The owner floor is now strictly above every session
+                // counter it covers, so all of those rows are redundant.
                 generations
                     .sessions
-                    .retain(|key, value| !key.starts_with(&prefix) || *value > raised);
+                    .retain(|key, _| !key.starts_with(&prefix));
                 raised
             }
             RevocationScope::Session { uid, session } => {
@@ -280,7 +290,10 @@ pub fn revoke(scope: &RevocationScope) -> Result<u32, String> {
                     .sessions
                     .entry(session_key(*uid, session))
                     .or_insert(0);
-                *entry = (*entry).max(floor).saturating_add(1);
+                *entry = (*entry)
+                    .max(floor)
+                    .checked_add(1)
+                    .ok_or_else(|| "approval session generation is exhausted".to_string())?;
                 *entry
             }
         };
