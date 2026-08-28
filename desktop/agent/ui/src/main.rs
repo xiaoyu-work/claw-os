@@ -1,6 +1,7 @@
 //! Native ClawOS Agent chat UI.
 
 use std::env;
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -51,6 +52,7 @@ pub struct Flags {
     pub voice: bool,
     pub query: Option<String>,
     pub context: Option<String>,
+    pub context_file: Option<PathBuf>,
     #[serde(skip)]
     activation: Option<OverlayActivation>,
 }
@@ -137,7 +139,15 @@ impl Application for App {
         &mut self.core
     }
 
-    fn init(mut core: Core, flags: Flags) -> (Self, Task<Message>) {
+    fn init(mut core: Core, mut flags: Flags) -> (Self, Task<Message>) {
+        let context_error = flags
+            .activation
+            .as_mut()
+            .and_then(|activation| activation.resolve_context_file().err());
+        if let Some(activation) = &flags.activation {
+            flags.context.clone_from(&activation.context);
+            flags.context_file.clone_from(&activation.context_file);
+        }
         if flags.overlay {
             core.window.show_headerbar = false;
             core.window.show_close = false;
@@ -152,7 +162,7 @@ impl Application for App {
             sessions: SessionState::default(),
             stream: StreamState::default(),
             input: text_editor::Content::with_text(flags.query.as_deref().unwrap_or_default()),
-            error: None,
+            error: context_error.map(|error| error.to_string()),
             voice: VoiceState::default(),
         };
         let mut tasks = vec![effects::connect_bridge()];
@@ -540,13 +550,16 @@ impl Application for App {
     }
 
     fn dbus_activation(&mut self, message: cosmic::dbus_activation::Message) -> Task<Message> {
-        let activation = match message.msg {
+        let mut activation = match message.msg {
             Details::Activate => OverlayActivation::default(),
             Details::ActivateAction { action, .. } => {
                 OverlayActivation::from_str(&action).unwrap_or_default()
             }
             Details::Open { .. } => return Task::none(),
         };
+        if let Err(error) = activation.resolve_context_file() {
+            self.error = Some(error.to_string());
+        }
         self.apply_activation(activation)
     }
 }
@@ -808,6 +821,7 @@ fn parse_flags() -> Flags {
         voice: parsed.voice,
         query: parsed.query,
         context: parsed.context,
+        context_file: parsed.context_file,
         activation,
     }
 }

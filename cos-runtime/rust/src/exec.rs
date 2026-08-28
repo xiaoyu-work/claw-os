@@ -2,8 +2,8 @@
 //! processes, and consulting `which`.
 //!
 //! GUI shells (the launcher, the app library, the terminal session
-//! registrar) all funnel here so process spawns get a session id and
-//! their lifetime is visible to `cos proc ps`.
+//! registrar) all funnel here so process spawns are registered by PID and
+//! their lifetime is visible to `cos app exec ps`.
 
 use serde::Deserialize;
 
@@ -30,11 +30,11 @@ pub struct WhichResult {
     pub path: Option<String>,
 }
 
-/// Response from `apps/exec start`.
+/// Durable handle returned by `apps/exec start`.
 #[derive(Debug, Clone, Deserialize)]
-pub struct StartResult {
-    pub session_id: String,
+pub struct LaunchHandle {
     pub pid: u32,
+    pub command: Vec<String>,
 }
 
 /// Run `argv` synchronously, with an optional timeout in seconds.
@@ -50,17 +50,17 @@ pub fn run(argv: &[&str], timeout_secs: Option<u32>) -> Result<RunResult, Bridge
     call_typed("exec", "run", a.iter().map(String::as_str), None)
 }
 
-/// Spawn a long-lived process and register it in the session
-/// registry. Returns `{session_id, pid}` — the GUI is responsible for
-/// keeping `session_id` around so caps continue to apply to the
-/// child.
-pub fn start(argv: &[&str]) -> Result<StartResult, BridgeError> {
+/// Spawn a long-lived process and register it in the process registry.
+///
+/// The returned PID can be passed to [`stop`]; `command` is the argv recorded
+/// by the exec app.
+pub fn start(argv: &[&str]) -> Result<LaunchHandle, BridgeError> {
     call_typed("exec", "start", argv.iter().copied(), None)
 }
 
-/// Stop a registered session.
-pub fn stop(session_id: &str) -> Result<serde_json::Value, BridgeError> {
-    call("exec", "stop", [session_id], None)
+/// Stop a registered background process by PID.
+pub fn stop(pid: u32) -> Result<serde_json::Value, BridgeError> {
+    call("exec", "stop", [pid.to_string()], None)
 }
 
 /// `which`-style lookup. `path` is `None` when the binary is not in

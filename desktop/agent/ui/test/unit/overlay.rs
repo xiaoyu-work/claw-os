@@ -7,6 +7,7 @@ fn activation_and_layer_close_reset_transient_overlay_state() {
         voice: false,
         query: Some("ask".into()),
         context: Some("window".into()),
+        context_file: None,
     });
     let generation = state.activation_generation();
     assert!(state.auto_submit());

@@ -804,6 +804,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "claw-os-sdk",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

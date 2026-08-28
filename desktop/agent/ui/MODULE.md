@@ -33,7 +33,10 @@ belongs to `src/effects.rs` and lifecycle owners.
 
 Initial CLI arguments and subsequent single-instance D-Bus activation use
 `cos_runtime::ask_claw::{UiArguments, Activation}`. Keep executable names,
-overlay flags, and context serialization out of the UI and host apps.
+overlay flags, and context serialization out of the UI and host apps. Shared
+launches carry only a private context-file path; activation validates and
+unlinks that file before reading it once. Inline `--context` remains a legacy
+external compatibility input.
 
 ## Tests
 

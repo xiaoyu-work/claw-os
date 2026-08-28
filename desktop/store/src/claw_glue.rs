@@ -110,10 +110,9 @@ pub fn fs_rm(path: &Path) -> Result<(), BridgeError> {
     bridge_fs::rm(path.to_string_lossy().as_ref()).map(|_| ())
 }
 
-/// Spawn `argv` via `cos app exec start`. The returned session id /
-/// pid are tracked in the kernel's session registry so caps continue
-/// to apply to the child.
-pub fn exec_start(argv: &[&str]) -> Result<exec::StartResult, BridgeError> {
+/// Spawn `argv` via `cos app exec start`. The returned PID and command
+/// identify the child tracked in the kernel's process registry.
+pub fn exec_start(argv: &[&str]) -> Result<exec::LaunchHandle, BridgeError> {
     exec::start(argv)
 }
 

@@ -15,15 +15,21 @@ impl ask_claw::Context for TerminalContext<'_> {
 }
 
 #[derive(Serialize)]
-struct ExplainOutputContext<'a> {
+struct ExplainOutputContext<'output, 'cwd> {
     mode: &'static str,
-    output: &'a str,
+    output: &'output str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cwd: Option<&'a str>,
+    cwd: Option<&'cwd str>,
+    #[serde(skip_serializing_if = "is_false")]
+    truncated: bool,
 }
 
-impl ask_claw::Context for ExplainOutputContext<'_> {
+impl ask_claw::Context for ExplainOutputContext<'_, '_> {
     const APP_ID: &'static str = "cosmic-term";
+}
+
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
 pub fn ask_claw(cwd: Option<&str>) -> Result<(), ask_claw::LaunchError> {
@@ -31,10 +37,46 @@ pub fn ask_claw(cwd: Option<&str>) -> Result<(), ask_claw::LaunchError> {
 }
 
 pub fn explain_output(output: &str, cwd: Option<&str>) -> Result<(), ask_claw::LaunchError> {
-    ask_claw::launch(&ExplainOutputContext {
+    let context = bounded_explain_context(output, cwd)?;
+    ask_claw::launch(&context).map(|_| ())
+}
+
+fn bounded_explain_context<'output, 'cwd>(
+    output: &'output str,
+    cwd: Option<&'cwd str>,
+) -> Result<ExplainOutputContext<'output, 'cwd>, ask_claw::ContextError> {
+    let full = ExplainOutputContext {
         mode: "explain_output",
         output,
         cwd,
+        truncated: false,
+    };
+    if ask_claw::context_fits(&full)? {
+        return Ok(full);
+    }
+
+    let output = ask_claw::newest_fitting_text_suffix(output, |candidate| {
+        ask_claw::context_fits(&ExplainOutputContext {
+            mode: "explain_output",
+            output: candidate,
+            cwd,
+            truncated: true,
+        })
+    })?
+    .ok_or(ask_claw::ContextError::NoRoomForText)?;
+
+    Ok(ExplainOutputContext {
+        mode: "explain_output",
+        output,
+        cwd,
+        truncated: true,
     })
-    .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/claw_glue.rs"
+    ));
 }

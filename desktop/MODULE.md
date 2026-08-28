@@ -37,7 +37,9 @@ of the root Rust workspace.
 Bundled apps launch Ask Claw through `cos_runtime::ask_claw`, with only typed
 app-specific context adapters in their local `claw_glue` modules. The runtime
 owns serialization bounds, executable discovery, activation arguments,
-supervised process errors, and the activation type consumed by the Agent UI.
+private read-once context files, supervised process errors, and the activation
+type consumed by the Agent UI. Process and audit records contain only the
+context-file path, never the payload.
 
 The Agent UI and bridge share `agent/protocol/`; endpoint and stream DTOs must
 not be duplicated in either binary. Core/clawd models terminate at the bridge's
