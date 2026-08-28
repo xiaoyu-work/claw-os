@@ -538,7 +538,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
+| `cos agent ...` | `core/src/agent/mod.rs`, `core/src/agent/*_commands.rs` | Top-level routing plus responsibility-specific command handlers |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
 | Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |
