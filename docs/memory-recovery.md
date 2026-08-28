@@ -79,6 +79,13 @@ already-checkpointed rows are retained without interpreting the suspect WAL.
 If a valid WAL cannot be fully checkpointed because an uncoordinated SQLite
 reader or writer is active, repair aborts before renaming any live file.
 
+Standalone salvage scans `messages NOT INDEXED` and commits those authoritative
+rows before rebuilding indexes and FTS. Titles and prompt references are then
+copied in separate transactions. Corruption in an optional projection can
+therefore omit that projection with an explicit warning, but cannot roll back
+readable conversation messages. A failure while scanning or committing
+readable messages aborts recovery instead of installing an empty replacement.
+
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains
 actions, counts, paths, and errors, but no message or prompt bodies. Normal

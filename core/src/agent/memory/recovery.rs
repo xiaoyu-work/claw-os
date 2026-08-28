@@ -7,7 +7,7 @@
 //! [`MemoryDb`](super::sqlite_fts::MemoryDb) handles retain a shared lock for
 //! their lifetime, so a database cannot be replaced beneath an active writer.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -262,6 +262,13 @@ impl Drop for StandaloneMainCopy {
         let _ = fs::remove_file(wal_path(&self.path));
         let _ = fs::remove_file(shm_path(&self.path));
     }
+}
+
+#[derive(Debug, Default)]
+struct StandaloneRecoveryResult {
+    recovered: RecoveredRecords,
+    salvage_succeeded: bool,
+    warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -1786,20 +1793,18 @@ fn inspect_wal(path: &Path, database_path: &Path) -> Result<Option<WalValidation
         file.read_exact(&mut frame).map_err(|error| {
             format!("read {} frame {}: {error}", path.display(), frame_index + 1)
         })?;
+        if wal_index.is_none() && frame[8..16] != salt {
+            break;
+        }
         let frame_number = frame_index + 1;
-        let validated = validate_wal_frame(
+        let (commit_size, checksum) = validate_wal_frame(
             &frame,
             frame_number,
             &salt,
             checksum_big_endian,
             rolling_checksum,
             path,
-        );
-        let (commit_size, checksum) = match validated {
-            Ok(validated) => validated,
-            Err(_error) if wal_index.is_none() => break,
-            Err(error) => return Err(error),
-        };
+        )?;
         rolling_checksum = checksum;
         if commit_size != 0 {
             commits += 1;
@@ -2307,6 +2312,7 @@ fn build_staged_replacement(
     ensure_private_database_file(replacement)?;
     let mut target = Connection::open_with_flags(replacement, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     initialize_connection(&target)?;
+    prepare_target_for_recovery(&target)?;
 
     let mut marker = ReplacementMarker {
         attempt_id: attempt_id.to_string(),
@@ -2320,18 +2326,12 @@ fn build_staged_replacement(
     write_replacement_marker(&target, &marker)?;
 
     if quarantine.exists() {
-        match recover_from_standalone_main(quarantine, attempt_id, &mut target) {
-            Ok(recovered) => {
-                marker.salvage_succeeded = true;
-                marker.recovered = recovered;
-            }
-            Err(error) => {
-                marker.recovery_warning = Some(format!(
-                    "standalone main-database recovery failed; replacement is empty: {error}"
-                ));
-            }
-        }
+        let result = recover_from_standalone_main(quarantine, attempt_id, &mut target)?;
+        marker.salvage_succeeded = result.salvage_succeeded;
+        marker.recovered = result.recovered;
+        marker.recovery_warning = (!result.warnings.is_empty()).then(|| result.warnings.join("; "));
     } else {
+        rebuild_target_projections(&mut target)?;
         marker.recovery_warning =
             Some("quarantine contains no main database; replacement is empty".to_string());
     }
@@ -2361,31 +2361,89 @@ fn recover_from_standalone_main(
     quarantine: &Path,
     attempt_id: &str,
     target: &mut Connection,
-) -> Result<RecoveredRecords, MemoryError> {
+) -> Result<StandaloneRecoveryResult, MemoryError> {
     let standalone_path = suffix_path(quarantine, &format!(".main-only-{attempt_id}"));
     remove_replacement_scratch(&standalone_path)?;
-    copy_snapshot_file(quarantine, &standalone_path)?;
+    if let Err(error) = copy_snapshot_file(quarantine, &standalone_path) {
+        rebuild_target_projections(target)?;
+        return Ok(unreadable_standalone(format!(
+            "could not copy quarantined main database: {error}"
+        )));
+    }
     let standalone = StandaloneMainCopy {
         path: standalone_path,
     };
 
-    let source = Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    source.busy_timeout(Duration::from_secs(5))?;
-    let integrity = check_sqlite_integrity(&source);
-    if integrity.status != "ok" {
-        return Err(MemoryError::Integrity(format!(
-            "standalone main database failed integrity_check: {}",
-            integrity.issues.join("; ")
+    let source =
+        match Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY) {
+            Ok(source) => source,
+            Err(error) => {
+                rebuild_target_projections(target)?;
+                return Ok(unreadable_standalone(format!(
+                    "standalone main database could not be opened: {error}"
+                )));
+            }
+        };
+    if let Err(error) = source.busy_timeout(Duration::from_secs(5)) {
+        rebuild_target_projections(target)?;
+        return Ok(unreadable_standalone(format!(
+            "standalone main database could not be configured: {error}"
         )));
     }
-    let schema = inspect_schema(&source)?;
-    if !schema.messages_compatible {
-        return Err(MemoryError::Integrity(
+    let messages_compatible = match table_has_columns(&source, "messages", EXPECTED_TABLES[0].1) {
+        Ok(compatible) => compatible,
+        Err(error) => {
+            rebuild_target_projections(target)?;
+            return Ok(unreadable_standalone(format!(
+                "standalone main database schema could not be read: {error}"
+            )));
+        }
+    };
+    if !messages_compatible {
+        rebuild_target_projections(target)?;
+        return Ok(unreadable_standalone(
             "standalone main database has no compatible messages table".to_string(),
         ));
     }
-    drop(source);
-    recover_authoritative_rows(&standalone.path, target)
+
+    let mut warnings = Vec::new();
+    let integrity = check_sqlite_integrity(&source);
+    if integrity.status != "ok" {
+        warnings.push(format!(
+            "global integrity_check reported secondary damage: {}",
+            integrity.issues.join("; ")
+        ));
+    }
+    let (mut recovered, sessions) = recover_authoritative_messages(&source, target)?;
+    rebuild_target_projections(target)?;
+
+    match recover_titles_projection(&source, target, &sessions) {
+        Ok(count) => recovered.titles = count,
+        Err(error) => warnings.push(format!("session titles were not recovered: {error}")),
+    }
+    match recover_prompt_projection(&source, target, &sessions) {
+        Ok((count, skipped)) => {
+            recovered.prompt_references = count;
+            recovered.skipped_prompt_references = skipped;
+        }
+        Err(error) => warnings.push(format!("session prompts were not recovered: {error}")),
+    }
+
+    Ok(StandaloneRecoveryResult {
+        recovered,
+        salvage_succeeded: true,
+        warnings,
+    })
+}
+
+fn unreadable_standalone(error: String) -> StandaloneRecoveryResult {
+    StandaloneRecoveryResult {
+        recovered: RecoveredRecords::default(),
+        salvage_succeeded: false,
+        warnings: vec![format!(
+            "standalone main-database recovery failed; replacement is empty: {error}"
+        )],
+    }
 }
 
 fn write_replacement_marker(
@@ -2559,98 +2617,169 @@ fn remove_if_present(path: &Path) -> Result<(), MemoryError> {
     }
 }
 
-fn recover_authoritative_rows(
-    source_path: &Path,
-    target: &mut Connection,
-) -> Result<RecoveredRecords, MemoryError> {
-    let source = Connection::open_with_flags(source_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    source.busy_timeout(Duration::from_secs(5))?;
-    let schema = inspect_schema(&source)?;
-    if !schema.messages_compatible {
-        return Ok(RecoveredRecords::default());
-    }
+fn prepare_target_for_recovery(target: &Connection) -> Result<(), MemoryError> {
+    target.execute_batch(
+        "DROP TRIGGER IF EXISTS messages_ai;
+         DROP TRIGGER IF EXISTS messages_ad;
+         DROP TRIGGER IF EXISTS messages_au;
+         DROP TABLE IF EXISTS messages_fts;
+         DROP INDEX IF EXISTS messages_session_ts;
+         DROP INDEX IF EXISTS messages_ts;",
+    )?;
+    Ok(())
+}
 
+fn rebuild_target_projections(target: &mut Connection) -> Result<(), MemoryError> {
+    let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    tx.execute_batch(
+        "CREATE INDEX IF NOT EXISTS messages_session_ts
+             ON messages(session_id, ts_ms);
+         CREATE INDEX IF NOT EXISTS messages_ts
+             ON messages(ts_ms);",
+    )?;
+    tx.execute_batch(FTS_SCHEMA)?;
+    tx.execute(
+        "INSERT INTO messages_fts(messages_fts) VALUES('rebuild')",
+        [],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn recover_authoritative_messages(
+    source: &Connection,
+    target: &mut Connection,
+) -> Result<(RecoveredRecords, HashSet<String>), MemoryError> {
     let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let mut recovered = RecoveredRecords::default();
+    let mut sessions = HashSet::new();
     {
-        let mut stmt = source
-            .prepare("SELECT id, session_id, role, content, ts_ms FROM messages ORDER BY id")?;
-        let mut rows = stmt.query([])?;
+        let mut statement = source.prepare(
+            "SELECT id, session_id, role, content, ts_ms
+             FROM messages NOT INDEXED
+             ORDER BY rowid",
+        )?;
+        let mut rows = statement.query([])?;
         while let Some(row) = rows.next()? {
+            let session_id: String = row.get(1)?;
             tx.execute(
                 "INSERT INTO messages(id, session_id, role, content, ts_ms)
                  VALUES (?, ?, ?, ?, ?)",
                 params![
                     row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
+                    &session_id,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
                     row.get::<_, i64>(4)?,
                 ],
             )?;
+            sessions.insert(session_id);
             recovered.messages += 1;
         }
     }
-    if schema.titles_compatible {
-        let mut stmt = source.prepare(
-            "SELECT t.session_id, t.title, t.ts_ms
-             FROM session_titles AS t
-             WHERE EXISTS (
-                 SELECT 1 FROM messages AS m WHERE m.session_id = t.session_id
-             )
-             ORDER BY t.session_id",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
+    tx.commit()?;
+    Ok((recovered, sessions))
+}
+
+fn recover_titles_projection(
+    source: &Connection,
+    target: &mut Connection,
+    sessions: &HashSet<String>,
+) -> Result<u64, MemoryError> {
+    if !table_has_columns(source, "session_titles", EXPECTED_TABLES[1].1)? {
+        return Err(MemoryError::Integrity(
+            "session_titles table is missing or incompatible".to_string(),
+        ));
+    }
+    let mut statement =
+        source.prepare("SELECT session_id, title, ts_ms FROM session_titles NOT INDEXED")?;
+    let mut rows = statement.query([])?;
+    let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut recovered = 0_u64;
+    while let Some(row) = rows.next()? {
+        let session_id: String = row.get(0)?;
+        let title: String = row.get(1)?;
+        if sessions.contains(&session_id) && !title.trim().is_empty() {
             tx.execute(
                 "INSERT INTO session_titles(session_id, title, ts_ms) VALUES (?, ?, ?)",
-                params![
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, i64>(2)?,
-                ],
+                params![session_id, title, row.get::<_, i64>(2)?],
             )?;
-            recovered.titles += 1;
-        }
-    }
-    if schema.prompts_compatible {
-        let mut stmt = source.prepare(
-            "SELECT s.session_id, s.prompt_hash, s.prompt_version, s.ts_ms, p.prompt
-             FROM session_system_prompts AS s
-             LEFT JOIN system_prompts AS p ON p.hash = s.prompt_hash
-             WHERE EXISTS (
-                 SELECT 1 FROM messages AS m WHERE m.session_id = s.session_id
-             )
-             ORDER BY s.session_id",
-        )?;
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let hash: String = row.get(1)?;
-            let prompt: Option<String> = row.get(4)?;
-            let Some(prompt) = prompt.filter(|value| system_prompt_hash(value) == hash) else {
-                recovered.skipped_prompt_references += 1;
-                continue;
-            };
-            tx.execute(
-                "INSERT OR IGNORE INTO system_prompts(hash, prompt) VALUES (?, ?)",
-                params![hash, prompt],
-            )?;
-            tx.execute(
-                "INSERT INTO session_system_prompts(
-                     session_id, prompt_hash, prompt_version, ts_ms
-                 ) VALUES (?, ?, ?, ?)",
-                params![
-                    row.get::<_, String>(0)?,
-                    hash,
-                    row.get::<_, u32>(2)?,
-                    row.get::<_, i64>(3)?,
-                ],
-            )?;
-            recovered.prompt_references += 1;
+            recovered += 1;
         }
     }
     tx.commit()?;
     Ok(recovered)
+}
+
+fn recover_prompt_projection(
+    source: &Connection,
+    target: &mut Connection,
+    sessions: &HashSet<String>,
+) -> Result<(u64, u64), MemoryError> {
+    if !table_has_columns(source, "system_prompts", EXPECTED_TABLES[2].1)?
+        || !table_has_columns(source, "session_system_prompts", EXPECTED_TABLES[3].1)?
+    {
+        return Err(MemoryError::Integrity(
+            "system prompt tables are missing or incompatible".to_string(),
+        ));
+    }
+
+    let mut prompts = HashMap::new();
+    {
+        let mut statement =
+            source.prepare("SELECT hash, prompt FROM system_prompts NOT INDEXED")?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            prompts.insert(row.get::<_, String>(0)?, row.get::<_, String>(1)?);
+        }
+    }
+
+    let mut references = Vec::new();
+    {
+        let mut statement = source.prepare(
+            "SELECT session_id, prompt_hash, prompt_version, ts_ms
+             FROM session_system_prompts NOT INDEXED",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            references.push((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, u32>(2)?,
+                row.get::<_, i64>(3)?,
+            ));
+        }
+    }
+
+    let tx = target.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut recovered = 0_u64;
+    let mut skipped = 0_u64;
+    for (session_id, hash, prompt_version, ts_ms) in references {
+        let Some(prompt) = prompts
+            .get(&hash)
+            .filter(|prompt| system_prompt_hash(prompt) == hash)
+        else {
+            skipped += 1;
+            continue;
+        };
+        if !sessions.contains(&session_id) {
+            skipped += 1;
+            continue;
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO system_prompts(hash, prompt) VALUES (?, ?)",
+            params![hash, prompt],
+        )?;
+        tx.execute(
+            "INSERT INTO session_system_prompts(
+                 session_id, prompt_hash, prompt_version, ts_ms
+             ) VALUES (?, ?, ?, ?)",
+            params![session_id, hash, prompt_version, ts_ms],
+        )?;
+        recovered += 1;
+    }
+    tx.commit()?;
+    Ok((recovered, skipped))
 }
 
 fn checkpoint_wal(conn: &Connection) -> Result<(), MemoryError> {

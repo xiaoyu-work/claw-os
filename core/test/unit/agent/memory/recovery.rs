@@ -1,5 +1,6 @@
 use super::*;
 use crate::agent::memory::sqlite_fts::MemoryDb;
+use std::io::{Seek, SeekFrom};
 
 fn database_path() -> (tempfile::TempDir, PathBuf) {
     let directory = tempfile::tempdir().expect("tempdir");
@@ -317,6 +318,182 @@ fn wrong_prompt_hash_is_quarantined_while_recoverable_messages_survive() {
 }
 
 #[test]
+fn damaged_secondary_projections_cannot_rollback_authoritative_message_recovery() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    let first = db
+        .record_message("session", "user", "authoritative apricot")
+        .expect("record first");
+    db.record_message("session", "assistant", "authoritative plum")
+        .expect("record second");
+    db.set_title("session", "damaged title source")
+        .expect("set title");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .expect("freeze prompt");
+    {
+        let conn = db.lock_conn().expect("connection");
+        conn.execute(
+            "INSERT INTO messages_fts(messages_fts, rowid, content)
+             VALUES('delete', ?, ?)",
+            params![first, "authoritative apricot"],
+        )
+        .expect("damage fts");
+        conn.execute(
+            "INSERT INTO messages_fts(rowid, content) VALUES(?, 'wrong index text')",
+            params![first],
+        )
+        .expect("replace fts terms");
+        conn.execute_batch(
+            "DROP INDEX messages_session_ts;
+             UPDATE session_titles SET title = x'80';
+             UPDATE system_prompts SET prompt = x'80';",
+        )
+        .expect("damage optional projections");
+    }
+    drop(db);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert!(health.requires_quarantine);
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("recover readable messages");
+    assert_eq!(report.recovered.messages, 2);
+    assert_eq!(report.recovered.titles, 0);
+    assert_eq!(report.recovered.prompt_references, 0);
+    assert_eq!(report.recovered.skipped_prompt_references, 0);
+    assert!(report
+        .recovery_warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("session titles")));
+    assert!(report
+        .recovery_warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("session prompts")));
+
+    let replacement = MemoryDb::open(&path).expect("replacement");
+    assert_eq!(replacement.count_total().expect("count"), 2);
+    assert_eq!(replacement.search("apricot", 10).expect("search").len(), 1);
+    assert_eq!(replacement.search("plum", 10).expect("search").len(), 1);
+}
+
+#[test]
+fn corrupt_secondary_index_with_failed_integrity_check_still_recovers_messages() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    for index in 0..32 {
+        db.record_message(
+            &format!("session-{index}"),
+            "user",
+            &format!("authoritative index row {index}"),
+        )
+        .expect("record");
+    }
+    drop(db);
+
+    let conn = Connection::open(&path).expect("raw connection");
+    checkpoint_wal(&conn).expect("checkpoint");
+    let page_size: i64 = conn
+        .query_row("PRAGMA page_size", [], |row| row.get(0))
+        .expect("page size");
+    let root_page: i64 = conn
+        .query_row(
+            "SELECT rootpage FROM sqlite_schema WHERE name = 'messages_session_ts'",
+            [],
+            |row| row.get(0),
+        )
+        .expect("index root page");
+    drop(conn);
+
+    let mut file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&path)
+        .expect("open database bytes");
+    file.seek(SeekFrom::Start(((root_page - 1) * page_size) as u64))
+        .expect("seek index page");
+    file.write_all(&[0xff]).expect("corrupt index page");
+    file.sync_all().expect("sync corruption");
+    drop(file);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert_eq!(health.sqlite.status, "fail");
+    assert!(health.requires_quarantine);
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("recover despite secondary index corruption");
+    assert_eq!(report.recovered.messages, 32);
+    assert!(report
+        .recovery_warning
+        .as_deref()
+        .is_some_and(|warning| warning.contains("global integrity_check")));
+    let replacement = MemoryDb::open(&path).expect("replacement");
+    assert_eq!(replacement.count_total().expect("count"), 32);
+    assert_eq!(
+        replacement
+            .search("authoritative", 100)
+            .expect("search")
+            .len(),
+        32
+    );
+}
+
+#[test]
+fn readable_message_scan_failure_does_not_install_empty_replacement() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "recoverable before bad row")
+        .expect("record");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .expect("freeze");
+    {
+        let conn = db.lock_conn().expect("connection");
+        conn.execute_batch(
+            "DROP TRIGGER messages_ai;
+             INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('session', 'user', x'80', 2);
+             UPDATE system_prompts SET prompt = 'tampered prompt';",
+        )
+        .expect("inject unreadable message");
+    }
+    drop(db);
+
+    let error = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect_err("message scan failure must abort");
+    assert!(
+        error.to_string().contains("Invalid column type")
+            || error.to_string().contains("invalid type"),
+        "unexpected error: {error}"
+    );
+    let log = read_repair_log(&path).expect("repair log");
+    let failed = log.last_applied.expect("failed attempt");
+    let quarantine = PathBuf::from(failed.quarantine_path.expect("quarantine path"));
+    assert!(
+        quarantine.exists(),
+        "source evidence must remain quarantined"
+    );
+    assert!(
+        !path.exists(),
+        "an empty replacement must not be installed after a message scan failure"
+    );
+}
+
+#[test]
 fn malformed_wal_is_quarantined_without_trusting_its_contents() {
     let (_directory, path) = database_path();
     create_message_database(&path, "base row");
@@ -392,7 +569,15 @@ fn wal_restart_ignores_stale_physical_and_partial_tail() {
 fn wal_scan_without_shm_uses_last_committed_prefix() {
     let (_directory, path) = database_path();
     let connection = create_live_wal(&path);
-    let original = fs::read(wal_path(&path)).expect("original wal");
+    let old_wal = fs::read(wal_path(&path)).expect("old wal");
+    checkpoint_wal(&connection).expect("checkpoint old wal");
+    connection
+        .execute(
+            "INSERT INTO messages(session_id, role, content, ts_ms)
+             VALUES('wal-session', 'user', 'new generation', 2)",
+            [],
+        )
+        .expect("insert new generation");
     let logical = inspect_wal(&wal_path(&path), &path)
         .expect("validate wal")
         .expect("wal");
@@ -401,9 +586,9 @@ fn wal_scan_without_shm_uses_last_committed_prefix() {
         .append(true)
         .open(wal_path(&path))
         .expect("open wal");
-    file.write_all(&original[32..32 + stale_frame_len])
+    file.write_all(&old_wal[32..32 + stale_frame_len])
         .expect("append stale frame");
-    file.write_all(&original[32..41])
+    file.write_all(&old_wal[32..41])
         .expect("append partial tail");
     file.sync_all().expect("sync tail");
     fs::remove_file(shm_path(&path)).expect("remove wal index");
@@ -413,6 +598,43 @@ fn wal_scan_without_shm_uses_last_committed_prefix() {
         .expect("wal");
     assert_eq!(recovered.frames, logical.frames);
     assert!(recovered.stale_tail_bytes > 0);
+    drop(connection);
+}
+
+#[cfg(unix)]
+#[test]
+fn wal_without_shm_rejects_current_generation_frame_corruption() {
+    let (_directory, path) = database_path();
+    let connection = create_live_wal(&path);
+    let original = fs::read(wal_path(&path)).expect("original wal");
+    fs::remove_file(shm_path(&path)).expect("remove wal index");
+    let directory = path.parent().expect("parent");
+
+    let mut bad_checksum = original.clone();
+    bad_checksum[48] ^= 1;
+    let candidate = directory.join("no-shm-bad-checksum.wal");
+    fs::write(&candidate, bad_checksum).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("rolling checksum"));
+
+    let mut bad_page = original.clone();
+    bad_page[32..36].copy_from_slice(&0_u32.to_be_bytes());
+    rewrite_first_frame_checksum(&mut bad_page);
+    let candidate = directory.join("no-shm-bad-page.wal");
+    fs::write(&candidate, bad_page).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("page number"));
+
+    let mut bad_commit = original;
+    bad_commit[36..40].copy_from_slice(&u32::MAX.to_be_bytes());
+    rewrite_first_frame_checksum(&mut bad_commit);
+    let candidate = directory.join("no-shm-bad-commit.wal");
+    fs::write(&candidate, bad_commit).unwrap();
+    assert!(inspect_wal(&candidate, &path)
+        .unwrap_err()
+        .contains("commit size"));
     drop(connection);
 }
 

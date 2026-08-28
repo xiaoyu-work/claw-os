@@ -263,6 +263,9 @@ separate copy of the quarantined main database and retains its checkpointed
 authoritative rows when possible. A valid WAL must checkpoint completely before
 any rename, and staged replacements are accepted only after their attempt
 marker and recovered counts are durable in the standalone main database.
+Authoritative messages are scanned without secondary indexes and committed
+before rebuilding indexes/FTS or attempting title and prompt projection
+recovery.
 See [`docs/memory-recovery.md`](docs/memory-recovery.md).
 
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
