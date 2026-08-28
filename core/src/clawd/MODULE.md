@@ -10,7 +10,8 @@ and agent tasks.
 - Accept authenticated Unix-socket RPC.
 - Derive client/session identity and capability context.
 - Dispatch privileged services and app/MCP session operations.
-- Own task ownership/lease and expose task lifecycle RPC.
+- Own task ownership/lease, snapshot authenticated client presence/source, and
+  expose task lifecycle RPC.
 - Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
   in this process (see `core/src/agentd/MODULE.md`).
 - Install audit hooks around broker-visible work, including runtime audit

@@ -62,6 +62,7 @@ use crate::agent::tools::mcp::protocol::{ClientCapabilities, Implementation, PRO
 use crate::agent::tools::mcp::transport::StdioTransport;
 use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
 
+use super::exposure::{ToolExposure, ToolTransport};
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
@@ -877,6 +878,15 @@ impl Tool for AppSessionTool {
         self.schema.clone()
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always()
+            .requiring_caps([crate::caps::Cap::new(
+                crate::caps::Verb::AGENT_INVOKE,
+                crate::caps::Scope::name(&self.app_id),
+            )])
+            .requiring_transport(ToolTransport::AppSession)
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let started = Instant::now();
         let supplied_args = json_to_arg_map(&input);
@@ -906,6 +916,22 @@ impl Tool for AppSessionTool {
 
         let args_map = effective.values;
         let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
+        if let Err(denial) = crate::caps::require(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(&self.app_id),
+        ) {
+            let message = denial.to_string();
+            emit_audit(
+                &self.app_id,
+                &self.manifest_tool_name,
+                crate::caps::Verb::AGENT_INVOKE.as_str(),
+                "denied",
+                Some(&message),
+                Some(&message),
+                started.elapsed(),
+            );
+            return ToolResult::err(message);
+        }
 
         for cap in &caps {
             if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
@@ -1136,6 +1162,12 @@ impl Tool for CosAppSessionOpen {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always()
+            .requiring_all_verbs([crate::caps::Verb::AGENT_INVOKE])
+            .requiring_transport(ToolTransport::AppSession)
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let app_id = match input.get("app").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
@@ -1196,11 +1228,23 @@ impl Tool for CosAppSessionClose {
         })
     }
 
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always()
+            .requiring_all_verbs([crate::caps::Verb::AGENT_INVOKE])
+            .requiring_transport(ToolTransport::AppSession)
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
         let app_id = match input.get("app").and_then(|v| v.as_str()) {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => return ToolResult::err("missing `app` field".to_string()),
         };
+        if let Err(denial) = crate::caps::require(
+            crate::caps::Verb::AGENT_INVOKE,
+            crate::caps::Scope::name(&app_id),
+        ) {
+            return ToolResult::err(denial.to_string());
+        }
         let closed = close_session(&app_id).await;
         ToolResult::ok(json!({"app": app_id, "closed": closed}).to_string())
     }
@@ -1230,10 +1274,12 @@ fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
 /// `cos_app_session_open`).
 pub fn register_all(registry: &mut ToolRegistry) {
     let apps = crate::apps::discover(&apps_root());
+    let mut has_session_tools = false;
     for app in apps.values() {
         let Some(session) = &app.manifest.session else {
             continue;
         };
+        has_session_tools = true;
         let arc_manifest = Arc::new(app.manifest.clone());
         for idx in 0..session.tools.len() {
             registry.register(Arc::new(AppSessionTool::from_manifest_tool(
@@ -1242,8 +1288,10 @@ pub fn register_all(registry: &mut ToolRegistry) {
             )));
         }
     }
-    registry.register(Arc::new(CosAppSessionOpen));
-    registry.register(Arc::new(CosAppSessionClose));
+    if has_session_tools {
+        registry.register(Arc::new(CosAppSessionOpen));
+        registry.register(Arc::new(CosAppSessionClose));
+    }
 }
 
 #[cfg(test)]

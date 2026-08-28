@@ -59,6 +59,11 @@ group and prompt text confer nothing.
 created before the fork, so the kernel stamps it with the broker's own uid and
 pid. Checking it would prove nothing about the worker.
 
+The signed job grant also binds the broker-derived client source, locality,
+attended state, and a digest of the effective capability set. The worker
+cross-checks those claims against the assigned trusted session before it builds
+the model-visible tool projection.
+
 Capabilities are derived by `clawd` from root-owned session metadata
 (`clawd::session_scope`) and handed to the worker; the worker never authors
 them, and the exact tool/provider checks still run at the execution boundary

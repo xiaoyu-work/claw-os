@@ -299,7 +299,7 @@ pub fn serve(args: &[String]) -> Result<Value, String> {
         .map_err(|e| format!("tokio runtime: {e}"))?;
 
     runtime.block_on(async move {
-        let state = state::AppState::new(cfg, owner_uid);
+        let state = state::AppState::new_with_locality(cfg, owner_uid, addr.ip().is_loopback());
         let app = server::build_app(state);
         if let Some((cert, key)) = tls_material {
             let _ = rustls::crypto::ring::default_provider().install_default();
@@ -484,7 +484,11 @@ fn spawn_detached(
             _ => child_args.push(a.clone()),
         }
     }
-    let detached_session = register_detached_session(&child_args)?;
+    let detached_session = register_detached_session(
+        &child_args,
+        bind.parse::<std::net::IpAddr>()
+            .is_ok_and(|address| address.is_loopback()),
+    )?;
     let mut pending_session =
         PendingDetachedSessionGuard::new(detached_session.clone());
 
@@ -867,7 +871,7 @@ impl Drop for PendingDetachedSessionGuard {
     }
 }
 
-fn register_detached_session(command: &[String]) -> Result<String, String> {
+fn register_detached_session(command: &[String], local: bool) -> Result<String, String> {
     let parent = crate::proc::current_session_info_for_caps().ok_or_else(|| {
         "detached agent serve requires a registered parent session".to_string()
     })?;
@@ -912,6 +916,11 @@ fn register_detached_session(command: &[String]) -> Result<String, String> {
         app_id: None,
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::LocalWeb,
+            false,
+            local,
+        ),
     };
     crate::proc::register_session(info)?;
     Ok(session_id)

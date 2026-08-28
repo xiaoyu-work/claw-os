@@ -9,6 +9,8 @@ and lifecycle state used across broker and agent operations.
 
 - Create, load, update, and expire sessions.
 - Bind role/scope/capability context to session identity.
+- Record typed client source, locality, and attended state from trusted entry
+  points.
 - Preserve transaction and concurrency invariants.
 - Provide session queries to CLI, agent, and broker consumers.
 
@@ -32,6 +34,10 @@ created an unattended job. Only a daemon-side authority writes it, and a
 consumer may act on a delegation variant only after `record_is_root_owned`
 confirms the record could not have been authored by the account it would
 delegate to. `None` always means "no delegation".
+
+`SessionMeta::client` is separate interaction provenance. Daemon-created task
+records snapshot it into the job, then bind it into the signed worker grant so
+concurrent submissions cannot overwrite one another's source or attendance.
 
 ## Tests
 

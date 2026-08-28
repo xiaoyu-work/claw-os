@@ -4,6 +4,32 @@ use super::super::transport::in_memory_pair;
 use super::*;
 use crate::agent::tools::builtin::Echo;
 
+struct Restricted;
+
+#[async_trait::async_trait]
+impl crate::agent::tools::Tool for Restricted {
+    fn name(&self) -> &str {
+        "restricted"
+    }
+
+    fn description(&self) -> &str {
+        "requires fs.read"
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({"type": "object"})
+    }
+
+    fn exposure(&self) -> crate::agent::tools::exposure::ToolExposure {
+        crate::agent::tools::exposure::ToolExposure::always()
+            .requiring_all_verbs([crate::caps::Verb::FS_READ])
+    }
+
+    async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
+        crate::agent::tools::ToolResult::ok("should not run")
+    }
+}
+
 fn registry_with_echo() -> Arc<ToolRegistry> {
     let mut r = ToolRegistry::new();
     r.register(Arc::new(Echo));
@@ -66,6 +92,36 @@ async fn tools_call_executes_registered_tool() {
         Some(ContentItem::Text { text }) => assert!(text.contains("hi")),
         _ => panic!("expected text content"),
     }
+
+    drop(client);
+    let _ = server_handle.await;
+}
+
+#[tokio::test]
+async fn unavailable_tools_are_neither_listed_nor_callable() {
+    let (client_t, server_t) = in_memory_pair();
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(Restricted));
+    let context = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
+    let server = McpServer::new_with_context("cos", "0", Arc::new(registry), context);
+    let server_handle = tokio::spawn(server.serve(server_t));
+
+    let client = McpClient::new(client_t);
+    client.start().await;
+    assert!(client.list_tools().await.unwrap().tools.is_empty());
+    let error = client
+        .call_tool("restricted", Some(json!({})))
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ClientError::Server {
+            code: ERR_INVALID_PARAMS,
+            ..
+        }
+    ));
     drop(client);
     let _ = server_handle.await;
 }

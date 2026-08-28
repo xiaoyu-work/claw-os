@@ -184,12 +184,14 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         uid: Some(1000),
         gid: Some(1000),
         start_time_ticks: Some(1),
+        attended_local: false,
     };
     let root = ClientIdentity {
         pid: Some(42),
         uid: Some(0),
         gid: Some(0),
         start_time_ticks: Some(1),
+        attended_local: false,
     };
     for command in HISTORICAL_ROOT_COMMANDS {
         let route = Command::parse(command).unwrap().route();

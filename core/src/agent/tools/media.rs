@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use super::exposure::ToolExposure;
 use super::{Tool, ToolResult};
 use crate::agent::media::{
     imagegen::{ImageGenRegistry, ImageGenRequest},
@@ -85,6 +86,10 @@ impl Tool for TtsTool {
             },
             "required": ["text"]
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AI_AUDIO_TTS])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -167,6 +172,11 @@ impl Tool for SttTool {
             },
             "required": ["path"]
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always()
+            .requiring_all_verbs([crate::caps::Verb::AI_AUDIO_STT, crate::caps::Verb::FS_READ])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
@@ -290,6 +300,10 @@ impl Tool for ImageGenTool {
             },
             "required": ["prompt"]
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::AI_IMAGE_GENERATE])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

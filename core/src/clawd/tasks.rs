@@ -5,7 +5,7 @@ use tokio::time::sleep;
 
 use crate::agent::service::{Job, JobStatus, Store};
 use crate::caps::Role;
-use crate::session::{self, SessionOrigin};
+use crate::session::{self, SessionClient, SessionOrigin, SessionSource};
 
 use super::client_identity::ClientIdentity;
 
@@ -47,15 +47,21 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
         .map(|value| u32::try_from(value).map_err(|_| format!("max_turns is too large: {value}")))
         .transpose()?;
     let store = Store::open_default().map_err(|err| err.to_string())?;
+    let session_client = SessionClient::new(SessionSource::BrokerTask, client.attended_local, true);
     let session_id = match session_id {
         Some(session_id) => {
-            prepare_task_session(&session_id, owner_uid, &owner_home)?;
+            prepare_task_session_with_client(&session_id, owner_uid, &owner_home, session_client)?;
             Some(session_id)
         }
-        None => Some(create_task_session(&prompt, owner_uid, &owner_home)?),
+        None => Some(create_task_session_with_client(
+            &prompt,
+            owner_uid,
+            &owner_home,
+            session_client,
+        )?),
     };
     let job = store
-        .submit_with_context(
+        .submit_with_context_and_client(
             prompt,
             context,
             branch_context,
@@ -63,6 +69,7 @@ pub async fn submit(params: Value, client: &ClientIdentity) -> Result<Value, Str
             max_turns,
             Some(owner_uid),
             Some(owner_home.to_string_lossy().into_owned()),
+            session_client,
         )
         .map_err(|err| err.to_string())?;
     Ok(job_value(job))
@@ -73,6 +80,20 @@ fn create_task_session(
     owner_uid: u32,
     owner_home: &std::path::Path,
 ) -> Result<String, String> {
+    create_task_session_with_client(
+        prompt,
+        owner_uid,
+        owner_home,
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+    )
+}
+
+fn create_task_session_with_client(
+    prompt: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    client: SessionClient,
+) -> Result<String, String> {
     let purpose = format!("agent task: {}", preview(prompt, 80));
     let sid = session::create(purpose).map_err(|err| err.to_string())?;
     session::update_meta(&sid, |meta| {
@@ -80,6 +101,7 @@ fn create_task_session(
         meta.role = Some(Role::Observer);
         meta.owner_uid = Some(owner_uid);
         meta.origin = Some(SessionOrigin::SystemAgentTask);
+        meta.client = client;
     })
     .map_err(|err| err.to_string())?;
     let caps = super::system_caps::system_agent_caps(owner_uid, owner_home);
@@ -91,6 +113,20 @@ fn prepare_task_session(
     session_id: &str,
     owner_uid: u32,
     owner_home: &std::path::Path,
+) -> Result<(), String> {
+    prepare_task_session_with_client(
+        session_id,
+        owner_uid,
+        owner_home,
+        SessionClient::new(SessionSource::BrokerTask, false, true),
+    )
+}
+
+fn prepare_task_session_with_client(
+    session_id: &str,
+    owner_uid: u32,
+    owner_home: &std::path::Path,
+    client: SessionClient,
 ) -> Result<(), String> {
     let sid = session_id
         .parse::<session::SessionId>()
@@ -133,6 +169,7 @@ fn prepare_task_session(
     // delegation marker cannot be replayed as one.
     session::update_meta(&sid, |meta| {
         meta.origin = Some(SessionOrigin::SystemAgentTask);
+        meta.client = client;
     })
     .map_err(|err| format!("refresh task provenance: {err}"))
 }

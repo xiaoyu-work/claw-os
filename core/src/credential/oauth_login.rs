@@ -37,12 +37,11 @@ pub(super) fn cmd_oauth_login(args: &[String]) -> Result<Value, String> {
 }
 
 pub(super) fn cmd_agent_oauth_login(args: &[String]) -> Result<Value, String> {
-    let attended_agent = crate::proc::current_session_info_for_caps()
-        .is_some_and(|session| is_attended_agent_oauth_session(&session));
+    let attended_agent = crate::agent::tools::exposure::current()
+        .is_some_and(|context| context.is_attended_local());
     if !attended_agent {
         return Err(
-            "Agent-initiated OAuth requires an attended local `cos agent ask`, \
-             `cos agent live`, or `cos agent chat` session"
+            "Agent-initiated OAuth requires a trusted attended local Agent session"
                 .to_string(),
         );
     }
@@ -72,13 +71,6 @@ fn is_direct_oauth_login_session(session: &crate::proc::SessionInfo) -> bool {
             .command
             .windows(2)
             .any(|args| args == ["credential", "oauth-login"])
-}
-
-fn is_attended_agent_oauth_session(session: &crate::proc::SessionInfo) -> bool {
-    is_same_pid_admin_cli_session(session)
-        && session.command.windows(2).any(|args| {
-            args[0] == "agent" && matches!(args[1].as_str(), "ask" | "live" | "chat")
-        })
 }
 
 fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {

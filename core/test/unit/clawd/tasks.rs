@@ -9,7 +9,9 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
     let home = temp.path().join("home-owner");
     std::fs::create_dir_all(&home).unwrap();
 
-    let session_id = create_task_session("test", 1001, &home).unwrap();
+    let trusted_client = SessionClient::new(SessionSource::BrokerTask, true, true);
+    let session_id =
+        create_task_session_with_client("test", 1001, &home, trusted_client).unwrap();
     let db = crate::agent::memory::sqlite_fts::MemoryDb::open(
         crate::paths::clawd_user_memory_db_path(1001),
     )
@@ -22,6 +24,7 @@ fn task_session_reuse_requires_owner_and_refreshes_caps() {
         session::get_meta(&sid).unwrap().origin,
         Some(SessionOrigin::SystemAgentTask)
     );
+    assert_eq!(session::get_meta(&sid).unwrap().client, trusted_client);
     session::set_caps(&sid, &crate::caps::CapSet::new()).unwrap();
     // A session that acquired a delegation marker is re-stamped as
     // ambient when it is resumed, so it can never be replayed as one.
@@ -67,6 +70,7 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         uid: Some(0),
         gid: Some(0),
         start_time_ticks: Some(1),
+        attended_local: false,
     };
     let error = submit(json!({ "prompt": "hello" }), &root)
         .await

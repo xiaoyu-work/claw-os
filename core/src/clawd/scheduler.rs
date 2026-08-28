@@ -721,6 +721,11 @@ fn trusted_session(
         app_id: None,
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::System,
+            false,
+            true,
+        ),
     }
 }
 

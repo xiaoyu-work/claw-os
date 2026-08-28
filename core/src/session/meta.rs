@@ -111,6 +111,68 @@ pub struct Lease {
 }
 
 // ---------------------------------------------------------------------------
+// SessionClient
+// ---------------------------------------------------------------------------
+
+/// Authenticated frontend that initiated a session.
+///
+/// This is descriptive provenance, not a caller-selected role. Daemon-backed
+/// sessions populate it from the broker route and kernel peer facts; local
+/// runtimes populate it at their trusted entry point. Missing metadata is
+/// deliberately [`Unknown`](SessionSource::Unknown) and unattended.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum SessionSource {
+    LocalCli,
+    LocalWeb,
+    BrokerTask,
+    ScheduledTrigger,
+    ExternalMcp,
+    App,
+    System,
+    DelegatedAgent,
+    #[default]
+    Unknown,
+}
+
+impl SessionSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalCli => "local-cli",
+            Self::LocalWeb => "local-web",
+            Self::BrokerTask => "broker-task",
+            Self::ScheduledTrigger => "scheduled-trigger",
+            Self::ExternalMcp => "external-mcp",
+            Self::App => "app",
+            Self::System => "system",
+            Self::DelegatedAgent => "delegated-agent",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Trusted interaction metadata carried with a session.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct SessionClient {
+    #[serde(default)]
+    pub source: SessionSource,
+    #[serde(default)]
+    pub attended: bool,
+    #[serde(default)]
+    pub local: bool,
+}
+
+impl SessionClient {
+    pub const fn new(source: SessionSource, attended: bool, local: bool) -> Self {
+        Self {
+            source,
+            attended,
+            local,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // SessionOrigin
 // ---------------------------------------------------------------------------
 
@@ -197,6 +259,13 @@ pub struct SessionMeta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin: Option<SessionOrigin>,
 
+    /// Authenticated frontend and presence metadata for this session.
+    ///
+    /// For durable authority decisions this field is trusted only when the
+    /// containing record is root-owned, exactly like [`SessionOrigin`].
+    #[serde(default)]
+    pub client: SessionClient,
+
     /// Parent session, if this one was spawned by a sub-agent
     /// delegation. `None` for top-level user-initiated sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +300,7 @@ impl SessionMeta {
             credential_tier: None,
             owner_uid: None,
             origin: None,
+            client: SessionClient::default(),
             parent_session: None,
             status: Status::Pending,
             budget: Budget::default(),

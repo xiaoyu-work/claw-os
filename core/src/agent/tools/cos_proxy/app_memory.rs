@@ -33,6 +33,7 @@ use serde_json::{json, Value};
 
 use crate::agent::memory::app_memory::{self, AppMemoryRow};
 use crate::agent::memory::sqlite_fts::MemoryDb;
+use crate::agent::tools::exposure::ToolExposure;
 use crate::agent::tools::{Tool, ToolResult};
 
 const DEFAULT_LIST_LIMIT: usize = 20;
@@ -108,6 +109,10 @@ impl Tool for CosAppMemoryTool {
             "required": ["command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::MEMORY_READ])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

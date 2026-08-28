@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::notes::NotesStore;
+use crate::agent::tools::exposure::ToolExposure;
 use crate::agent::tools::{Tool, ToolResult};
 
 /// `cos_memory` LLM tool. Holds its own `NotesStore` so tests can inject a
@@ -80,6 +81,13 @@ impl Tool for CosMemoryTool {
             "required": ["command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_any_verb([
+            crate::caps::Verb::MEMORY_READ,
+            crate::caps::Verb::MEMORY_WRITE,
+        ])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

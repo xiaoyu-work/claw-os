@@ -3,7 +3,9 @@
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
+use super::super::exposure::{ToolExposure, ToolTransport};
 use super::super::{Tool, ToolResult};
+use crate::session::SessionSource;
 
 pub struct CosOauthLoginTool;
 
@@ -55,6 +57,17 @@ impl Tool for CosOauthLoginTool {
             "required": ["provider"],
             "additionalProperties": false
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always()
+            .from_sources([
+                SessionSource::LocalCli,
+                SessionSource::LocalWeb,
+                SessionSource::BrokerTask,
+            ])
+            .requiring_attended_local()
+            .requiring_transport(ToolTransport::InteractiveAuthorization)
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

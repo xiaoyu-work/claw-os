@@ -38,6 +38,7 @@ fn pid_recycle_safe() {
         app_id: None,
         pending_bind: false,
         start_time_ticks: Some(real_start),
+        client: crate::session::SessionClient::default(),
     };
     assert!(
         is_alive_for_info(&info_match),

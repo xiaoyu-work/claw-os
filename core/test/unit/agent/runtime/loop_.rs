@@ -1177,7 +1177,8 @@ fn compressor_from_cfg_returns_none_when_disabled() {
     let mut c = cfg();
     c.compress_enabled = false;
     let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
-    assert!(compressor_from_cfg(prov, &c, &builtin_only_registry()).is_none());
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(&c));
+    assert!(compressor_from_cfg(prov, &c, &builtin_only_registry(), &exposure).is_none());
 }
 
 #[test]
@@ -1189,8 +1190,10 @@ fn compressor_from_cfg_returns_some_when_enabled() {
     c.compress_keep_tail_tokens = 200;
     c.compress_summary_max_tokens = 64;
     let prov: Arc<dyn Provider> = Arc::new(MockProvider::new(&c.model, &c));
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(&c));
     let comp =
-        compressor_from_cfg(prov, &c, &builtin_only_registry()).expect("expected compressor");
+        compressor_from_cfg(prov, &c, &builtin_only_registry(), &exposure)
+            .expect("expected compressor");
     // The trait object can't expose config, but we can prove it
     // exists and `should_compress` is wired.
     assert!(!comp.should_compress(None, &[]));
@@ -1292,11 +1295,11 @@ async fn ask_with_guardrails_blocks_denied_tool_call() {
     mock.push_response(MockResponse::Text("recovered".into()));
 
     let provider: Arc<dyn Provider> = Arc::new(mock);
-    let mut tools = builtin_only_registry();
+    let tools = builtin_only_registry();
     let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("now");
-    tools.set_guardrails(g);
+    let exposure = ToolExposureContext::isolated(g);
 
-    let result = ask_with(provider, &cfg, "what time is it", &tools)
+    let result = ask_with_exposure(provider, &cfg, "what time is it", &tools, &exposure)
         .await
         .unwrap();
     // Loop survives: the tool is treated like an unknown tool.
@@ -1308,11 +1311,11 @@ async fn ask_with_guardrails_blocks_denied_tool_call() {
 /// guardrails, and the runtime hands that list to the provider.
 #[test]
 fn registry_as_llm_tools_omits_denied_tools() {
-    let mut tools = builtin_only_registry();
+    let tools = builtin_only_registry();
     let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("echo");
-    tools.set_guardrails(g);
+    let exposure = ToolExposureContext::isolated(g);
 
-    let llm_tools = tools.as_llm_tools();
+    let llm_tools = tools.as_llm_tools_for(&exposure);
     let names: Vec<&str> = llm_tools.iter().map(|t| t.name.as_str()).collect();
     assert!(!names.contains(&"echo"));
     assert!(names.contains(&"now"));
@@ -1322,19 +1325,19 @@ fn registry_as_llm_tools_omits_denied_tools() {
 /// like `cos agent status`); `get` MUST NOT.
 #[test]
 fn registry_get_unfiltered_bypasses_guardrails() {
-    let mut tools = builtin_only_registry();
+    let tools = builtin_only_registry();
     let g = crate::agent::tools::guardrails::Guardrails::permissive().deny_tool("echo");
-    tools.set_guardrails(g);
+    let exposure = ToolExposureContext::isolated(g);
 
     assert!(
-        tools.get("echo").is_none(),
+        tools.get_for(&exposure, "echo").is_none(),
         "filtered get must reject denied"
     );
     assert!(
         tools.get_unfiltered("echo").is_some(),
         "unfiltered must surface denied"
     );
-    assert!(tools.get("now").is_some());
+    assert!(tools.get_for(&exposure, "now").is_some());
     assert!(tools.get_unfiltered("now").is_some());
 }
 

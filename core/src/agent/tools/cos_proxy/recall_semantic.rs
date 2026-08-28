@@ -21,6 +21,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::agent::memory::semantic::{SemanticHit, SemanticStore};
+use crate::agent::tools::exposure::ToolExposure;
 use crate::agent::tools::{Tool, ToolResult};
 
 const DEFAULT_LIMIT: usize = 10;
@@ -82,6 +83,10 @@ impl Tool for CosRecallSemanticTool {
             "required": ["command"],
             "additionalProperties": false,
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_all_verbs([crate::caps::Verb::MEMORY_READ])
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

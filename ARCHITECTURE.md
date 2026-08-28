@@ -44,7 +44,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
-| Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
+| Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Memory and sessions | SQLite/FTS memory, semantic recall, session/message persistence, curation, and checkpoints | `core/src/agent/memory/`, `core/src/session/`, `core/src/checkpoint.rs` |
 | Audit | Hash-chained JSONL events and agent audit/query commands | `core/src/audit.rs`, `core/src/agent/audit_cli.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
@@ -75,7 +75,13 @@ This keeps local, sandboxed, and remote implementations interchangeable.
 ### Authority and policy
 
 - `clawd` is the privileged broker boundary.
-- The tool registry filters tools before model exposure.
+- The tool registry caches only immutable descriptors. Every request projects
+  them through a typed context built from authenticated session identity,
+  effective capabilities, source/presence, execution host, reachable
+  transports, enabled extensions, and guardrails.
+- Exposure is discoverability, not authorization: dispatch repeats the same
+  projection check and tools still validate arguments before exact capability
+  enforcement.
 - Runtime dispatch runs guardrails and pre/post hooks around tool calls.
 - App manifests declare capability needs; bundled apps enforce them through
   `cos_runtime.policy`.
@@ -230,6 +236,8 @@ CLI / web UI / bridge
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
   -> compact tool registry / guardrails / hooks
+     -> rebuild session-scoped tool projection from trusted runtime facts
+        (never request fields or process environment)
      (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
   -> parallel-safe or serial tool execution
   -> tool results appended to conversation
@@ -238,6 +246,15 @@ CLI / web UI / bridge
   -> stream/progress/audit/result frames back to clawd over the job channel
   -> clawd persists usage/session/audit records and finishes the task
 ```
+
+The `clawd` task record snapshots broker-derived source, locality and attended
+state. `clawd` re-derives the session capability set, signs that client metadata
+and a content-addressed capability generation into the `claw-agentd` job grant,
+and the worker verifies both before constructing `ToolExposureContext`.
+Direct CLI, authenticated web and external MCP surfaces construct the same
+context from their verified process session and trusted entry-point facts.
+There is no process-global authorization or availability cache; concurrent
+sessions project independently even when they share one descriptor registry.
 
 `core/src/agent/runtime/turn.rs` is the main seam where model output, tool
 authorization, execution ordering, hooks, and conversation history meet.

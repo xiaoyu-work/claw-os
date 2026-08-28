@@ -238,6 +238,7 @@ fn session_row(session_id: &str, pid: u32, app_id: Option<&str>, caps: CapSet) -
         app_id: app_id.map(ToOwned::to_owned),
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: crate::session::SessionClient::default(),
     }
 }
 
@@ -1134,6 +1135,7 @@ fn test_client() -> ClientIdentity {
         uid: Some(this_uid()),
         gid: Some(0),
         start_time_ticks,
+        attended_local: false,
     }
 }
 
@@ -1404,6 +1406,7 @@ fn e2e_client() -> ClientIdentity {
         uid: Some(E2E_UID),
         gid: Some(0),
         start_time_ticks,
+        attended_local: false,
     }
 }
 
@@ -1429,6 +1432,7 @@ fn e2e_row(session_id: &str, pid: u32, transient: Option<CapSet>) -> SessionInfo
         app_id: Some("fs".to_string()),
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: crate::session::SessionClient::default(),
     }
 }
 

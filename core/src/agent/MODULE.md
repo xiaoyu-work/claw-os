@@ -34,7 +34,7 @@ surfaces.
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
-| `tools/registry.rs` | Tool exposure and dispatch lookup |
+| `tools/registry.rs`, `tools/exposure.rs` | Immutable tool catalogue plus session-scoped exposure and dispatch lookup |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
@@ -58,8 +58,9 @@ CLI/web -> clawd task queue -> claw-agentd worker
 
 `runtime/turn.rs` is the contract seam between providers and tools. Provider
 changes must preserve equivalent streaming/non-streaming text, tools, opaque
-reasoning state, usage, and error behavior. Tool calls only execute through the
-registry, guardrails, and hooks.
+reasoning state, usage, and error behavior. Tool schemas and calls use the same
+trusted per-request exposure context, then execute through registry
+reauthorization, guardrails, approvals, and hooks.
 
 ## Tests
 

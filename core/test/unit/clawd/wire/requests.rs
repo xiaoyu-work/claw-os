@@ -10,10 +10,16 @@ fn a_task_submission_is_closed_and_bounded() {
     });
     assert!(serde_json::from_value::<TaskSubmit>(ok).is_ok());
 
-    // `owner_uid` is authority the daemon derives; a caller cannot
-    // smuggle it in beside a legitimate field.
-    let smuggled = json!({"prompt": "hi", "owner_uid": 0});
-    assert!(serde_json::from_value::<TaskSubmit>(smuggled).is_err());
+    // Identity, source, and presence are authority the daemon derives; a
+    // caller cannot smuggle any of them in beside a legitimate field.
+    for field in [
+        json!({"prompt": "hi", "owner_uid": 0}),
+        json!({"prompt": "hi", "source": "local-cli"}),
+        json!({"prompt": "hi", "attended": true}),
+        json!({"prompt": "hi", "local": true}),
+    ] {
+        assert!(serde_json::from_value::<TaskSubmit>(field).is_err());
+    }
 
     let wrong_type = json!({"prompt": ["hi"]});
     assert!(serde_json::from_value::<TaskSubmit>(wrong_type).is_err());

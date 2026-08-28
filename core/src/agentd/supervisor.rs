@@ -264,6 +264,8 @@ struct Lease {
     task_id: String,
     session_id: Option<String>,
     owner_uid: u32,
+    client: crate::session::SessionClient,
+    capability_generation: String,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
@@ -312,7 +314,7 @@ async fn supervise(
 
     // Capabilities are derived here, from root-owned session metadata,
     // and handed to the worker. Nothing the worker says can widen them.
-    let session = match job.session_id.as_deref() {
+    let mut session = match job.session_id.as_deref() {
         Some(session_id) => match broker_session_info(session_id) {
             Ok(session) => session,
             Err(error) => {
@@ -322,6 +324,17 @@ async fn supervise(
         },
         None => None,
     };
+    let effective_client = if job.client.source != crate::session::SessionSource::Unknown {
+        job.client
+    } else {
+        session
+            .as_ref()
+            .map(|session| session.client)
+            .unwrap_or_default()
+    };
+    if let Some(session) = session.as_mut() {
+        session.client = effective_client;
+    }
 
     let spawned = match spawn::spawn_worker(&identity, &job.id) {
         Ok(spawned) => {
@@ -363,6 +376,14 @@ async fn supervise(
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
         owner_uid,
+        client: effective_client,
+        capability_generation: session
+            .as_ref()
+            .and_then(|session| session.caps.as_ref())
+            .map(crate::agent::tools::exposure::capability_generation)
+            .unwrap_or_else(|| {
+                crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
+            }),
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
@@ -594,6 +615,8 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         task_id: lease.task_id.clone(),
         session_id: lease.session_id.clone(),
         owner_uid: lease.owner_uid,
+        client: lease.client,
+        capability_generation: lease.capability_generation.clone(),
         owner_gid: 0,
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
@@ -627,6 +650,8 @@ fn accept(
                 task_id: lease.task_id.clone(),
                 session_id: lease.session_id.clone(),
                 owner_uid: lease.owner_uid,
+                client: lease.client,
+                capability_generation: lease.capability_generation.clone(),
                 worker_pid: lease.worker_pid,
                 worker_start_time_ticks: lease.worker_start_time_ticks,
                 route: route.to_string(),

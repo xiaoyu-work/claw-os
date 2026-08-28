@@ -10,6 +10,8 @@ fn signed_grant() -> crate::agentd::grant::SignedGrant {
         task_id: "task-a".to_string(),
         session_id: None,
         owner_uid: 1000,
+        client: crate::session::SessionClient::default(),
+        capability_generation: "empty".to_string(),
         owner_gid: 1000,
         worker_pid: 2,
         worker_start_time_ticks: None,

@@ -8,6 +8,10 @@ which tool calls are exposed and executed.
 ## Responsibilities
 
 - Register built-in, `cos` proxy, progressive app, memory, browser, and MCP tools.
+- Cache immutable name/description/schema descriptors separately from
+  per-request visibility decisions.
+- Project descriptors through trusted session owner, source, attendance,
+  capabilities, host transports, enabled extensions, and guardrails.
 - Let an attended local system Agent initiate trusted account authorization
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
@@ -18,7 +22,8 @@ which tool calls are exposed and executed.
 
 | Path | Role |
 | --- | --- |
-| `registry.rs` | Tool registration, filtering, lookup |
+| `registry.rs` | Immutable descriptor/tool registration and projected lookup |
+| `exposure.rs` | Typed session facts, availability requirements, projection decisions |
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
@@ -28,10 +33,12 @@ which tool calls are exposed and executed.
 
 ## Dependencies
 
-Runtime dispatch depends on the registry, never on concrete tools directly.
-Tools consume stable service/capability definitions. Model output and external
-tool results are untrusted; authority comes only from session and capability
-context.
+Runtime dispatch depends on the registry plus one `ToolExposureContext`, never
+on concrete tools directly. Projection is rebuilt per request and repeated at
+dispatch; only immutable descriptors may be cached. Tools consume stable
+service/capability definitions and still perform exact argument-derived checks.
+Model output, client fields, process environment, and external tool results are
+untrusted; authority comes only from authenticated session/runtime facts.
 
 ## Tests
 

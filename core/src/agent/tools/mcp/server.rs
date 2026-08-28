@@ -26,6 +26,7 @@ use super::protocol::{
     ERR_PARSE, JSONRPC_VERSION, PROTOCOL_VERSION,
 };
 use super::transport::{Transport, TransportError};
+use crate::agent::tools::exposure::ToolExposureContext;
 use crate::agent::tools::registry::ToolRegistry;
 
 #[derive(Debug, thiserror::Error)]
@@ -38,18 +39,37 @@ pub struct McpServer {
     name: String,
     version: String,
     registry: Arc<ToolRegistry>,
+    exposure: ToolExposureContext,
 }
 
 impl McpServer {
+    #[cfg(test)]
     pub fn new(
         name: impl Into<String>,
         version: impl Into<String>,
         registry: Arc<ToolRegistry>,
     ) -> Self {
+        Self::new_with_context(
+            name,
+            version,
+            registry,
+            ToolExposureContext::isolated(
+                crate::agent::tools::guardrails::Guardrails::permissive(),
+            ),
+        )
+    }
+
+    pub fn new_with_context(
+        name: impl Into<String>,
+        version: impl Into<String>,
+        registry: Arc<ToolRegistry>,
+        exposure: ToolExposureContext,
+    ) -> Self {
         Self {
             name: name.into(),
             version: version.into(),
             registry,
+            exposure,
         }
     }
 
@@ -290,17 +310,16 @@ impl McpServer {
                 );
             }
         }
-        let mut tools: Vec<ToolDescriptor> = Vec::new();
-        for name in self.registry.names() {
-            if let Some(t) = self.registry.get(name) {
-                tools.push(ToolDescriptor {
-                    name: t.name().to_string(),
-                    description: Some(t.description().to_string()),
-                    input_schema: t.input_schema(),
-                });
-            }
-
-        }
+        let tools: Vec<ToolDescriptor> = self
+            .registry
+            .as_llm_tools_for(&self.exposure)
+            .into_iter()
+            .map(|tool| ToolDescriptor {
+                name: tool.name,
+                description: Some(tool.description),
+                input_schema: tool.input_schema,
+            })
+            .collect();
         let result = ListToolsResult {
             tools,
             next_cursor: None,
@@ -335,18 +354,19 @@ impl McpServer {
                 );
             }
         };
-        let tool = match self.registry.get(&params.name) {
-            Some(t) => t,
-            None => {
-                return JsonRpcResponse::err(
-                    id,
-                    JsonRpcError::new(
-                        ERR_INVALID_PARAMS,
-                        format!("tool not registered: {}", params.name),
-                    ),
-                );
-            }
-        };
+        if self
+            .registry
+            .get_for(&self.exposure, &params.name)
+            .is_none()
+        {
+            return JsonRpcResponse::err(
+                id,
+                JsonRpcError::new(
+                    ERR_INVALID_PARAMS,
+                    format!("tool not registered: {}", params.name),
+                ),
+            );
+        }
         let arguments = match params.arguments {
             Some(Value::Object(arguments)) => Value::Object(arguments),
             Some(_) => {
@@ -363,7 +383,15 @@ impl McpServer {
                 );
             }
         };
-        let result = tool.exec(arguments).await;
+        let result = self
+            .registry
+            .execute(
+                &self.exposure,
+                &params.name,
+                arguments,
+                "policy: external_mcp",
+            )
+            .await;
         let body = CallToolResult {
             content: vec![ContentItem::Text {
                 text: result.content,

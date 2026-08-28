@@ -107,6 +107,11 @@ pub struct SessionInfo {
     /// at spawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub start_time_ticks: Option<u64>,
+    /// Authenticated frontend and user-presence metadata. This is copied from
+    /// root-owned durable session metadata for broker tasks, or set by a
+    /// trusted local entry point for in-process runtimes.
+    #[serde(default)]
+    pub client: crate::session::SessionClient,
 }
 
 #[derive(Debug, Serialize, Deserialize, Default)]
@@ -1362,6 +1367,9 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         app_id: None,
         pending_bind: false,
         start_time_ticks,
+        client: current_session_info_for_caps()
+            .map(|session| session.client)
+            .unwrap_or_default(),
     };
 
     let info_for_registry = info.clone();

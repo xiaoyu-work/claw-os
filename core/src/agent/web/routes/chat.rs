@@ -193,10 +193,18 @@ async fn drive_chat(
     let provider = crate::ai::gate::build_system_provider(&cfg)
         .map_err(|e| format!("provider unavailable: {e}"))?;
 
+    let mut exposure =
+        crate::agent::tools::exposure::ToolExposureContext::from_current_session(
+            Some(&session_id),
+            None,
+            crate::agent::tools::exposure::ExecutionHost::Direct,
+            runtime::loop_::guardrails_from_cfg(&cfg),
+        )?
+        .for_authenticated_web_request(state.inner.local_only);
     let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(&cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
+    let _mcp_handles =
+        runtime::loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &mut exposure).await;
 
     let memory_db = if use_memory {
         match memory::sqlite_fts::MemoryDb::open_default() {
@@ -239,12 +247,13 @@ async fn drive_chat(
     // truncates long tool-result bodies before replay.
     let result = match memory_db.as_ref() {
         Some(db) => {
-            runtime::loop_::ask_with_stream_continuation_scoped(
+            runtime::loop_::ask_with_stream_continuation_scoped_exposure(
                 provider.clone(),
                 &cfg,
                 &prompt,
                 None,
                 &tools,
+                &exposure,
                 db,
                 &session_id,
                 100,
@@ -255,12 +264,13 @@ async fn drive_chat(
             .await
         }
         None => {
-            runtime::loop_::ask_with_stream_scoped(
+            runtime::loop_::ask_with_stream_scoped_exposure(
                 provider.clone(),
                 &cfg,
                 &prompt,
                 None,
                 &tools,
+                &exposure,
                 None,
                 sink,
                 progress,

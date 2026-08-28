@@ -1,26 +1,34 @@
-//! Tool registry — collection of `Arc<dyn Tool>` keyed by name.
-//!
-//! Optionally carries a [`Guardrails`](super::guardrails::Guardrails) that
-//! restricts which tools the model can see and call. The default
-//! is `Guardrails::permissive()` (every registered tool is permitted).
+//! Tool registry — immutable descriptors and implementations keyed by name.
 //!
 //! Optionally carries an [`ApprovalGate`](super::super::runtime::approval::ApprovalGate)
 //! that gates per-call invocations of tools the policy classifies as
 //! dangerous. The default is an empty gate (every call short-circuits
 //! to `Approved`).
+//!
+//! Session authorization and reachability are deliberately absent from the
+//! cached entries. Every model projection and execution lookup receives a
+//! [`ToolExposureContext`](super::exposure::ToolExposureContext), so one
+//! session cannot populate process-global availability state for another.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::guardrails::Guardrails;
-use super::Tool;
+use serde_json::Value;
+
+use super::exposure::{ExposureDecision, ToolExposure, ToolExposureContext};
+use super::{Tool, ToolResult};
 use crate::agent::llm;
 use crate::agent::runtime::approval::ApprovalGate;
 
+struct ToolEntry {
+    tool: Arc<dyn Tool>,
+    descriptor: llm::Tool,
+    exposure: ToolExposure,
+}
+
 #[derive(Default)]
 pub struct ToolRegistry {
-    tools: HashMap<String, Arc<dyn Tool>>,
-    guardrails: Guardrails,
+    tools: HashMap<String, ToolEntry>,
     approval: ApprovalGate,
 }
 
@@ -31,17 +39,20 @@ impl ToolRegistry {
 
     /// Register a tool. Last write wins for duplicate names.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        self.tools.insert(tool.name().to_owned(), tool);
-    }
-
-    /// Replace the active guardrails. Call once at construction time.
-    pub fn set_guardrails(&mut self, guardrails: Guardrails) {
-        self.guardrails = guardrails;
-    }
-
-    /// Borrow the active guardrails.
-    pub fn guardrails(&self) -> &Guardrails {
-        &self.guardrails
+        let descriptor = llm::Tool {
+            name: tool.name().to_string(),
+            description: tool.description().to_string(),
+            input_schema: tool.input_schema(),
+        };
+        let exposure = tool.exposure();
+        self.tools.insert(
+            descriptor.name.clone(),
+            ToolEntry {
+                tool,
+                descriptor,
+                exposure,
+            },
+        );
     }
 
     /// Replace the active approval gate. Call once at construction time.
@@ -49,51 +60,78 @@ impl ToolRegistry {
         self.approval = approval;
     }
 
-    /// Borrow the active approval gate.
-    pub fn approval(&self) -> &ApprovalGate {
-        &self.approval
+    /// Returns the exposure decision for a registered tool.
+    pub fn exposure_decision(&self, context: &ToolExposureContext, name: &str) -> ExposureDecision {
+        let Some(entry) = self.tools.get(name) else {
+            return ExposureDecision::Hidden("tool is not registered".to_string());
+        };
+        if let super::guardrails::Decision::Deny(reason) = context.guardrails().decide(name) {
+            return ExposureDecision::Hidden(reason);
+        }
+        entry.exposure.decide(context)
     }
 
-    /// Returns `Some(tool)` only when the tool is registered AND permitted
-    /// by the active guardrails. Returns `None` for absent OR denied tools.
-    /// Used by the runtime turn dispatcher so denied calls are uniformly
-    /// rejected, regardless of whether the model saw the tool in its
-    /// schema list.
-    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        if !self.guardrails.permits(name) {
+    /// Returns `Some(tool)` only when the current session may see and reach it.
+    pub fn get_for(&self, context: &ToolExposureContext, name: &str) -> Option<Arc<dyn Tool>> {
+        if !self.exposure_decision(context, name).is_visible() {
             return None;
         }
-        self.tools.get(name).cloned()
+        self.tools.get(name).map(|entry| entry.tool.clone())
     }
 
-    /// Like [`get`] but ignores guardrails. Use only when you specifically
-    /// need to bypass policy (e.g. printing the registered set in
-    /// diagnostics). Production runtime code should use [`get`].
+    /// Descriptor-cache lookup without session projection. Runtime dispatch
+    /// must use [`get_for`](Self::get_for).
+    pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
+        self.get_unfiltered(name)
+    }
+
+    /// Compatibility alias for raw descriptor-cache lookup.
+    /// Production runtime code must use [`get_for`](Self::get_for).
     pub fn get_unfiltered(&self, name: &str) -> Option<Arc<dyn Tool>> {
-        self.tools.get(name).cloned()
+        self.tools.get(name).map(|entry| entry.tool.clone())
+    }
+
+    pub fn descriptor_unfiltered(&self, name: &str) -> Option<&llm::Tool> {
+        self.tools.get(name).map(|entry| &entry.descriptor)
     }
 
     /// Whether the named tool opts into concurrent dispatch with
     /// siblings in the same turn (see [`Tool::parallel_safe`]).
     /// Unknown / denied tools return `false` — they'll be handled by
     /// the normal serial path which already raises a clear error.
-    pub fn is_parallel_safe(&self, name: &str) -> bool {
+    pub fn is_parallel_safe_for(&self, context: &ToolExposureContext, name: &str) -> bool {
+        if !self.exposure_decision(context, name).is_visible() {
+            return false;
+        }
         self.tools
             .get(name)
-            .map(|t| t.parallel_safe())
+            .map(|entry| entry.tool.parallel_safe())
             .unwrap_or(false)
     }
 
-    /// Names of every permitted tool, sorted.
-    pub fn names(&self) -> Vec<&str> {
+    pub fn is_parallel_safe(&self, name: &str) -> bool {
+        self.tools
+            .get(name)
+            .map(|entry| entry.tool.parallel_safe())
+            .unwrap_or(false)
+    }
+
+    /// Names visible in this session, sorted.
+    pub fn names_for(&self, context: &ToolExposureContext) -> Vec<&str> {
         let mut names: Vec<&str> = self
             .tools
             .keys()
             .map(String::as_str)
-            .filter(|n| self.guardrails.permits(n))
+            .filter(|name| self.exposure_decision(context, name).is_visible())
             .collect();
         names.sort_unstable();
         names
+    }
+
+    /// Names in the immutable descriptor cache. Runtime model projection must
+    /// use [`names_for`](Self::names_for).
+    pub fn names(&self) -> Vec<&str> {
+        self.names_unfiltered()
     }
 
     /// Names of every registered tool ignoring guardrails. For diagnostics.
@@ -103,30 +141,99 @@ impl ToolRegistry {
         names
     }
 
+    pub fn len_for(&self, context: &ToolExposureContext) -> usize {
+        self.names_for(context).len()
+    }
+
+    pub fn is_empty_for(&self, context: &ToolExposureContext) -> bool {
+        self.len_for(context) == 0
+    }
+
     pub fn len(&self) -> usize {
-        self.names().len()
+        self.tools.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.tools.is_empty()
     }
 
-    /// Convert to the LLM-trait-facing representation passed in
-    /// `ChatRequest.tools`. Honours guardrails — denied tools are NOT
-    /// surfaced to the model.
+    /// Convert the current session projection to the representation passed in
+    /// `ChatRequest.tools`.
+    pub fn as_llm_tools_for(&self, context: &ToolExposureContext) -> Vec<llm::Tool> {
+        let mut out: Vec<llm::Tool> = self
+            .tools
+            .iter()
+            .filter(|(name, _)| self.exposure_decision(context, name).is_visible())
+            .map(|(_, entry)| entry.descriptor.clone())
+            .collect();
+        out.sort_by(|a, b| a.name.cmp(&b.name));
+        out
+    }
+
+    /// Every immutable descriptor, without session projection.
     pub fn as_llm_tools(&self) -> Vec<llm::Tool> {
         let mut out: Vec<llm::Tool> = self
             .tools
             .values()
-            .filter(|t| self.guardrails.permits(t.name()))
-            .map(|t| llm::Tool {
-                name: t.name().to_string(),
-                description: t.description().to_string(),
-                input_schema: t.input_schema(),
-            })
+            .map(|entry| entry.descriptor.clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    /// Execute through the same session projection used for schema exposure.
+    ///
+    /// This is intentionally only the coarse reachability check. Tool
+    /// implementations still validate their arguments and rerun exact
+    /// capability/scope enforcement before side effects.
+    pub async fn execute(
+        &self,
+        context: &ToolExposureContext,
+        name: &str,
+        input: Value,
+        approval_reason: &str,
+    ) -> ToolResult {
+        let Some(tool) = self.get_for(context, name) else {
+            let reason = self
+                .exposure_decision(context, name)
+                .reason()
+                .unwrap_or("unavailable")
+                .to_string();
+            return ToolResult::err(format!("tool `{name}` is unavailable: {reason}"));
+        };
+
+        if self.approval.is_classified(name) {
+            match self.approval.evaluate(name, &input, approval_reason).await {
+                crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {}
+                crate::agent::runtime::approval::ApprovalOutcome::Denied { reason } => {
+                    return ToolResult::err(format!(
+                        "approval denied for `{name}`: {}",
+                        reason.unwrap_or_else(|| "no reason".to_string())
+                    ));
+                }
+                crate::agent::runtime::approval::ApprovalOutcome::Deferred { prompt } => {
+                    return ToolResult::err(format!(
+                        "approval pending for `{name}`: {}",
+                        prompt.unwrap_or_else(|| "user approval required".to_string())
+                    ));
+                }
+            }
+        }
+
+        let guardrails = context.guardrails().clone();
+        let approval = self.approval.clone();
+        let exposure = context.clone();
+        super::exposure::scope(
+            exposure.clone(),
+            super::delegate::PARENT_GUARDRAILS.scope(
+                guardrails,
+                super::delegate::PARENT_APPROVAL.scope(
+                    approval,
+                    super::delegate::PARENT_EXPOSURE.scope(exposure, tool.exec(input)),
+                ),
+            ),
+        )
+        .await
     }
 }
 
@@ -161,7 +268,9 @@ pub fn default_registry() -> ToolRegistry {
             super::cos_proxy::register_recall(&mut r, db.clone());
             super::cos_proxy::register_app_memory(&mut r, db);
         }
-        Err(e) => tracing::warn!("cos_recall/cos_app_memory: failed to open default memory DB: {e}"),
+        Err(e) => {
+            tracing::warn!("cos_recall/cos_app_memory: failed to open default memory DB: {e}")
+        }
     }
     // Best-effort: open the default semantic store; only registered
     // when `[embed]` is configured. When disabled the tool silently
@@ -174,9 +283,7 @@ pub fn default_registry() -> ToolRegistry {
         Ok(None) => {
             tracing::debug!("cos_recall_semantic: [embed] disabled — tool not registered")
         }
-        Err(e) => tracing::warn!(
-            "cos_recall_semantic: failed to open default semantic DB: {e}"
-        ),
+        Err(e) => tracing::warn!("cos_recall_semantic: failed to open default semantic DB: {e}"),
     }
     r
 }

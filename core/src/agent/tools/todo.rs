@@ -38,6 +38,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::agent::tools::exposure::ToolExposure;
 use crate::agent::tools::{Tool, ToolResult};
 
 /// Windows-reserved device names. These names — regardless of suffix
@@ -342,6 +343,13 @@ impl Tool for Todo {
             },
             "required": ["command"]
         })
+    }
+
+    fn exposure(&self) -> ToolExposure {
+        ToolExposure::always().requiring_any_verb([
+            crate::caps::Verb::MEMORY_READ,
+            crate::caps::Verb::MEMORY_WRITE,
+        ])
     }
 
     async fn exec(&self, input: serde_json::Value) -> ToolResult {

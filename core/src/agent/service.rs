@@ -148,6 +148,10 @@ pub struct Job {
     /// own (typically empty) config.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_home: Option<String>,
+    /// Broker-derived client/source metadata snapshotted at submission.
+    /// Request JSON cannot set this field.
+    #[serde(default)]
+    pub client: crate::session::SessionClient,
     /// How many times this job has been recovered from `running/` after
     /// the worker executing it died (see [`Store::recover_orphaned_jobs`]).
     /// Bounds crash-loop blast radius: a job that repeatedly kills its
@@ -173,6 +177,29 @@ impl Job {
         owner_uid: Option<u32>,
         owner_home: Option<String>,
     ) -> Self {
+        Self::new_pending_with_client(
+            prompt,
+            context,
+            branch_context,
+            session_id,
+            max_turns,
+            owner_uid,
+            owner_home,
+            crate::session::SessionClient::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn new_pending_with_client(
+        prompt: String,
+        context: Option<String>,
+        branch_context: Option<String>,
+        session_id: Option<String>,
+        max_turns: Option<u32>,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
+        client: crate::session::SessionClient,
+    ) -> Self {
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
@@ -196,6 +223,7 @@ impl Job {
             fallback: None,
             owner_uid,
             owner_home,
+            client,
             recovery_count: 0,
         }
     }
@@ -387,8 +415,15 @@ impl Store {
         owner_uid: Option<u32>,
         owner_home: Option<String>,
     ) -> io::Result<Job> {
-        self.submit_with_context(
-            prompt, None, None, session_id, max_turns, owner_uid, owner_home,
+        self.submit_with_context_and_client(
+            prompt,
+            None,
+            None,
+            session_id,
+            max_turns,
+            owner_uid,
+            owner_home,
+            crate::session::SessionClient::default(),
         )
     }
 
@@ -402,7 +437,7 @@ impl Store {
         owner_uid: Option<u32>,
         owner_home: Option<String>,
     ) -> io::Result<Job> {
-        let job = Job::new_pending(
+        self.submit_with_context_and_client(
             prompt,
             context,
             branch_context,
@@ -410,6 +445,31 @@ impl Store {
             max_turns,
             owner_uid,
             owner_home,
+            crate::session::SessionClient::default(),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_context_and_client(
+        &self,
+        prompt: String,
+        context: Option<String>,
+        branch_context: Option<String>,
+        session_id: Option<String>,
+        max_turns: Option<u32>,
+        owner_uid: Option<u32>,
+        owner_home: Option<String>,
+        client: crate::session::SessionClient,
+    ) -> io::Result<Job> {
+        let job = Job::new_pending_with_client(
+            prompt,
+            context,
+            branch_context,
+            session_id,
+            max_turns,
+            owner_uid,
+            owner_home,
+            client,
         );
         let path = self.path_for(JobStatus::Pending, &job.id);
         write_json_atomic(&path, &job)?;
@@ -2019,11 +2079,27 @@ pub async fn execute_job(
         Ok(p) => p,
         Err(e) => return FinishOutcome::Error(format!("provider unavailable: {e}")),
     };
+    let guardrails = loop_::guardrails_from_cfg(&cfg);
+    let mut exposure =
+        match crate::agent::tools::exposure::ToolExposureContext::from_current_session(
+            job.session_id.as_deref(),
+            Some(&job.id),
+            crate::agent::tools::exposure::ExecutionHost::AgentWorker,
+            guardrails,
+        ) {
+            Ok(context) => context,
+            Err(error) if job.session_id.is_none() => {
+                tracing::warn!(%error, "agent job has no authenticated session; exposing only unscoped tools");
+                crate::agent::tools::exposure::ToolExposureContext::isolated(
+                    loop_::guardrails_from_cfg(&cfg),
+                )
+            }
+            Err(error) => return FinishOutcome::Error(error),
+        };
     let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(loop_::guardrails_from_cfg(&cfg));
     tools.set_approval(loop_::approval_from_cfg(&cfg));
     // MCP attach (best-effort) — handles dropped at end of fn.
-    let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg).await;
+    let _mcp_handles = loop_::attach_mcp_servers_for_cli(&mut tools, &cfg, &mut exposure).await;
 
     let result = if let Some(sid) = job.session_id.as_deref() {
         match crate::agent::memory::sqlite_fts::MemoryDb::open_default() {
@@ -2044,12 +2120,13 @@ pub async fn execute_job(
                 // Replay prior turns so multi-turn task.stream sessions (the
                 // desktop agent UI is the main caller) see continuous context
                 // instead of treating every job.submit as a fresh exchange.
-                loop_::ask_with_stream_continuation_scoped(
+                loop_::ask_with_stream_continuation_scoped_exposure(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
                     job.context.as_deref(),
                     &tools,
+                    &exposure,
                     &db,
                     sid,
                     100,
@@ -2060,12 +2137,13 @@ pub async fn execute_job(
                 .await
             }
             Err(_) => {
-                loop_::ask_with_stream_scoped(
+                loop_::ask_with_stream_scoped_exposure(
                     provider.clone(),
                     &cfg,
                     &job.prompt,
                     job.context.as_deref(),
                     &tools,
+                    &exposure,
                     None,
                     stream_sink.clone(),
                     progress_sink.clone(),
@@ -2075,12 +2153,13 @@ pub async fn execute_job(
             }
         }
     } else {
-        loop_::ask_with_stream_scoped(
+        loop_::ask_with_stream_scoped_exposure(
             provider.clone(),
             &cfg,
             &job.prompt,
             job.context.as_deref(),
             &tools,
+            &exposure,
             None,
             stream_sink,
             progress_sink,

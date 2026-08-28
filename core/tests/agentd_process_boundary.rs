@@ -122,6 +122,10 @@ fn grant_for(
         task_id: task_id.to_string(),
         session_id: None,
         owner_uid: owner.uid,
+        client: cos::session::SessionClient::default(),
+        capability_generation: cos::agent::tools::exposure::capability_generation(
+            &cos::caps::CapSet::new(),
+        ),
         owner_gid: owner.gid,
         worker_pid,
         worker_start_time_ticks: start_time_ticks,
@@ -547,6 +551,10 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         task_id: "task-noapproval".to_string(),
         session_id: None,
         owner_uid: harness.identity.uid,
+        client: cos::session::SessionClient::default(),
+        capability_generation: cos::agent::tools::exposure::capability_generation(
+            &cos::caps::CapSet::new(),
+        ),
         owner_gid: harness.identity.gid,
         worker_pid: worker.pid,
         worker_start_time_ticks: worker.start_time_ticks,

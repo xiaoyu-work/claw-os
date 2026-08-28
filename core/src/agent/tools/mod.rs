@@ -11,6 +11,7 @@ pub mod cos_apps;
 pub mod cos_apps_session;
 pub mod cos_proxy;
 pub mod delegate;
+pub mod exposure;
 pub mod guardrails;
 pub mod mcp;
 pub mod media;
@@ -59,6 +60,12 @@ pub trait Tool: Send + Sync {
     /// JSON Schema describing the input shape. The schema is consumed by the
     /// LLM to decide how to call this tool.
     fn input_schema(&self) -> serde_json::Value;
+
+    /// Immutable coarse requirements for advertising this tool. Exact
+    /// argument-derived authorization still runs inside [`Tool::exec`].
+    fn exposure(&self) -> exposure::ToolExposure {
+        exposure::ToolExposure::always()
+    }
 
     /// Execute the tool. Errors should be returned via `ToolResult::err`,
     /// not via Result, so the model can see them and react.

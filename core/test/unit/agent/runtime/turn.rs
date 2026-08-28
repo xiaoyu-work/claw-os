@@ -475,6 +475,10 @@ fn registry_with(tools_vec: Vec<Arc<dyn Tool>>) -> ToolRegistry {
     r
 }
 
+fn exposure() -> ToolExposureContext {
+    ToolExposureContext::isolated(crate::agent::tools::guardrails::Guardrails::permissive())
+}
+
 fn calls(specs: &[(&str, &str)]) -> Vec<ToolCall> {
     specs
         .iter()
@@ -497,9 +501,11 @@ async fn progress_sink_fires_for_every_dispatch_in_order() {
     })]);
     let tool_calls = calls(&[("id-1", "w1"), ("id-2", "w1")]);
     let p = Arc::new(RecordingProgress::default());
+    let exposure = exposure();
     let (blocks, stop) =
         dispatch_calls(
             &registry,
+            &exposure,
             None,
             &tool_calls,
             None,
@@ -539,9 +545,11 @@ async fn parallel_safe_tools_dispatch_concurrently() {
     let tool_calls = calls(&[("a", "r1"), ("b", "r2"), ("c", "r3")]);
     let p = progress::null_progress();
     let started = std::time::Instant::now();
+    let exposure = exposure();
     let (blocks, _) =
         dispatch_calls(
             &registry,
+            &exposure,
             None,
             &tool_calls,
             None,
@@ -576,9 +584,11 @@ async fn serial_tools_remain_sequential() {
     let tool_calls = calls(&[("a", "w1"), ("b", "w2"), ("c", "w3")]);
     let p = progress::null_progress();
     let started = std::time::Instant::now();
+    let exposure = exposure();
     let _ =
         dispatch_calls(
             &registry,
+            &exposure,
             None,
             &tool_calls,
             None,
@@ -618,9 +628,11 @@ async fn mixed_batch_preserves_declaration_order() {
     // Declaration order: w1 (serial), r1 (parallel), w2 (serial).
     let tool_calls = calls(&[("id-w1", "w1"), ("id-r1", "r1"), ("id-w2", "w2")]);
     let p = progress::null_progress();
+    let exposure = exposure();
     let (blocks, _) =
         dispatch_calls(
             &registry,
+            &exposure,
             None,
             &tool_calls,
             None,

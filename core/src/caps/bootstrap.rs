@@ -47,6 +47,7 @@ use std::io::IsTerminal;
 use crate::caps::role::Role;
 use crate::caps::scope::Scope;
 use crate::proc::{deregister_session, register_session, SessionInfo};
+use crate::session::{SessionClient, SessionSource};
 
 /// RAII guard that removes the bootstrapped session row from the
 /// proc registry on `Drop`. Hold it for the lifetime of `main()` so
@@ -140,6 +141,7 @@ fn bootstrap_user_cli_session_impl(
         app_id: None,
         pending_bind: false,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
+        client: bootstrap_client(args, interactive_terminal),
     };
 
     match register_session(info) {
@@ -163,6 +165,20 @@ fn bootstrap_user_cli_session_impl(
             None
         }
     }
+}
+
+fn bootstrap_client(args: &[String], interactive_terminal: bool) -> SessionClient {
+    let source = match args {
+        [first, second, ..] if first == "agent" && second == "serve" => SessionSource::LocalWeb,
+        [first, second, ..] if first == "agent" && second == "mcp" => SessionSource::ExternalMcp,
+        [first, ..] if first == "app" => SessionSource::App,
+        _ => SessionSource::LocalCli,
+    };
+    SessionClient::new(
+        source,
+        interactive_terminal && source == SessionSource::LocalCli,
+        true,
+    )
 }
 
 fn is_safe_noninteractive_app_launcher(args: &[String]) -> bool {

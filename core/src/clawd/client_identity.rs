@@ -25,16 +25,22 @@ pub struct ClientIdentity {
     /// moment they bind to it.
     #[serde(skip)]
     pub start_time_ticks: Option<u64>,
+    /// Kernel-observed local terminal presence at message admission. This is
+    /// never read from request JSON or the peer's environment.
+    #[serde(skip)]
+    pub attended_local: bool,
 }
 
 impl ClientIdentity {
     /// The peer behind one authenticated message.
     pub fn from_peer(process: PeerProcess) -> Self {
+        let attended_local = process_has_terminal(process.pid, process.start_time_ticks);
         Self {
             pid: Some(process.pid),
             uid: Some(process.uid),
             gid: Some(process.gid),
             start_time_ticks: Some(process.start_time_ticks),
+            attended_local,
         }
     }
 
@@ -44,6 +50,7 @@ impl ClientIdentity {
             uid: None,
             gid: None,
             start_time_ticks: None,
+            attended_local: false,
         }
     }
 
@@ -70,6 +77,30 @@ impl ClientIdentity {
         let uid = self.require_uid()?;
         resolve_home(uid).ok_or_else(|| format!("home directory is unavailable for peer uid {uid}"))
     }
+}
+
+#[cfg(target_os = "linux")]
+fn process_has_terminal(pid: u32, start_time_ticks: u64) -> bool {
+    if crate::proc::read_start_time_ticks_pub(pid) != Some(start_time_ticks) {
+        return false;
+    }
+    let attended = (0..=2).any(|fd| {
+        std::fs::read_link(format!("/proc/{pid}/fd/{fd}"))
+            .ok()
+            .and_then(|path| path.to_str().map(str::to_string))
+            .is_some_and(|path| {
+                path == "/dev/tty"
+                    || path == "/dev/console"
+                    || path.starts_with("/dev/pts/")
+                    || path.starts_with("/dev/tty")
+            })
+    });
+    attended && crate::proc::read_start_time_ticks_pub(pid) == Some(start_time_ticks)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn process_has_terminal(_pid: u32, _start_time_ticks: u64) -> bool {
+    false
 }
 
 #[cfg(unix)]

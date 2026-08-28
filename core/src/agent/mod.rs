@@ -3197,12 +3197,22 @@ async fn chat_cmd_async(
     }
     let cfg = &cfg_owned;
 
+    let mut session_id: String = explicit_session
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+    let mut exposure = crate::agent::tools::exposure::ToolExposureContext::from_current_session(
+        Some(&session_id),
+        None,
+        crate::agent::tools::exposure::ExecutionHost::Direct,
+        runtime::loop_::guardrails_from_cfg(cfg),
+    )?;
+
     // Build the registry once. MCP servers attach the same way as
     // `live`/`ask`, so the model has the full toolbox.
     let mut tools = crate::agent::tools::registry::default_registry();
-    tools.set_guardrails(runtime::loop_::guardrails_from_cfg(cfg));
     tools.set_approval(runtime::loop_::approval_from_cfg(cfg));
-    let _mcp_handles = runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg).await;
+    let _mcp_handles =
+        runtime::loop_::attach_mcp_servers_for_cli(&mut tools, cfg, &mut exposure).await;
 
     let memory_db = if use_memory {
         match memory::sqlite_fts::MemoryDb::open_default() {
@@ -3217,10 +3227,6 @@ async fn chat_cmd_async(
     } else {
         None
     };
-
-    let mut session_id: String = explicit_session
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
     let stdout = std::io::stdout();
     let stderr = std::io::stderr();
@@ -3248,7 +3254,7 @@ async fn chat_cmd_async(
         );
         let _ = writeln!(e, "Type /help for commands. Ctrl-D or /quit to exit.");
         if show_tools {
-            let names = tools.names();
+            let names = tools.names_for(&exposure);
             let _ = writeln!(e, "tools ({}): {}", names.len(), names.join(", "));
         }
     }
@@ -3465,6 +3471,7 @@ async fn chat_cmd_async(
                 }
                 "clear" => {
                     session_id = uuid::Uuid::new_v4().to_string();
+                    exposure.set_conversation_session_id(session_id.clone());
                     prompt_seq = 0;
                     let mut e = stderr.lock();
                     let _ = writeln!(e, "[new session: {session_id}]");
@@ -3496,7 +3503,7 @@ async fn chat_cmd_async(
                     }
                 }
                 "tools" => {
-                    let names = tools.names();
+                    let names = tools.names_for(&exposure);
                     let _ = writeln!(
                         stderr.lock(),
                         "tools ({}): {}",
@@ -3520,11 +3527,12 @@ async fn chat_cmd_async(
             let sink: Arc<dyn StreamSink> = sink_obj.clone();
             let progress: Arc<dyn crate::agent::runtime::progress::ProgressSink> = sink_obj.clone();
             if let Some(db) = &memory_db {
-                runtime::loop_::ask_with_stream_continuation(
+                runtime::loop_::ask_with_stream_continuation_exposure(
                     provider.clone(),
                     cfg,
                     &user_prompt,
                     &tools,
+                    &exposure,
                     db,
                     &session_id,
                     100,
@@ -3533,11 +3541,12 @@ async fn chat_cmd_async(
                 )
                 .await
             } else {
-                runtime::loop_::ask_with_stream(
+                runtime::loop_::ask_with_stream_exposure(
                     provider.clone(),
                     cfg,
                     &user_prompt,
                     &tools,
+                    &exposure,
                     None,
                     sink,
                     progress,
@@ -3545,18 +3554,26 @@ async fn chat_cmd_async(
                 .await
             }
         } else if let Some(db) = &memory_db {
-            runtime::loop_::ask_with_memory_continuation(
+            runtime::loop_::ask_with_memory_continuation_exposure(
                 provider.clone(),
                 cfg,
                 &user_prompt,
                 &tools,
+                &exposure,
                 db,
                 &session_id,
                 100,
             )
             .await
         } else {
-            runtime::loop_::ask_with(provider.clone(), cfg, &user_prompt, &tools).await
+            runtime::loop_::ask_with_exposure(
+                provider.clone(),
+                cfg,
+                &user_prompt,
+                &tools,
+                &exposure,
+            )
+            .await
         };
 
         match result {
@@ -4393,8 +4410,19 @@ fn classify_cmd(args: &[String]) -> Result<Value, String> {
 /// model would see if you ran `cos agent ask` in the same env.
 fn tools_cmd(args: &[String]) -> Result<Value, String> {
     let cfg = &crate::config::get().agent;
-    let mut registry = tools::registry::default_registry();
-    registry.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
+    let registry = tools::registry::default_registry();
+    let exposure = tools::exposure::ToolExposureContext::from_current_session(
+        None,
+        None,
+        tools::exposure::ExecutionHost::Direct,
+        crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
+    )
+    .unwrap_or_else(|_| {
+        tools::exposure::ToolExposureContext::isolated(
+            crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
+        )
+    });
+    let mut registry = registry;
     registry.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
 
     let sub = args.first().map(|s| s.as_str()).unwrap_or("list");
@@ -4414,24 +4442,33 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
             let names: Vec<&str> = if unfiltered {
                 registry.names_unfiltered()
             } else {
-                registry.names()
+                registry.names_for(&exposure)
             };
             let entries: Vec<Value> = names
                 .iter()
                 .filter_map(|n| {
-                    registry.get_unfiltered(n).map(|t| {
-                        let permitted = registry.guardrails().permits(n);
+                    registry.descriptor_unfiltered(n).map(|descriptor| {
+                        let decision = registry.exposure_decision(&exposure, n);
                         json!({
                             "name": n,
-                            "description": t.description(),
-                            "permitted": permitted,
+                            "description": descriptor.description,
+                            "permitted": decision.is_visible(),
+                            "hidden_reason": decision.reason(),
                         })
                     })
                 })
                 .collect();
             Ok(json!({
                 "registered_total": registry.names_unfiltered().len(),
-                "permitted_count": registry.names().len(),
+                "permitted_count": registry.names_for(&exposure).len(),
+                "source": exposure.client().source.as_str(),
+                "attended": exposure.client().attended,
+                "local": exposure.client().local,
+                "owner_uid": exposure.owner_uid(),
+                "authority_session_id": exposure.authority_session_id(),
+                "capability_generation": exposure.capability_generation(),
+                "transports": exposure.transports().map(|transport| transport.as_str()).collect::<Vec<_>>(),
+                "extensions": exposure.enabled_extensions().collect::<Vec<_>>(),
                 "unfiltered": unfiltered,
                 "tools": entries,
             }))
@@ -4442,17 +4479,19 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
                 .cloned()
                 .ok_or_else(|| "usage: cos agent tools show <name>".to_string())?;
             let tool = registry
-                .get_unfiltered(&name)
+                .descriptor_unfiltered(&name)
                 .ok_or_else(|| format!("tool '{name}' not registered"))?;
+            let decision = registry.exposure_decision(&exposure, &name);
             Ok(json!({
-                "name": tool.name(),
-                "description": tool.description(),
-                "input_schema": tool.input_schema(),
-                "permitted": registry.guardrails().permits(&name),
+                "name": tool.name,
+                "description": tool.description,
+                "input_schema": tool.input_schema,
+                "permitted": decision.is_visible(),
+                "hidden_reason": decision.reason(),
             }))
         }
         "llm-list" => {
-            let llm_tools = tools::guardrails::filter_llm_tools(&registry, registry.guardrails());
+            let llm_tools = registry.as_llm_tools_for(&exposure);
             Ok(json!({
                 "count": llm_tools.len(),
                 "tools": llm_tools.iter().map(|t| json!({
@@ -7071,8 +7110,18 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
         "status" | "" => {
             let cfg = &crate::config::get().agent;
             let mut tools = tools::registry::default_registry();
-            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(cfg));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+            let exposure = tools::exposure::ToolExposureContext::from_current_session(
+                None,
+                None,
+                tools::exposure::ExecutionHost::Direct,
+                crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
+            )
+            .unwrap_or_else(|_| {
+                tools::exposure::ToolExposureContext::isolated(
+                    crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
+                )
+            });
             let configured_servers: Vec<Value> = cfg
                 .mcp_servers
                 .iter()
@@ -7093,8 +7142,14 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 "transport": "stdio",
                 "server_name": format!("cos-agent/{}", env!("CARGO_PKG_VERSION")),
                 "tools_registered": tools.names_unfiltered().len(),
-                "tools_permitted": tools.names().len(),
-                "tools": tools.names(),
+                "tools_permitted": tools.names_for(&exposure).len(),
+                "tools": tools.names_for(&exposure),
+                "source": exposure.client().source.as_str(),
+                "attended": exposure.client().attended,
+                "local": exposure.client().local,
+                "authority_session_id": exposure.authority_session_id(),
+                "capability_generation": exposure.capability_generation(),
+                "transports": exposure.transports().map(|transport| transport.as_str()).collect::<Vec<_>>(),
                 "external_servers_configured": cfg.mcp_servers.len(),
                 "external_servers_enabled": enabled_count,
                 "external_servers": configured_servers,
@@ -7237,13 +7292,20 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
             // to (does not replace) cfg.tool_deny so global denies
             // still apply.
             let merged = merge_mcp_overrides(cfg, allow_overrides, deny_overrides);
-            tools.set_guardrails(crate::agent::runtime::loop_::guardrails_from_cfg(&merged));
             tools.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
+            let exposure = tools::exposure::ToolExposureContext::from_current_session(
+                None,
+                None,
+                tools::exposure::ExecutionHost::Direct,
+                crate::agent::runtime::loop_::guardrails_from_cfg(&merged),
+            )?
+            .for_external_mcp();
             let registry = Arc::new(tools);
-            let server = McpServer::new(
+            let server = McpServer::new_with_context(
                 "cos-agent",
                 env!("CARGO_PKG_VERSION"),
                 registry,
+                exposure,
             );
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

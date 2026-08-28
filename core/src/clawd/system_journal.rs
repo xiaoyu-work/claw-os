@@ -170,6 +170,9 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
         // Worker failures quote provider responses and prompt text.
         "error": audit_policy::optional_text_digest(job.error.as_deref()),
         "owner_uid": job.owner_uid,
+        "client_source": job.client.source.as_str(),
+        "attended": job.client.attended,
+        "local": job.client.local,
     })
 }
 

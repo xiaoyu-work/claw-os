@@ -670,6 +670,11 @@ fn execute_job(job: &CronJob, run_id: &str) -> CronRunResult {
         app_id: None,
         pending_bind: true,
         start_time_ticks: None,
+        client: crate::session::SessionClient::new(
+            crate::session::SessionSource::ScheduledTrigger,
+            false,
+            true,
+        ),
     };
     if let Err(error) = crate::proc::register_session_for_owner(session, owner_uid) {
         return failed_run(&started_at, &start, &format!("register cron session: {error}"));
