@@ -114,8 +114,8 @@ async fn pre_tool_allow_passes_through() {
     assert_eq!(post.load(Ordering::SeqCst), 1);
 }
 
-#[tokio::test]
-async fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
+#[test]
+fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
     let _lock = crate::test_env::lock_env();
     let tmp = tempfile::tempdir().unwrap();
     let read_path = tmp.path().join("read.txt").to_string_lossy().into_owned();
@@ -149,7 +149,8 @@ async fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
             "mixed capability proxy",
             mixed_capability_primitive,
             &["read", "write"],
-        ),
+        )
+        .with_capability_approval(),
     ));
     registry.set_approval(
         crate::agent::runtime::approval::ApprovalGate::new(
@@ -159,7 +160,11 @@ async fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         ),
     );
 
-    let read = dispatch_tool(
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let read = runtime.block_on(dispatch_tool(
         &registry,
         &ToolCall {
             id: "read".to_string(),
@@ -167,11 +172,10 @@ async fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
             input: serde_json::json!({"command": "read", "args": [read_path.clone()]}),
         },
         Some("mixed-session"),
-    )
-    .await;
+    ));
     assert!(!read.is_error, "read command should use its held cap: {read:?}");
 
-    let write = dispatch_tool(
+    let write = runtime.block_on(dispatch_tool(
         &registry,
         &ToolCall {
             id: "write".to_string(),
@@ -179,8 +183,7 @@ async fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
             input: serde_json::json!({"command": "write", "args": [write_path.clone()]}),
         },
         Some("mixed-session"),
-    )
-    .await;
+    ));
     assert!(write.is_error);
     assert!(
         write.content.contains("\"verb\":\"fs.delete\""),

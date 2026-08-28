@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 use std::env;
 
-use crate::caps::{require_or_json, Scope, Verb};
+use crate::caps::{require_or_json, Cap, Scope, Verb};
 
 /// Built-in system information (replaces Python sys app for basic queries).
 ///
@@ -11,18 +11,14 @@ use crate::caps::{require_or_json, Scope, Verb};
 /// kernel surfaces return an explicit "requires Linux" error so the
 /// shape of the response is always machine-readable.
 ///
-/// Capability: every subcommand is read-only system observation, so the
-/// gate is [`Verb::SYS_OBSERVE`] (catalog: "Inspect system state … without
-/// changing them", Risk::Low). The previous gate was `Verb::SYS_KERNEL`
-/// ("Load kernel modules … reserved for trusted system tools",
-/// Risk::Critical), which mis-classified read-only ops like `loadavg` /
-/// `resources` / `uptime` as kernel-module loading and made
-/// clawd-routed agent jobs fail with `verb-not-granted: sys.kernel` even
-/// though [`crate::clawd::system_caps::system_agent_caps`] already
-/// grants `SYS_OBSERVE`. The cron/netfilter/checkpoint sites that
-/// *do* mutate kernel state still use `SYS_KERNEL`.
+/// Capability: ordinary subcommands are read-only system observation and
+/// require [`Verb::SYS_OBSERVE`]. `env --include-secrets` additionally
+/// requires exact [`Verb::SECRET_READ`] authority for `environment`;
+/// observation consent alone can never expose secret-valued variables.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
+    for cap in required_capabilities(command, args)? {
+        require_or_json(cap.verb, cap.scope).map_err(|value| value.to_string())?;
+    }
     match command {
         // identity / environment
         "info" => cmd_info(),
@@ -64,8 +60,48 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         // packages
         "pkg_updates" => cmd_pkg_updates(),
 
-        _ => Err(format!("unknown command: {command}")),
+        _ => unreachable!("required_capabilities validates the command"),
     }
+}
+
+fn required_capabilities(command: &str, args: &[String]) -> Result<Vec<Cap>, String> {
+    if !matches!(
+        command,
+        "info"
+            | "env"
+            | "uptime"
+            | "who"
+            | "desktop"
+            | "resources"
+            | "loadavg"
+            | "sensors"
+            | "cgroup"
+            | "proc"
+            | "top"
+            | "threads"
+            | "port"
+            | "net"
+            | "net_rate"
+            | "mounts"
+            | "disk_io"
+            | "largest_files"
+            | "journal"
+            | "dmesg"
+            | "services"
+            | "failed_units"
+            | "coredumps"
+            | "pkg_updates"
+    ) {
+        return Err(format!("unknown command: {command}"));
+    }
+    let mut required = vec![Cap::new(Verb::SYS_OBSERVE, Scope::wild())];
+    if command == "env" && args.iter().any(|arg| arg == "--include-secrets") {
+        required.push(Cap::new(
+            Verb::SECRET_READ,
+            Scope::name("environment"),
+        ));
+    }
+    Ok(required)
 }
 
 fn cmd_info() -> Result<Value, String> {

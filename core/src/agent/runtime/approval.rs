@@ -13,16 +13,16 @@
 //! (which decides which tools the LLM can *see*). Guardrails are
 //! a coarse pre-filter; this compatibility gate is per call. A
 //! third-party tool may be advertised to the model while an operator
-//! still requires a name-level prompt. Core primitive proxies use the
-//! exact capability gate instead.
+//! still requires a name-level prompt. Only fully mapped core proxies
+//! use the exact capability gate instead.
 //!
 //! ## Authority boundary
 //!
-//! This module never grants a capability. Core proxy tools validate
-//! their arguments and reach the exact `(verb, scope)` gate at
-//! execution; for them, `dangerous_tools` is ignored as a deprecated
+//! This module never grants a capability. A proxy with a complete
+//! command/argument mapping reaches the exact `(verb, scope)` gate at
+//! execution; for it, `dangerous_tools` is ignored as a deprecated
 //! early prompt while `auto_deny_tools` remains a hard operator block.
-//! Tools without such a boundary retain the legacy name-based prompt.
+//! Mixed or incomplete tools retain the legacy name-based prompt.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;

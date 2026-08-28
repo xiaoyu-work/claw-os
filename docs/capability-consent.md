@@ -11,7 +11,8 @@ may run.
 3. `caps::require` checks the session's existing capability set.
 4. If the capability is missing:
    - an **attended** system-Agent session may file one request for that exact
-     verb, scope, catalog risk, owner, session, and consent context;
+     verb, scope, catalog risk, owner, session, task, worker pid/start time,
+     lease nonce/deadline, request generation, and consent context;
    - an **unattended** cron/trigger session fails closed and must receive the
      exact authority when the automation is created.
 5. An approval creates a time-bounded, use-bounded, generation-bound consent
@@ -37,11 +38,15 @@ route, and a request id is metadata rather than authority.
 
 - Capability and scope matching is exact; scope containment is not used to
   substitute a broader approval for the validated operation.
+- A decision or redemption fails if the originating process is gone, the task
+  or lease identity differs, the request deadline passed, or the revocation
+  generation changed. A replacement worker is never silently rebound.
 - `once` has one use. `session` and `forever` remain use-limited and expire.
 - Concurrent spends and concurrent approve/deny decisions have one winner.
 - Revocation increments a root-owned owner/session generation. Every grant
   checks that generation, so restoring an older approval file cannot revive
-  retired consent.
+  retired consent. Owner-wide revocation advances beyond the highest session
+  generation for that owner rather than merely incrementing the owner counter.
 - Approval records created before exact authorization metadata existed remain
   visible as history but grant nothing.
 
@@ -61,6 +66,11 @@ tool name is too coarse and no longer intercepts execution.
   widens a capability.
 - Remove capability-aware core proxy names from `dangerous_tools`; exact
   capability risk and scope now drive their consent requests.
+- Keep mixed or incomplete proxies on `dangerous_tools` until every sensitive
+  branch has an exact mapping. `cos_sysinfo` remains legacy-filtered, and its
+  `env --include-secrets` branch separately requires
+  `secret.read:name:environment`; a low-risk `sys.observe` grant is
+  insufficient.
 
 The authoritative implementation is in
 [`core/src/caps/enforcement.rs`](../core/src/caps/enforcement.rs),

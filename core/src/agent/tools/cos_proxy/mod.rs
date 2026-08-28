@@ -23,10 +23,10 @@
 //! [`crate::agent::memory::notes`]).
 //!
 //! Proxy names are not an authorization boundary: one proxy may expose
-//! both read and write commands. Inputs are shape-checked here, then the
-//! primitive derives and enforces its exact capability before side
-//! effects. Runtime `dangerous_tools` entries therefore remain only a
-//! legacy UX filter for tools without this capability boundary.
+//! both read and write commands. Inputs are shape-checked here. A proxy
+//! bypasses the legacy name prompt only after every command derives and
+//! enforces an exact capability before side effects; mixed or incomplete
+//! proxies remain on `dangerous_tools`.
 
 pub mod app_memory;
 pub mod memory;
@@ -64,9 +64,9 @@ pub struct CosPrimitiveTool {
 }
 
 impl CosPrimitiveTool {
-    /// Construct a serial primitive whose implementation enforces an
-    /// exact capability. Use [`Self::with_legacy_tool_approval`] inside
-    /// this module for shims that have not reached that boundary yet.
+    /// Construct a serial primitive. It remains on the legacy
+    /// tool-name approval path until registration explicitly marks its
+    /// command mapping as capability-aware.
     pub const fn new(
         name: &'static str,
         description: &'static str,
@@ -79,13 +79,13 @@ impl CosPrimitiveTool {
             primitive,
             commands,
             parallel_safe: false,
-            approval_boundary: ApprovalBoundary::Capability,
+            approval_boundary: ApprovalBoundary::ToolName,
         }
     }
 
     /// Variant constructor for primitives whose every command is
-    /// read-only and capability-gated (e.g. `cos_sysinfo`). The dispatch
-    /// loop may run these concurrently with other parallel-safe calls.
+    /// read-only. The dispatch loop may run these concurrently with
+    /// other parallel-safe calls.
     pub const fn new_readonly(
         name: &'static str,
         description: &'static str,
@@ -98,12 +98,12 @@ impl CosPrimitiveTool {
             primitive,
             commands,
             parallel_safe: true,
-            approval_boundary: ApprovalBoundary::Capability,
+            approval_boundary: ApprovalBoundary::ToolName,
         }
     }
 
-    const fn with_legacy_tool_approval(mut self) -> Self {
-        self.approval_boundary = ApprovalBoundary::ToolName;
+    pub(crate) const fn with_capability_approval(mut self) -> Self {
+        self.approval_boundary = ApprovalBoundary::Capability;
         self
     }
 }
@@ -467,11 +467,11 @@ pub fn register_all(registry: &mut ToolRegistry) {
         } else {
             CosPrimitiveTool::new(spec.name, spec.description, spec.primitive, spec.commands)
         };
-        // These diagnostics/model shims do not all reach `caps::require`.
-        // Keep legacy name filtering for them until each command has an
-        // exact capability boundary.
-        if matches!(spec.name, "cos_model" | "cos_doctor" | "cos_diagnose") {
-            tool = tool.with_legacy_tool_approval();
+        // Only proxies whose complete command surface has an exact
+        // validated capability mapping may bypass the legacy
+        // `dangerous_tools` prompt.
+        if matches!(spec.name, "cos_proc" | "cos_credential") {
+            tool = tool.with_capability_approval();
         }
         registry.register(Arc::new(tool));
     }

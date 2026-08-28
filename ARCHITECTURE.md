@@ -276,7 +276,10 @@ verb and canonical scope, the worker names only those values. `clawd` supplies
 owner, session, task, worker identity, attended/unattended context, and catalog
 risk from trusted state. Attended denials may file one exact request;
 unattended denials fail closed and must rely on authority delegated when the
-automation was created.
+automation was created. The request captures the worker pid/start time, a
+broker-only lease nonce and deadline, and the revocation generation current at
+request time; a stale decision, replacement worker, or concurrent task cannot
+rebind it.
 
 An approved record is durable consent evidence, not ambient session authority.
 At execution `clawd` atomically spends the exact record, then mints and
@@ -286,6 +289,13 @@ use budget, and revocation generation. Only then does the execution-time
 `caps::require` return success. There is no worker route to decide a request or
 obtain a reusable capability. See
 [`docs/capability-consent.md`](docs/capability-consent.md).
+
+Tool-name policy is not authority. `auto_deny_tools` remains a hard
+pre-dispatch block, while `dangerous_tools` is retained for tools whose
+complete command surface has not yet been mapped to exact capabilities.
+`cos_sysinfo`, for example, stays on that compatibility path and additionally
+requires `secret.read:name:environment` before honoring `env
+--include-secrets`.
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one
@@ -337,8 +347,9 @@ under a store-wide lock, so `once` cannot be double-spent and
 `core/src/approvals/generations.rs`: a monotonic counter in root-owned state
 that a binding captures at approval time and every load compares against, so
 retiring authority is an increment no restored backup can undo. `permission.revoke`
-is the root-only route that performs it, and session finish, task cancellation
-and worker-lease teardown call it for the session they tear down. A record with
+is the root-only route that performs it; owner-wide revocation advances beyond
+the highest per-session generation. Session finish, task cancellation and
+worker-lease teardown revoke the session they tear down. A record with
 no such provenance — one written before the binding existed — is evidence that a
 decision happened, not authority: it authorises nothing until the owner is asked
 again.

@@ -34,7 +34,13 @@ Runtime dispatch depends on the registry, never on concrete tools directly.
 Tools consume stable service/capability definitions. Model output and external
 tool results are untrusted; authority comes only from session and capability
 context. `auto_deny_tools` may block any tool early, but
-`dangerous_tools`/`auto_approve_tools` never grant capability authority.
+`dangerous_tools`/`auto_approve_tools` never grant capability authority. Only
+proxies whose complete command surface has an exact mapping declare a
+capability-aware boundary; mixed or incomplete proxies stay on the legacy
+filter. Only
+proxies whose complete command surface has an exact mapping declare a
+capability-aware boundary; mixed or incomplete proxies stay on the legacy
+filter.
 
 ## Tests
 
