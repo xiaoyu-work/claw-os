@@ -13,6 +13,7 @@ default = ["wgpu"]
 wgpu = ["libcosmic/wgpu"]
 
 [dependencies]
+cos-runtime = { path = "../../cos-runtime/rust" }
 zbus = "5.12"
 libcosmic = { git = "https://github.com/pop-os/libcosmic", features = [
     "dbus-config",

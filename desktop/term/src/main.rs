@@ -49,6 +49,7 @@ use config::{
     ProfileId,
 };
 mod config;
+mod claw_glue;
 mod mouse_reporter;
 
 use icon_cache::IconCache;
@@ -3299,12 +3300,7 @@ impl Application for App {
                 let cwd = self
                     .active_terminal_working_directory()
                     .map(|p| p.to_string_lossy().into_owned());
-                let ctx = match cwd {
-                    Some(c) => format!(r#"{{"app":"cosmic-term","cwd":"{}"}}"#, c),
-                    None => r#"{"app":"cosmic-term"}"#.to_string(),
-                };
-                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                if let Err(err) = cos_runtime::exec::start(argv) {
+                if let Err(err) = crate::claw_glue::ask_claw(cwd.as_deref()) {
                     log::error!("failed to open Ask Claw overlay: {err}");
                 }
             }
@@ -3316,17 +3312,9 @@ impl Application for App {
                 // to explain or suggest a fix without needing to copy/paste.
                 let snapshot = self.snapshot_active_terminal(80);
                 if let Some((scrollback, cwd)) = snapshot {
-                    let cwd_field = match cwd {
-                        Some(c) => format!(r#","cwd":"{}""#, escape_json_str(&c)),
-                        None => String::new(),
-                    };
-                    let ctx = format!(
-                        r#"{{"app":"cosmic-term","mode":"explain_output","output":"{}"{}}}"#,
-                        escape_json_str(&scrollback),
-                        cwd_field,
-                    );
-                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                    if let Err(err) = cos_runtime::exec::start(argv) {
+                    if let Err(err) =
+                        crate::claw_glue::explain_output(&scrollback, cwd.as_deref())
+                    {
                         log::error!("failed to open Ask Claw explain overlay: {err}");
                     }
                 } else {
@@ -3829,22 +3817,4 @@ fn is_wayland() -> bool {
         cosmic::app::cosmic::windowing_system(),
         Some(cosmic::app::cosmic::WindowingSystem::Wayland)
     )
-}
-
-fn escape_json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                out.push_str(&format!("\\u{:04x}", c as u32));
-            }
-            c => out.push(c),
-        }
-    }
-    out
 }

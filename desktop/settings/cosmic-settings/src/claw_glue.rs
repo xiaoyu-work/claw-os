@@ -24,7 +24,8 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::{ExitStatus, Output};
 
-use cos_runtime::{BridgeError, exec, fs};
+use cos_runtime::{BridgeError, ask_claw, exec, fs};
+use serde::Serialize;
 
 fn map_err(err: BridgeError) -> io::Error {
     if err.is_denied() {
@@ -75,6 +76,37 @@ pub fn rename(src: &Path, dst: &Path) -> io::Result<()> {
 /// the kernel gates the launch and records an audit row.
 pub fn start(argv: &[&str]) -> io::Result<()> {
     exec::start(argv).map(|_| ()).map_err(map_err)
+}
+
+#[derive(Serialize)]
+struct SettingsPageContext<'a> {
+    page: &'a str,
+    title: &'a str,
+}
+
+impl ask_claw::Context for SettingsPageContext<'_> {
+    const APP_ID: &'static str = "cosmic-settings";
+}
+
+#[derive(Serialize)]
+struct SettingsSearchContext<'a> {
+    mode: &'static str,
+    query: &'a str,
+}
+
+impl ask_claw::Context for SettingsSearchContext<'_> {
+    const APP_ID: &'static str = "cosmic-settings";
+}
+
+pub fn ask_claw_page(page: &str, title: &str) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&SettingsPageContext { page, title })
+}
+
+pub fn ask_claw_search(query: &str) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&SettingsSearchContext {
+        mode: "search",
+        query,
+    })
 }
 
 /// Run `argv` synchronously and return stdout on a clean exit.

@@ -24,3 +24,16 @@ fn context_defaults_when_env_absent() {
     assert_eq!(ctx.app_id, "unknown");
     assert!(ctx.files.is_empty());
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn overlay_ignores_executable_environment_override() {
+    std::env::set_var("COS_AGENT_UI_BIN", "/nonexistent/attacker");
+    let context = Context {
+        app_id: "notes".into(),
+        files: Vec::new(),
+    };
+    let error = context.open_agent_overlay(None).unwrap_err();
+    std::env::remove_var("COS_AGENT_UI_BIN");
+    assert_eq!(error.kind(), std::io::ErrorKind::NotFound);
+}

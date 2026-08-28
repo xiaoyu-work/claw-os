@@ -14,6 +14,7 @@
 //!
 //! | Module        | Wire family | Equivalent route           |
 //! |---------------|-------------|----------------------------|
+//! | [`ask_claw`]  | desktop     | supervised Agent overlay   |
 //! | [`policy`]    | `policy`    | hidden policy bridge       |
 //! | [`fs`]        | `app`       | `cos app fs ...`           |
 //! | [`exec`]      | `app`       | `cos app exec ...`         |
@@ -36,6 +37,7 @@
 
 pub use claw_os_sdk::{call, call_typed, cos_call_json, BridgeError, Error};
 
+pub mod ask_claw;
 pub mod exec;
 pub mod fs;
 pub mod net;

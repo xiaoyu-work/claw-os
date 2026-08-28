@@ -2,6 +2,7 @@
 mod config;
 mod app;
 mod app_group;
+mod claw_glue;
 mod icon_cache;
 mod localize;
 mod subscriptions;

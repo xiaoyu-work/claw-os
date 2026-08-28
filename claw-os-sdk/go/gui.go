@@ -16,14 +16,26 @@
 package clawossdk
 
 import (
+	"bufio"
+	"bytes"
+	"encoding/binary"
 	"encoding/json"
+	"fmt"
+	"io"
+	"net"
 	"os"
 	"os/exec"
+	"strings"
+	"syscall"
+	"time"
 )
 
 // GUICommand is the command value the bridge passes (and the default
 // `desktop.exec`) when an app is launched as a GUI.
 const GUICommand = "--gui"
+const askClawLauncher = "/usr/local/bin/cos-ask-claw-launcher"
+const askClawProtocol = 1
+const askClawRequestLimit = 32 * 1024
 
 // IsGUILaunch reports whether the current invocation is a desktop GUI
 // launch. It prefers the COS_APP_GUI environment variable the bridge
@@ -61,8 +73,8 @@ func Context(files []string) *GuiContext {
 	return &GuiContext{AppID: appID, Files: files}
 }
 
-// OpenAgentOverlay summons the system "Ask Claw" agent overlay — the
-// same `cos-agent-ui --overlay` window the global hotkey raises. Pass a
+// OpenAgentOverlay summons the system "Ask Claw" agent overlay through the
+// fixed packaged launcher's authenticated Unix-socket protocol. Pass a
 // non-empty hint to ground the agent's first response in the app's
 // current state without polluting the visible chat transcript.
 //
@@ -70,21 +82,149 @@ func Context(files []string) *GuiContext {
 // app's stdio or event loop. Returns an error if the overlay binary is
 // missing (e.g. a headless box with no desktop shell).
 func (c *GuiContext) OpenAgentOverlay(hint string) error {
-	bin := os.Getenv("COS_AGENT_UI_BIN")
-	if bin == "" {
-		bin = "cos-agent-ui"
+	if err := validateAskClawLauncher(); err != nil {
+		return err
 	}
-	argv := []string{"--overlay"}
-	if hint != "" {
-		argv = append(argv, "--context", hint)
+	cmd := exec.Command(askClawLauncher, "--protocol", fmt.Sprint(askClawProtocol))
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
 	}
-	// Nil stdio connects the child to the null device (see os/exec docs),
-	// so the overlay is not tied to the app's terminal.
-	cmd := exec.Command(bin, argv...)
+	cmd.Stderr = nil
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	return cmd.Process.Release()
+	type announcementResult struct {
+		endpoint string
+		err      error
+	}
+	announced := make(chan announcementResult, 1)
+	go func() {
+		line, err := bufio.NewReader(io.LimitReader(stdout, 257)).ReadString('\n')
+		if err != nil {
+			announced <- announcementResult{err: err}
+			return
+		}
+		if len(line) > 256 {
+			announced <- announcementResult{err: fmt.Errorf("Ask Claw socket announcement is too long")}
+			return
+		}
+		prefix := fmt.Sprintf("SOCKET %d @", askClawProtocol)
+		if !strings.HasPrefix(line, prefix) || !strings.HasSuffix(line, "\n") {
+			announced <- announcementResult{err: fmt.Errorf("invalid Ask Claw socket announcement")}
+			return
+		}
+		announced <- announcementResult{
+			endpoint: "@" + strings.TrimSuffix(strings.TrimPrefix(line, prefix), "\n"),
+		}
+	}()
+	var endpoint string
+	select {
+	case result := <-announced:
+		if result.err != nil {
+			_ = cmd.Process.Kill()
+			_ = cmd.Wait()
+			return result.err
+		}
+		endpoint = result.endpoint
+	case <-time.After(5 * time.Second):
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("Ask Claw launcher readiness timed out")
+	}
+	if endpoint == "@" {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("empty Ask Claw socket endpoint")
+	}
+	connection, err := net.DialTimeout("unix", endpoint, 5*time.Second)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	readyMessage := make([]byte, len("READY 1\n"))
+	if _, err := io.ReadFull(connection, readyMessage); err != nil || string(readyMessage) != "READY 1\n" {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("unexpected Ask Claw launcher handshake")
+	}
+	request := map[string]any{"protocol": askClawProtocol, "app": c.AppID, "hint": hint}
+	payload, err := json.Marshal(request)
+	if err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	if len(payload) > askClawRequestLimit {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("Ask Claw request exceeds the protocol limit")
+	}
+	frame := make([]byte, 4+len(payload))
+	binary.BigEndian.PutUint32(frame, uint32(len(payload)))
+	copy(frame[4:], payload)
+	if _, err := io.Copy(connection, bytes.NewReader(frame)); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	unixConnection, ok := connection.(*net.UnixConn)
+	if !ok {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return fmt.Errorf("Ask Claw launcher did not provide a Unix socket")
+	}
+	if err := unixConnection.CloseWrite(); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		return err
+	}
+	accepted := make([]byte, len("ACCEPTED 1\n"))
+	if _, err := io.ReadFull(connection, accepted); err != nil || string(accepted) != "ACCEPTED 1\n" {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("unexpected Ask Claw acceptance response")
+	}
+	go func() { _ = cmd.Wait() }()
+	return nil
+}
+
+func validateAskClawLauncher() error {
+	for _, path := range []string{"/usr", "/usr/local", "/usr/local/bin"} {
+		info, err := os.Lstat(path)
+		if err != nil {
+			return err
+		}
+		statInfo, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() ||
+			statInfo.Uid != 0 || info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("untrusted Ask Claw launcher parent: %s", path)
+		}
+	}
+	info, err := os.Lstat(askClawLauncher)
+	if err != nil {
+		return err
+	}
+	statInfo, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() ||
+		statInfo.Uid != 0 || info.Mode().Perm()&0o111 == 0 ||
+		info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("untrusted Ask Claw launcher")
+	}
+	return nil
 }
 
 func filesFromEnv() []string {

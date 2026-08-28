@@ -1,6 +1,3 @@
-use std::fmt::{Display, Formatter};
-use std::str::FromStr;
-
 use cosmic::app::Task;
 use cosmic::iced::Limits;
 use cosmic::iced::platform_specific::runtime::wayland::layer_surface::{
@@ -10,30 +7,9 @@ use cosmic::iced::platform_specific::shell::commands::layer_surface::{
     Anchor, KeyboardInteractivity, Layer, destroy_layer_surface, get_layer_surface,
 };
 use cosmic::iced::window::Id as SurfaceId;
-use serde::{Deserialize, Serialize};
 
 use crate::Message;
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct OverlayActivation {
-    pub(crate) voice: bool,
-    pub(crate) query: Option<String>,
-    pub(crate) context: Option<String>,
-}
-
-impl Display for OverlayActivation {
-    fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(&serde_json::to_string(self).unwrap_or_default())
-    }
-}
-
-impl FromStr for OverlayActivation {
-    type Err = serde_json::Error;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        serde_json::from_str(value)
-    }
-}
+pub(crate) use cos_runtime::ask_claw::Activation as OverlayActivation;
 
 #[derive(Debug, Clone)]
 pub(crate) struct DeferredSubmit {

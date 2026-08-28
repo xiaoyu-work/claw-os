@@ -793,33 +793,99 @@ fn open_uri(uri: &str) -> std::io::Result<()> {
         .map(|_| ())
 }
 
-fn parse_flags() -> Flags {
-    let mut flags = Flags::default();
-    let mut args = env::args().skip(1);
-    while let Some(argument) = args.next() {
-        match argument.as_str() {
-            "--overlay" => flags.overlay = true,
-            "--voice" => flags.voice = true,
-            "--query" => flags.query = args.next(),
-            "--context" => flags.context = args.next(),
-            "-h" | "--help" => {
-                eprintln!("cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context TEXT]");
-                std::process::exit(0);
-            }
-            other => eprintln!("warning: ignoring unknown flag: {other}"),
+fn parse_arguments() -> cos_runtime::ask_claw::UiArguments {
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(env::args().skip(1));
+    if parsed.help {
+        eprintln!("{}", cos_runtime::ask_claw::UI_USAGE);
+        std::process::exit(0);
+    }
+    for argument in &parsed.unknown {
+        eprintln!("warning: ignoring unknown flag: {argument}");
+    }
+    parsed
+}
+
+fn flags_from_arguments(parsed: cos_runtime::ask_claw::UiArguments) -> Flags {
+    let activation = match parsed.activation_from_process_socket() {
+        Ok(activation) => activation,
+        Err(error) => {
+            eprintln!("failed to read Ask Claw activation: {error}");
+            std::process::exit(2);
+        }
+    };
+    let voice = activation
+        .as_ref()
+        .map(|activation| activation.voice)
+        .unwrap_or(parsed.voice);
+    let query = activation
+        .as_ref()
+        .and_then(|activation| activation.query.clone())
+        .or(parsed.query);
+    let context = activation
+        .as_ref()
+        .and_then(|activation| activation.context.clone())
+        .or(parsed.context);
+    Flags {
+        overlay: parsed.overlay,
+        voice,
+        query,
+        context,
+        activation,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UiLaunchMode {
+    Window,
+    SharedOverlay,
+    PrivateOverlay,
+}
+
+impl UiLaunchMode {
+    fn from_arguments(arguments: &cos_runtime::ask_claw::UiArguments) -> Self {
+        if !arguments.overlay {
+            Self::Window
+        } else if arguments.context_socket
+            || arguments.context.is_some()
+            || arguments.query.is_some()
+        {
+            Self::PrivateOverlay
+        } else {
+            Self::SharedOverlay
         }
     }
-    if flags.overlay {
-        flags.activation = Some(OverlayActivation {
-            voice: flags.voice,
-            query: flags.query.clone(),
-            context: flags.context.clone(),
-        });
+
+    fn exits_on_close(self) -> bool {
+        self == Self::PrivateOverlay
     }
-    flags
+}
+
+fn overlay_settings(exit_on_close: bool) -> Settings {
+    Settings::default()
+        .no_main_window(true)
+        .exit_on_close(exit_on_close)
+        .size_limits(
+            Limits::NONE
+                .min_width(1.0)
+                .min_height(120.0)
+                .max_width(560.0)
+                .max_height(560.0),
+        )
 }
 
 fn main() -> cosmic::iced::Result {
+    let parsed = parse_arguments();
+    let launch_mode = UiLaunchMode::from_arguments(&parsed);
+    let settings = match launch_mode {
+        UiLaunchMode::Window => {
+            Settings::default().size_limits(Limits::NONE.min_width(640.0).min_height(420.0))
+        }
+        UiLaunchMode::SharedOverlay | UiLaunchMode::PrivateOverlay => {
+            overlay_settings(launch_mode.exits_on_close())
+        }
+    };
+    let flags = flags_from_arguments(parsed);
+
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -828,26 +894,10 @@ fn main() -> cosmic::iced::Result {
         .with_writer(std::io::stderr)
         .try_init();
     localize::localize();
-    let flags = parse_flags();
-    if flags.overlay {
-        cosmic::app::run_single_instance::<App>(
-            Settings::default()
-                .no_main_window(true)
-                .exit_on_close(false)
-                .size_limits(
-                    Limits::NONE
-                        .min_width(1.0)
-                        .min_height(120.0)
-                        .max_width(560.0)
-                        .max_height(560.0),
-                ),
-            flags,
-        )
+    if launch_mode == UiLaunchMode::SharedOverlay {
+        cosmic::app::run_single_instance::<App>(settings, flags)
     } else {
-        cosmic::app::run::<App>(
-            Settings::default().size_limits(Limits::NONE.min_width(640.0).min_height(420.0)),
-            flags,
-        )
+        cosmic::app::run::<App>(settings, flags)
     }
 }
 
