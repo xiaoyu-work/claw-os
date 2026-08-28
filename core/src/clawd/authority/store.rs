@@ -174,6 +174,60 @@ pub struct Presentation {
     pub session_id: Option<String>,
 }
 
+impl Presentation {
+    /// Base presentation with no session named yet.
+    pub fn new(
+        uid: u32,
+        pid: u32,
+        start_time_ticks: Option<u64>,
+        audience: Audience,
+        route: &'static str,
+    ) -> Self {
+        Self {
+            uid,
+            pid,
+            start_time_ticks,
+            audience,
+            route,
+            session_id: None,
+        }
+    }
+}
+
+/// Evidence that a relay grant was resolved for one exact session.
+///
+/// Unforgeable by construction: the type is private to the authority
+/// module, its only constructor is [`RelayProof::for_session`], and
+/// that is `pub(super)` so it can be reached only after
+/// [`super::authorize_relayed`] has resolved a live relay grant bound
+/// `Process`-tight to the presenting process. Nothing in a request body
+/// or a handler can produce one.
+#[derive(Debug, Clone)]
+pub(super) struct RelayProof {
+    session_id: String,
+}
+
+impl RelayProof {
+    pub(super) fn for_session(session_id: &str) -> Self {
+        Self {
+            session_id: session_id.to_string(),
+        }
+    }
+
+    /// Does this proof authorize presenting `grant`?
+    ///
+    /// Only the one session the relay grant named. A relay for session A
+    /// is inert against session B's grant, and against every grant that
+    /// names no session at all.
+    fn covers(&self, grant: &Grant) -> bool {
+        grant
+            .subject
+            .session_id
+            .as_deref()
+            .is_some_and(|session| session == self.session_id)
+    }
+}
+
 #[derive(Default)]
 struct Inner {
     next_id: u64,
@@ -346,6 +400,30 @@ impl Authority {
         session_id: &str,
         presentation: &Presentation,
     ) -> Result<GrantView, AuthorityError> {
+        self.resolve_session_inner(session_id, presentation, None)
+    }
+
+    /// Resolve a session grant that a trusted launcher is presenting on
+    /// the sandboxed worker's behalf.
+    ///
+    /// `proof` can only exist after a relay grant bound to this exact
+    /// process was resolved, so this widens the process-tree check by
+    /// exactly one already-authenticated hop and nothing else.
+    pub(super) fn resolve_session_relayed(
+        &self,
+        session_id: &str,
+        presentation: &Presentation,
+        proof: &RelayProof,
+    ) -> Result<GrantView, AuthorityError> {
+        self.resolve_session_inner(session_id, presentation, Some(proof))
+    }
+
+    fn resolve_session_inner(
+        &self,
+        session_id: &str,
+        presentation: &Presentation,
+        relay: Option<&RelayProof>,
+    ) -> Result<GrantView, AuthorityError> {
         let now = Instant::now();
         let mut inner = self.lock();
         inner.sweep(now);
@@ -354,7 +432,7 @@ impl Authority {
             .get(session_id)
             .ok_or(AuthorityError::UnknownGrant)?;
         let grant = inner.grants.get(&key).ok_or(AuthorityError::UnknownGrant)?;
-        check_presentation(grant, presentation, now)?;
+        check_presentation_with(grant, presentation, now, relay)?;
         Ok(view_of(grant, now))
     }
 
@@ -671,6 +749,15 @@ fn check_presentation(
     presentation: &Presentation,
     now: Instant,
 ) -> Result<(), AuthorityError> {
+    check_presentation_with(grant, presentation, now, None)
+}
+
+fn check_presentation_with(
+    grant: &Grant,
+    presentation: &Presentation,
+    now: Instant,
+    relay: Option<&RelayProof>,
+) -> Result<(), AuthorityError> {
     if grant.revoked {
         return Err(AuthorityError::Revoked);
     }
@@ -688,6 +775,8 @@ fn check_presentation(
     if grant.principal.uid != presentation.uid {
         return Err(AuthorityError::PrincipalMismatch);
     }
+    // Set only by the relay path, and only for the cgroup comparison.
+    let mut skip_unit_check = false;
     match grant.binding {
         Binding::Process => {
             if grant.principal.pid != presentation.pid {
@@ -700,19 +789,33 @@ fn check_presentation(
             }
         }
         Binding::ProcessTree => {
-            if grant.principal.pid != presentation.pid
-                && !crate::proc::process_descends_from(presentation.pid, grant.principal.pid)
-            {
+            let in_tree = grant.principal.pid == presentation.pid
+                || crate::proc::process_descends_from(presentation.pid, grant.principal.pid);
+            // A relay presents a session grant from outside the tree.
+            // That is only reachable through a relay grant this same
+            // process already proved it holds, bound `Process`-tight to
+            // it and naming this exact session, so the identity check
+            // has already happened — one layer out.
+            let relayed = relay.is_some_and(|proof| proof.covers(grant));
+            if !in_tree && !relayed {
                 return Err(AuthorityError::PrincipalMismatch);
             }
+            // The bound principal is a sandboxed worker whose cgroup is
+            // by construction not the launcher's, so that one
+            // comparison is skipped — and only that one. Audience and
+            // subject are still decided below: a relay proves *who is
+            // speaking*, never *what may be said*.
+            skip_unit_check = !in_tree;
         }
     }
-    if let (Some(bound), Some(current)) = (
-        grant.principal.unit.as_deref(),
-        read_presenting_unit(presentation.pid),
-    ) {
-        if bound != current {
-            return Err(AuthorityError::PrincipalMismatch);
+    if !skip_unit_check {
+        if let (Some(bound), Some(current)) = (
+            grant.principal.unit.as_deref(),
+            read_presenting_unit(presentation.pid),
+        ) {
+            if bound != current {
+                return Err(AuthorityError::PrincipalMismatch);
+            }
         }
     }
     if !grant.audience.contains(presentation.audience) {

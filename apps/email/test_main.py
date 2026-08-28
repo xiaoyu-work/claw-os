@@ -79,23 +79,23 @@ class TestCredentialStoreIntegration(unittest.TestCase):
         self.assertIsNone(error)
         load.assert_called_once_with("GOOGLE_ACCESS_TOKEN")
 
-    @patch("claw_test_email_main.urllib.request.urlopen")
-    def test_gmail_request_sends_bearer_token(self, urlopen):
+    @patch("claw_test_email_main.open_url")
+    def test_gmail_request_sends_bearer_token(self, open_url):
         os.environ["GOOGLE_ACCESS_TOKEN"] = "access-token"
         response = MagicMock()
         response.__enter__.return_value.read.return_value = b"{}"
-        urlopen.return_value = response
+        open_url.return_value = (response, "https://gmail.googleapis.com/test", [])
 
         result = email_main._gmail_request("https://gmail.googleapis.com/test")
 
         self.assertEqual(result, {})
-        request = urlopen.call_args.args[0]
+        request = open_url.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer access-token")
 
-    @patch("claw_test_email_main.urllib.request.urlopen")
-    def test_gmail_401_returns_non_retryable_auth_guidance(self, urlopen):
+    @patch("claw_test_email_main.open_url")
+    def test_gmail_401_returns_non_retryable_auth_guidance(self, open_url):
         os.environ["GOOGLE_ACCESS_TOKEN"] = "expired-token"
-        urlopen.side_effect = email_main.urllib.error.HTTPError(
+        open_url.side_effect = email_main.urllib.error.HTTPError(
             "https://gmail.googleapis.com/test",
             401,
             "Unauthorized",
@@ -235,8 +235,8 @@ class TestSendCommand(unittest.TestCase):
         result = run("send", ["--to", "x@y.com", "--subject", "hi", "--provider", "smtp"])
         self.assertIn("error", result)
 
-    @patch("claw_test_email_main.smtplib.SMTP")
-    def test_send_smtp_success(self, mock_smtp_cls):
+    @patch("claw_test_email_main.cos_smtp.connect")
+    def test_send_smtp_success(self, mock_connect):
         os.environ["SMTP_HOST"] = "mail.example.com"
         os.environ["SMTP_PORT"] = "587"
         os.environ["SMTP_USER"] = "user"
@@ -244,8 +244,8 @@ class TestSendCommand(unittest.TestCase):
         os.environ["SMTP_FROM"] = "me@example.com"
 
         mock_server = MagicMock()
-        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_connect.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
         result = run(
             "send",
@@ -254,18 +254,19 @@ class TestSendCommand(unittest.TestCase):
         self.assertTrue(result.get("sent"))
         self.assertEqual(result["to"], "x@y.com")
         self.assertEqual(result["provider"], "smtp")
-        mock_server.starttls.assert_called_once()
+        self.assertTrue(mock_connect.call_args.kwargs["starttls"])
+        self.assertFalse(mock_connect.call_args.kwargs["implicit_tls"])
         mock_server.login.assert_called_once_with("user", "pass")
         mock_server.send_message.assert_called_once()
 
-    @patch("claw_test_email_main.smtplib.SMTP")
-    def test_send_smtp_with_cc(self, mock_smtp_cls):
+    @patch("claw_test_email_main.cos_smtp.connect")
+    def test_send_smtp_with_cc(self, mock_connect):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
 
         mock_server = MagicMock()
-        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_connect.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
         result = run(
             "send",
@@ -283,30 +284,30 @@ class TestSendCommand(unittest.TestCase):
         msg = mock_server.send_message.call_args[0][0]
         self.assertEqual(msg["Cc"], "z@y.com")
 
-    @patch("claw_test_email_main.smtplib.SMTP")
-    def test_send_smtp_no_starttls_on_port_25(self, mock_smtp_cls):
+    @patch("claw_test_email_main.cos_smtp.connect")
+    def test_send_smtp_no_starttls_on_port_25(self, mock_connect):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
 
         mock_server = MagicMock()
-        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_connect.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
         result = run(
             "send",
             ["--to", "x@y.com", "--subject", "hi", "--body", "hello", "--provider", "smtp"],
         )
         self.assertTrue(result.get("sent"))
-        mock_server.starttls.assert_not_called()
+        self.assertFalse(mock_connect.call_args.kwargs["starttls"])
 
-    @patch("claw_test_email_main.smtplib.SMTP")
-    def test_send_smtp_no_login_without_credentials(self, mock_smtp_cls):
+    @patch("claw_test_email_main.cos_smtp.connect")
+    def test_send_smtp_no_login_without_credentials(self, mock_connect):
         os.environ["SMTP_HOST"] = "localhost"
         os.environ["SMTP_PORT"] = "25"
 
         mock_server = MagicMock()
-        mock_smtp_cls.return_value.__enter__ = MagicMock(return_value=mock_server)
-        mock_smtp_cls.return_value.__exit__ = MagicMock(return_value=False)
+        mock_connect.return_value.__enter__ = MagicMock(return_value=mock_server)
+        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
         result = run(
             "send",

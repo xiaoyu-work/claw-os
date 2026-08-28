@@ -98,6 +98,10 @@ pub struct McpServerHandle {
     name: String,
     tool_count: usize,
     _proc_session: Option<crate::bridge::McpProcSession>,
+    /// Broker endpoint, egress broker, cgroup and launch directory for
+    /// this server's sandbox. Dropped with the handle, which is what
+    /// stops a torn-down server from keeping any authority alive.
+    _sandbox: Option<crate::worker::LaunchResources>,
 }
 
 impl McpServerHandle {
@@ -311,67 +315,91 @@ pub async fn attach_server(
     if spec.url.is_some() {
         return attach_http_server(spec, registry).await;
     }
-    let proc_session =
-        crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
-    let mut command = if proc_session.is_some() {
-        let mut command =
-            tokio::process::Command::new(crate::bridge::app_runner_path());
-        command.arg("--").arg(&spec.command).args(&spec.args);
-        command
-    } else {
-        let mut command = tokio::process::Command::new(&spec.command);
-        command.args(&spec.args);
-        command
-    };
-    // Wipe inherited environment then re-add an explicit allowlist.
-    // The order is: env_clear → allowlist from os::env → spec.env
-    // overlay. Caller-provided values win on collision.
-    command.env_clear();
-    for (k, v) in safe_env_allowlist() {
-        command.env(k, v);
-    }
-    for (k, v) in &spec.env {
-        command.env(k, v);
-    }
+    let proc_session = crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
+    // MCP servers and adapters are third-party code with no manifest of
+    // their own, so they get the same hostile-worker sandbox an App
+    // operation gets — minus any host path beyond the read-only system
+    // image, and with no network at all. There is no separate, weaker
+    // MCP launch path: a host that cannot enforce this refuses to
+    // attach the server.
+    let mut extra_env: std::collections::BTreeMap<String, String> = spec
+        .env
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect();
     if let Some(session) = proc_session.as_ref() {
-        command
-            .env("COS_SESSION", session.id())
-            .env("COS_PROC_DATA_DIR", session.proc_data_dir());
+        extra_env.insert("COS_SESSION".to_string(), session.id().to_string());
     }
-    if let Some(home) = crate::paths::current_home_override() {
-        let canonical_home = home
-            .canonicalize()
-            .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
-        let cwd = match &spec.cwd {
-            Some(cwd) => {
-                let canonical = std::path::Path::new(cwd)
-                    .canonicalize()
-                    .map_err(|e| format!("canonicalize MCP cwd {cwd}: {e}"))?;
-                if !canonical.starts_with(&canonical_home) {
-                    return Err(format!(
-                        "MCP cwd {} escapes owner home {}",
-                        canonical.display(),
-                        canonical_home.display()
-                    ));
-                }
-                canonical
+    let cwd = match (&spec.cwd, crate::paths::current_home_override()) {
+        (Some(cwd), Some(home)) => {
+            let canonical_home = home
+                .canonicalize()
+                .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
+            let canonical = std::path::Path::new(cwd)
+                .canonicalize()
+                .map_err(|e| format!("canonicalize MCP cwd {cwd}: {e}"))?;
+            if !canonical.starts_with(&canonical_home) {
+                return Err(format!(
+                    "MCP cwd {} escapes owner home {}",
+                    canonical.display(),
+                    canonical_home.display()
+                ));
             }
-            None => canonical_home,
-        };
-        command
-            .current_dir(cwd)
-            .env("HOME", &home)
-            .env("COS_HOME", &home)
-            .env("COS_DATA_DIR", crate::paths::user_data_dir())
-            .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
-    } else if let Some(cwd) = &spec.cwd {
-        command.current_dir(cwd);
+            Some(canonical)
+        }
+        (Some(cwd), None) => Some(
+            std::path::Path::new(cwd)
+                .canonicalize()
+                .map_err(|e| format!("canonicalize MCP cwd {cwd}: {e}"))?,
+        ),
+        (None, _) => None,
+    };
+    let policy = crate::worker::derive::mcp_server(crate::worker::derive::McpServerInput {
+        name: &spec.name,
+        program: resolve_mcp_program(&spec.command)?,
+        argv: spec.args.clone(),
+        cwd,
+        extra_env,
+        session_id: proc_session
+            .as_ref()
+            .map(|session| session.id().to_string()),
+    })
+    .inspect_err(|error| {
+        crate::worker::audit::refused(
+            &format!("mcp:{}", spec.name),
+            crate::worker::TrustTier::McpServer.as_str(),
+            error,
+        );
+    })?;
+    let mut launch = crate::worker::WorkerLaunch::new(policy);
+    if let Some(session) = proc_session.as_ref() {
+        // An MCP server holds no standing capabilities. Its authority
+        // is whatever the kernel has installed on the session at the
+        // instant of the call — nothing at rest, and a session tool
+        // call's transient set only while that call is in flight. The
+        // endpoint reads it live and relays under the launcher's grant,
+        // so clearing the transient set removes it immediately.
+        launch = launch.with_authority(session.broker_authority());
     }
+    let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
+        crate::worker::audit::refused(
+            &format!("mcp:{}", spec.name),
+            crate::worker::TrustTier::McpServer.as_str(),
+            error,
+        );
+    })?;
+    crate::worker::audit::launched(
+        &prepared.facts,
+        proc_session.as_ref().map(|session| session.id()),
+    );
+    let crate::worker::PreparedLaunch {
+        command, resources, ..
+    } = prepared;
+    let mut command = tokio::process::Command::from(command);
     command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    crate::bridge::apply_routed_identity(command.as_std_mut())?;
     let mut child = command
         .spawn()
         .map_err(|e| format!("spawn `{}`: {e}", spec.command))?;
@@ -484,6 +512,7 @@ pub async fn attach_server(
         name: spec.name.clone(),
         tool_count: registered,
         _proc_session: proc_session,
+        _sandbox: Some(resources),
     })
 }
 
@@ -559,19 +588,20 @@ pub async fn attach_http_server(
         name: spec.name.clone(),
         tool_count: registered,
         _proc_session: None,
+        _sandbox: None,
     })
 }
 
 /// Environment variables passed unconditionally to MCP child
-/// processes. These are the bare minimum a typical command-line tool
-/// needs to function (locate its libraries, render Unicode, locate
-/// its config home). Notably absent: any `*_TOKEN`, `*_KEY`,
-/// `*_SECRET`, AWS / GCP / Azure credentials, the user's
-/// `OPENAI_API_KEY`, GitHub tokens, etc.
+/// processes.
 ///
-/// `COS_*` variables are forwarded because they configure the
-/// agent's own runtime; some MCP servers shipped with cos expect
-/// e.g. `COS_DATA_DIR` to be set.
+/// Kept for the HTTP/SSE attach path, which starts no child of its own
+/// but still resolves configured values. The stdio path no longer uses
+/// it: a sandboxed server's environment is built from the launch
+/// policy, so nothing from the launcher's own environment reaches it —
+/// not `PATH`, not `HOME`, not a single `COS_*` value the policy did
+/// not name.
+#[allow(dead_code)]
 fn safe_env_allowlist() -> Vec<(String, String)> {
     const ALWAYS: &[&str] = &[
         "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
@@ -599,6 +629,32 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
         }
     }
     out
+}
+
+/// Resolve an MCP server command to the canonical absolute path the
+/// sandbox will execute.
+///
+/// Resolution happens in the launcher, against the launcher's `PATH`,
+/// because inside the sandbox `PATH` is a fixed policy value and the
+/// server has no say in which binary runs.
+fn resolve_mcp_program(command: &str) -> Result<std::path::PathBuf, String> {
+    let candidate = std::path::Path::new(command);
+    if candidate.components().count() > 1 || candidate.is_absolute() {
+        return candidate
+            .canonicalize()
+            .map_err(|error| format!("resolve MCP command `{command}`: {error}"));
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let path = dir.join(command);
+            if path.is_file() {
+                return path
+                    .canonicalize()
+                    .map_err(|error| format!("resolve MCP command `{command}`: {error}"));
+            }
+        }
+    }
+    Err(format!("MCP command `{command}` was not found on PATH"))
 }
 
 /// Kill the child and spawn a background reap so zombies don't

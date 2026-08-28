@@ -47,6 +47,7 @@ pub mod sysinfo;
 pub mod trace;
 pub mod triggers;
 pub mod watch;
+pub mod worker;
 
 #[cfg(test)]
 pub mod test_env {

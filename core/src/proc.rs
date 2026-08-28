@@ -262,6 +262,17 @@ pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
         .find(|session| session.session_id == session_id)
 }
 
+/// Read one session row from the launcher's own registry view.
+///
+/// The worker sandbox's broker endpoint runs inside the launcher, which
+/// is the owner of the routed registry partition the row lives in, so
+/// this is the same read `caps::require` and the daemon's authority
+/// perform — including the transient capabilities a session tool call
+/// installs for exactly one invocation.
+pub(crate) fn session_row_for_launcher(session_id: &str) -> Option<SessionInfo> {
+    session_info_by_id(session_id)
+}
+
 /// Snapshot every row in the registry resolved for the currently
 /// active owner/home override.
 ///

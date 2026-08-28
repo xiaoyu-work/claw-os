@@ -12,7 +12,7 @@ import sys
 import threading
 import time
 
-from cos_runtime import policy
+from cos_runtime import egress, policy
 
 
 DEFAULT_PORT = 443
@@ -169,6 +169,19 @@ def cmd_dns(args):
 
 def _connect_target(target, timeout):
     family, socktype, proto, sockaddr = target
+    # A raw TCP probe is exactly what a sandboxed worker may not do: it
+    # has no route and no permission to open an `AF_INET` socket. Say so
+    # explicitly rather than returning a connection error that reads like
+    # the host being down.
+    if egress.available() or os.environ.get("COS_WORKER_SANDBOX"):
+        return {
+            "ok": False,
+            "ip": sockaddr[0],
+            "error": (
+                "raw TCP probing is unavailable inside the worker sandbox; "
+                "run netdiag outside a sandboxed operation"
+            ),
+        }
     sock = None
     try:
         sock = socket.socket(family, socktype, proto)

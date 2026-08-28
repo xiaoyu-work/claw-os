@@ -1482,8 +1482,9 @@ def run(command, args):
         "args": args,
         "app_id": os.environ["COS_APP_ID"],
         "session": os.environ["COS_SESSION"],
-        "proc_data_dir": os.environ["COS_PROC_DATA_DIR"],
-        "launch_program": os.environ["TEST_LAUNCH_PROGRAM"],
+        "sandbox": os.environ.get("COS_WORKER_SANDBOX", ""),
+        "proc_data_dir_present": "COS_PROC_DATA_DIR" in os.environ,
+        "launch_program": os.path.realpath("/proc/self/exe"),
         "uid": os.geteuid(),
     }
 "#
@@ -1502,9 +1503,10 @@ if [ "$COS_COMMAND" = "fail" ]; then
   printf '{"error":"__RUNTIME__ failed"}\n'
   exit 9
 fi
-printf '{"runtime":"__RUNTIME__","command":"%s","args":%s,"app_id":"%s","session":"%s","proc_data_dir":"%s","launch_program":"%s","uid":%s}\n' \
-  "$COS_COMMAND" "$COS_ARGS_JSON" "$COS_APP_ID" "$COS_SESSION" "$COS_PROC_DATA_DIR" \
-  "$TEST_LAUNCH_PROGRAM" "$(id -u)"
+if [ -n "${COS_PROC_DATA_DIR:-}" ]; then proc_present=true; else proc_present=false; fi
+printf '{"runtime":"__RUNTIME__","command":"%s","args":%s,"app_id":"%s","session":"%s","sandbox":"%s","proc_data_dir_present":%s,"launch_program":"%s","uid":%s}\n' \
+  "$COS_COMMAND" "$COS_ARGS_JSON" "$COS_APP_ID" "$COS_SESSION" "${COS_WORKER_SANDBOX:-}" \
+  "$proc_present" "$0" "$(id -u)"
 "#
     .replace("__RUNTIME__", runtime)
 }
@@ -1521,7 +1523,7 @@ fn runtime_test_audit(data: &std::path::Path) -> Vec<Value> {
 #[cfg(unix)]
 #[test]
 fn polyglot_app_operations_dispatch_through_declared_runtime() {
-    with_runtime_app_test_env(|apps, data, proc_data| {
+    with_runtime_app_test_env(|apps, data, _proc_data| {
         let cases = [
             ("python-op", "python", None, "main.py"),
             ("node-op", "node", Some("handler.js"), "handler.js"),
@@ -1536,12 +1538,13 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
                 &runtime_test_entry_source(runtime),
             );
 
+            let ran_marker = data.join("apps").join(id).join(format!("{id}.ran"));
             let schema = dispatch(&["app".to_string(), id.to_string(), "--schema".to_string()])
                 .unwrap()
                 .unwrap();
             assert!(schema.contains("\"echo\""));
             assert!(
-                !data.join(format!("{id}.ran")).exists(),
+                !ran_marker.exists(),
                 "schema inspection executed the {runtime} entrypoint"
             );
 
@@ -1566,20 +1569,34 @@ fn polyglot_app_operations_dispatch_through_declared_runtime() {
             assert!(value["session"]
                 .as_str()
                 .is_some_and(|session| session.starts_with("app-")));
-            assert_eq!(value["proc_data_dir"], proc_data.to_string_lossy().as_ref());
-            let expected_program = match runtime {
-                "python" => "python3".to_string(),
-                "node" => "node".to_string(),
-                "shell" => "bash".to_string(),
-                "binary" => app_dir.join(entry_file).to_string_lossy().into_owned(),
-                _ => unreachable!(),
-            };
-            assert_eq!(value["launch_program"], expected_program);
+            // Every runtime lands in the hostile-worker sandbox, and
+            // none of them receives the session registry directory: the
+            // launch's authority lives behind the broker endpoint.
+            assert_eq!(value["sandbox"], "1");
+            assert_eq!(value["proc_data_dir_present"], json!(false));
+            let program = value["launch_program"].as_str().unwrap_or_default();
+            match runtime {
+                "python" => assert!(
+                    program.contains("python3"),
+                    "python op ran {program} instead of an interpreter"
+                ),
+                _ => assert_eq!(
+                    program,
+                    app_dir.join(entry_file).to_string_lossy().as_ref(),
+                    "{runtime} op ran the wrong entry"
+                ),
+            }
             assert_eq!(
                 value["uid"].as_u64(),
                 Some(unsafe { libc::geteuid() } as u64)
             );
-            assert!(data.join(format!("{id}.ran")).is_file());
+            // `COS_DATA_DIR` is the App's own partition of the owner's
+            // data root, never the root itself.
+            assert!(ran_marker.is_file());
+            assert!(
+                !data.join(format!("{id}.ran")).exists(),
+                "{runtime} op wrote into the owner's data root"
+            );
 
             let error_output = dispatch(&["app".to_string(), id.to_string(), "fail".to_string()])
                 .unwrap()
@@ -1670,8 +1687,10 @@ fn polyglot_app_desktop_exec_still_uses_gui_bridge() {
         .unwrap();
         assert!(output.is_none());
 
-        let gui: Value =
-            serde_json::from_slice(&std::fs::read(data.join("gui.json")).unwrap()).unwrap();
+        let gui: Value = serde_json::from_slice(
+            &std::fs::read(data.join("apps").join("desktop-shell").join("gui.json")).unwrap(),
+        )
+        .unwrap();
         assert_eq!(gui["runtime"], "shell");
         assert_eq!(gui["command"], "--gui");
         assert_eq!(gui["args"], json!(["document.txt"]));

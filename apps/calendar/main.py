@@ -17,7 +17,13 @@ from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from _shared.credentials import load_credential  # noqa: E402
+from _shared.safe_http import open_url  # noqa: E402
 from cos_runtime import memory, policy  # noqa: E402
+
+# Ceiling on one provider request. Bounded here rather than left to the
+# platform default so a hung endpoint cannot hold an operation open past
+# its sandbox runtime limit.
+HTTP_TIMEOUT = 30
 
 DATA_DIR = os.environ.get("COS_DATA_DIR", "/var/lib/cos")
 
@@ -116,7 +122,11 @@ def _google_request(method, url, body=None, token=None):
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req) as resp:
+    # `open_url` authorizes the endpoint before it connects, carries
+    # the request over the operation's approved transport — the brokered
+    # egress tunnel inside a sandbox — and re-authorizes every redirect
+    # hop against `net.dial` instead of following it blindly.
+    with open_url(req, timeout=HTTP_TIMEOUT)[0] as resp:
         if resp.status == 204:
             return {}
         return json.loads(resp.read().decode())
@@ -187,7 +197,11 @@ def _outlook_request(method, url, body=None, token=None):
         headers["Content-Type"] = "application/json"
         data = json.dumps(body).encode()
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    with urllib.request.urlopen(req) as resp:
+    # `open_url` authorizes the endpoint before it connects, carries
+    # the request over the operation's approved transport — the brokered
+    # egress tunnel inside a sandbox — and re-authorizes every redirect
+    # hop against `net.dial` instead of following it blindly.
+    with open_url(req, timeout=HTTP_TIMEOUT)[0] as resp:
         if resp.status == 204:
             return {}
         return json.loads(resp.read().decode())

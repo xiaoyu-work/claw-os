@@ -28,6 +28,15 @@ Adapters use argument-vector subprocess APIs, never shell interpolation.
 Operation manifests and runtime validation remain aligned. External binary
 failure is surfaced as an adapter error, not a successful empty result.
 
+Adapters attach as MCP servers and therefore run in the same
+hostile-worker sandbox as any third-party server
+([`../core/src/worker/MODULE.md`](../core/src/worker/MODULE.md)): a
+read-only system image, no App data directory, no host paths beyond the
+configured working directory, no network at all, and a per-launch broker
+endpoint that admits nothing by default. An adapter that shells out to a
+binary outside `/usr` must declare it as a dependency; a binary the
+sandbox cannot see is not a smaller adapter, it is a failed launch.
+
 ## Tests
 
 ```bash

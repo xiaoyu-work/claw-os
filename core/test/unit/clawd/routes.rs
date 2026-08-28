@@ -54,6 +54,10 @@ const HISTORICAL_USER_COMMANDS: &[&str] = &[
     "app_session.bind",
     "app_session.set_transient",
     "app_session.deregister",
+    // The launcher's relay: addressed by a grant `clawd` issued to that
+    // exact process, and refused for every route a session may not
+    // reach. It is `Access::User` because the launcher is unprivileged.
+    "app_session.relay",
     "permission.pending",
     "permission.recent",
     "permission.status",

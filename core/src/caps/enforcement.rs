@@ -296,6 +296,29 @@ fn app_session_process_is_current(session: &SessionRow) -> bool {
 pub fn require(verb: Verb, scope: Scope) -> Result<(), Denial> {
     let mode = Mode::from_env();
     let session_id = crate::proc::current_session_id();
+    // Inside a worker sandbox there is no session registry to read:
+    // the launch's authority lives outside, behind the private broker
+    // endpoint, and this process only gets to ask it questions. The
+    // answer is advisory — the enforceable boundary is the sandbox's
+    // mounts, network namespace and syscall filter — but it must still
+    // refuse by default, which is what an unreachable broker does.
+    if let Some(decision) = crate::worker::broker::sandbox_policy_check(verb, &scope) {
+        let result = decision.map_err(|reason| Denial {
+            verb,
+            requested_scope: scope.clone(),
+            granted_scopes: Vec::new(),
+            reason: DenialReason::ScopeOutOfRange,
+            hint: Some(reason),
+        });
+        crate::audit::log_cap_decision(build_cap_audit_record(
+            verb,
+            &scope,
+            mode,
+            session_id.as_deref(),
+            &result,
+        ));
+        return result;
+    }
     let mut result = require_impl(verb, scope.clone(), mode, session_id.as_deref());
     if let Err(denial) = &mut result {
         attach_approval_request(denial, mode, session_id.as_deref());

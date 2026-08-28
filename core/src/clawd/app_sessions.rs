@@ -47,6 +47,8 @@ use crate::proc::SessionInfo;
 
 use super::authority;
 use super::client_identity::ClientIdentity;
+use super::routes::{Access, Command, Route, RouteCall};
+use super::state::DaemonState;
 
 /// How long an issued handle may be used to bind a child process.
 /// Long enough for a slow interpreter start, short enough that a
@@ -229,6 +231,7 @@ pub const COMMANDS: &[&str] = &[
     "app_session.bind",
     "app_session.set_transient",
     "app_session.deregister",
+    "app_session.relay",
 ];
 
 pub async fn register(params: Value, client: &ClientIdentity) -> Result<Value, BrokerError> {
@@ -435,7 +438,20 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
         child_pid,
         &bound_caps,
     )?;
-    Ok(json!({"bound": true}))
+    // The worker runs inside a mount and pid namespace and cannot
+    // present its own session grant: the only process outside it that
+    // legitimately speaks for the session is the launcher that built
+    // the sandbox. It gets a relay grant — no capabilities of its own,
+    // bound `Process`-tight to this launcher, naming this one session —
+    // and the worker never sees it.
+    let relay_handle = issue_relay_grant(
+        &handle,
+        &session_id,
+        launch.subject.app_id.as_deref(),
+        uid,
+        launcher_pid,
+    )?;
+    Ok(json!({"bound": true, "relay_handle": relay_handle}))
 }
 
 /// Serializer for one App session's capability transitions.
@@ -654,14 +670,13 @@ fn require_launch_grant(
     let view = authority::authority()
         .resolve(
             handle,
-            &authority::Presentation {
+            &authority::Presentation::new(
                 uid,
                 pid,
-                start_time_ticks: client.start_time_ticks,
-                audience: authority::Audience::AppLaunch,
-                route: "app_session",
-                session_id: None,
-            },
+                client.start_time_ticks,
+                authority::Audience::AppLaunch,
+                "app_session",
+            ),
         )
         .map_err(|error| error.to_string())?;
     if view.subject.session_id.as_deref() != Some(session_id) {
@@ -1170,14 +1185,16 @@ fn issue_launch_grant(
             binding: authority::Binding::Process,
             subject: authority::Subject::session(session_id)
                 .with_app(app_id.map(ToOwned::to_owned)),
-            // The launch grant is the parent of the session grant, so
-            // it has to carry every audience that session will need;
-            // `bind` narrows it to the provider audiences and drops
-            // launch authority.
+            // The launch grant is the parent of the session grant and
+            // of the launcher's relay grant, so it has to carry every
+            // audience either will need; `bind` narrows the session
+            // grant to the provider audiences, the relay grant to
+            // relay authority alone, and both drop launch authority.
             audience: authority::AudienceSet::of(&[
                 authority::Audience::AppLaunch,
                 authority::Audience::SystemService,
                 authority::Audience::Credential,
+                authority::Audience::AppRelay,
             ]),
             caps: caps.clone(),
             lifetime: LAUNCH_GRANT_TTL,
@@ -1228,6 +1245,150 @@ fn issue_session_grant(
         .map_err(|error| error.to_string())?;
     authority::audit::record_issued(&view, None);
     Ok(())
+}
+
+/// Mint the launcher's right to relay for one App session.
+///
+/// The grant carries an empty capability set on purpose: it authorizes
+/// *presenting* the session grant, never any effect. It is bound
+/// `Process`-tight to the launcher, so a same-uid sibling, a process
+/// that received the handle over a socket, or the sandboxed worker
+/// itself cannot use it; it is derived from the launch grant, so
+/// `deregister` revokes it with everything else; and its audience is
+/// only [`authority::Audience::AppRelay`], so it can reach nothing
+/// directly.
+/// Relay one App-session system-service call for a sandboxed worker.
+///
+/// A worker runs inside a mount and pid namespace with no route to the
+/// real broker socket. Its launcher holds the relay grant this route is
+/// addressed by, and forwards exactly one inner call at a time.
+///
+/// The relay is plumbing, not policy. It decides only *which* routes
+/// may be relayed at all; every question about whether this session may
+/// take this action against this resource is answered by the inner
+/// route's own typed decode, its authority decision and the exact
+/// capability its provider spends — all against the live session grant,
+/// so a transient capability set for one MCP call is honoured while it
+/// is set and gone the moment it is cleared.
+pub async fn relay(
+    state: &DaemonState,
+    params: Value,
+    client: &ClientIdentity,
+    relay_grant: &authority::Decision,
+) -> Result<Value, String> {
+    let session_id = required_string(&params, "session_id")?;
+    let handle = required_string(&params, "handle")?;
+    // The middleware resolved the handle against this process. What is
+    // left is the route's own contract: the grant names *this* session.
+    if relay_grant.session_id() != Some(session_id.as_str()) {
+        return Err("relay handle does not cover this App session".to_string());
+    }
+    let command = required_string(&params, "command")?;
+    let inner =
+        Command::parse(&command).ok_or_else(|| format!("unknown relay route `{command}`"))?;
+    let route = relayable_route(inner)?;
+
+    // The session id is not taken from the worker: it is overwritten
+    // with the one the relay grant names, before the inner body is
+    // decoded, so the typed decode validates the value that will
+    // actually be authorized.
+    let mut inner_params = params
+        .get("params")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
+    let Some(object) = inner_params.as_object_mut() else {
+        return Err("relayed parameters must be an object".to_string());
+    };
+    object.insert("session".to_string(), Value::String(session_id.clone()));
+    let inner_params = (route.decode)(inner_params)
+        .map_err(|_| format!("relayed route `{}` refused its parameters", route.name))?;
+
+    let decision = authority::authorize_relayed(
+        &handle,
+        &session_id,
+        route.name,
+        &route.authority,
+        &inner_params,
+        client,
+    )
+    .await
+    .map_err(|_| format!("relayed route `{}` was not authorized", route.name))?;
+
+    let call = RouteCall {
+        state,
+        client,
+        params: inner_params,
+        authority: decision.as_ref(),
+    };
+    let outcome = (route.handler)(call).await;
+    // The same obligation the server enforces for a direct call: a
+    // route that derives its own capability and answered without
+    // spending one has authorized nothing, so nothing is released.
+    if !authority::obligation_met(decision.as_ref()) {
+        tracing::error!(
+            route = route.name,
+            "relayed route answered without exercising its capability requirement"
+        );
+        return Err("relayed route did not exercise its authority".to_string());
+    }
+    let result = outcome.map_err(|error| error.message)?;
+    Ok(json!({ "command": route.name, "result": result }))
+}
+
+/// Which routes a relay may reach.
+///
+/// Only a `Session`-subject system-service route: the exact shape whose
+/// authority *is* the App session grant. Everything else — root access,
+/// peer-scoped, peer-session, handle-addressed, the consent surface,
+/// session and identity control, the scheduler, the journal, and the
+/// relay route itself — is refused here and refused again by
+/// [`authority::authorize_relayed`].
+fn relayable_route(command: Command) -> Result<&'static Route, String> {
+    let route = command.route();
+    let refuse = |reason: &str| Err(format!("route `{}` {reason}", route.name));
+    if command == Command::AppSessionRelay {
+        return refuse("cannot be relayed through itself");
+    }
+    if route.access != Access::User {
+        return refuse("is not reachable by an unprivileged session");
+    }
+    if route.authority.subject != authority::SubjectSource::Session {
+        return refuse("is not addressed by an App session");
+    }
+    if route.authority.audience != authority::Audience::SystemService {
+        return refuse("is outside the system-service audience a relay may reach");
+    }
+    Ok(route)
+}
+
+fn issue_relay_grant(
+    launch_handle: &str,
+    session_id: &str,
+    app_id: Option<&str>,
+    uid: u32,
+    launcher_pid: u32,
+) -> Result<String, String> {
+    let principal = authority::Principal::of_process(uid, launcher_pid)
+        .ok_or_else(|| format!("App launcher {launcher_pid} could not be identified"))?;
+    let (handle, view) = authority::authority()
+        .attenuate(
+            launch_handle,
+            authority::Attenuation {
+                issuer: authority::Issuer::AppSessionAuthority,
+                principal,
+                binding: authority::Binding::Process,
+                subject: authority::Subject::session(session_id)
+                    .with_app(app_id.map(ToOwned::to_owned)),
+                audience: authority::AudienceSet::of(&[authority::Audience::AppRelay]),
+                caps: CapSet::new(),
+                lifetime: SESSION_GRANT_TTL,
+                uses: authority::Uses::Unbounded,
+                index_session: false,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
+    Ok(handle.into_wire())
 }
 
 /// Re-derive the session grant after a transient capability change.
