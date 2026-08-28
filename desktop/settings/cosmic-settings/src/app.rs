@@ -394,13 +394,7 @@ impl cosmic::Application for SettingsApp {
         match message {
             Message::AskClaw => {
                 let page_info = &self.pages.info[self.active_page];
-                let ctx = format!(
-                    r#"{{"app":"cosmic-settings","page":"{}","title":"{}"}}"#,
-                    page_info.id.replace('"', "\\\""),
-                    page_info.title.replace('"', "\\\""),
-                );
-                let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                if let Err(err) = cos_runtime::exec::start(argv) {
+                if let Err(err) = crate::claw_glue::ask_claw_page(&page_info.id, &page_info.title) {
                     tracing::error!(?err, "failed to open Ask Claw overlay");
                 }
             }
@@ -440,12 +434,7 @@ impl cosmic::Application for SettingsApp {
                 // which page to open.
                 let query = self.search_input.trim().to_string();
                 if !query.is_empty() {
-                    let ctx = format!(
-                        r#"{{"app":"cosmic-settings","mode":"search","query":"{}"}}"#,
-                        escape_json_str(&query),
-                    );
-                    let argv: &[&str] = &["cos-agent-ui", "--overlay", "--context", &ctx];
-                    if let Err(err) = cos_runtime::exec::start(argv) {
+                    if let Err(err) = crate::claw_glue::ask_claw_search(&query) {
                         tracing::error!(?err, "failed to open Ask Claw overlay");
                     }
                 }
@@ -1397,24 +1386,4 @@ impl SettingsApp {
             .padding([0, padding, bottom_spacer, padding])
             .into()
     }
-}
-
-/// Escape a Rust string for safe embedding inside a JSON string literal.
-/// Used by the AskClaw context payload, which is hand-built with
-/// `format!` so we don't need to make `serde_json` an unconditional
-/// dependency.
-fn escape_json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out
 }

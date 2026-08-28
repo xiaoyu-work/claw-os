@@ -18,6 +18,7 @@ detail:
 | `cos_runtime::pkg` | (not applicable) | Route `pkg.*` ops similarly |
 | `cos_runtime::notify` | (not applicable) | Route `notify.*` ops similarly |
 | `cos_runtime::net` | (not applicable) | Route `net.*` ops similarly |
+| `cos_runtime::ask_claw` | (not applicable) | Serialize bounded typed desktop context and launch the Agent overlay through supervised `exec.start` |
 | (not applicable) | `cos_runtime.snapshot` | Copy-on-write before every gated fs mutation |
 
 These modules talk wire-v1 too, but they're the *kernel side* of that wire —
@@ -32,6 +33,20 @@ the consumers are the bundled apps in this repo, not external apps.
   where someone installs `cos-runtime` separately.
 - Importing `cos_runtime` from a non-claw-os process **will fail loudly**
   (`cos` binary not on PATH, no `COS_SESSION` env, etc.) — by design.
+
+## Ask Claw desktop integration
+
+Bundled desktop apps implement `cos_runtime::ask_claw::Context` on a narrow
+app-local `Serialize` type, then call `ask_claw::launch`. The runtime inserts
+the app identity, serializes with `serde_json`, rejects non-object/reserved or
+larger-than-32-KiB contexts, selects the Agent UI executable, builds overlay
+activation arguments, and launches it through the existing supervised
+`exec.start` boundary. The Agent UI imports the same activation type and CLI
+parser from this module.
+
+Keep these typed adapters in each app's `claw_glue` module. Reducers should
+only select the user intent and pass the already-visible page, query, path, or
+terminal output fields; they must not build JSON or know the Agent UI command.
 
 ## Relationship to `claw-os-sdk`
 

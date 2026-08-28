@@ -794,29 +794,22 @@ fn open_uri(uri: &str) -> std::io::Result<()> {
 }
 
 fn parse_flags() -> Flags {
-    let mut flags = Flags::default();
-    let mut args = env::args().skip(1);
-    while let Some(argument) = args.next() {
-        match argument.as_str() {
-            "--overlay" => flags.overlay = true,
-            "--voice" => flags.voice = true,
-            "--query" => flags.query = args.next(),
-            "--context" => flags.context = args.next(),
-            "-h" | "--help" => {
-                eprintln!("cos-agent-ui [--overlay] [--voice] [--query TEXT] [--context TEXT]");
-                std::process::exit(0);
-            }
-            other => eprintln!("warning: ignoring unknown flag: {other}"),
-        }
+    let parsed = cos_runtime::ask_claw::parse_ui_arguments(env::args().skip(1));
+    if parsed.help {
+        eprintln!("{}", cos_runtime::ask_claw::UI_USAGE);
+        std::process::exit(0);
     }
-    if flags.overlay {
-        flags.activation = Some(OverlayActivation {
-            voice: flags.voice,
-            query: flags.query.clone(),
-            context: flags.context.clone(),
-        });
+    for argument in &parsed.unknown {
+        eprintln!("warning: ignoring unknown flag: {argument}");
     }
-    flags
+    let activation = parsed.activation();
+    Flags {
+        overlay: parsed.overlay,
+        voice: parsed.voice,
+        query: parsed.query,
+        context: parsed.context,
+        activation,
+    }
 }
 
 fn main() -> cosmic::iced::Result {

@@ -87,6 +87,12 @@ Apps use the Claw OS SDK/agent gate rather than provider SDKs. Provider choice,
 credentials, consent, budgets, model-visible logging, and fallback behavior
 remain owned by the core agent.
 
+Bundled desktop apps launch Ask Claw through `cos_runtime::ask_claw`. Their
+thin `claw_glue` adapters define only typed, app-specific context fields; the
+runtime owns bounded JSON serialization, executable selection, overlay
+activation arguments, supervised launch errors, and the activation contract
+consumed by the Agent UI.
+
 ### Persistence and observability
 
 Anything inserted into a model request must be reconstructable from session or
@@ -510,6 +516,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - The desktop Agent UI and HTTP bridge compile against
   `desktop/agent/protocol`; the bridge translates clawd/core models into this
   versioned presentation contract and rejects incompatible versions explicitly.
+- Desktop Ask Claw launchers and the Agent UI share the
+  `cos_runtime::ask_claw` activation contract; host reducers never name the
+  Agent UI executable or hand-build context JSON.
 - `cos` and `clawd` speak one broker protocol version and are replaced
   together. A mismatched pair fails closed with a named protocol error; there
   is no permissive dual-stack listener.

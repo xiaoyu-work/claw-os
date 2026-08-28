@@ -34,6 +34,11 @@ Wayland, SDK, or MCP boundaries. Preserve licenses and avoid pulling privileged
 agent logic into GPL desktop processes. Component workspaces remain independent
 of the root Rust workspace.
 
+Bundled apps launch Ask Claw through `cos_runtime::ask_claw`, with only typed
+app-specific context adapters in their local `claw_glue` modules. The runtime
+owns serialization bounds, executable discovery, activation arguments,
+supervised process errors, and the activation type consumed by the Agent UI.
+
 The Agent UI and bridge share `agent/protocol/`; endpoint and stream DTOs must
 not be duplicated in either binary. Core/clawd models terminate at the bridge's
 anti-corruption translation layer and never become UI state.

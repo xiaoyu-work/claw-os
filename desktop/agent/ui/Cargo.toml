@@ -29,6 +29,7 @@ bytes = "1"
 uuid = { version = "1", features = ["v4"] }
 url = "2"
 cos-agent-protocol = { workspace = true }
+cos-runtime = { path = "../../../cos-runtime/rust" }
 
 # Microphone capture (replaces React's MediaRecorder + getUserMedia).
 # cpal is the standard cross-platform audio crate; on Linux it talks

@@ -15,7 +15,7 @@ versioned desktop Agent protocol without importing clawd or core models.
 | `src/bridge_state.rs` | Bridge connection, model availability, failure, and reconnect state |
 | `src/effects.rs` | Async bridge, history, stream, and cancellation effects that emit typed UI messages |
 | `src/voice.rs` | Recording/processing lifecycle, abort generation, and stale completion rejection |
-| `src/overlay.rs` | Activation context, deferred submission, file-picker focus, and layer-surface lifecycle |
+| `src/overlay.rs` | Deferred context submission, file-picker focus, and layer-surface lifecycle; activation type is owned by `cos-runtime` |
 | `src/views.rs` | Read-only widget composition that emits `Message` values |
 | `src/styles.rs` | Presentation styles |
 | `src/bridge.rs`, `src/sse.rs`, `src/recorder.rs` | Protocol transport, SSE decoding, and audio capture/upload adapters |
@@ -30,6 +30,10 @@ and stale stream-event handling.
 The UI consumes DTOs from `../protocol/` through `src/bridge.rs`. Views may
 read composed application state and emit messages, but transport orchestration
 belongs to `src/effects.rs` and lifecycle owners.
+
+Initial CLI arguments and subsequent single-instance D-Bus activation use
+`cos_runtime::ask_claw::{UiArguments, Activation}`. Keep executable names,
+overlay flags, and context serialization out of the UI and host apps.
 
 ## Tests
 

@@ -34,7 +34,8 @@ pub mod ai;
 use std::io;
 use std::path::Path;
 
-use cos_runtime::BridgeError;
+use cos_runtime::{ask_claw, BridgeError};
+use serde::Serialize;
 
 /// Convert a `BridgeError` to an `io::Error`, preserving the
 /// "denied" signal as `ErrorKind::PermissionDenied`. Anything else
@@ -118,4 +119,21 @@ pub fn start_detached<S: AsRef<str>>(program: &str, args: &[S]) -> io::Result<()
 pub fn start_detached_path<S: AsRef<str>>(program: &Path, args: &[S]) -> io::Result<()> {
     let prog = path_str(program)?;
     start_detached(prog, args)
+}
+
+#[derive(Serialize)]
+struct FilesContext<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cwd: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<&'a str>,
+}
+
+impl ask_claw::Context for FilesContext<'_> {
+    const APP_ID: &'static str = "cosmic-files";
+}
+
+/// Open Ask Claw with the current directory and optional selected path.
+pub fn ask_claw(cwd: Option<&str>, selection: Option<&str>) -> Result<(), ask_claw::LaunchError> {
+    ask_claw::launch(&FilesContext { cwd, selection }).map(|_| ())
 }
