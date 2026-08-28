@@ -313,6 +313,14 @@ impl ToolExposureContext {
             && self.client.local
             && self.has_transport(ToolTransport::InteractiveAuthorization)
     }
+
+    pub fn permits_interactive_authorization(&self) -> bool {
+        self.is_attended_local()
+            && matches!(
+                self.client.source,
+                SessionSource::LocalCli | SessionSource::LocalWeb | SessionSource::BrokerTask
+            )
+    }
 }
 
 /// Immutable exposure requirements cached beside a tool descriptor.

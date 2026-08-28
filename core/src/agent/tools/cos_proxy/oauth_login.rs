@@ -21,6 +21,11 @@ impl Default for CosOauthLoginTool {
     }
 }
 
+type AuthorizedRunner = fn(
+    Vec<String>,
+    crate::credential::AgentOauthAuthorization,
+) -> Result<Value, String>;
+
 #[async_trait]
 impl Tool for CosOauthLoginTool {
     fn name(&self) -> &str {
@@ -71,48 +76,60 @@ impl Tool for CosOauthLoginTool {
     }
 
     async fn exec(&self, input: Value) -> ToolResult {
-        let provider = match input.get("provider").and_then(Value::as_str) {
-            Some(provider @ ("google" | "microsoft")) => provider.to_string(),
-            Some(provider) => {
-                return ToolResult::err(format!(
-                    "unsupported OAuth provider: {provider}. supported: google, microsoft"
-                ));
-            }
-            None => return ToolResult::err("missing 'provider' field"),
-        };
-        let timeout = match input.get("timeout_seconds") {
-            Some(value) => match value.as_u64() {
-                Some(seconds @ 30..=900) => Some(seconds),
-                _ => return ToolResult::err("timeout_seconds must be between 30 and 900"),
-            },
-            None => None,
-        };
-
-        let mut args = vec![provider];
-        if let Some(seconds) = timeout {
-            args.extend(["--timeout".to_string(), seconds.to_string()]);
-        }
-
-        if crate::paths::is_routed_job()
-            || crate::paths::current_owner_uid_override().is_some()
-            || crate::paths::current_home_override().is_some()
-        {
-            return oauth_result(tokio::task::block_in_place(|| {
-                crate::credential::run_agent_oauth_login(&args)
-            }));
-        }
-
-        let result =
-            tokio::task::spawn_blocking(move || crate::credential::run_agent_oauth_login(&args))
-                .await;
-        match result {
-            Ok(result) => oauth_result(result),
-            Err(error) => ToolResult::err(format!("OAuth login task failed: {error}")),
-        }
+        execute_with(input, run_authorized).await
     }
 
     fn parallel_safe(&self) -> bool {
         false
+    }
+}
+
+fn run_authorized(
+    args: Vec<String>,
+    authorization: crate::credential::AgentOauthAuthorization,
+) -> Result<Value, String> {
+    crate::credential::run_agent_oauth_login_authorized(&args, authorization)
+}
+
+async fn execute_with(input: Value, runner: AuthorizedRunner) -> ToolResult {
+    let provider = match input.get("provider").and_then(Value::as_str) {
+        Some(provider @ ("google" | "microsoft")) => provider.to_string(),
+        Some(provider) => {
+            return ToolResult::err(format!(
+                "unsupported OAuth provider: {provider}. supported: google, microsoft"
+            ));
+        }
+        None => return ToolResult::err("missing 'provider' field"),
+    };
+    let timeout = match input.get("timeout_seconds") {
+        Some(value) => match value.as_u64() {
+            Some(seconds @ 30..=900) => Some(seconds),
+            _ => return ToolResult::err("timeout_seconds must be between 30 and 900"),
+        },
+        None => None,
+    };
+
+    let mut args = vec![provider];
+    if let Some(seconds) = timeout {
+        args.extend(["--timeout".to_string(), seconds.to_string()]);
+    }
+    let authorization = match crate::credential::authorize_agent_oauth_login() {
+        Ok(authorization) => authorization,
+        Err(error) => return ToolResult::err(error),
+    };
+
+    if crate::paths::is_routed_job()
+        || crate::paths::current_owner_uid_override().is_some()
+        || crate::paths::current_home_override().is_some()
+    {
+        return oauth_result(tokio::task::block_in_place(|| {
+            runner(args, authorization)
+        }));
+    }
+
+    match tokio::task::spawn_blocking(move || runner(args, authorization)).await {
+        Ok(result) => oauth_result(result),
+        Err(error) => ToolResult::err(format!("OAuth login task failed: {error}")),
     }
 }
 
