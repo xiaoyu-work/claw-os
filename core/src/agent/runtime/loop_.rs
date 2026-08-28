@@ -874,7 +874,11 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         transient_context,
         recorder,
     ));
-    let llm_tools = tools.as_llm_tools();
+    let llm_tools = if cfg.progressive_tools_enabled {
+        tools.as_llm_tools_progressive()
+    } else {
+        tools.as_llm_tools()
+    };
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the

@@ -489,13 +489,18 @@ async fn chat_cmd_async(
         let mut e = stderr.lock();
         let _ = writeln!(
             e,
-            "cos agent chat — provider={} model={} session={} memory={} streaming={} max_turns={}",
+            "cos agent chat — provider={} model={} session={} memory={} streaming={} max_turns={} progressive_tools={}",
             cfg.provider,
             cfg.model,
             session_id,
             if memory_db.is_some() { "on" } else { "off" },
             if streaming { "on" } else { "off" },
             cfg.max_turns,
+            if cfg.progressive_tools_enabled {
+                "on"
+            } else {
+                "off"
+            },
         );
         let _ = writeln!(e, "Type /help for commands. Ctrl-D or /quit to exit.");
         if show_tools {

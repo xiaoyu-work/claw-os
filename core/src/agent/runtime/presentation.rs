@@ -14,6 +14,7 @@ use serde_json::Value;
 
 use crate::agent::llm::accumulate::{SinkReady, StreamSink};
 use crate::agent::llm::{ContentBlock, StreamEvent};
+use crate::agent::tools::progressive;
 
 use super::evidence;
 use super::progress::{ProgressReady, ProgressSink};
@@ -54,9 +55,15 @@ impl StreamSink for UserVisibleStreamSink {
                         .on_event(&StreamEvent::TextDelta { text: visible });
                 }
             }
+            StreamEvent::ToolUseStart { name, .. } if name == progressive::TOOL_CALL => {}
             StreamEvent::ToolInputDelta { .. } => {}
             StreamEvent::ToolUse(call) => {
                 let mut visible = call.clone();
+                if let Some((name, _)) =
+                    progressive::resolve_visible_identity(&visible.name, &visible.input)
+                {
+                    visible.name = name;
+                }
                 visible.input = Value::Null;
                 self.inner.on_event(&StreamEvent::ToolUse(visible));
             }
@@ -67,13 +74,23 @@ impl StreamSink for UserVisibleStreamSink {
                         ContentBlock::Text { text } => {
                             *text = evidence::strip_markers(text);
                         }
-                        ContentBlock::ToolUse { input, .. } => {
+                        ContentBlock::ToolUse { name, input, .. } => {
+                            if let Some((resolved_name, _)) =
+                                progressive::resolve_visible_identity(name, input)
+                            {
+                                *name = resolved_name;
+                            }
                             *input = Value::Null;
                         }
                         _ => {}
                     }
                 }
                 for call in &mut visible.tool_calls {
+                    if let Some((name, _)) =
+                        progressive::resolve_visible_identity(&call.name, &call.input)
+                    {
+                        call.name = name;
+                    }
                     call.input = Value::Null;
                 }
                 self.inner.on_event(&StreamEvent::Message(visible));

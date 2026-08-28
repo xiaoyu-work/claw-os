@@ -1,4 +1,5 @@
 use super::*;
+use crate::agent::llm::{ContentBlock, Message, Role};
 
 fn db() -> MemoryDb {
     MemoryDb::open_in_memory().unwrap()
@@ -20,6 +21,25 @@ fn tool_invocations_are_separate_from_messages_and_clear_with_session() {
 
     assert_eq!(db.clear_session("s").unwrap(), 0);
     assert!(db.recent_tool_invocations("s", 10).unwrap().is_empty());
+}
+
+#[test]
+fn render_message_content_uses_underlying_bridged_tool_identity() {
+    let message = Message {
+        role: Role::Assistant,
+        content: vec![ContentBlock::ToolUse {
+            id: "call-1".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "cos_app_mail",
+                "arguments": {"command": "list"},
+            }),
+        }],
+    };
+    let rendered = render_message_content(&message);
+    assert!(rendered.contains("[tool_use:cos_app_mail]"));
+    assert!(rendered.contains("\"command\":\"list\""));
+    assert!(!rendered.contains("cos_tool_call"));
 }
 
 #[test]

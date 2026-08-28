@@ -174,6 +174,7 @@ fn body_renders_assistant_function_call_part() {
     let asst = &body["contents"][1];
     assert_eq!(asst["role"], "model");
     assert_eq!(asst["parts"][0]["functionCall"]["name"], "echo");
+    assert_eq!(asst["parts"][0]["functionCall"]["id"], "0");
     assert_eq!(asst["parts"][0]["functionCall"]["args"]["text"], "hi");
 }
 
@@ -193,6 +194,7 @@ fn body_renders_tool_result_as_function_response_part() {
     // Tool result lives under user role.
     assert_eq!(msg["role"], "user");
     assert_eq!(msg["parts"][0]["functionResponse"]["name"], "echo");
+    assert_eq!(msg["parts"][0]["functionResponse"]["id"], "0");
     // JSON content is parsed and inlined into `response`.
     assert_eq!(msg["parts"][0]["functionResponse"]["response"]["ok"], true);
 }
@@ -440,13 +442,63 @@ fn parses_function_call_response_synthesizes_id() {
     let resp: wire::Response = serde_json::from_value(raw).unwrap();
     let chat = wire::response_to_chat(resp, "fallback").unwrap();
     assert_eq!(chat.tool_calls.len(), 1);
-    // Id format: "<name>::<seq>"
-    assert_eq!(chat.tool_calls[0].id, "lookup::0");
+    // Id format: "<name>::<unique-id>"
+    assert!(chat.tool_calls[0].id.starts_with("lookup::"));
     assert_eq!(chat.tool_calls[0].name, "lookup");
     assert_eq!(chat.tool_calls[0].input["q"], "weather");
     // Even though Gemini said STOP, we upgrade to ToolUse because a
     // function call was emitted.
     assert!(matches!(chat.finish_reason, FinishReason::ToolUse));
+}
+
+#[test]
+fn parses_and_preserves_upstream_function_call_id() {
+    let raw = serde_json::json!({
+        "candidates": [{
+            "content": {
+                "role": "model",
+                "parts": [
+                    {
+                        "functionCall": {
+                            "id": "upstream-call-123",
+                            "name": "cos_tool_call",
+                            "args": {
+                                "name": "mcp_test_lookup",
+                                "arguments": {"query": "weather"}
+                            }
+                        }
+                    }
+                ]
+            },
+            "finishReason": "STOP"
+        }]
+    });
+    let response: wire::Response = serde_json::from_value(raw).unwrap();
+    let chat = wire::response_to_chat(response, "fallback").unwrap();
+    assert_eq!(chat.tool_calls[0].id, "cos_tool_call::upstream-call-123");
+
+    let mut request = req_text("ignored");
+    request.messages.push(Message {
+        role: Role::Assistant,
+        content: chat.content,
+    });
+    request.messages.push(Message {
+        role: Role::Tool,
+        content: vec![ContentBlock::ToolResult {
+            tool_use_id: chat.tool_calls[0].id.clone(),
+            is_error: false,
+            content: "{\"ok\":true}".into(),
+        }],
+    });
+    let body = wire::build_request_body(&request, false);
+    assert_eq!(
+        body["contents"][1]["parts"][0]["functionCall"]["id"],
+        "upstream-call-123"
+    );
+    assert_eq!(
+        body["contents"][2]["parts"][0]["functionResponse"]["id"],
+        "upstream-call-123"
+    );
 }
 
 #[test]
@@ -466,9 +518,31 @@ fn parses_parallel_function_calls_with_distinct_ids() {
     let resp: wire::Response = serde_json::from_value(raw).unwrap();
     let chat = wire::response_to_chat(resp, "fallback").unwrap();
     assert_eq!(chat.tool_calls.len(), 2);
-    // Two distinct synthetic ids: echo::0, echo::1
-    assert_eq!(chat.tool_calls[0].id, "echo::0");
-    assert_eq!(chat.tool_calls[1].id, "echo::1");
+    assert!(chat.tool_calls[0].id.starts_with("echo::"));
+    assert!(chat.tool_calls[1].id.starts_with("echo::"));
+    assert_ne!(chat.tool_calls[0].id, chat.tool_calls[1].id);
+}
+
+#[test]
+fn synthetic_tool_ids_remain_unique_across_responses() {
+    fn response() -> wire::Response {
+        serde_json::from_value(serde_json::json!({
+            "candidates": [{
+                "content": {
+                    "role": "model",
+                    "parts": [{"functionCall": {"name": "echo", "args": {}}}]
+                },
+                "finishReason": "STOP"
+            }]
+        }))
+        .unwrap()
+    }
+
+    let first = wire::response_to_chat(response(), "fallback").unwrap();
+    let second = wire::response_to_chat(response(), "fallback").unwrap();
+    assert_ne!(first.tool_calls[0].id, second.tool_calls[0].id);
+    assert_eq!(wire::strip_id_seq(&first.tool_calls[0].id), "echo");
+    assert_eq!(wire::strip_id_seq(&second.tool_calls[0].id), "echo");
 }
 
 #[test]

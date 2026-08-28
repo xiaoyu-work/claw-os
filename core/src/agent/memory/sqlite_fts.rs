@@ -1129,11 +1129,14 @@ pub fn render_message_content(msg: &crate::agent::llm::Message) -> String {
                 out.push_str(text);
             }
             crate::agent::llm::ContentBlock::ToolUse { name, input, .. } => {
+                let (name, input) =
+                    crate::agent::tools::progressive::resolve_visible_identity(name, input)
+                        .unwrap_or_else(|| (name.clone(), input.clone()));
                 if !out.is_empty() {
                     out.push('\n');
                 }
                 out.push_str("[tool_use:");
-                out.push_str(name);
+                out.push_str(&name);
                 out.push_str("] ");
                 out.push_str(&input.to_string());
             }

@@ -12,6 +12,8 @@ through model turns, tools, hooks, progress, and final records.
 - Keep due reminders and application context request-local.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
+- Resolve progressive tool envelopes before hooks, approval, progress, and
+  parallel scheduling while preserving provider call ids.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 
@@ -21,7 +23,7 @@ through model turns, tools, hooks, progress, and final records.
 | --- | --- |
 | `loop_.rs` | Shared request lifecycle, public ask adapters, and turn repetition |
 | `deps.rs` | Explicit runtime hooks, clock, semantic indexer, and path snapshot |
-| `turn.rs` | Shared request/response/tool state transitions and provider delivery adapters |
+| `turn.rs` | Shared request/response/tool transitions, progressive resolution, and provider delivery adapters |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |
 | `background.rs` | Background agent task handling |
@@ -39,7 +41,8 @@ reinstalls both the captured `Arc<CosConfig>` and typed routed-path context
 (owner home, owner UID, routed-job marker); its curation log is an explicit
 composition-time path. It never executes a model-emitted tool call
 outside `turn.rs` dispatch. Message order and opaque provider state must survive
-every turn.
+every turn. Provider history retains bridge envelopes; evidence, progress, and
+stored presentation resolve them to the underlying tool identity.
 
 ## Lifecycle ownership
 

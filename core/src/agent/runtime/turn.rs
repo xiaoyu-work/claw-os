@@ -693,6 +693,10 @@ async fn dispatch_tool(
     call: &ToolCall,
     session_id: Option<&str>,
 ) -> ToolResult {
+    if let Some(result) = registry.execute_progressive_catalog(&call.name, &call.input) {
+        return result;
+    }
+
     // Per-call approval gate. Skip the await entirely when the tool
     // is not configured under any of the three sets. `is_classified`
     // is one O(1) HashSet lookup that covers
@@ -749,11 +753,20 @@ async fn dispatch_tool(
                 .await
         }
         None => ToolResult::err(format!(
-            "unknown tool '{}'. registered: {:?}",
-            call.name,
-            registry.names()
+            "unknown or unavailable tool '{}'. Use cos_tool_search to discover deferred tools.",
+            call.name
         )),
     }
+}
+
+struct ResolvedInvocation {
+    call: ToolCall,
+    error: Option<String>,
+}
+
+fn resolve_invocation(tools: &ToolRegistry, call: &ToolCall) -> ResolvedInvocation {
+    let (call, error) = tools.resolve_progressive_invocation(call);
+    ResolvedInvocation { call, error }
 }
 
 /// Outcome of a single dispatch: the (possibly-overridden) call, the
@@ -814,13 +827,14 @@ async fn wait_progress_ready(
 async fn dispatch_one(
     tools: &ToolRegistry,
     hook_ctx: Option<&HookContext>,
-    call: &ToolCall,
+    invocation: &ResolvedInvocation,
     session_id: Option<&str>,
     progress: &dyn ProgressSink,
     interrupt: Option<&interrupt::Handle>,
 ) -> Result<DispatchOutcome, super::loop_::AgentError> {
     check_interrupted(interrupt)?;
-    let (effective_call, decision_error) = apply_pre_hook(hook_ctx, call);
+    let (effective_call, hook_error) = apply_pre_hook(hook_ctx, &invocation.call);
+    let decision_error = invocation.error.clone().or(hook_error);
 
     wait_progress_ready(progress, interrupt).await?;
     progress.on_tool_start(
@@ -880,12 +894,17 @@ async fn dispatch_calls(
     interrupt: Option<&interrupt::Handle>,
 ) -> Result<(Vec<ContentBlock>, Option<String>), super::loop_::AgentError> {
     check_interrupted(interrupt)?;
+    let resolved = tool_calls
+        .iter()
+        .map(|call| resolve_invocation(tools, call))
+        .collect::<Vec<_>>();
+
     // Partition into parallel-safe vs serial groups, preserving the
     // original index so we can interleave the results back in order.
     let mut parallel: Vec<usize> = Vec::new();
     let mut serial: Vec<usize> = Vec::new();
-    for (i, call) in tool_calls.iter().enumerate() {
-        if tools.is_parallel_safe(&call.name) {
+    for (i, invocation) in resolved.iter().enumerate() {
+        if invocation.error.is_none() && tools.is_progressive_parallel_safe(&invocation.call) {
             parallel.push(i);
         } else {
             serial.push(i);
@@ -901,10 +920,11 @@ async fn dispatch_calls(
     // task; no `spawn` is needed and no `Send` bound creeps in.
     if !parallel.is_empty() {
         let futs = parallel.iter().map(|&i| {
-            let call = &tool_calls[i];
+            let invocation = &resolved[i];
             async move {
                 let outcome =
-                    dispatch_one(tools, hook_ctx, call, session_id, progress, interrupt).await?;
+                    dispatch_one(tools, hook_ctx, invocation, session_id, progress, interrupt)
+                        .await?;
                 Ok::<_, super::loop_::AgentError>((i, outcome))
             }
         });
@@ -924,7 +944,7 @@ async fn dispatch_calls(
         let outcome = dispatch_one(
             tools,
             hook_ctx,
-            &tool_calls[i],
+            &resolved[i],
             session_id,
             progress,
             interrupt,

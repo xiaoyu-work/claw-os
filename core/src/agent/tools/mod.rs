@@ -15,6 +15,7 @@ pub mod delegate;
 pub mod guardrails;
 pub mod mcp;
 pub mod media;
+pub mod progressive;
 pub mod registry;
 pub mod skills;
 pub mod todo;

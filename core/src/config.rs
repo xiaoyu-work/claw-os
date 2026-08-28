@@ -221,6 +221,12 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_deny: Vec<String>,
 
+    /// Replace extensible App/MCP schemas with a fixed
+    /// search/describe/call bridge while keeping kernel primitives direct.
+    /// The provider-facing tool array remains stable for prompt caching.
+    #[serde(default = "default_progressive_tools_enabled")]
+    pub progressive_tools_enabled: bool,
+
     /// Optional tool-name approval override. Capability risk remains the
     /// default policy: high/critical capability requests enter the durable
     /// approval queue automatically. When this list is non-empty, headless
@@ -717,6 +723,9 @@ fn default_agent_temperature() -> f32 {
 fn default_agent_request_timeout() -> u64 {
     120
 }
+fn default_progressive_tools_enabled() -> bool {
+    true
+}
 fn default_compress_target() -> u32 {
     crate::agent::context::compressor::DEFAULT_TARGET_TOKENS
 }
@@ -932,6 +941,7 @@ impl Default for AgentConfig {
             redact_memory_enabled: default_redact_memory_enabled(),
             tool_allow: None,
             tool_deny: Vec::new(),
+            progressive_tools_enabled: default_progressive_tools_enabled(),
             dangerous_tools: Vec::new(),
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),
