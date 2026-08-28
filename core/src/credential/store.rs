@@ -560,14 +560,14 @@ pub(super) fn read_credential_value(
 /// fall back to environment variables or other lookup paths without
 /// converting a not-found into a hard error.
 pub fn try_load(name: &str, namespace: &str) -> Result<Option<String>, String> {
-    credential_scope(namespace, name)?;
-    let path = namespace_dir(namespace).join(format!("{name}.json"));
-    if !path.is_file() {
+    let id = CredentialId::parse(namespace, name)?;
+    credential_scope(id.namespace(), id.name())?;
+    if !FILE_STORE.contains(&id)? {
         return Ok(None);
     }
     // Trusted kernel accessor used to construct providers on behalf of a
     // session. User/App-facing reads must go through `cmd_load`.
-    read_credential_value(name, namespace, false).map(Some)
+    FILE_STORE.load(&id, false).map(Some)
 }
 
 /// Return whether a credential record exists without decrypting its value.

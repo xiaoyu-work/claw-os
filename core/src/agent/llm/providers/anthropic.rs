@@ -38,7 +38,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use super::openai_compat::resolve_api_key;
+use crate::agent::llm::construction::HttpTransport;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
     StreamEvent, Tool, ToolCall, ToolChoice, Usage,
@@ -94,46 +95,17 @@ impl std::fmt::Debug for AnthropicConfig {
 }
 
 impl AnthropicConfig {
-    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_BASE.to_string());
-
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            "provider:anthropic",
+    pub fn try_from_agent_config(
+        model: &str,
+        agent: &AgentConfig,
+    ) -> Result<Self> {
+        crate::agent::llm::registry::anthropic_config(
+            model,
             agent,
-        )?
-        .map(std::sync::Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
-        })
+            &ProcessCredentialSource,
+        )
     }
 
-    #[cfg(test)]
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(model, agent)
             .expect("test credential configuration should resolve")
@@ -142,23 +114,16 @@ impl AnthropicConfig {
 
 pub struct AnthropicProvider {
     cfg: AnthropicConfig,
-    client: reqwest::Client,
+    transport: HttpTransport,
 }
 
 impl AnthropicProvider {
     pub fn new(cfg: AnthropicConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase HTTP timeout. `connect_timeout`
-            // bounds TCP + TLS independently of the overall request
-            // budget so a black-holed host doesn't tie up a worker.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: AnthropicConfig, transport: HttpTransport) -> Self {
+        Self { cfg, transport }
     }
 
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
@@ -167,7 +132,6 @@ impl AnthropicProvider {
         )?))
     }
 
-    #[cfg(test)]
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(model, agent)
             .expect("test credential configuration should resolve")
@@ -213,8 +177,8 @@ impl Provider for AnthropicProvider {
         };
 
         let mut http = self
-            .client
-            .post(self.endpoint())
+            .transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
@@ -324,8 +288,8 @@ impl Provider for AnthropicProvider {
         };
 
         let mut http = self
-            .client
-            .post(self.endpoint())
+            .transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .header("anthropic-version", ANTHROPIC_VERSION)

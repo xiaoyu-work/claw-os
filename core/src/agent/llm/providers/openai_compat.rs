@@ -33,6 +33,9 @@ use std::time::Duration;
 
 pub(crate) use super::openai_responses as responses_wire;
 
+use crate::agent::llm::construction::{
+    resolve_process_api_key, HttpTransport, ProcessCredentialSource,
+};
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, LlmError, Provider, Result, StreamEvent,
 };
@@ -134,40 +137,12 @@ fn alias_is_copilot(alias: &str) -> bool {
     matches!(alias, "copilot")
 }
 
-/// Resolve an API key from the credential store, then env var, then None.
-/// Missing and blank entries fall through; unreadable stored credentials
-/// produce a typed error so construction cannot silently drop corruption.
+/// Legacy process-backed key resolver retained for source compatibility.
 pub fn resolve_api_key(
     api_key_credential: Option<&str>,
     api_key_env: Option<&str>,
 ) -> Result<Option<String>> {
-    if let Some(name) = api_key_credential {
-        match crate::credential::try_load(name, "agent").map_err(|message| {
-            LlmError::CredentialStore {
-                credential: name.to_string(),
-                message,
-            }
-        })? {
-            Some(value) => {
-                let value = value.trim();
-                if !value.is_empty() {
-                    return Ok(Some(value.to_string()));
-                }
-            }
-            None => {
-                // Fall through to env.
-            }
-        }
-    }
-    if let Some(env_name) = api_key_env {
-        if let Ok(value) = std::env::var(env_name) {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Ok(Some(value.to_string()));
-            }
-        }
-    }
-    Ok(None)
+    resolve_process_api_key(api_key_credential, api_key_env)
 }
 
 #[derive(Clone)]
@@ -205,52 +180,19 @@ impl std::fmt::Debug for OpenAICompatConfig {
 }
 
 impl OpenAICompatConfig {
-    /// Build from a registered alias + the agent config block.
-    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        let base_url = agent
-            .base_url
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| default_base_url_for(alias).to_string());
-
-        // Strip a trailing slash so the request path concat is clean.
-        let base_url = base_url.trim_end_matches('/').to_string();
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        // A declared pool is authoritative. Resolve it before touching the
-        // legacy fields so stale single-key credentials can neither rescue
-        // nor interfere with pool configuration.
-        let pool = crate::agent::llm::credential_pool::Pool::try_from_agent_config(
-            format!("provider:{alias}"),
+    pub fn try_from_agent_config(
+        alias: &str,
+        model: &str,
+        agent: &AgentConfig,
+    ) -> Result<Self> {
+        crate::agent::llm::registry::openai_config(
+            alias,
+            model,
             agent,
-        )?
-        .map(Arc::new);
-        let api_key = if pool.is_some() {
-            None
-        } else {
-            resolve_api_key(
-                agent.api_key_credential.as_deref(),
-                agent.api_key_env.as_deref(),
-            )?
-        };
-
-        Ok(Self {
-            alias: alias.to_string(),
-            base_url,
-            api_key,
-            model: model.to_string(),
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-            pool,
-        })
+            &ProcessCredentialSource,
+        )
     }
 
-    #[cfg(test)]
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(alias, model, agent)
             .expect("test credential configuration should resolve")
@@ -259,7 +201,7 @@ impl OpenAICompatConfig {
 
 pub struct OpenAICompatProvider {
     cfg: OpenAICompatConfig,
-    client: reqwest::Client,
+    transport: HttpTransport,
     copilot_auth: Arc<dyn CopilotAuthSource>,
 }
 
@@ -298,7 +240,30 @@ trait CopilotAuthSource: Send + Sync {
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi>;
 }
 
-struct LiveCopilotAuthSource;
+struct LiveCopilotAuthSource {
+    transport: HttpTransport,
+    endpoints: super::copilot_auth::CopilotAuthEndpoints,
+}
+
+impl LiveCopilotAuthSource {
+    fn new(transport: HttpTransport) -> Self {
+        Self {
+            transport,
+            endpoints: super::copilot_auth::CopilotAuthEndpoints::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_endpoints(
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            transport,
+            endpoints,
+        }
+    }
+}
 
 #[async_trait]
 impl CopilotAuthSource for LiveCopilotAuthSource {
@@ -306,7 +271,12 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         &self,
         github_token: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::ensure_copilot_token(github_token).await
+        super::copilot_auth::ensure_copilot_token_with_transport(
+            github_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn refresh_rejected_token(
@@ -314,7 +284,13 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         github_token: &str,
         rejected_token: &super::copilot_auth::CopilotToken,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::refresh_rejected_copilot_token(github_token, rejected_token).await
+        super::copilot_auth::refresh_rejected_copilot_token_with_transport(
+            github_token,
+            rejected_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn wire_api_for_model(
@@ -322,28 +298,25 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         token: &super::copilot_auth::CopilotToken,
         model: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi> {
-        super::copilot_auth::wire_api_for_model(token, model).await
+        super::copilot_auth::wire_api_for_model_with_transport(
+            token,
+            model,
+            &self.transport,
+        )
+        .await
     }
 }
 
 impl OpenAICompatProvider {
     pub fn new(cfg: OpenAICompatConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase timeouts. `request_timeout` covers
-            // the whole call; `connect_timeout` bounds just the TCP +
-            // TLS handshake so a black-holed DNS / firewalled host
-            // can't tie up a worker for the full request budget.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: OpenAICompatConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            client,
-            copilot_auth: Arc::new(LiveCopilotAuthSource),
+            transport: transport.clone(),
+            copilot_auth: Arc::new(LiveCopilotAuthSource::new(transport)),
         }
     }
 
@@ -357,15 +330,31 @@ impl OpenAICompatProvider {
         provider
     }
 
-    /// Convenience constructor that pulls everything from `AgentConfig`.
-    /// Used by the registry.
-    pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
+    #[cfg(test)]
+    fn new_with_copilot_endpoints(
+        cfg: OpenAICompatConfig,
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            cfg,
+            transport: transport.clone(),
+            copilot_auth: Arc::new(LiveCopilotAuthSource::with_endpoints(
+                transport, endpoints,
+            )),
+        }
+    }
+
+    pub fn try_from_agent_config(
+        alias: &str,
+        model: &str,
+        agent: &AgentConfig,
+    ) -> Result<Self> {
         Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
             alias, model, agent,
         )?))
     }
 
-    #[cfg(test)]
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(alias, model, agent)
             .expect("test credential configuration should resolve")
@@ -722,8 +711,8 @@ impl Provider for OpenAICompatProvider {
             };
 
             let mut http = self
-                .client
-                .post(&target.endpoint_url)
+                .transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .json(&body);
 
@@ -886,8 +875,8 @@ impl Provider for OpenAICompatProvider {
             };
 
             let mut http = self
-                .client
-                .post(&target.endpoint_url)
+                .transport
+                .post(&target.endpoint_url, self.cfg.request_timeout)
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .json(&body);
@@ -986,7 +975,6 @@ pub fn is_alias(name: &str) -> bool {
     PROVIDER_ALIASES.contains(&name)
 }
 
-// Construction helper used by the registry.
 pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
     Ok(Arc::new(OpenAICompatProvider::try_from_agent_config(
         alias, model, agent,

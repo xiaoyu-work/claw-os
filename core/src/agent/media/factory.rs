@@ -68,7 +68,7 @@ use super::tts_gemini::{GeminiTts, GeminiTtsConfig};
 use super::tts_minimax::{MiniMaxConfig, MiniMaxTts};
 
 fn resolve_api_key(cred: Option<&str>, env: Option<&str>) -> Option<String> {
-    crate::agent::llm::providers::openai_compat::resolve_api_key(cred, env)
+    crate::agent::llm::construction::resolve_process_api_key(cred, env)
         .ok()
         .flatten()
 }

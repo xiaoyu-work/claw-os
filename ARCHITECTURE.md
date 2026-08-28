@@ -286,7 +286,26 @@ Composition roots resolve environment-backed paths and open optional
 memory/semantic stores once. `RegistryDeps` makes registry assembly
 side-effect-free, while `RuntimeDeps` carries the scoped hook registry, clock,
 semantic indexer, notes store, and prompt/audit paths into the unified
-lifecycle. Standalone and `claw-agentd` audit hooks are installed into that
+lifecycle. LLM composition follows the same snapshot rule:
+`ProviderBuildContext` injects a `CredentialSource` and one shared
+`HttpTransport` into `llm::registry`; the registry alone maps immutable
+`AgentConfig` values into provider-specific settings. Credential-store then
+environment precedence is resolved once before provider construction, and
+credential pools receive only pre-resolved entries. `ProviderChain` receives a
+`ProviderAttemptObserver`; the live audit observer is assembled with the audit
+path and request/session metadata outside the chain, and retains the existing
+warn-only audit-write failure semantics. Provider modules therefore own only
+authentication headers, wire serialization/parsing/streaming, and upstream
+error classification, with no config, environment, credential-store, or audit
+discovery.
+
+Copilot's context-aware path keeps the same transport through GitHub-token
+exchange, rejected-token refresh, live model-catalog negotiation, and the
+final chat/Responses request. Process-backed constructors and auth functions
+remain source-compatible legacy composition boundaries; production registry
+and fallback assembly use only injected variants.
+
+Standalone and `claw-agentd` audit hooks are installed into that
 exact registry, and delegated children inherit it. App-session tools retain
 their discovered App root; Skill roots retain their trust origin. Legacy
 `config::get()` and static `with_override` callers remain source compatible,

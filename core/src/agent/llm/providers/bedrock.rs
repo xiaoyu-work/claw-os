@@ -53,6 +53,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::anthropic::wire as anthropic_wire;
+use crate::agent::llm::construction::HttpTransport;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::sigv4::{
     current_amz_date, sign, AwsCredentials, SignableRequest, SigningContext,
 };
@@ -116,30 +118,7 @@ impl std::fmt::Debug for BedrockConfig {
 
 impl BedrockConfig {
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        let region = agent
-            .aws_region
-            .clone()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| DEFAULT_REGION.to_string());
-
-        let base_url = agent.base_url.clone().filter(|s| !s.is_empty());
-
-        let credentials = resolve_credentials(agent);
-
-        let request_timeout = if agent.request_timeout == 0 {
-            Duration::from_secs(0)
-        } else {
-            Duration::from_secs(agent.request_timeout)
-        };
-
-        Self {
-            region,
-            base_url,
-            model: model.to_string(),
-            credentials,
-            extra_headers: agent.extra_headers.clone(),
-            request_timeout,
-        }
+        crate::agent::llm::registry::bedrock_config(model, agent, &ProcessCredentialSource)
     }
 
     /// Region-derived host for SigV4 signing AND the URL we POST to.
@@ -178,75 +157,18 @@ fn host_from_url(url: &str) -> Option<String> {
     Some(host_with_port.to_string())
 }
 
-/// Look up access key + secret + optional session token from the
-/// agent config. Returns `None` if access key OR secret key is
-/// missing — partial credentials are useless and we don't want to
-/// silently send an unsigned request.
-fn resolve_credentials(agent: &AgentConfig) -> Option<AwsCredentials> {
-    let access_key = lookup_aws_value(
-        agent.aws_access_key_credential.as_deref(),
-        agent.aws_access_key_env.as_deref(),
-        DEFAULT_ACCESS_KEY_ENV,
-    )?;
-    let secret_key = lookup_aws_value(
-        agent.aws_secret_key_credential.as_deref(),
-        agent.aws_secret_key_env.as_deref(),
-        DEFAULT_SECRET_KEY_ENV,
-    )?;
-    let session_token = lookup_aws_value(
-        agent.aws_session_token_credential.as_deref(),
-        agent.aws_session_token_env.as_deref(),
-        DEFAULT_SESSION_TOKEN_ENV,
-    );
-
-    let mut creds = AwsCredentials::new(access_key, secret_key);
-    if let Some(t) = session_token {
-        creds = creds.with_session_token(t);
-    }
-    Some(creds)
-}
-
-/// Resolve a single AWS-credential value with the standard
-/// `*_credential` (cos credential store) → `*_env` (override) →
-/// `<default-env>` (AWS SDK convention) ladder.
-fn lookup_aws_value(
-    cred_name: Option<&str>,
-    env_name: Option<&str>,
-    default_env: &str,
-) -> Option<String> {
-    if let Some(name) = cred_name {
-        if let Ok(Some(v)) = crate::credential::try_load(name, "agent") {
-            if !v.is_empty() {
-                return Some(v);
-            }
-        }
-    }
-    let env = env_name.unwrap_or(default_env);
-    if let Ok(v) = std::env::var(env) {
-        if !v.is_empty() {
-            return Some(v);
-        }
-    }
-    None
-}
-
 pub struct BedrockProvider {
     cfg: BedrockConfig,
-    client: reqwest::Client,
+    transport: HttpTransport,
 }
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        let mut builder = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            // MEDIUM-14: per-phase HTTP timeout.
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60));
-        if cfg.request_timeout > Duration::from_secs(0) {
-            builder = builder.timeout(cfg.request_timeout);
-        }
-        let client = builder.build().unwrap_or_else(|_| reqwest::Client::new());
-        Self { cfg, client }
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: BedrockConfig, transport: HttpTransport) -> Self {
+        Self { cfg, transport }
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
@@ -351,8 +273,8 @@ impl Provider for BedrockProvider {
         let signed = sign(creds, &ctx, &host, &signable);
 
         let mut http = self
-            .client
-            .post(self.full_url())
+            .transport
+            .post(self.full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             // accept identifies us in CloudTrail logs
             .header("Accept", "application/json")
@@ -440,8 +362,8 @@ impl Provider for BedrockProvider {
         let signed = sign(creds, &ctx, &host, &signable);
 
         let mut http = self
-            .client
-            .post(self.stream_full_url())
+            .transport
+            .post(self.stream_full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header(
                 "X-Amzn-Bedrock-Accept",

@@ -6,8 +6,7 @@
 //! `api_key_env` field is too narrow. This module provides a typed
 //! pool that:
 //!
-//!   * Loads N keys at construction (eagerly, from
-//!     `crate::credential::try_load` and/or `std::env::var`).
+//!   * Receives N pre-resolved keys at construction.
 //!   * Hands one out per call via a [`SelectionStrategy`].
 //!   * Tracks per-key health: success count, failure count, last
 //!     error class, and an optional `cooldown_until` timestamp that
@@ -56,7 +55,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -282,14 +281,9 @@ impl Pool {
         })
     }
 
-    /// Build a pool by resolving credential names + env-var names
-    /// against the active credential store + process env. Empty /
-    /// missing entries are silently dropped; the order of arguments
-    /// is preserved (`credential_names` first, then `env_names`).
-    /// Inline keys are appended last.
-    ///
-    /// Returns `PoolError::Empty` only if **none** of the sources
-    /// resolved to a non-empty value.
+    /// Legacy process-backed constructor. New provider composition resolves
+    /// sources through `construction::resolve_api_credentials` and passes
+    /// entries to [`Self::from_entries`].
     pub fn from_sources(
         name: impl Into<String>,
         credential_names: &[&str],
@@ -297,44 +291,43 @@ impl Pool {
         inline: &[&str],
         strategy: SelectionStrategy,
     ) -> Result<Self, PoolError> {
+        use crate::agent::llm::construction::CredentialSource;
+
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
         let mut entries = Vec::new();
-        for cname in credential_names {
-            if let Ok(Some(value)) = crate::credential::try_load(cname, "agent") {
-                let v = value.trim();
-                if !v.is_empty() {
-                    entries.push(PoolEntry::from_credential(*cname, v.to_string()));
+        for credential in credential_names {
+            if let Ok(Some(value)) = source.load_stored(credential) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_credential(*credential, value.to_string()));
                 }
             }
         }
-        for ename in env_names {
-            if let Ok(value) = std::env::var(ename) {
-                let v = value.trim();
-                if !v.is_empty() {
-                    entries.push(PoolEntry::from_env(*ename, v.to_string()));
+        for environment in env_names {
+            if let Some(value) = source.load_environment(environment) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_env(*environment, value.to_string()));
                 }
             }
         }
-        for raw in inline {
-            let v = raw.trim();
-            if !v.is_empty() {
-                entries.push(PoolEntry::inline(v.to_string()));
+        for value in inline {
+            let value = value.trim();
+            if !value.is_empty() {
+                entries.push(PoolEntry::inline(value.to_string()));
             }
         }
         Self::from_entries(name, entries, strategy)
     }
 
-    /// Whether either multi-key source list was declared. Only an absent
-    /// pool permits callers to resolve the legacy single-key fields.
+    /// Legacy declaration helper retained for source compatibility.
     pub fn is_declared(cfg: &crate::config::AgentConfig) -> bool {
-        !cfg.api_key_credentials.is_empty() || !cfg.api_key_envs.is_empty()
+        crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg)
+            .pool_declared()
     }
 
-    /// Build a pool from an [`crate::config::AgentConfig`] block. Returns
-    /// `Ok(None)` only when neither multi-key source list is declared.
-    /// Declared pools resolve eagerly and fail closed when every source is
-    /// missing or blank. Credential-store failures remain typed so callers
-    /// can distinguish corruption from an absent entry. Cooldown picks up
-    /// `pool_cooldown_secs` (0 → disabled).
+    /// Legacy process-backed config constructor. New provider composition
+    /// injects a `CredentialSource` and retains the returned pool in an `Arc`.
     pub fn try_from_agent_config(
         name: impl Into<String>,
         cfg: &crate::config::AgentConfig,
@@ -342,50 +335,20 @@ impl Pool {
         if !Self::is_declared(cfg) {
             return Ok(None);
         }
-
-        let name = name.into();
-        let mut entries = Vec::new();
-        for credential in &cfg.api_key_credentials {
-            match crate::credential::try_load(credential, "agent").map_err(|message| {
-                crate::agent::llm::LlmError::CredentialStore {
-                    credential: credential.clone(),
-                    message,
-                }
-            })? {
-                Some(value) if !value.trim().is_empty() => entries.push(
-                    PoolEntry::from_credential(credential.clone(), value.trim().to_string()),
-                ),
-                Some(_) | None => {}
-            }
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
+        let resolved = crate::agent::llm::construction::resolve_api_credentials(
+            name,
+            crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg),
+            &source,
+        )?;
+        match resolved.pool {
+            Some(pool) => Arc::try_unwrap(pool).map(Some).map_err(|_| {
+                crate::agent::llm::LlmError::Internal(
+                    "newly resolved credential pool was unexpectedly shared".to_string(),
+                )
+            }),
+            None => Ok(None),
         }
-        for env_name in &cfg.api_key_envs {
-            if let Ok(value) = std::env::var(env_name) {
-                let value = value.trim();
-                if !value.is_empty() {
-                    entries.push(PoolEntry::from_env(env_name.clone(), value.to_string()));
-                }
-            }
-        }
-
-        if entries.is_empty() {
-            return Err(crate::agent::llm::LlmError::NotConfigured(format!(
-                "credential pool '{name}' was declared but no usable key resolved; \
-                 unresolved credential names: {:?}; unresolved environment variables: {:?}. \
-                 Store a listed credential with `cos credential store <name> <key> \
-                 --namespace agent` or set a listed environment variable",
-                cfg.api_key_credentials, cfg.api_key_envs
-            )));
-        }
-
-        let strategy = SelectionStrategy::from_str_lossy(&cfg.pool_strategy);
-        let mut pool = Self::from_entries(name, entries, strategy).map_err(|error| {
-            crate::agent::llm::LlmError::NotConfigured(format!(
-                "{error}. Fix the declared pool sources, then run \
-                 `cos agent setup text --verify-only`"
-            ))
-        })?;
-        pool.set_cooldown(Duration::from_secs(cfg.pool_cooldown_secs));
-        Ok(Some(pool))
     }
 
     pub fn name(&self) -> &str {

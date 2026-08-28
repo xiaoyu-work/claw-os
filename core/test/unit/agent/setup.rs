@@ -240,7 +240,7 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
         assert_eq!(source.name, ENV_NAME);
     }
 
-    let key = llm::providers::openai_compat::resolve_api_key(
+    let key = llm::construction::resolve_process_api_key(
         cfg.api_key_credential.as_deref(),
         cfg.api_key_env.as_deref(),
     )
@@ -258,7 +258,7 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
         ],
     )
     .expect("replace credential with non-blank value");
-    let key = llm::providers::openai_compat::resolve_api_key(
+    let key = llm::construction::resolve_process_api_key(
         cfg.api_key_credential.as_deref(),
         cfg.api_key_env.as_deref(),
     )

@@ -1185,8 +1185,9 @@ pub fn wrap_for_system(inner: Arc<dyn LlmProvider>) -> Arc<dyn LlmProvider> {
 pub fn build_system_provider(
     cfg: &crate::config::AgentConfig,
 ) -> llm::Result<Arc<dyn LlmProvider>> {
-    use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
-    use std::collections::BTreeSet;
+    use crate::agent::llm::attempt_observer::{
+        AuditProviderAttemptObserver, RequestMetadata,
+    };
 
     // Provider construction is where the model transport (HTTP client,
     // streaming parser, credential resolution) enters a process. It is
@@ -1194,13 +1195,29 @@ pub fn build_system_provider(
     crate::agentd::guard::ensure_agent_runtime_allowed("model provider construction")
         .map_err(llm::LlmError::NotConfigured)?;
 
+    let context = llm::construction::ProviderBuildContext::from_process()?;
+    let observer = Arc::new(AuditProviderAttemptObserver::new(
+        crate::paths::agent_audit_log_path(),
+        RequestMetadata::from_process(),
+    ));
+    build_system_provider_with_context(cfg, &context, observer)
+}
+
+pub fn build_system_provider_with_context(
+    cfg: &crate::config::AgentConfig,
+    context: &llm::construction::ProviderBuildContext,
+    observer: Arc<dyn llm::attempt_observer::ProviderAttemptObserver>,
+) -> llm::Result<Arc<dyn LlmProvider>> {
+    use crate::agent::llm::provider_chain::{ProviderChain, ProviderSlot};
+    use std::collections::BTreeSet;
+
     if cfg.provider_fallbacks.len() > 8 {
         return Err(llm::LlmError::NotConfigured(format!(
             "provider fallback chain has {} fallbacks; maximum is 8",
             cfg.provider_fallbacks.len()
         )));
     }
-    let primary = llm::registry::build(&cfg.provider, &cfg.model, cfg)?;
+    let primary = llm::registry::build_with_context(&cfg.provider, &cfg.model, cfg, context)?;
     let mut slots = vec![ProviderSlot::new(
         wrap_for_system(primary),
         cfg.provider.clone(),
@@ -1226,7 +1243,7 @@ pub fn build_system_provider(
             )));
         }
         let fallback_cfg = fallback.apply_to(cfg);
-        let built = llm::registry::build(provider, model, &fallback_cfg)?;
+        let built = llm::registry::build_with_context(provider, model, &fallback_cfg, context)?;
         slots.push(ProviderSlot::new(
             wrap_for_system(built),
             provider.to_string(),
@@ -1236,7 +1253,7 @@ pub fn build_system_provider(
     if slots.len() == 1 {
         Ok(slots.remove(0).provider)
     } else {
-        Ok(Arc::new(ProviderChain::new(slots)?))
+        Ok(Arc::new(ProviderChain::new_with_observer(slots, observer)?))
     }
 }
 
