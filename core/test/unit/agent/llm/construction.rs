@@ -162,6 +162,13 @@ fn provider_constructors_and_chain_have_no_ambient_infrastructure_reads() {
                 "/src/agent/llm/providers/bedrock.rs"
             )),
         ),
+        (
+            "copilot_auth",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/src/agent/llm/providers/copilot_auth.rs"
+            )),
+        ),
     ];
     for (name, source) in provider_sources {
         for forbidden in [
@@ -176,6 +183,18 @@ fn provider_constructors_and_chain_have_no_ambient_infrastructure_reads() {
                 "{name} contains ambient infrastructure read: {forbidden}"
             );
         }
+    }
+
+    let openai = provider_sources[0].1;
+    for injected_auth_call in [
+        "ensure_copilot_token_with_transport",
+        "refresh_rejected_copilot_token_with_transport",
+        "wire_api_for_model_with_transport",
+    ] {
+        assert!(
+            openai.contains(injected_auth_call),
+            "Copilot live auth bypasses injected transport: {injected_auth_call}"
+        );
     }
 
     let chain = include_str!(concat!(

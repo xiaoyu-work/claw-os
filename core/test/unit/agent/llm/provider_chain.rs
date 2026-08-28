@@ -14,7 +14,7 @@ fn slot(name: &str, model: &str, responses: Vec<MockResponse>) -> ProviderSlot {
 
 #[tokio::test]
 async fn falls_back_on_transient_error_and_sticks() {
-    let chain = ProviderChain::new(
+    let chain = ProviderChain::new_with_observer(
         vec![
             slot(
                 "primary",
@@ -45,7 +45,7 @@ async fn falls_back_on_transient_error_and_sticks() {
 
 #[tokio::test]
 async fn caller_error_does_not_fallback() {
-    let chain = ProviderChain::new(
+    let chain = ProviderChain::new_with_observer(
         vec![
             slot(
                 "primary",
@@ -72,7 +72,7 @@ async fn caller_error_does_not_fallback() {
 
 #[tokio::test]
 async fn exhausted_chain_does_not_pin_failed_fallback() {
-    let chain = ProviderChain::new(
+    let chain = ProviderChain::new_with_observer(
         vec![
             slot(
                 "primary",
@@ -109,7 +109,7 @@ impl ProviderAttemptObserver for RecordingObserver {
 #[tokio::test]
 async fn reports_switch_through_injected_observer() {
     let observer = Arc::new(RecordingObserver::default());
-    let chain = ProviderChain::new(
+    let chain = ProviderChain::new_with_observer(
         vec![
             slot(
                 "primary",

@@ -299,6 +299,12 @@ authentication headers, wire serialization/parsing/streaming, and upstream
 error classification, with no config, environment, credential-store, or audit
 discovery.
 
+Copilot's context-aware path keeps the same transport through GitHub-token
+exchange, rejected-token refresh, live model-catalog negotiation, and the
+final chat/Responses request. Process-backed constructors and auth functions
+remain source-compatible legacy composition boundaries; production registry
+and fallback assembly use only injected variants.
+
 Standalone and `claw-agentd` audit hooks are installed into that
 exact registry, and delegated children inherit it. App-session tools retain
 their discovered App root; Skill roots retain their trust origin. Legacy

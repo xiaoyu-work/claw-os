@@ -35,10 +35,15 @@ construction, streaming accumulation, fallback, credentials, and usage.
 Provider modules translate only at the wire boundary. `registry` receives an
 immutable `AgentConfig` snapshot plus `ProviderBuildContext`; credential-store
 and environment precedence lives once in `construction`, and providers share
-its HTTP connection pool. `ProviderChain` owns fallback state but receives a
+its HTTP connection pool. Copilot token exchange, refresh, live-model
+discovery, and chat all use that same injected transport. `ProviderChain` owns fallback state but receives a
 `ProviderAttemptObserver`, so audit path and session metadata discovery remain
 at the composition boundary. Streaming and non-streaming paths preserve
 equivalent content, tools, opaque reasoning/tool state, usage, and errors.
+
+Legacy public constructors remain available as explicit process-backed
+compatibility boundaries. Core composition uses the separately named
+`*_with_transport`, `build_with_context`, and `new_with_observer` APIs.
 
 ## Tests
 

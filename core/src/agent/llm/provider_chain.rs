@@ -66,7 +66,16 @@ pub struct ProviderChain {
 }
 
 impl ProviderChain {
-    pub fn new(
+    /// Legacy constructor using a no-op observer. Runtime composition uses
+    /// [`Self::new_with_observer`] to inject audit observation.
+    pub fn new(slots: Vec<ProviderSlot>) -> Result<Self> {
+        Self::new_with_observer(
+            slots,
+            Arc::new(super::attempt_observer::NoopProviderAttemptObserver),
+        )
+    }
+
+    pub fn new_with_observer(
         slots: Vec<ProviderSlot>,
         observer: Arc<dyn ProviderAttemptObserver>,
     ) -> Result<Self> {

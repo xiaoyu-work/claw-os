@@ -37,13 +37,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::agent::llm::construction::HttpTransport;
-#[cfg(test)]
-use crate::agent::llm::construction::ProviderBuildContext;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, FinishReason, LlmError, Provider, Result, Role,
     StreamEvent, Tool, ToolCall, ToolChoice, Usage,
 };
-#[cfg(test)]
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "gemini";
@@ -97,17 +95,14 @@ impl std::fmt::Debug for GeminiConfig {
 }
 
 impl GeminiConfig {
-    #[cfg(test)]
     pub fn try_from_agent_config(
         model: &str,
-        agent: &crate::config::AgentConfig,
+        agent: &AgentConfig,
     ) -> Result<Self> {
-        let context = ProviderBuildContext::from_process()?;
-        crate::agent::llm::registry::gemini_config(model, agent, &context)
+        crate::agent::llm::registry::gemini_config(model, agent, &ProcessCredentialSource)
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(model, agent)
             .expect("test credential configuration should resolve")
     }
@@ -119,17 +114,23 @@ pub struct GeminiProvider {
 }
 
 impl GeminiProvider {
-    pub fn new(cfg: GeminiConfig, transport: HttpTransport) -> Self {
+    pub fn new(cfg: GeminiConfig) -> Self {
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: GeminiConfig, transport: HttpTransport) -> Self {
         Self { cfg, transport }
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
-        let context =
-            ProviderBuildContext::from_process().expect("test HTTP transport should build");
-        let cfg = crate::agent::llm::registry::gemini_config(model, agent, &context)
-            .expect("test credential configuration should resolve");
-        Self::new(cfg, context.transport())
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
+        Ok(Self::new(GeminiConfig::try_from_agent_config(
+            model, agent,
+        )?))
+    }
+
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(model, agent)
+            .expect("test credential configuration should resolve")
     }
 
     fn endpoint(&self) -> String {
@@ -654,6 +655,12 @@ pub(crate) mod wire {
 
 pub fn is_alias(name: &str) -> bool {
     name == PROVIDER_NAME
+}
+
+pub fn build_provider(model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    Ok(Arc::new(GeminiProvider::try_from_agent_config(
+        model, agent,
+    )?))
 }
 
 #[cfg(test)]

@@ -40,15 +40,19 @@ pub struct HttpTransport {
 
 impl HttpTransport {
     pub fn new() -> Result<Self> {
-        let client = reqwest::Client::builder()
-            .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
-            .connect_timeout(Duration::from_secs(5))
-            .pool_idle_timeout(Duration::from_secs(60))
-            .build()
+        build_http_client()
+            .map(|client| Self { client })
             .map_err(|error| {
                 LlmError::Internal(format!("failed to build provider HTTP transport: {error}"))
-            })?;
-        Ok(Self { client })
+            })
+    }
+
+    /// Infallible compatibility boundary for legacy constructors whose return
+    /// types cannot surface HTTP-client construction errors.
+    pub fn legacy_default() -> Self {
+        Self {
+            client: build_http_client().unwrap_or_else(|_| reqwest::Client::new()),
+        }
     }
 
     pub fn post(
@@ -58,6 +62,22 @@ impl HttpTransport {
     ) -> reqwest::RequestBuilder {
         with_timeout(self.client.post(url), request_timeout)
     }
+
+    pub fn get(
+        &self,
+        url: impl reqwest::IntoUrl,
+        request_timeout: Duration,
+    ) -> reqwest::RequestBuilder {
+        with_timeout(self.client.get(url), request_timeout)
+    }
+}
+
+fn build_http_client() -> std::result::Result<reqwest::Client, reqwest::Error> {
+    reqwest::Client::builder()
+        .user_agent(concat!("cos-agent/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(5))
+        .pool_idle_timeout(Duration::from_secs(60))
+        .build()
 }
 
 fn with_timeout(

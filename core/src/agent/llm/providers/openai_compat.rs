@@ -33,15 +33,12 @@ use std::time::Duration;
 
 pub(crate) use super::openai_responses as responses_wire;
 
-use crate::agent::llm::construction::HttpTransport;
-#[cfg(test)]
 use crate::agent::llm::construction::{
-    resolve_process_api_key as resolve_api_key, ProviderBuildContext,
+    resolve_process_api_key, HttpTransport, ProcessCredentialSource,
 };
 use crate::agent::llm::{
     ChatRequest, ChatResponse, ContentBlock, LlmError, Provider, Result, StreamEvent,
 };
-#[cfg(test)]
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "openai";
@@ -140,6 +137,14 @@ fn alias_is_copilot(alias: &str) -> bool {
     matches!(alias, "copilot")
 }
 
+/// Legacy process-backed key resolver retained for source compatibility.
+pub fn resolve_api_key(
+    api_key_credential: Option<&str>,
+    api_key_env: Option<&str>,
+) -> Result<Option<String>> {
+    resolve_process_api_key(api_key_credential, api_key_env)
+}
+
 #[derive(Clone)]
 pub struct OpenAICompatConfig {
     /// Stable name reported by [`Provider::name`] — one of [`PROVIDER_ALIASES`].
@@ -175,18 +180,20 @@ impl std::fmt::Debug for OpenAICompatConfig {
 }
 
 impl OpenAICompatConfig {
-    #[cfg(test)]
     pub fn try_from_agent_config(
         alias: &str,
         model: &str,
-        agent: &crate::config::AgentConfig,
+        agent: &AgentConfig,
     ) -> Result<Self> {
-        let context = ProviderBuildContext::from_process()?;
-        crate::agent::llm::registry::openai_config(alias, model, agent, &context)
+        crate::agent::llm::registry::openai_config(
+            alias,
+            model,
+            agent,
+            &ProcessCredentialSource,
+        )
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(alias: &str, model: &str, agent: &crate::config::AgentConfig) -> Self {
+    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
         Self::try_from_agent_config(alias, model, agent)
             .expect("test credential configuration should resolve")
     }
@@ -233,7 +240,30 @@ trait CopilotAuthSource: Send + Sync {
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi>;
 }
 
-struct LiveCopilotAuthSource;
+struct LiveCopilotAuthSource {
+    transport: HttpTransport,
+    endpoints: super::copilot_auth::CopilotAuthEndpoints,
+}
+
+impl LiveCopilotAuthSource {
+    fn new(transport: HttpTransport) -> Self {
+        Self {
+            transport,
+            endpoints: super::copilot_auth::CopilotAuthEndpoints::default(),
+        }
+    }
+
+    #[cfg(test)]
+    fn with_endpoints(
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            transport,
+            endpoints,
+        }
+    }
+}
 
 #[async_trait]
 impl CopilotAuthSource for LiveCopilotAuthSource {
@@ -241,7 +271,12 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         &self,
         github_token: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::ensure_copilot_token(github_token).await
+        super::copilot_auth::ensure_copilot_token_with_transport(
+            github_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn refresh_rejected_token(
@@ -249,7 +284,13 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         github_token: &str,
         rejected_token: &super::copilot_auth::CopilotToken,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotToken> {
-        super::copilot_auth::refresh_rejected_copilot_token(github_token, rejected_token).await
+        super::copilot_auth::refresh_rejected_copilot_token_with_transport(
+            github_token,
+            rejected_token,
+            &self.transport,
+            &self.endpoints,
+        )
+        .await
     }
 
     async fn wire_api_for_model(
@@ -257,16 +298,25 @@ impl CopilotAuthSource for LiveCopilotAuthSource {
         token: &super::copilot_auth::CopilotToken,
         model: &str,
     ) -> CopilotAuthResult<super::copilot_auth::CopilotWireApi> {
-        super::copilot_auth::wire_api_for_model(token, model).await
+        super::copilot_auth::wire_api_for_model_with_transport(
+            token,
+            model,
+            &self.transport,
+        )
+        .await
     }
 }
 
 impl OpenAICompatProvider {
-    pub fn new(cfg: OpenAICompatConfig, transport: HttpTransport) -> Self {
+    pub fn new(cfg: OpenAICompatConfig) -> Self {
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: OpenAICompatConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            transport,
-            copilot_auth: Arc::new(LiveCopilotAuthSource),
+            transport: transport.clone(),
+            copilot_auth: Arc::new(LiveCopilotAuthSource::new(transport)),
         }
     }
 
@@ -275,23 +325,39 @@ impl OpenAICompatProvider {
         cfg: OpenAICompatConfig,
         copilot_auth: Arc<dyn CopilotAuthSource>,
     ) -> Self {
-        let mut provider = Self::new(
-            cfg,
-            ProviderBuildContext::from_process()
-                .expect("test HTTP transport should build")
-                .transport(),
-        );
+        let mut provider = Self::new(cfg);
         provider.copilot_auth = copilot_auth;
         provider
     }
 
     #[cfg(test)]
-    pub fn from_agent_config(alias: &str, model: &str, agent: &crate::config::AgentConfig) -> Self {
-        let context =
-            ProviderBuildContext::from_process().expect("test HTTP transport should build");
-        let cfg = crate::agent::llm::registry::openai_config(alias, model, agent, &context)
-            .expect("test credential configuration should resolve");
-        Self::new(cfg, context.transport())
+    fn new_with_copilot_endpoints(
+        cfg: OpenAICompatConfig,
+        transport: HttpTransport,
+        endpoints: super::copilot_auth::CopilotAuthEndpoints,
+    ) -> Self {
+        Self {
+            cfg,
+            transport: transport.clone(),
+            copilot_auth: Arc::new(LiveCopilotAuthSource::with_endpoints(
+                transport, endpoints,
+            )),
+        }
+    }
+
+    pub fn try_from_agent_config(
+        alias: &str,
+        model: &str,
+        agent: &AgentConfig,
+    ) -> Result<Self> {
+        Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
+            alias, model, agent,
+        )?))
+    }
+
+    pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(alias, model, agent)
+            .expect("test credential configuration should resolve")
     }
 
     fn endpoint(&self) -> String {
@@ -907,6 +973,12 @@ pub(crate) use super::openai_chat as wire;
 // Free function so the registry can decide whether the alias is one we own.
 pub fn is_alias(name: &str) -> bool {
     PROVIDER_ALIASES.contains(&name)
+}
+
+pub fn build_provider(alias: &str, model: &str, agent: &AgentConfig) -> Result<Arc<dyn Provider>> {
+    Ok(Arc::new(OpenAICompatProvider::try_from_agent_config(
+        alias, model, agent,
+    )?))
 }
 
 #[cfg(test)]

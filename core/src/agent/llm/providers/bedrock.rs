@@ -49,17 +49,16 @@
 use async_trait::async_trait;
 use futures_util::stream::{BoxStream, StreamExt};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use super::anthropic::wire as anthropic_wire;
 use crate::agent::llm::construction::HttpTransport;
-#[cfg(test)]
-use crate::agent::llm::construction::ProviderBuildContext;
+use crate::agent::llm::construction::ProcessCredentialSource;
 use crate::agent::llm::sigv4::{
     current_amz_date, sign, AwsCredentials, SignableRequest, SigningContext,
 };
 use crate::agent::llm::{ChatRequest, ChatResponse, LlmError, Provider, Result, StreamEvent};
-#[cfg(test)]
 use crate::config::AgentConfig;
 
 pub const PROVIDER_NAME: &str = "bedrock";
@@ -118,11 +117,8 @@ impl std::fmt::Debug for BedrockConfig {
 }
 
 impl BedrockConfig {
-    #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
-        let context =
-            ProviderBuildContext::from_process().expect("test HTTP transport should build");
-        crate::agent::llm::registry::bedrock_config(model, agent, &context)
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        crate::agent::llm::registry::bedrock_config(model, agent, &ProcessCredentialSource)
     }
 
     /// Region-derived host for SigV4 signing AND the URL we POST to.
@@ -167,16 +163,16 @@ pub struct BedrockProvider {
 }
 
 impl BedrockProvider {
-    pub fn new(cfg: BedrockConfig, transport: HttpTransport) -> Self {
+    pub fn new(cfg: BedrockConfig) -> Self {
+        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+    }
+
+    pub fn new_with_transport(cfg: BedrockConfig, transport: HttpTransport) -> Self {
         Self { cfg, transport }
     }
 
-    #[cfg(test)]
-    pub fn from_agent_config(model: &str, agent: &crate::config::AgentConfig) -> Self {
-        let context =
-            ProviderBuildContext::from_process().expect("test HTTP transport should build");
-        let cfg = crate::agent::llm::registry::bedrock_config(model, agent, &context);
-        Self::new(cfg, context.transport())
+    pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::new(BedrockConfig::from_agent_config(model, agent))
     }
 
     /// `/model/<url-encoded model id>/invoke` — exact path, before SigV4
@@ -521,6 +517,10 @@ fn extract_aws_error_message(body: &str) -> Option<String> {
 
 pub fn is_alias(name: &str) -> bool {
     name == PROVIDER_NAME
+}
+
+pub fn build_provider(model: &str, agent: &AgentConfig) -> Arc<dyn Provider> {
+    Arc::new(BedrockProvider::from_agent_config(model, agent))
 }
 
 // --------------------------------------------------------------------

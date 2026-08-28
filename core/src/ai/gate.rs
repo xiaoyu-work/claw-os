@@ -1253,7 +1253,7 @@ pub fn build_system_provider_with_context(
     if slots.len() == 1 {
         Ok(slots.remove(0).provider)
     } else {
-        Ok(Arc::new(ProviderChain::new(slots, observer)?))
+        Ok(Arc::new(ProviderChain::new_with_observer(slots, observer)?))
     }
 }
 

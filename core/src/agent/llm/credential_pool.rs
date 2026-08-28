@@ -55,7 +55,7 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -279,6 +279,76 @@ impl Pool {
             cooldown: DEFAULT_COOLDOWN,
             state: Mutex::new(state),
         })
+    }
+
+    /// Legacy process-backed constructor. New provider composition resolves
+    /// sources through `construction::resolve_api_credentials` and passes
+    /// entries to [`Self::from_entries`].
+    pub fn from_sources(
+        name: impl Into<String>,
+        credential_names: &[&str],
+        env_names: &[&str],
+        inline: &[&str],
+        strategy: SelectionStrategy,
+    ) -> Result<Self, PoolError> {
+        use crate::agent::llm::construction::CredentialSource;
+
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
+        let mut entries = Vec::new();
+        for credential in credential_names {
+            if let Ok(Some(value)) = source.load_stored(credential) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_credential(*credential, value.to_string()));
+                }
+            }
+        }
+        for environment in env_names {
+            if let Some(value) = source.load_environment(environment) {
+                let value = value.trim();
+                if !value.is_empty() {
+                    entries.push(PoolEntry::from_env(*environment, value.to_string()));
+                }
+            }
+        }
+        for value in inline {
+            let value = value.trim();
+            if !value.is_empty() {
+                entries.push(PoolEntry::inline(value.to_string()));
+            }
+        }
+        Self::from_entries(name, entries, strategy)
+    }
+
+    /// Legacy declaration helper retained for source compatibility.
+    pub fn is_declared(cfg: &crate::config::AgentConfig) -> bool {
+        crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg)
+            .pool_declared()
+    }
+
+    /// Legacy process-backed config constructor. New provider composition
+    /// injects a `CredentialSource` and retains the returned pool in an `Arc`.
+    pub fn try_from_agent_config(
+        name: impl Into<String>,
+        cfg: &crate::config::AgentConfig,
+    ) -> crate::agent::llm::Result<Option<Self>> {
+        if !Self::is_declared(cfg) {
+            return Ok(None);
+        }
+        let source = crate::agent::llm::construction::ProcessCredentialSource;
+        let resolved = crate::agent::llm::construction::resolve_api_credentials(
+            name,
+            crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg),
+            &source,
+        )?;
+        match resolved.pool {
+            Some(pool) => Arc::try_unwrap(pool).map(Some).map_err(|_| {
+                crate::agent::llm::LlmError::Internal(
+                    "newly resolved credential pool was unexpectedly shared".to_string(),
+                )
+            }),
+            None => Ok(None),
+        }
     }
 
     pub fn name(&self) -> &str {

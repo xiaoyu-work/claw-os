@@ -30,9 +30,10 @@ provider-neutral agent types and provider-specific HTTP/event protocols.
 
 ## Dependencies
 
-Providers implement `llm::Provider` and use `llm::types`. They never discover
-configuration, credential stores, process environment, audit paths, or HTTP
-client policy. `llm::registry` supplies provider-specific settings,
+Providers implement `llm::Provider` and use `llm::types`. Context-aware
+constructors never discover configuration, credential stores, process
+environment, audit paths, or HTTP client policy. Legacy public constructors
+remain as explicit compatibility boundaries, while `llm::registry` supplies provider-specific settings,
 `llm::construction` supplies resolved credential ownership and a shared
 transport, and provider-specific headers or state do not leak into unrelated
 wire formats. Setup/model discovery changes stay consistent with runtime

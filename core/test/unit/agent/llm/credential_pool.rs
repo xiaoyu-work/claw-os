@@ -41,6 +41,65 @@ fn from_entries_rejects_empty_value() {
     }
 }
 
+#[test]
+fn legacy_config_pool_absent_preserves_single_key_path() {
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_env = Some("COS_TEST_POOL_LEGACY_SINGLE".into());
+    std::env::set_var("COS_TEST_POOL_LEGACY_SINGLE", "single-key");
+    assert!(!Pool::is_declared(&cfg));
+    assert!(Pool::try_from_agent_config("absent", &cfg)
+        .unwrap()
+        .is_none());
+    std::env::remove_var("COS_TEST_POOL_LEGACY_SINGLE");
+}
+
+#[test]
+fn legacy_from_sources_inline_only() {
+    let pool = Pool::from_sources(
+        "x",
+        &[],
+        &[],
+        &["sk-a", "  ", "sk-b"],
+        SelectionStrategy::Sticky,
+    )
+    .unwrap();
+    assert_eq!(pool.len(), 2);
+}
+
+#[test]
+fn legacy_from_sources_resolves_environment() {
+    std::env::set_var("COS_TEST_POOL_KEY_A", "sk-aa");
+    std::env::set_var("COS_TEST_POOL_KEY_B", "sk-bb");
+    let pool = Pool::from_sources(
+        "envpool",
+        &[],
+        &["COS_TEST_POOL_KEY_A", "COS_TEST_POOL_KEY_B"],
+        &[],
+        SelectionStrategy::RoundRobin,
+    )
+    .unwrap();
+    std::env::remove_var("COS_TEST_POOL_KEY_A");
+    std::env::remove_var("COS_TEST_POOL_KEY_B");
+    assert_eq!(pool.len(), 2);
+}
+
+#[test]
+fn legacy_config_pool_unresolved_fails_with_source_names() {
+    const ENV_NAME: &str = "COS_TEST_POOL_CONFIG_MISSING";
+    std::env::remove_var(ENV_NAME);
+    let mut cfg = crate::config::AgentConfig::default();
+    cfg.api_key_envs = vec![ENV_NAME.into()];
+
+    let error = Pool::try_from_agent_config("unresolved", &cfg).unwrap_err();
+    match error {
+        crate::agent::llm::LlmError::NotConfigured(message) => {
+            assert!(message.contains(ENV_NAME), "got: {message}");
+            assert!(message.contains("cos credential store"), "got: {message}");
+        }
+        other => panic!("expected NotConfigured, got {other:?}"),
+    }
+}
+
 // ---- selection: sticky -------------------------------------------------
 
 #[test]
