@@ -1,12 +1,12 @@
 use super::super::client::{ClientError, McpClient};
 use super::super::protocol::{ClientCapabilities, ContentItem, Implementation};
-use super::super::transport::{in_memory_pair, InMemoryTransport, Transport};
+use super::super::transport::{in_memory_pair, InMemoryTransport, Transport, TransportError};
 use super::*;
 use crate::agent::tools::builtin::Echo;
 use crate::agent::tools::{Tool, ToolResult};
 use async_trait::async_trait;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, Mutex, Semaphore};
 use tokio::time::{timeout, Duration};
 
 fn registry_with_echo() -> Arc<ToolRegistry> {
@@ -22,6 +22,21 @@ struct BlockingTool {
 }
 
 struct ExecutionGuard(Arc<AtomicUsize>);
+
+struct FailingSendTransport {
+    incoming: Mutex<mpsc::UnboundedReceiver<String>>,
+}
+
+#[async_trait]
+impl Transport for FailingSendTransport {
+    async fn send(&self, _frame: String) -> Result<(), TransportError> {
+        Err(TransportError::Io("forced response failure".into()))
+    }
+
+    async fn recv(&self) -> Result<Option<String>, TransportError> {
+        Ok(self.incoming.lock().await.recv().await)
+    }
+}
 
 impl Drop for ExecutionGuard {
     fn drop(&mut self) {
@@ -671,5 +686,60 @@ async fn transport_shutdown_cancels_active_and_drops_queued_calls() {
         .unwrap()
         .unwrap();
     assert_eq!(drops.load(Ordering::SeqCst), 2);
+    assert!(started.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn response_send_failure_aborts_and_reaps_handlers_before_returning() {
+    let (registry, _permits, mut started, drops) = registry_with_blocking();
+    let (input, incoming) = mpsc::unbounded_channel();
+    let server_handle = tokio::spawn(bounded_server(registry, 1, 1).serve(FailingSendTransport {
+        incoming: Mutex::new(incoming),
+    }));
+
+    input
+        .send(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "tools/call",
+                "params": {
+                    "name": "blocking",
+                    "arguments": {"sequence": 1},
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+    assert_eq!(next_start(&mut started).await, 1);
+    input
+        .send(
+            serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "tools/call",
+                "params": {
+                    "name": "blocking",
+                    "arguments": {"sequence": 2},
+                },
+            })
+            .to_string(),
+        )
+        .unwrap();
+    input
+        .send(r#"{"jsonrpc":"2.0","id":3,"method":"ping"}"#.into())
+        .unwrap();
+
+    let error = timeout(Duration::from_secs(2), server_handle)
+        .await
+        .expect("serve did not finish after response send failure")
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        ServerError::Transport(TransportError::Io(message))
+            if message == "forced response failure"
+    ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     assert!(started.try_recv().is_err());
 }

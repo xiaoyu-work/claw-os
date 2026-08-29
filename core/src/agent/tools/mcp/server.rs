@@ -147,170 +147,174 @@ impl McpServer {
         let mut active_requests: Vec<(RequestId, AbortHandle)> = Vec::new();
         let mut queued = VecDeque::new();
 
-        loop {
-            while handlers.len() < me.limits.max_active_tool_calls {
-                let Some(call) = queued.pop_front() else {
-                    break;
+        let result = async {
+            loop {
+                while handlers.len() < me.limits.max_active_tool_calls {
+                    let Some(call) = queued.pop_front() else {
+                        break;
+                    };
+                    spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
+                }
+
+                let frame = tokio::select! {
+                    biased;
+                    completed = handlers.join_next(), if !handlers.is_empty() => {
+                        active_requests.retain(|(_, handle)| !handle.is_finished());
+                        match completed {
+                            Some(Ok(response)) => t.send(encode_response(&response)).await?,
+                            Some(Err(error)) if error.is_cancelled() => {}
+                            Some(Err(error)) => {
+                                tracing::warn!("MCP tool-call handler failed: {error}");
+                            }
+                            None => {}
+                        }
+                        continue;
+                    }
+                    received = t.recv() => {
+                        match received {
+                            Ok(Some(frame)) => frame,
+                            Ok(None) => break Ok(()),
+                            Err(error) => break Err(error.into()),
+                        }
+                    }
                 };
-                spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
-            }
 
-            let frame = tokio::select! {
-                biased;
-                completed = handlers.join_next(), if !handlers.is_empty() => {
-                    active_requests.retain(|(_, handle)| !handle.is_finished());
-                    match completed {
-                        Some(Ok(response)) => t.send(encode_response(&response)).await?,
-                        Some(Err(error)) if error.is_cancelled() => {}
-                        Some(Err(error)) => {
-                            tracing::warn!("MCP tool-call handler failed: {error}");
-                        }
-                        None => {}
+                let raw: Value = match serde_json::from_str(&frame) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        let response = JsonRpcResponse::err(
+                            RequestId::Null,
+                            JsonRpcError::new(ERR_PARSE, format!("parse error: {error}")),
+                        );
+                        t.send(encode_response(&response)).await?;
+                        continue;
                     }
-                    continue;
-                }
-                received = t.recv() => {
-                    match received {
-                        Ok(Some(frame)) => frame,
-                        Ok(None) => {
-                            shutdown_handlers(&mut handlers).await;
-                            return Ok(());
-                        }
-                        Err(error) => {
-                            shutdown_handlers(&mut handlers).await;
-                            return Err(error.into());
-                        }
-                    }
-                }
-            };
-
-            let raw: Value = match serde_json::from_str(&frame) {
-                Ok(value) => value,
-                Err(error) => {
+                };
+                if !raw.is_object() {
                     let response = JsonRpcResponse::err(
                         RequestId::Null,
-                        JsonRpcError::new(ERR_PARSE, format!("parse error: {error}")),
+                        JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
                     );
                     t.send(encode_response(&response)).await?;
                     continue;
                 }
-            };
-            if !raw.is_object() {
-                let response = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(ERR_INVALID_REQUEST, "request must be a JSON object"),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "missing or invalid jsonrpc 2.0 envelope",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_some()
-                && !matches!(
-                    raw.get("id"),
-                    Some(Value::Null | Value::String(_) | Value::Number(_))
-                )
-            {
-                let response = JsonRpcResponse::err(
-                    RequestId::Null,
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request id must be a string, number, or null",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw
-                .get("params")
-                .is_some_and(|params| !params.is_object() && !params.is_array())
-                && raw.get("id").is_none()
-            {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(
-                        ERR_INVALID_REQUEST,
-                        "request params must be an object or array",
-                    ),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_some()
-                && raw.get("params").is_some_and(Value::is_null)
-                && matches!(
-                    raw.get("method").and_then(Value::as_str),
-                    Some("ping" | "tools/list")
-                )
-            {
-                let response = JsonRpcResponse::err(
-                    extract_id(&raw),
-                    JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
-                );
-                t.send(encode_response(&response)).await?;
-                continue;
-            }
-            if raw.get("id").is_none() {
-                match serde_json::from_value::<JsonRpcNotification>(raw) {
-                    Ok(notification) => {
-                        handle_notification(notification, &mut queued, &active_requests);
-                        continue;
+                if raw.get("jsonrpc").and_then(Value::as_str) != Some(JSONRPC_VERSION) {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            "missing or invalid jsonrpc 2.0 envelope",
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw.get("id").is_some()
+                    && !matches!(
+                        raw.get("id"),
+                        Some(Value::Null | Value::String(_) | Value::Number(_))
+                    )
+                {
+                    let response = JsonRpcResponse::err(
+                        RequestId::Null,
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            "request id must be a string, number, or null",
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw
+                    .get("params")
+                    .is_some_and(|params| !params.is_object() && !params.is_array())
+                    && raw.get("id").is_none()
+                {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(
+                            ERR_INVALID_REQUEST,
+                            "request params must be an object or array",
+                        ),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw.get("id").is_some()
+                    && raw.get("params").is_some_and(Value::is_null)
+                    && matches!(
+                        raw.get("method").and_then(Value::as_str),
+                        Some("ping" | "tools/list")
+                    )
+                {
+                    let response = JsonRpcResponse::err(
+                        extract_id(&raw),
+                        JsonRpcError::new(ERR_INVALID_PARAMS, "params must not be null"),
+                    );
+                    t.send(encode_response(&response)).await?;
+                    continue;
+                }
+                if raw.get("id").is_none() {
+                    match serde_json::from_value::<JsonRpcNotification>(raw) {
+                        Ok(notification) => {
+                            handle_notification(notification, &mut queued, &active_requests);
+                            continue;
+                        }
+                        Err(error) => {
+                            let response = JsonRpcResponse::err(
+                                RequestId::Null,
+                                JsonRpcError::new(
+                                    ERR_INVALID_REQUEST,
+                                    format!("invalid notification: {error}"),
+                                ),
+                            );
+                            t.send(encode_response(&response)).await?;
+                            continue;
+                        }
                     }
+                }
+                let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
+                    Ok(request) => request,
                     Err(error) => {
                         let response = JsonRpcResponse::err(
-                            RequestId::Null,
+                            extract_id(&raw),
                             JsonRpcError::new(
                                 ERR_INVALID_REQUEST,
-                                format!("invalid notification: {error}"),
+                                format!("invalid request: {error}"),
                             ),
                         );
                         t.send(encode_response(&response)).await?;
                         continue;
                     }
-                }
-            }
-            let request: JsonRpcRequest = match serde_json::from_value(raw.clone()) {
-                Ok(request) => request,
-                Err(error) => {
-                    let response = JsonRpcResponse::err(
-                        extract_id(&raw),
-                        JsonRpcError::new(ERR_INVALID_REQUEST, format!("invalid request: {error}")),
-                    );
-                    t.send(encode_response(&response)).await?;
+                };
+
+                if request.method == "tools/call" {
+                    let call = match me.prepare_tools_call(request) {
+                        Ok(call) => call,
+                        Err(response) => {
+                            t.send(encode_response(&response)).await?;
+                            continue;
+                        }
+                    };
+                    if handlers.len() < me.limits.max_active_tool_calls {
+                        spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
+                    } else if queued.len() < me.limits.max_queued_tool_calls {
+                        queued.push_back(call);
+                    } else {
+                        t.send(encode_response(&overload_response(call.id))).await?;
+                    }
                     continue;
                 }
-            };
 
-            if request.method == "tools/call" {
-                let call = match me.prepare_tools_call(request) {
-                    Ok(call) => call,
-                    Err(response) => {
-                        t.send(encode_response(&response)).await?;
-                        continue;
-                    }
-                };
-                if handlers.len() < me.limits.max_active_tool_calls {
-                    spawn_tool_call(&mut handlers, &mut active_requests, Arc::clone(&me), call);
-                } else if queued.len() < me.limits.max_queued_tool_calls {
-                    queued.push_back(call);
-                } else {
-                    t.send(encode_response(&overload_response(call.id))).await?;
-                }
-                continue;
+                let response = me.handle_control(request);
+                t.send(encode_response(&response)).await?;
             }
-
-            let response = me.handle_control(request);
-            t.send(encode_response(&response)).await?;
         }
+        .await;
+
+        queued.clear();
+        shutdown_handlers(&mut handlers).await;
+        result
     }
 
     fn handle_control(&self, req: JsonRpcRequest) -> JsonRpcResponse {
