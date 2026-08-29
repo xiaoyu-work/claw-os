@@ -11,6 +11,30 @@ fn open_in_memory_is_clean() {
 }
 
 #[test]
+fn open_migrates_pre_compaction_database_additively() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("memory.db");
+    let connection = Connection::open(&path).unwrap();
+    connection.execute_batch(CONNECTION_PRAGMAS).unwrap();
+    connection.execute_batch(BASE_SCHEMA).unwrap();
+    connection.execute_batch(FTS_SCHEMA).unwrap();
+    drop(connection);
+
+    let db = MemoryDb::open(&path).unwrap();
+    let conn = db.lock_conn().unwrap();
+    let tables: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_schema
+             WHERE type = 'table'
+               AND name IN ('session_compactions', 'compaction_summaries')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(tables, 2);
+}
+
+#[test]
 fn record_then_recent_returns_in_order() {
     let db = db();
     db.record_message("s1", "user", "first").unwrap();

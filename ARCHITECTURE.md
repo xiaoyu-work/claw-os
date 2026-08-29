@@ -99,6 +99,20 @@ Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
 approvals, and privileged actions cannot bypass the recording path.
 
+Long `MemoryDb` conversations use durable compaction projections rather than
+rewriting their authoritative transcript. Each per-session attempt records a
+monotonic `started` then `completed`/`failed` lifecycle, the exact raw row IDs
+and inclusive range plus SHA-256 digest, algorithm version, protected
+tail/user boundary, provider/model identity, frozen-prompt hash/version, and
+recovery metadata.
+Completed summary text is content-addressed. Continuations verify and load the
+latest valid summary plus every uncompacted row; raw rows remain searchable and
+exportable. A per-session advisory lock prevents duplicate concurrent
+compaction, and reacquiring that lock closes a crash-left `started` attempt
+before retry. Oversized old tool results are deterministically stubbed before
+an LLM summary, while tool pairs and a real user anchor remain in the protected
+tail.
+
 Curated `MEMORY.md` facts are an append-only history, not a live inventory.
 Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
 aliases, classifies durable knowledge versus observed environment state, bounds
@@ -242,7 +256,9 @@ CLI / web UI / bridge
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
   -> append due reminders / transient App data to the current request only
-  -> load persisted conversation and compress when the configured budget requires it
+  -> load the latest verified durable compaction plus its uncompacted raw tail
+  -> deterministically prune old tool output, then start/complete a serialized
+     durable summary only when the configured budget still requires it
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)

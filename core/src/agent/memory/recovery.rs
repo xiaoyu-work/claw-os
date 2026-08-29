@@ -18,6 +18,7 @@ use rusqlite::{params, Connection, OpenFlags, OptionalExtension, TransactionBeha
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use super::compaction::{self, COMPACTION_SCHEMA};
 use super::sqlite_fts::{
     initialize_connection, system_prompt_hash, MemoryError, BASE_SCHEMA, CONNECTION_PRAGMAS,
     FTS_SCHEMA,
@@ -41,6 +42,41 @@ const EXPECTED_TABLES: &[(&str, &[&str])] = &[
     ),
 ];
 const EXPECTED_INDEXES: &[&str] = &["messages_session_ts", "messages_ts"];
+const EXPECTED_COMPACTION_TABLES: &[(&str, &[&str])] = &[
+    ("compaction_summaries", &["hash", "summary"]),
+    (
+        "session_compactions",
+        &[
+            "id",
+            "session_id",
+            "generation",
+            "state",
+            "started_ts_ms",
+            "finished_ts_ms",
+            "source_start_id",
+            "source_end_id",
+            "source_count",
+            "source_ids_json",
+            "source_digest",
+            "algorithm",
+            "algorithm_version",
+            "protected_tail_start_id",
+            "protected_user_message_id",
+            "summary_hash",
+            "prompt_hash",
+            "prompt_version",
+            "provider",
+            "model",
+            "previous_compaction_id",
+            "recovery_metadata",
+            "failure_kind",
+        ],
+    ),
+];
+const EXPECTED_COMPACTION_INDEXES: &[&str] = &[
+    "session_compactions_latest",
+    "session_compactions_one_started",
+];
 const EXPECTED_TRIGGERS: &[&str] = &["messages_ai", "messages_ad", "messages_au"];
 
 #[cfg(test)]
@@ -131,6 +167,7 @@ pub struct MemoryHealthReport {
     pub fts: MemoryHealthCheck,
     pub prompt_references: MemoryHealthCheck,
     pub prompt_hashes: MemoryHealthCheck,
+    pub compactions: MemoryHealthCheck,
     pub titles: MemoryHealthCheck,
     pub repair_lifecycle: MemoryHealthCheck,
     pub stats: Option<MemoryHealthStats>,
@@ -152,6 +189,10 @@ pub struct RecoveredRecords {
     pub titles: u64,
     pub prompt_references: u64,
     pub skipped_prompt_references: u64,
+    #[serde(default)]
+    pub compactions: u64,
+    #[serde(default)]
+    pub skipped_compactions: u64,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -222,6 +263,7 @@ struct SchemaInspection {
     altered_triggers: Vec<String>,
     messages_compatible: bool,
     prompts_compatible: bool,
+    compactions_compatible: bool,
     titles_compatible: bool,
     fts_compatible: bool,
 }
@@ -965,6 +1007,7 @@ fn diagnose_locked(
         check_prompt_references(&conn, &schema_inspection);
     let (prompt_hashes, prompt_hash_requires_quarantine) =
         check_prompt_hashes(&conn, &schema_inspection);
+    let compactions = check_compactions(&conn, &schema_inspection);
     let titles = check_titles(&conn, &schema_inspection);
     let stats = match read_health_stats(&conn, &schema_inspection) {
         Ok(stats) => Some(stats),
@@ -997,6 +1040,7 @@ fn diagnose_locked(
         fts,
         prompt_references,
         prompt_hashes,
+        compactions,
         titles,
         repair_lifecycle,
         stats,
@@ -1025,6 +1069,7 @@ fn absent_health_report(
         fts: absent(),
         prompt_references: absent(),
         prompt_hashes: absent(),
+        compactions: absent(),
         titles: absent(),
         repair_lifecycle,
         stats: Some(MemoryHealthStats::default()),
@@ -1057,6 +1102,7 @@ fn blocked_health_report(
         fts: blocked(),
         prompt_references: blocked(),
         prompt_hashes: blocked(),
+        compactions: blocked(),
         titles: blocked(),
         repair_lifecycle,
         stats: None,
@@ -1076,6 +1122,7 @@ fn finalize_health_report(report: &mut MemoryHealthReport) {
         &report.fts,
         &report.prompt_references,
         &report.prompt_hashes,
+        &report.compactions,
         &report.titles,
         &report.repair_lifecycle,
     ];
@@ -1139,6 +1186,9 @@ fn populate_planned_repairs(report: &mut MemoryHealthReport) {
         > 0
     {
         actions.push("remove_unreferenced_prompt_blobs".to_string());
+    }
+    if report.compactions.status != "ok" {
+        actions.push("repair_compaction_projection".to_string());
     }
     if report.repair_lifecycle.status == "fail" {
         actions.insert(0, "resume_interrupted_repair".to_string());
@@ -1228,12 +1278,40 @@ fn inspect_schema(conn: &Connection) -> Result<SchemaInspection, MemoryError> {
             inspection.missing.push(format!("missing index {index}"));
         }
     }
+    for (table, columns) in EXPECTED_COMPACTION_TABLES {
+        match schema_object_type(conn, table)? {
+            None => inspection.missing.push(format!("missing table {table}")),
+            Some(kind) if kind != "table" => inspection
+                .incompatible
+                .push(format!("{table} is {kind}, expected table")),
+            Some(_) => {
+                let actual = table_columns(conn, table)?;
+                let absent: Vec<_> = columns
+                    .iter()
+                    .filter(|column| !actual.iter().any(|actual| actual == **column))
+                    .copied()
+                    .collect();
+                if !absent.is_empty() {
+                    inspection.incompatible.push(format!(
+                        "table {table} is missing column(s): {}",
+                        absent.join(", ")
+                    ));
+                }
+            }
+        }
+    }
+    for index in EXPECTED_COMPACTION_INDEXES {
+        if schema_object_type(conn, index)?.as_deref() != Some("index") {
+            inspection.missing.push(format!("missing index {index}"));
+        }
+    }
 
     inspection.messages_compatible = table_has_columns(conn, "messages", EXPECTED_TABLES[0].1)?;
     inspection.titles_compatible = table_has_columns(conn, "session_titles", EXPECTED_TABLES[1].1)?;
     inspection.prompts_compatible =
         table_has_columns(conn, "system_prompts", EXPECTED_TABLES[2].1)?
             && table_has_columns(conn, "session_system_prompts", EXPECTED_TABLES[3].1)?;
+    inspection.compactions_compatible = compaction::tables_compatible(conn)?;
 
     match schema_object_type(conn, "messages_fts")? {
         None => inspection
@@ -1413,15 +1491,30 @@ fn check_prompt_references(
         } else {
             0
         };
-        let unreferenced_blobs = conn.query_row(
-            "SELECT COUNT(*)
-             FROM system_prompts AS p
-             WHERE NOT EXISTS (
-                 SELECT 1 FROM session_system_prompts AS s WHERE s.prompt_hash = p.hash
-             )",
-            [],
-            |row| row.get::<_, i64>(0),
-        )? as u64;
+        let unreferenced_blobs = if schema.compactions_compatible {
+            conn.query_row(
+                "SELECT COUNT(*)
+                 FROM system_prompts AS p
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM session_system_prompts AS s WHERE s.prompt_hash = p.hash
+                 )
+                   AND NOT EXISTS (
+                     SELECT 1 FROM session_compactions AS c WHERE c.prompt_hash = p.hash
+                 )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as u64
+        } else {
+            conn.query_row(
+                "SELECT COUNT(*)
+                 FROM system_prompts AS p
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM session_system_prompts AS s WHERE s.prompt_hash = p.hash
+                 )",
+                [],
+                |row| row.get::<_, i64>(0),
+            )? as u64
+        };
         Ok((dangling, orphaned_sessions, unreferenced_blobs))
     })();
     match result {
@@ -1506,6 +1599,83 @@ fn check_prompt_hashes(conn: &Connection, schema: &SchemaInspection) -> (MemoryH
         Err(error) => (
             MemoryHealthCheck::fail("prompt hash check failed", vec![error.to_string()]),
             true,
+        ),
+    }
+}
+
+fn check_compactions(conn: &Connection, schema: &SchemaInspection) -> MemoryHealthCheck {
+    if !schema.compactions_compatible {
+        return MemoryHealthCheck::fail(
+            "durable compaction projection is unavailable",
+            vec!["compaction tables are missing or incompatible".to_string()],
+        );
+    }
+    match compaction::inspect_projection(conn) {
+        Ok(inspection) => {
+            let mut issues = Vec::new();
+            if inspection.invalid_records > 0 {
+                issues.push(format!(
+                    "{} compaction record(s) failed lifecycle, source, or content-address verification",
+                    inspection.invalid_records
+                ));
+            }
+            if inspection.interrupted > 0 {
+                issues.push(format!(
+                    "{} compaction attempt(s) started without completing",
+                    inspection.interrupted
+                ));
+            }
+            if inspection.orphaned_sessions > 0 {
+                issues.push(format!(
+                    "{} compaction record(s) have no raw session rows",
+                    inspection.orphaned_sessions
+                ));
+            }
+            if inspection.unreferenced_summaries > 0 {
+                issues.push(format!(
+                    "{} content-addressed compaction summary blob(s) are unreferenced",
+                    inspection.unreferenced_summaries
+                ));
+            }
+            let mut check = if inspection.invalid_records > 0 {
+                MemoryHealthCheck::fail(
+                    "durable compaction projection contains invalid summaries",
+                    issues,
+                )
+            } else if issues.is_empty() {
+                MemoryHealthCheck::ok("durable compaction lifecycle and summaries are valid")
+            } else {
+                MemoryHealthCheck::warn(
+                    "durable compaction projection needs in-place recovery",
+                    issues,
+                )
+            };
+            check
+                .metrics
+                .insert("completed".to_string(), inspection.completed);
+            check
+                .metrics
+                .insert("failed".to_string(), inspection.failed);
+            check
+                .metrics
+                .insert("interrupted".to_string(), inspection.interrupted);
+            check.metrics.insert(
+                "invalid_records".to_string(),
+                inspection.invalid_records,
+            );
+            check.metrics.insert(
+                "orphaned_sessions".to_string(),
+                inspection.orphaned_sessions,
+            );
+            check.metrics.insert(
+                "unreferenced_summaries".to_string(),
+                inspection.unreferenced_summaries,
+            );
+            check
+        }
+        Err(error) => MemoryHealthCheck::fail(
+            "durable compaction projection check failed",
+            vec![error.to_string()],
         ),
     }
 }
@@ -2094,7 +2264,25 @@ fn perform_in_place_repair(
 
     let mut conn = conn;
     let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if compaction::tables_compatible(&tx)? {
+        tx.execute(
+            "UPDATE session_compactions
+             SET state = 'failed',
+                 finished_ts_ms = ?,
+                 failure_kind = 'interrupted_during_repair'
+             WHERE state = 'started'",
+            params![current_ts_ms()],
+        )?;
+    } else {
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS session_compactions_one_started;
+             DROP INDEX IF EXISTS session_compactions_latest;
+             DROP TABLE IF EXISTS session_compactions;
+             DROP TABLE IF EXISTS compaction_summaries;",
+        )?;
+    }
     tx.execute_batch(BASE_SCHEMA)?;
+    tx.execute_batch(COMPACTION_SCHEMA)?;
     validate_prompt_integrity(&tx)?;
 
     tx.execute(
@@ -2113,11 +2301,16 @@ fn perform_in_place_repair(
          )",
         [],
     )?;
+    compaction::repair_projection(&tx)?;
     tx.execute(
         "DELETE FROM system_prompts
          WHERE NOT EXISTS (
              SELECT 1 FROM session_system_prompts
              WHERE session_system_prompts.prompt_hash = system_prompts.hash
+         )
+           AND NOT EXISTS (
+             SELECT 1 FROM session_compactions
+             WHERE session_compactions.prompt_hash = system_prompts.hash
          )",
         [],
     )?;
@@ -2435,6 +2628,13 @@ fn recover_from_standalone_main(
         }
         Err(error) => warnings.push(format!("session prompts were not recovered: {error}")),
     }
+    match compaction::recover_projection(&source, target, &sessions) {
+        Ok((count, skipped)) => {
+            recovered.compactions = count;
+            recovered.skipped_compactions = skipped;
+        }
+        Err(error) => warnings.push(format!("session compactions were not recovered: {error}")),
+    }
 
     Ok(StandaloneRecoveryResult {
         recovered,
@@ -2521,15 +2721,38 @@ fn write_replacement_marker(
              recovered_titles          INTEGER NOT NULL,
              recovered_prompt_refs     INTEGER NOT NULL,
              skipped_prompt_refs       INTEGER NOT NULL,
+             recovered_compactions     INTEGER NOT NULL DEFAULT 0,
+             skipped_compactions       INTEGER NOT NULL DEFAULT 0,
              recovery_warning          TEXT
          );",
     )?;
+    let marker_columns = table_columns(conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "recovered_compactions")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN recovered_compactions INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    let marker_columns = table_columns(conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "skipped_compactions")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN skipped_compactions INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
     conn.execute(
         "INSERT INTO memory_repair_install(
              singleton, attempt_id, quarantine_path, source_main_sha256,
              complete, salvage_succeeded, recovered_messages, recovered_titles,
-             recovered_prompt_refs, skipped_prompt_refs, recovery_warning
-         ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             recovered_prompt_refs, skipped_prompt_refs, recovered_compactions,
+             skipped_compactions, recovery_warning
+         ) VALUES(1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(singleton) DO UPDATE SET
              attempt_id = excluded.attempt_id,
              quarantine_path = excluded.quarantine_path,
@@ -2540,6 +2763,8 @@ fn write_replacement_marker(
              recovered_titles = excluded.recovered_titles,
              recovered_prompt_refs = excluded.recovered_prompt_refs,
              skipped_prompt_refs = excluded.skipped_prompt_refs,
+             recovered_compactions = excluded.recovered_compactions,
+             skipped_compactions = excluded.skipped_compactions,
              recovery_warning = excluded.recovery_warning",
         params![
             &marker.attempt_id,
@@ -2551,6 +2776,8 @@ fn write_replacement_marker(
             marker.recovered.titles as i64,
             marker.recovered.prompt_references as i64,
             marker.recovered.skipped_prompt_references as i64,
+            marker.recovered.compactions as i64,
+            marker.recovered.skipped_compactions as i64,
             marker.recovery_warning.as_deref(),
         ],
     )?;
@@ -2570,15 +2797,36 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
     let standalone = StandaloneMainCopy {
         path: standalone_path,
     };
-    let conn = Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let conn = Connection::open_with_flags(&standalone.path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     if schema_object_type(&conn, REPLACEMENT_MARKER_TABLE)?.is_none() {
         return Ok(None);
+    }
+    let marker_columns = table_columns(&conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "recovered_compactions")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN recovered_compactions INTEGER NOT NULL DEFAULT 0;",
+        )?;
+    }
+    let marker_columns = table_columns(&conn, REPLACEMENT_MARKER_TABLE)?;
+    if !marker_columns
+        .iter()
+        .any(|column| column == "skipped_compactions")
+    {
+        conn.execute_batch(
+            "ALTER TABLE memory_repair_install
+             ADD COLUMN skipped_compactions INTEGER NOT NULL DEFAULT 0;",
+        )?;
     }
     let marker = conn
         .query_row(
             "SELECT attempt_id, quarantine_path, source_main_sha256, complete,
                 salvage_succeeded, recovered_messages, recovered_titles,
-                recovered_prompt_refs, skipped_prompt_refs, recovery_warning
+                recovered_prompt_refs, skipped_prompt_refs, recovered_compactions,
+                skipped_compactions, recovery_warning
          FROM memory_repair_install
          WHERE singleton = 1",
             [],
@@ -2594,8 +2842,10 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
                         titles: row.get::<_, i64>(6)? as u64,
                         prompt_references: row.get::<_, i64>(7)? as u64,
                         skipped_prompt_references: row.get::<_, i64>(8)? as u64,
+                        compactions: row.get::<_, i64>(9)? as u64,
+                        skipped_compactions: row.get::<_, i64>(10)? as u64,
                     },
-                    recovery_warning: row.get(9)?,
+                    recovery_warning: row.get(11)?,
                 })
             },
         )
@@ -2611,9 +2861,15 @@ fn read_replacement_marker(path: &Path) -> Result<Option<ReplacementMarker>, Mem
             conn.query_row("SELECT COUNT(*) FROM session_system_prompts", [], |row| {
                 row.get::<_, i64>(0)
             })? as u64;
+        let compactions = conn.query_row(
+            "SELECT COUNT(*) FROM session_compactions WHERE state = 'completed'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? as u64;
         if messages < marker.recovered.messages
             || titles < marker.recovered.titles
             || prompt_references < marker.recovered.prompt_references
+            || compactions < marker.recovered.compactions
         {
             return Err(MemoryError::Integrity(format!(
                 "replacement {} does not contain the rows recorded by its repair marker",

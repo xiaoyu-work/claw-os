@@ -10,6 +10,10 @@ through model turns, tools, hooks, progress, and final records.
 - Build and run bounded multi-turn loops.
 - Restore or freeze one versioned canonical system prompt per persisted session.
 - Keep due reminders and application context request-local.
+- Load the latest verified durable compaction plus its uncompacted tail for
+  every continuation surface.
+- Track raw row provenance through each turn so a prepared compaction can be
+  committed before its summary becomes model-visible.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
 - Build every provider tool schema and dispatch lookup from the same
@@ -25,7 +29,7 @@ through model turns, tools, hooks, progress, and final records.
 
 | Path | Role |
 | --- | --- |
-| `loop_.rs` | Request-level orchestration and turn repetition |
+| `loop_.rs` | Request-level orchestration, durable projection/compaction, and turn repetition |
 | `turn.rs` | Provider call, tool extraction, dispatch, results |
 | `hooks.rs` | Pre/post tool and turn hooks |
 | `progress.rs` | Tool progress and heartbeat contract |

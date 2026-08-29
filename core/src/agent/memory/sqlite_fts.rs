@@ -7,6 +7,8 @@
 //! Schema:
 //! - `messages(id, session_id, role, content, ts_ms)` — durable rows.
 //! - `messages_fts(content)` — FTS5 contentless virtual table indexed by triggers.
+//! - `session_compactions` + `compaction_summaries` — verified projections;
+//!   raw message rows remain the authoritative searchable/exportable source.
 //!
 //! The DB lives at `data_dir/agent/memory.db` by default and uses WAL mode so
 //! concurrent readers (e.g. the `cos_recall` tool) don't block writers.
@@ -16,6 +18,7 @@
 //! damaged content-addressed prompts are never returned to the model, and
 //! schema corruption requires explicit diagnosis/repair.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -23,6 +26,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use sha2::{Digest, Sha256};
 
+use super::compaction::COMPACTION_SCHEMA;
 use super::recovery::{self, MemoryLifecycleLock};
 
 pub(crate) const INJECTED_ROLE: &str = "injected";
@@ -222,7 +226,9 @@ END;
 
 #[derive(Debug, Clone)]
 pub struct MemoryDb {
-    conn: Arc<Mutex<Connection>>,
+    pub(super) conn: Arc<Mutex<Connection>>,
+    pub(super) path: Option<PathBuf>,
+    pub(super) compaction_locks: Arc<Mutex<HashSet<String>>>,
     _lifecycle_lock: Option<Arc<MemoryLifecycleLock>>,
 }
 
@@ -248,6 +254,15 @@ impl MemoryDb {
         if initialize || recovery::database_has_no_user_schema(&conn)? {
             initialize_connection(&conn)?;
         } else {
+            conn.execute_batch(CONNECTION_PRAGMAS)?;
+            // Durable compaction is an additive projection over authoritative
+            // message rows. Create it automatically for pre-compaction
+            // databases, while still refusing incompatible existing objects.
+            conn.execute_batch(COMPACTION_SCHEMA).map_err(|error| {
+                MemoryError::Integrity(format!(
+                    "durable compaction schema migration failed: {error}"
+                ))
+            })?;
             let issues = recovery::runtime_schema_issues(&conn)?;
             if !issues.is_empty() {
                 return Err(MemoryError::Integrity(format!(
@@ -255,11 +270,12 @@ impl MemoryDb {
                     issues.join("; ")
                 )));
             }
-            conn.execute_batch(CONNECTION_PRAGMAS)?;
         }
         crate::storage::set_private_file(path)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            path: Some(path.to_path_buf()),
+            compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: lifecycle_lock.map(Arc::new),
         })
     }
@@ -271,6 +287,8 @@ impl MemoryDb {
         initialize_connection(&conn)?;
         Ok(Self {
             conn: Arc::new(Mutex::new(conn)),
+            path: None,
+            compaction_locks: Arc::new(Mutex::new(HashSet::new())),
             _lifecycle_lock: None,
         })
     }
@@ -466,6 +484,10 @@ impl MemoryDb {
              WHERE NOT EXISTS (
                  SELECT 1 FROM session_system_prompts AS s
                  WHERE s.prompt_hash = system_prompts.hash
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM session_compactions AS c
+                 WHERE c.prompt_hash = system_prompts.hash
              )",
             [],
         )?;
@@ -624,6 +646,18 @@ impl MemoryDb {
     pub fn clear_session(&self, session_id: &str) -> Result<usize, MemoryError> {
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM session_compactions WHERE session_id = ?",
+            params![session_id],
+        )?;
+        tx.execute(
+            "DELETE FROM compaction_summaries
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_compactions AS c
+                 WHERE c.summary_hash = compaction_summaries.hash
+             )",
+            [],
+        )?;
         let n = tx.execute(
             "DELETE FROM messages WHERE session_id = ?",
             params![session_id],
@@ -637,6 +671,10 @@ impl MemoryDb {
              WHERE NOT EXISTS (
                  SELECT 1 FROM session_system_prompts AS s
                  WHERE s.prompt_hash = system_prompts.hash
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM session_compactions AS c
+                 WHERE c.prompt_hash = system_prompts.hash
              )",
             [],
         )?;
@@ -663,6 +701,21 @@ impl MemoryDb {
             })
             .map(|n| n as usize)
             .unwrap_or(0);
+        tx.execute(
+            "DELETE FROM session_compactions
+             WHERE session_id IN (
+                 SELECT DISTINCT session_id FROM messages WHERE ts_ms < ?
+             )",
+            params![cutoff_ts_ms],
+        )?;
+        tx.execute(
+            "DELETE FROM compaction_summaries
+             WHERE NOT EXISTS (
+                 SELECT 1 FROM session_compactions AS c
+                 WHERE c.summary_hash = compaction_summaries.hash
+             )",
+            [],
+        )?;
         let messages_deleted = tx.execute(
             "DELETE FROM messages WHERE ts_ms < ?",
             params![cutoff_ts_ms],
@@ -690,6 +743,10 @@ impl MemoryDb {
              WHERE NOT EXISTS (
                  SELECT 1 FROM session_system_prompts AS s
                  WHERE s.prompt_hash = system_prompts.hash
+             )
+               AND NOT EXISTS (
+                 SELECT 1 FROM session_compactions AS c
+                 WHERE c.prompt_hash = system_prompts.hash
              )",
             [],
         )?;
@@ -1042,6 +1099,7 @@ fn verify_system_prompt_hash(hash: &str, prompt: &str) -> Result<(), MemoryError
 pub(super) fn initialize_connection(conn: &Connection) -> Result<(), MemoryError> {
     conn.execute_batch(CONNECTION_PRAGMAS)?;
     conn.execute_batch(BASE_SCHEMA)?;
+    conn.execute_batch(COMPACTION_SCHEMA)?;
     conn.execute_batch(FTS_SCHEMA)?;
     Ok(())
 }

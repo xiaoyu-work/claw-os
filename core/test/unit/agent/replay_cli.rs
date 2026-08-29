@@ -93,6 +93,57 @@ fn replay_with_returns_messages_chronologically() {
 }
 
 #[test]
+fn replay_exports_raw_rows_and_compaction_recovery_metadata() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let first = db.record_message("s1", "user", "raw first").unwrap();
+    let second = db.record_message("s1", "assistant", "raw second").unwrap();
+    let anchor = db.record_message("s1", "user", "raw anchor").unwrap();
+    let attempt = match db
+        .begin_compaction(
+            "s1",
+            NewCompaction {
+                source_start_id: first,
+                source_end_id: second,
+                source_count: 2,
+                protected_tail_start_id: Some(anchor),
+                protected_user_message_id: Some(anchor),
+                algorithm: "test".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("unexpected compaction result: {other:?}"),
+    };
+    attempt.complete("[CONTEXT SUMMARY]\n\nraw recap").unwrap();
+
+    let opts = ReplayOpts {
+        session_id: Some("s1".into()),
+        limit: 10,
+        ..Default::default()
+    };
+    let value = replay_with(&db, &opts).unwrap();
+    assert_eq!(value["message_count"], json!(3));
+    assert_eq!(value["messages"][0]["content"], json!("raw first"));
+    assert_eq!(value["compactions"][0]["state"], json!("completed"));
+    assert_eq!(
+        value["compactions"][0]["source_ids"],
+        json!([first, second])
+    );
+    assert_eq!(
+        value["compactions"][0]["recovery_metadata"]["raw_rows_searchable"],
+        json!(true)
+    );
+}
+
+#[test]
 fn replay_with_role_filter_keeps_only_matching() {
     let db = MemoryDb::open_in_memory().unwrap();
     db.record_message("s1", "user", "u1").unwrap();

@@ -3201,6 +3201,7 @@ fn sessions_health_with_path_reports_focused_checks() {
     assert!(v.get("sqlite").is_some());
     assert!(v.get("fts").is_some());
     assert!(v.get("prompt_hashes").is_some());
+    assert!(v.get("compactions").is_some());
 }
 
 #[test]

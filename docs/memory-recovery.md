@@ -15,6 +15,8 @@ report these dimensions separately:
 - FTS contents and maintenance triggers;
 - session-to-prompt references;
 - SHA-256 verification of content-addressed prompt blobs;
+- durable compaction lifecycle, source digests, protected boundaries, and
+  content-addressed summary blobs;
 - session-title ownership; and
 - interrupted or failed repair lifecycle records.
 
@@ -35,6 +37,33 @@ Runtime classification is explicit:
   repair; and
 - a dangling or hash-invalid frozen prompt is fatal for that model request, so
   damaged instructions never reach the provider.
+
+## Durable compaction
+
+Conversation compaction never rewrites or deletes authoritative `messages`
+rows. A completed projection records its session and generation, exact
+source row IDs and inclusive range, source-content digest, algorithm/version,
+protected tail and real-user anchor, provider/model, the frozen prompt
+hash/version used at the time, and metadata that points recovery tooling back
+to the searchable raw rows. Summary text is stored by SHA-256 and verified
+before it can be replayed.
+
+Continuation loading selects the newest valid completed projection and appends
+all raw rows after its source boundary. Invalid newer projections are ignored
+in favor of an older valid generation. A per-session advisory lock spans
+summary generation. If the lock can be reacquired while a `started` record
+still exists, the prior process did not complete it; the record is marked
+`failed` and a later attempt may retry safely.
+
+`cos agent replay <session-id>` continues to export the original message rows
+and now includes the compaction lifecycle metadata and raw-row recovery range.
+It does not substitute the summary for the audit source.
+
+Before requesting an LLM summary, the compressor deterministically replaces
+oversized tool results outside the protected tail with size-and-digest stubs.
+If that projection is already below the trigger, it is persisted without an
+extra model call. Tool call/result pairs are kept together, and the protected
+tail always includes at least one genuine user message.
 
 ## Repair
 
@@ -57,9 +86,9 @@ cos agent sessions repair --rebuild-fts --yes
 ```
 
 In-place repair checkpoints the WAL, restores schema objects and FTS triggers,
-rebuilds FTS from `messages`, and removes only orphaned title or prompt
-projection rows after checking authoritative references in the same
-transaction.
+rebuilds FTS from `messages`, closes interrupted compactions, removes invalid
+compaction summaries, and removes only orphaned title or prompt projection rows
+after checking authoritative references in the same transaction.
 
 If health reports `requires_quarantine`, preserve the damaged database and
 initialize a replacement with:
@@ -80,16 +109,18 @@ If a valid WAL cannot be fully checkpointed because an uncoordinated SQLite
 reader or writer is active, repair aborts before renaming any live file.
 
 Standalone salvage scans `messages NOT INDEXED` and commits those authoritative
-rows before rebuilding indexes and FTS. Titles and prompt references are then
-copied in separate transactions. Corruption in an optional projection can
-therefore omit that projection with an explicit warning, but cannot roll back
-readable conversation messages. A failure while scanning or committing
-readable messages aborts recovery instead of installing an empty replacement.
-Operational failures while copying, opening, configuring, or inspecting the
-standalone source likewise fail the repair and leave quarantine intact. An
-empty replacement is allowed only when SQLite conclusively rejects that
-standalone main database or its authoritative `messages` schema is absent or
-incompatible.
+rows before rebuilding indexes and FTS. Titles, prompt references, and valid
+content-addressed compaction projections are then copied in separate
+transactions. A compaction is recovered only when its raw source range/digest,
+summary hash, and referenced prompt blob all verify. Corruption in an optional
+projection can therefore omit that projection with an explicit warning, but
+cannot roll back readable conversation messages. A failure while scanning or
+committing readable messages aborts recovery instead of installing an empty
+replacement. Operational failures while copying, opening, configuring, or
+inspecting the standalone source likewise fail the repair and leave quarantine
+intact. An empty replacement is allowed only when SQLite conclusively rejects
+that standalone main database or its authoritative `messages` schema is absent
+or incompatible.
 
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains

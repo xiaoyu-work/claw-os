@@ -211,6 +211,31 @@ fn adjust_for_tool_pairs_orphan_result_at_boundary_pulls_use_in() {
 }
 
 #[test]
+fn adjust_for_flattened_tool_pairs_pulls_call_into_tail() {
+    let msgs = vec![
+        user_msg("intro"),
+        assistant_msg("[tool: lookup]"),
+        user_msg("[tool result]\nlarge output"),
+        user_msg("continue"),
+    ];
+    let adjusted = LlmCompressor::adjust_for_tool_pairs(&msgs, 2);
+    assert_eq!(adjusted, 1);
+}
+
+#[test]
+fn protected_tail_keeps_a_real_user_anchor() {
+    let msgs = vec![
+        user_msg("original goal"),
+        assistant_msg("working"),
+        assistant_msg("more work"),
+        assistant_msg("latest status"),
+    ];
+    let (boundary, user_index) = LlmCompressor::protect_user_anchor(&msgs, 3);
+    assert_eq!(boundary, 0);
+    assert_eq!(user_index, 0);
+}
+
+#[test]
 fn render_transcript_marks_roles_and_tool_calls() {
     let msgs = vec![
         user_msg("hello"),
@@ -288,7 +313,7 @@ async fn compress_with_mock_provider_inserts_summary_before_tail() {
 }
 
 #[tokio::test]
-async fn compress_with_failing_provider_falls_back_to_truncate() {
+async fn compress_with_empty_provider_summary_preserves_history() {
     // Mock provider has no responses queued; chat() returns a
     // configurable empty error response — but our mock's default
     // behaviour is to echo. We force a failure by pushing an
@@ -307,14 +332,43 @@ async fn compress_with_failing_provider_falls_back_to_truncate() {
     let c = LlmCompressor::new(provider, "mock-model").with_config(cfg);
     let msgs: Vec<Message> = (0..8).map(|i| user_msg(&format!("msg-{i}"))).collect();
     let after = c.compress(None, msgs.clone()).await;
-    // No summary inserted; tail is the truncated suffix only.
-    for m in &after {
-        match &m.content[0] {
-            ContentBlock::Text { text } => assert!(!text.contains(SUMMARY_MARKER)),
-            _ => {}
-        }
-    }
-    assert!(after.len() < msgs.len());
+    assert_eq!(
+        after.len(),
+        msgs.len(),
+        "failed summarization must preserve the original history"
+    );
+    assert!(after.iter().all(|message| message.content.iter().all(
+        |block| !matches!(block, ContentBlock::Text { text } if text.contains(SUMMARY_MARKER))
+    )));
+}
+
+#[tokio::test]
+async fn deterministic_tool_pruning_can_avoid_provider_summary() {
+    let cfg = CompressorConfig {
+        trigger_tokens: 500,
+        keep_tail_tokens: 10,
+        ..Default::default()
+    };
+    let provider = Arc::new(MockProvider::new("mock-model", &parent_cfg()));
+    let c = LlmCompressor::new(provider.clone(), "mock-model").with_config(cfg);
+    let msgs = vec![
+        user_msg("inspect the service"),
+        tool_use_msg("t1", "logs", serde_json::json!({})),
+        tool_result_msg("t1", &"x".repeat(5000)),
+        assistant_msg("the command completed"),
+        user_msg("what happened?"),
+    ];
+
+    let plan = c.prepare(None, msgs).expect("compression plan");
+    assert_eq!(plan.algorithm(), DETERMINISTIC_PRUNE_ALGORITHM);
+    assert_eq!(plan.pruned_tool_results(), 1);
+    let execution = c.execute(plan).await;
+
+    assert!(execution.failure.is_none());
+    assert!(provider.last_request().is_none(), "no LLM call is needed");
+    let projection = execution.projection.expect("durable projection");
+    assert_eq!(projection.algorithm, DETERMINISTIC_PRUNE_ALGORITHM);
+    assert!(projection.summary_text.contains("sha256="));
 }
 
 #[tokio::test]

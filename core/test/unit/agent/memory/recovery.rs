@@ -61,9 +61,132 @@ fn clean_database_reports_separate_health_checks() {
     assert_eq!(report.fts.status, "ok");
     assert_eq!(report.prompt_references.status, "ok");
     assert_eq!(report.prompt_hashes.status, "ok");
+    assert_eq!(report.compactions.status, "ok");
     assert_eq!(report.titles.status, "ok");
     assert_eq!(report.repair_lifecycle.status, "ok");
     assert_eq!(report.stats.expect("stats").total_messages, 1);
+}
+
+fn complete_test_compaction(db: &MemoryDb, session_id: &str) {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let rows = db.recent_replayable(session_id, 10).expect("rows");
+    assert!(rows.len() >= 3);
+    let attempt = match db
+        .begin_compaction(
+            session_id,
+            NewCompaction {
+                source_start_id: rows[0].id,
+                source_end_id: rows[1].id,
+                source_count: 2,
+                protected_tail_start_id: Some(rows[2].id),
+                protected_user_message_id: Some(rows[2].id),
+                algorithm: "test".to_string(),
+                algorithm_version: 1,
+                provider: "mock".to_string(),
+                model: "mock-model".to_string(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .expect("begin compaction")
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("unexpected compaction result: {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nrecovered summary")
+        .expect("complete compaction");
+}
+
+#[test]
+fn invalid_compaction_projection_is_repaired_without_losing_raw_messages() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first searchable raw")
+        .unwrap();
+    db.record_message("session", "assistant", "second raw")
+        .unwrap();
+    db.record_message("session", "user", "protected tail")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE compaction_summaries SET summary = 'tampered summary'",
+            [],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert_eq!(health.compactions.status, "fail");
+    assert!(!health.requires_quarantine);
+    assert!(health
+        .planned_repairs
+        .iter()
+        .any(|action| action == "repair_compaction_projection"));
+
+    repair(&path, RepairOptions::default()).expect("repair projection");
+    let repaired = MemoryDb::open(&path).expect("reopen");
+    assert!(repaired
+        .latest_valid_compaction("session")
+        .unwrap()
+        .0
+        .is_none());
+    assert_eq!(
+        repaired
+            .search_session("session", "searchable", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn quarantine_recovery_preserves_valid_compaction_and_raw_sources() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first recovery source")
+        .unwrap();
+    db.record_message("session", "assistant", "second recovery source")
+        .unwrap();
+    db.record_message("session", "user", "protected tail")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+    drop(db);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("quarantine repair");
+    assert_eq!(report.recovered.compactions, 1);
+    let repaired = MemoryDb::open(&path).expect("replacement");
+    let (summary, rejected) = repaired.latest_valid_compaction("session").unwrap();
+    assert_eq!(rejected, 0);
+    assert!(summary
+        .expect("recovered summary")
+        .summary
+        .contains("recovered summary"));
+    assert_eq!(
+        repaired
+            .search_session("session", "recovery source", 10)
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 #[test]

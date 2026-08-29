@@ -601,6 +601,12 @@ async fn streaming_continuation_honors_configured_compression() {
     .unwrap();
 
     assert_eq!(result.answer, "actual answer");
+    let compactions = db.compactions_for_session(sid).unwrap();
+    assert_eq!(compactions.len(), 1);
+    assert_eq!(
+        compactions[0].state,
+        crate::agent::memory::compaction::CompactionState::Completed
+    );
     let request = mock.last_request().expect("main provider request");
     assert!(request.messages.iter().any(|message| {
         message.content.iter().any(|block| matches!(
@@ -647,6 +653,12 @@ async fn non_streaming_continuation_honors_configured_compression() {
     .unwrap();
 
     assert_eq!(result.answer, "actual answer");
+    let compactions = db.compactions_for_session(sid).unwrap();
+    assert_eq!(compactions.len(), 1);
+    assert_eq!(
+        compactions[0].state,
+        crate::agent::memory::compaction::CompactionState::Completed
+    );
     let request = mock.last_request().expect("main provider request");
     assert!(request.messages.iter().any(|message| {
         message.content.iter().any(|block| matches!(
@@ -656,6 +668,272 @@ async fn non_streaming_continuation_honors_configured_compression() {
                     && text.contains("compressed history")
         ))
     }));
+}
+
+#[tokio::test]
+async fn restart_loads_durable_summary_without_replaying_compacted_rows() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("memory.db");
+    let sid = "durable-restart";
+    let db = MemoryDb::open(&path).unwrap();
+    for index in 0..6 {
+        db.record_message(
+            sid,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("OLD_SOURCE_{index} {}", "x".repeat(300)),
+        )
+        .unwrap();
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+
+    let first = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    first.push_response(MockResponse::Text("durable recap".into()));
+    first.push_response(MockResponse::Text("first answer".into()));
+    ask_with_memory_continuation(
+        first,
+        &cfg,
+        "first continuation",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+    )
+    .await
+    .unwrap();
+    drop(db);
+
+    let reopened = MemoryDb::open(&path).unwrap();
+    let seed = load_continuation_messages(&reopened, sid, 100, true);
+    let replayed: Vec<String> = seed
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(replayed.iter().any(|text| text.contains("durable recap")));
+    assert!(replayed.iter().all(|text| !text.contains("OLD_SOURCE_0")));
+
+    let mut no_recompact = cfg.clone();
+    no_recompact.compress_enabled = false;
+    let second = Arc::new(MockProvider::new(&no_recompact.model, &no_recompact));
+    second.push_response(MockResponse::Text("second answer".into()));
+    ask_with_memory_continuation(
+        second.clone(),
+        &no_recompact,
+        "second continuation",
+        &builtin_only_registry(),
+        &reopened,
+        sid,
+        100,
+    )
+    .await
+    .unwrap();
+    let request = second.last_request().unwrap();
+    let text = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("durable recap"));
+    assert!(!text.contains("OLD_SOURCE_0"));
+    assert_eq!(reopened.compactions_for_session(sid).unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn compression_enabled_continuation_does_not_hide_rows_behind_history_limit() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "full-compaction-source";
+    let mut ids = Vec::new();
+    for index in 0..25 {
+        ids.push(
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("historical {index} {}", "x".repeat(80)),
+            )
+            .unwrap(),
+        );
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text("all history summarized".into()));
+    mock.push_response(MockResponse::Text("answer".into()));
+
+    ask_with_memory_continuation(
+        mock,
+        &cfg,
+        "continue",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        3,
+    )
+    .await
+    .unwrap();
+
+    let record = db.compactions_for_session(sid).unwrap().remove(0);
+    assert_eq!(record.source_start_id, ids[0]);
+    assert_eq!(record.source_end_id, *ids.last().unwrap());
+    assert_eq!(record.source_count, ids.len());
+}
+
+#[tokio::test]
+async fn persisted_compaction_summary_is_redacted_before_replay() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "redacted-compaction";
+    for index in 0..6 {
+        db.record_message(
+            sid,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("history {index} {}", "x".repeat(200)),
+        )
+        .unwrap();
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+    cfg.redact_memory_enabled = true;
+
+    let secret = "ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA12345678";
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text(format!(
+        "summary accidentally repeated {secret}"
+    )));
+    mock.push_response(MockResponse::Text("answer".into()));
+    ask_with_memory_continuation(
+        mock.clone(),
+        &cfg,
+        "continue",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+    )
+    .await
+    .unwrap();
+
+    let (summary, rejected) = db.latest_valid_compaction(sid).unwrap();
+    assert_eq!(rejected, 0);
+    let summary = summary.unwrap().summary;
+    assert!(!summary.contains(secret));
+    assert!(summary.contains("[REDACTED:github_token]"));
+    let request = mock.last_request().unwrap();
+    assert!(request.messages.iter().any(|message| message.content.iter().any(
+        |block| matches!(block, crate::agent::llm::ContentBlock::Text { text } if text.contains("[REDACTED:github_token]"))
+    )));
+}
+
+#[tokio::test]
+async fn failed_summary_call_closes_lifecycle_without_dropping_history() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "failed-durable-compaction";
+    for index in 0..6 {
+        db.record_message(
+            sid,
+            if index % 2 == 0 { "user" } else { "assistant" },
+            &format!("preserve source {index} {}", "x".repeat(200)),
+        )
+        .unwrap();
+    }
+    let mut cfg = cfg();
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = 1;
+    cfg.compress_keep_tail_tokens = 1;
+    cfg.compress_summary_max_tokens = 64;
+
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text(String::new()));
+    mock.push_response(MockResponse::Text("answer after failed summary".into()));
+    let result = ask_with_memory_continuation(
+        mock.clone(),
+        &cfg,
+        "continue",
+        &builtin_only_registry(),
+        &db,
+        sid,
+        100,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.answer, "answer after failed summary");
+    let records = db.compactions_for_session(sid).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].state,
+        crate::agent::memory::compaction::CompactionState::Failed
+    );
+    assert_eq!(
+        records[0].failure_kind.as_deref(),
+        Some("empty_provider_summary")
+    );
+    let request = mock.last_request().unwrap();
+    assert!(request.messages.iter().any(|message| message.content.iter().any(
+        |block| matches!(block, crate::agent::llm::ContentBlock::Text { text } if text.contains("preserve source 0"))
+    )));
+}
+
+#[tokio::test]
+async fn deterministic_tool_pruning_persists_without_a_summary_provider_call() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "deterministic-prune";
+    db.record_message(sid, "user", "inspect logs").unwrap();
+    db.record_message(sid, "assistant", "[tool_use:logs] {}")
+        .unwrap();
+    db.record_message(sid, "user", &format!("[tool_result] {}", "x".repeat(5000)))
+        .unwrap();
+    db.record_message(sid, "assistant", "logs collected")
+        .unwrap();
+
+    let mut cfg = cfg();
+    let tools = builtin_only_registry();
+    let exposure = ToolExposureContext::isolated(guardrails_from_cfg(&cfg));
+    let system_tokens = crate::agent::context::compressor::estimate_text_tokens(
+        &crate::agent::prompt::build_system_prompt(None),
+    );
+    let tool_tokens = crate::agent::context::compressor::estimate_tools_tokens(
+        &tools.as_llm_tools_for(&exposure),
+    );
+    cfg.compress_enabled = true;
+    cfg.compress_trigger_tokens = system_tokens
+        .saturating_add(tool_tokens)
+        .saturating_add(300);
+    cfg.compress_target_tokens = cfg.compress_trigger_tokens.saturating_add(100);
+    cfg.compress_keep_tail_tokens = 8;
+
+    let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
+    mock.push_response(MockResponse::Text("actual answer".into()));
+    let result =
+        ask_with_memory_continuation(mock, &cfg, "what did the logs show?", &tools, &db, sid, 100)
+            .await
+            .unwrap();
+
+    assert_eq!(result.answer, "actual answer");
+    let records = db.compactions_for_session(sid).unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(
+        records[0].algorithm,
+        crate::agent::context::compressor::DETERMINISTIC_PRUNE_ALGORITHM
+    );
+    assert_eq!(records[0].recovery_metadata.pruned_tool_results, 1);
 }
 
 fn cfg() -> AgentConfig {

@@ -15,6 +15,7 @@ use crate::agent::context::compressor::{self, Compressor, CompressorConfig, LlmC
 use crate::agent::context::think_scrub::ThinkScrubber;
 use crate::agent::llm::accumulate::StreamSink;
 use crate::agent::llm::{self, Message, Provider};
+use crate::agent::memory::compaction::{BeginCompaction, CompactionSummary, NewCompaction};
 use crate::agent::memory::sqlite_fts::{self, MemoryDb};
 use crate::agent::prompt;
 use crate::agent::runtime::auto_curator::AutoCurator;
@@ -92,6 +93,25 @@ pub struct AskResult {
     pub session_id: String,
 }
 
+#[derive(Debug, Clone)]
+enum MessageOrigin {
+    Raw { id: i64, replay: Message },
+    Summary(Box<CompactionSummary>),
+    Ephemeral,
+}
+
+#[derive(Debug, Clone, Default)]
+struct ConversationSeed {
+    messages: Vec<Message>,
+    origins: Vec<MessageOrigin>,
+}
+
+impl ConversationSeed {
+    fn empty() -> Self {
+        Self::default()
+    }
+}
+
 /// Run a single `cos agent ask` invocation end-to-end with the supplied
 /// provider and tool registry. Memory recording is disabled — the
 /// conversation history is not persisted. Use [`ask_with_memory`] for the
@@ -121,7 +141,7 @@ pub async fn ask_with_exposure(
         exposure,
         None,
         None,
-        Vec::new(),
+        ConversationSeed::empty(),
     )
     .await
 }
@@ -146,7 +166,7 @@ pub async fn ask_with_memory(
         &exposure,
         Some((db, session_id)),
         None,
-        Vec::new(),
+        ConversationSeed::empty(),
     )
     .await
 }
@@ -188,8 +208,8 @@ pub async fn ask_with_memory_continuation_exposure(
     session_id: &str,
     history_limit: usize,
 ) -> Result<AskResult, AgentError> {
-    let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
+    let prior = load_continuation_messages(db, session_id, history_limit, compressor.is_some());
     ask_inner(
         provider,
         cfg,
@@ -223,7 +243,7 @@ pub async fn ask_with_compressor(
         &ToolExposureContext::isolated(guardrails_from_cfg(cfg)),
         db,
         Some(compressor),
-        Vec::new(),
+        ConversationSeed::empty(),
     )
     .await
 }
@@ -287,7 +307,7 @@ pub async fn ask_with_stream_exposure(
         compressor,
         sink,
         progress,
-        Vec::new(),
+        ConversationSeed::empty(),
         None,
     )
     .await
@@ -345,7 +365,7 @@ pub async fn ask_with_stream_scoped_exposure(
         compressor,
         sink,
         progress,
-        Vec::new(),
+        ConversationSeed::empty(),
         Some(interrupt_scope),
     )
     .await
@@ -366,10 +386,12 @@ pub async fn ask_with_stream_scoped_exposure(
 /// in particular — do not reject the request when ids no longer line
 /// up across a process boundary.
 ///
-/// `history_limit` caps the number of prior conversation rows replayed
-/// (0 means "load up to a sane default"). Audit-only injected prompt
-/// rows do not consume this budget. Practical chat UIs should keep the
-/// limit small enough to stay within the model's context window.
+/// Before a session has a durable summary, `history_limit` caps the number of
+/// prior conversation rows replayed (0 means "load up to a sane default").
+/// Compression-enabled callers load the full raw head so the first durable
+/// range has no hidden gap. After compaction, every caller receives the latest
+/// valid summary plus its complete uncompacted tail. Audit-only injected
+/// prompt rows never enter this projection.
 pub async fn ask_with_stream_continuation(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
@@ -410,8 +432,8 @@ pub async fn ask_with_stream_continuation_exposure(
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
 ) -> Result<AskResult, AgentError> {
-    let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
+    let prior = load_continuation_messages(db, session_id, history_limit, compressor.is_some());
     ask_inner_streaming(
         provider,
         cfg,
@@ -475,8 +497,8 @@ pub async fn ask_with_stream_continuation_scoped_exposure(
     progress: Arc<dyn ProgressSink>,
     interrupt_scope: &str,
 ) -> Result<AskResult, AgentError> {
-    let prior = load_continuation_messages(db, session_id, history_limit);
     let compressor = compressor_from_cfg(provider.clone(), cfg, tools, exposure);
+    let prior = load_continuation_messages(db, session_id, history_limit, compressor.is_some());
     ask_inner_streaming(
         provider,
         cfg,
@@ -498,20 +520,32 @@ fn load_continuation_messages(
     db: &MemoryDb,
     session_id: &str,
     history_limit: usize,
-) -> Vec<Message> {
-    let limit = if history_limit == 0 {
-        200
-    } else {
-        history_limit
-    };
-    match db.recent_replayable(session_id, limit) {
-        Ok(rows) => rows_to_messages(&rows),
+    full_history_without_summary: bool,
+) -> ConversationSeed {
+    match db.continuation_projection(session_id, history_limit, full_history_without_summary) {
+        Ok(projection) => {
+            if projection.recovered_interrupted > 0 {
+                tracing::warn!(
+                    session_id,
+                    attempts = projection.recovered_interrupted,
+                    "memory: recovered interrupted compaction lifecycle"
+                );
+            }
+            if projection.rejected_invalid > 0 {
+                tracing::warn!(
+                    session_id,
+                    summaries = projection.rejected_invalid,
+                    "memory: rejected invalid durable compaction summaries"
+                );
+            }
+            projection_to_seed(projection)
+        }
         Err(e) => {
             tracing::warn!(
                 "memory: failed to load prior history for session {session_id}: {e}; \
                  continuing without context"
             );
-            Vec::new()
+            ConversationSeed::empty()
         }
     }
 }
@@ -523,29 +557,333 @@ fn load_continuation_messages(
 /// original tool_use ids to match. Rows whose flattened text is empty
 /// are skipped.
 fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
-    use crate::agent::llm::{ContentBlock, Role};
-    let mut out = Vec::with_capacity(rows.len());
+    rows_to_seed(rows).messages
+}
+
+fn projection_to_seed(
+    projection: crate::agent::memory::compaction::ContinuationProjection,
+) -> ConversationSeed {
+    let mut seed = ConversationSeed::empty();
+    if let Some(summary) = projection.summary {
+        seed.messages
+            .push(Message::assistant_text(summary.summary.clone()));
+        seed.origins.push(MessageOrigin::Summary(Box::new(summary)));
+    }
+    let tail = rows_to_seed(&projection.tail);
+    seed.messages.extend(tail.messages);
+    seed.origins.extend(tail.origins);
+    seed
+}
+
+fn rows_to_seed(rows: &[sqlite_fts::MessageRow]) -> ConversationSeed {
+    let mut out = ConversationSeed {
+        messages: Vec::with_capacity(rows.len()),
+        origins: Vec::with_capacity(rows.len()),
+    };
     for row in rows {
         // Keep this guard even though continuation loading filters in SQL:
         // injected rows are audit evidence, never conversation content.
         if row.role == sqlite_fts::INJECTED_ROLE {
             continue;
         }
-        let role = match row.role.as_str() {
-            "assistant" => Role::Assistant,
-            "system" => Role::System,
-            _ => Role::User,
-        };
-        let text = super::evidence::strip_markers(&flatten_stored_content(&row.content));
-        if text.trim().is_empty() {
+        let Some(message) = stored_replay_message(&row.role, &row.content) else {
             continue;
-        }
-        out.push(Message {
-            role,
-            content: vec![ContentBlock::Text { text }],
+        };
+        out.messages.push(message.clone());
+        out.origins.push(MessageOrigin::Raw {
+            id: row.id,
+            replay: message,
         });
     }
     out
+}
+
+fn stored_replay_message(role: &str, content: &str) -> Option<Message> {
+    use crate::agent::llm::{ContentBlock, Role};
+    if role == sqlite_fts::INJECTED_ROLE {
+        return None;
+    }
+    let role = match role {
+        "assistant" => Role::Assistant,
+        "system" => Role::System,
+        _ => Role::User,
+    };
+    let text = super::evidence::strip_markers(&flatten_stored_content_for_replay(content));
+    (!text.trim().is_empty()).then(|| Message {
+        role,
+        content: vec![ContentBlock::Text { text }],
+    })
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DurableCoverage {
+    start_id: i64,
+    end_id: i64,
+    count: usize,
+    previous_compaction_id: Option<i64>,
+}
+
+fn coverage_for_prefix(origins: &[MessageOrigin], count: usize) -> Option<DurableCoverage> {
+    if count == 0 || count > origins.len() {
+        return None;
+    }
+    let mut coverage: Option<DurableCoverage> = None;
+    for (index, origin) in origins[..count].iter().enumerate() {
+        match origin {
+            MessageOrigin::Raw { id, .. } => {
+                let current = coverage.get_or_insert(DurableCoverage {
+                    start_id: *id,
+                    end_id: *id,
+                    count: 0,
+                    previous_compaction_id: None,
+                });
+                if *id <= current.end_id && current.count > 0 {
+                    return None;
+                }
+                current.end_id = *id;
+                current.count = current.count.saturating_add(1);
+            }
+            MessageOrigin::Summary(summary) if index == 0 && coverage.is_none() => {
+                coverage = Some(DurableCoverage {
+                    start_id: summary.record.source_start_id,
+                    end_id: summary.record.source_end_id,
+                    count: summary.record.source_count,
+                    previous_compaction_id: Some(summary.record.id),
+                });
+            }
+            MessageOrigin::Summary(_) | MessageOrigin::Ephemeral => return None,
+        }
+    }
+    coverage
+}
+
+fn raw_origin_id(origin: Option<&MessageOrigin>) -> Option<i64> {
+    match origin {
+        Some(MessageOrigin::Raw { id, .. }) => Some(*id),
+        _ => None,
+    }
+}
+
+fn durable_projection_message(origin: &MessageOrigin, fallback: &Message) -> Message {
+    match origin {
+        MessageOrigin::Raw { replay, .. } => replay.clone(),
+        MessageOrigin::Summary(summary) => Message::assistant_text(summary.summary.clone()),
+        MessageOrigin::Ephemeral => fallback.clone(),
+    }
+}
+
+fn redact_message(message: &mut Message, redactor: Option<&Redactor>) {
+    let Some(redactor) = redactor else {
+        return;
+    };
+    for block in &mut message.content {
+        match block {
+            llm::ContentBlock::Text { text }
+            | llm::ContentBlock::ToolResult { content: text, .. } => {
+                *text = redactor.redact(text);
+            }
+            llm::ContentBlock::ToolUse { input, .. } => {
+                let serialized = input.to_string();
+                let redacted = redactor.redact(&serialized);
+                if let Ok(value) = serde_json::from_str(&redacted) {
+                    *input = value;
+                }
+            }
+            llm::ContentBlock::Reasoning { summary, .. } => {
+                for text in summary {
+                    *text = redactor.redact(text);
+                }
+            }
+            llm::ContentBlock::ToolState { .. } | llm::ContentBlock::Image { .. } => {}
+        }
+    }
+}
+
+fn scrub_messages_with_origins(
+    messages: Vec<Message>,
+    origins: Vec<MessageOrigin>,
+) -> (Vec<Message>, Vec<MessageOrigin>) {
+    let scrubber = ThinkScrubber::new();
+    let mut scrubbed_messages = Vec::with_capacity(messages.len());
+    let mut scrubbed_origins = Vec::with_capacity(origins.len());
+    for (message, origin) in messages.into_iter().zip(origins) {
+        let mut scrubbed = scrubber.scrub_messages(vec![message]);
+        if let Some(message) = scrubbed.pop() {
+            scrubbed_messages.push(message);
+            scrubbed_origins.push(origin);
+        }
+    }
+    (scrubbed_messages, scrubbed_origins)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn maybe_compress_messages(
+    compressor: &Arc<dyn Compressor>,
+    system: &str,
+    messages: &mut Vec<Message>,
+    origins: &mut Vec<MessageOrigin>,
+    recorder: Option<(&MemoryDb, &str)>,
+    redactor: Option<&Redactor>,
+    provider_name: &str,
+    model_name: &str,
+) -> Result<bool, AgentError> {
+    if !compressor.should_compress(Some(system), messages) {
+        return Ok(false);
+    }
+    if messages.len() != origins.len() {
+        return Err(AgentError::Internal(
+            "conversation origin tracking diverged from messages".to_string(),
+        ));
+    }
+
+    let original_messages = std::mem::take(messages);
+    let original_origins = std::mem::take(origins);
+    let mut projection_messages: Vec<Message> = original_messages
+        .iter()
+        .zip(&original_origins)
+        .map(|(message, origin)| durable_projection_message(origin, message))
+        .collect();
+    for message in &mut projection_messages {
+        redact_message(message, redactor);
+    }
+
+    let Some(plan) = compressor.prepare_compaction(Some(system), projection_messages) else {
+        let compressed = compressor.compress(Some(system), original_messages).await;
+        *origins = vec![MessageOrigin::Ephemeral; compressed.len()];
+        *messages = compressed;
+        return Ok(true);
+    };
+    let source_count = plan.source_message_count();
+    if source_count > original_messages.len() {
+        *messages = original_messages;
+        *origins = original_origins;
+        return Err(AgentError::Internal(
+            "compressor returned an invalid source boundary".to_string(),
+        ));
+    }
+
+    let Some((db, session_id)) = recorder else {
+        let execution = compressor.execute_compaction(plan).await;
+        *origins = vec![MessageOrigin::Ephemeral; execution.messages.len()];
+        *messages = execution.messages;
+        return Ok(true);
+    };
+    let Some(coverage) = coverage_for_prefix(&original_origins, source_count) else {
+        tracing::warn!(
+            session_id,
+            "context: skipped compression because the source range is not durably reconstructable"
+        );
+        *messages = original_messages;
+        *origins = original_origins;
+        return Ok(false);
+    };
+    let Some(protected_tail_start_id) = raw_origin_id(original_origins.get(source_count)) else {
+        tracing::warn!(
+            session_id,
+            "context: skipped compaction because the protected tail is not durable"
+        );
+        *messages = original_messages;
+        *origins = original_origins;
+        return Ok(false);
+    };
+    let Some(protected_user_message_id) =
+        raw_origin_id(original_origins.get(plan.protected_user_index()))
+    else {
+        tracing::warn!(
+            session_id,
+            "context: skipped compaction because no durable user anchor survived"
+        );
+        *messages = original_messages;
+        *origins = original_origins;
+        return Ok(false);
+    };
+    let spec = NewCompaction {
+        source_start_id: coverage.start_id,
+        source_end_id: coverage.end_id,
+        source_count: coverage.count,
+        protected_tail_start_id: Some(protected_tail_start_id),
+        protected_user_message_id: Some(protected_user_message_id),
+        algorithm: plan.algorithm().to_string(),
+        algorithm_version: plan.algorithm_version(),
+        provider: provider_name.to_string(),
+        model: model_name.to_string(),
+        previous_compaction_id: coverage.previous_compaction_id,
+        pruned_tool_results: plan.pruned_tool_results(),
+    };
+    let attempt = match db.begin_compaction(session_id, spec) {
+        Ok(BeginCompaction::Started(attempt)) => attempt,
+        Ok(BeginCompaction::Busy) => {
+            tracing::debug!(session_id, "context: another compaction is active");
+            *messages = original_messages;
+            *origins = original_origins;
+            return Ok(false);
+        }
+        Ok(BeginCompaction::AlreadyCovered) => {
+            tracing::debug!(
+                session_id,
+                "context: source range is already covered by durable compaction"
+            );
+            *messages = original_messages;
+            *origins = original_origins;
+            return Ok(false);
+        }
+        Err(error) if error.is_integrity_failure() => {
+            *messages = original_messages;
+            *origins = original_origins;
+            return Err(AgentError::MemoryIntegrity(format!(
+                "refusing compaction for session {session_id}: {error}"
+            )));
+        }
+        Err(error) => {
+            tracing::warn!(session_id, %error, "context: failed to start durable compaction");
+            *messages = original_messages;
+            *origins = original_origins;
+            return Ok(false);
+        }
+    };
+
+    let execution = compressor.execute_compaction(plan).await;
+    let Some(projection) = execution.projection else {
+        let failure = execution.failure.unwrap_or("summary_generation_failed");
+        if let Err(error) = attempt.fail(failure) {
+            tracing::warn!(session_id, %error, "context: failed to close compaction attempt");
+        }
+        *messages = original_messages;
+        *origins = original_origins;
+        return Ok(false);
+    };
+    let mut summary_text = super::evidence::strip_markers(&projection.summary_text);
+    if let Some(redactor) = redactor {
+        summary_text = redactor.redact(&summary_text);
+    }
+    let summary_text = summary_text.trim().to_string();
+    match attempt.complete(&summary_text) {
+        Ok(summary) => {
+            let mut compacted = Vec::with_capacity(original_messages.len() - source_count + 1);
+            compacted.push(Message::assistant_text(summary.summary.clone()));
+            compacted.extend(original_messages[source_count..].iter().cloned());
+            let mut compacted_origins =
+                Vec::with_capacity(original_origins.len() - source_count + 1);
+            compacted_origins.push(MessageOrigin::Summary(Box::new(summary)));
+            compacted_origins.extend(original_origins[source_count..].iter().cloned());
+            *messages = compacted;
+            *origins = compacted_origins;
+            Ok(true)
+        }
+        Err(error) if error.is_integrity_failure() => {
+            *messages = original_messages;
+            *origins = original_origins;
+            Err(AgentError::MemoryIntegrity(format!(
+                "failed to commit compaction for session {session_id}: {error}"
+            )))
+        }
+        Err(error) => {
+            tracing::warn!(session_id, %error, "context: failed to persist compaction summary");
+            *messages = original_messages;
+            *origins = original_origins;
+            Ok(false)
+        }
+    }
 }
 
 /// Flatten the `render_message_content` marker format back into a
@@ -553,12 +891,21 @@ fn rows_to_messages(rows: &[sqlite_fts::MessageRow]) -> Vec<Message> {
 /// `agent::web::routes::sessions::parse_stored_content`, but lossy
 /// where the web parser is structured — here `[tool_use:NAME] {json}`
 /// collapses to `[tool: NAME]` and `[tool_result] body` becomes
-/// `[tool result]\n<truncated body>` because the goal is replay
-/// context, not exact reconstruction. Long tool-result bodies are
-/// truncated to keep the replayed prompt cheap. Runtime evidence markers are
-/// stripped so stale call ids cannot be cited in a later invocation.
+/// `[tool result]\n<truncated body]`. This bounded form is used by diagnostics
+/// and tests; continuation loading uses the same parser without truncation so
+/// the compressor can preserve the protected tail verbatim and replace only
+/// old oversized results with deterministic digest stubs. Runtime evidence
+/// markers are stripped so stale call ids cannot be cited later.
 fn flatten_stored_content(content: &str) -> String {
     const MAX_RESULT_PREVIEW_CHARS: usize = 1500;
+    flatten_stored_content_with_limit(content, Some(MAX_RESULT_PREVIEW_CHARS))
+}
+
+fn flatten_stored_content_for_replay(content: &str) -> String {
+    flatten_stored_content_with_limit(content, None)
+}
+
+fn flatten_stored_content_with_limit(content: &str, max_result_chars: Option<usize>) -> String {
     let mut out = String::new();
     let mut active_result: Option<(bool, String)> = None;
 
@@ -568,29 +915,33 @@ fn flatten_stored_content(content: &str) -> String {
         }
     };
 
-    let flush_result = |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
-        if let Some((is_error, body)) = active.take() {
-            if !out.is_empty() && !out.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push_str(if is_error {
-                "[tool result error]"
-            } else {
-                "[tool result]"
-            });
-            let trimmed = body.trim();
-            if !trimmed.is_empty() {
-                out.push('\n');
-                if trimmed.chars().count() > max_chars {
-                    let preview: String = trimmed.chars().take(max_chars).collect();
-                    out.push_str(&preview);
-                    out.push_str("\n…[truncated]");
+    let flush_result =
+        |active: &mut Option<(bool, String)>, out: &mut String, max_chars: Option<usize>| {
+            if let Some((is_error, body)) = active.take() {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                out.push_str(if is_error {
+                    "[tool result error]"
                 } else {
-                    out.push_str(trimmed);
+                    "[tool result]"
+                });
+                let trimmed = body.trim();
+                if !trimmed.is_empty() {
+                    out.push('\n');
+                    match max_chars {
+                        Some(max_chars) if trimmed.chars().count() > max_chars => {
+                            let preview: String = trimmed.chars().take(max_chars).collect();
+                            out.push_str(&preview);
+                            out.push_str("\n…[truncated]");
+                        }
+                        _ => {
+                            out.push_str(trimmed);
+                        }
+                    }
                 }
             }
-        }
-    };
+        };
 
     for line in content.lines() {
         let trimmed = line.trim_start();
@@ -599,7 +950,7 @@ fn flatten_stored_content(content: &str) -> String {
             if let Some(end) = rest.find(']') {
                 let name = rest[..end].trim();
                 if !name.is_empty() {
-                    flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+                    flush_result(&mut active_result, &mut out, max_result_chars);
                     push_separator(&mut out);
                     out.push_str("[tool: ");
                     out.push_str(name);
@@ -610,12 +961,12 @@ fn flatten_stored_content(content: &str) -> String {
         }
 
         if let Some(rest) = trimmed.strip_prefix("[tool_result:error]") {
-            flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+            flush_result(&mut active_result, &mut out, max_result_chars);
             active_result = Some((true, rest.trim_start_matches([' ', '\t']).to_string()));
             continue;
         }
         if let Some(rest) = trimmed.strip_prefix("[tool_result]") {
-            flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+            flush_result(&mut active_result, &mut out, max_result_chars);
             active_result = Some((false, rest.trim_start_matches([' ', '\t']).to_string()));
             continue;
         }
@@ -629,7 +980,7 @@ fn flatten_stored_content(content: &str) -> String {
         }
     }
 
-    flush_result(&mut active_result, &mut out, MAX_RESULT_PREVIEW_CHARS);
+    flush_result(&mut active_result, &mut out, max_result_chars);
     out.trim().to_string()
 }
 
@@ -773,7 +1124,7 @@ async fn ask_inner(
     exposure: &ToolExposureContext,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
-    initial_messages: Vec<Message>,
+    initial_messages: ConversationSeed,
 ) -> Result<AskResult, AgentError> {
     if crate::caps::approval_gateway::installed().is_some() {
         return ask_inner_scoped(
@@ -813,7 +1164,7 @@ async fn ask_inner_scoped(
     exposure: &ToolExposureContext,
     recorder: Option<(&MemoryDb, &str)>,
     compressor: Option<Arc<dyn Compressor>>,
-    initial_messages: Vec<Message>,
+    initial_messages: ConversationSeed,
 ) -> Result<AskResult, AgentError> {
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
@@ -835,6 +1186,7 @@ async fn ask_inner_scoped(
     // extract durable user facts and append them to MEMORY.md.
     let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
 
+    let mut user_origin = MessageOrigin::Ephemeral;
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
@@ -842,8 +1194,11 @@ async fn ask_inner_scoped(
             .unwrap_or_else(|| user_prompt.to_string());
         match db.record_message(sid, "user", &to_record) {
             Ok(msg_id) => {
+                if let Some(replay) = stored_replay_message("user", &to_record) {
+                    user_origin = MessageOrigin::Raw { id: msg_id, replay };
+                }
                 if let Some(ix) = &semantic_indexer {
-                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record);
+                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record.clone());
                 }
             }
             Err(e) => tracing::warn!("memory: failed to record user prompt: {e}"),
@@ -852,8 +1207,12 @@ async fn ask_inner_scoped(
 
     let system = resolve_system_prompt(cfg, user_prompt, recorder)?;
 
-    let mut messages = initial_messages;
+    let ConversationSeed {
+        mut messages,
+        mut origins,
+    } = initial_messages;
     messages.push(build_request_user_message(user_prompt, None, recorder));
+    origins.push(user_origin);
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the
@@ -920,9 +1279,11 @@ async fn ask_inner_scoped(
 
         if cfg.think_scrub_enabled {
             let before = messages.len();
-            let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
-            let after = new_msgs.len();
-            messages = new_msgs;
+            (messages, origins) = scrub_messages_with_origins(
+                std::mem::take(&mut messages),
+                std::mem::take(&mut origins),
+            );
+            let after = messages.len();
             if before != after {
                 tracing::debug!(
                     turn,
@@ -934,12 +1295,22 @@ async fn ask_inner_scoped(
         }
 
         if let Some(c) = compressor.as_ref() {
-            if c.should_compress(Some(turn_system), &messages) {
-                let before = messages.len();
-                let est_before = compressor::estimate_total_tokens(Some(turn_system), &messages);
-                messages = c
-                    .compress(Some(turn_system), std::mem::take(&mut messages))
-                    .await;
+            let before = messages.len();
+            let est_before = compressor::estimate_total_tokens(Some(turn_system), &messages);
+            let provider_name = provider.effective_provider_name();
+            let model_name = provider.effective_model_name(&cfg.model);
+            if maybe_compress_messages(
+                c,
+                turn_system,
+                &mut messages,
+                &mut origins,
+                recorder,
+                redactor.as_ref(),
+                &provider_name,
+                &model_name,
+            )
+            .await?
+            {
                 let after = messages.len();
                 let est_after = compressor::estimate_total_tokens(Some(turn_system), &messages);
                 tracing::info!(
@@ -1088,6 +1459,7 @@ async fn ask_inner_scoped(
         // so secrets that arrived via tool results never enter the FTS5
         // index. The in-memory `messages` vec is left untouched — the model
         // still sees the originals on the next turn.
+        let mut appended_origins = Vec::with_capacity(messages.len().saturating_sub(len_before));
         if let Some((db, sid)) = recorder {
             for new_msg in &messages[len_before..] {
                 let role = sqlite_fts::role_str(new_msg.role);
@@ -1098,6 +1470,7 @@ async fn ask_inner_scoped(
                     content
                 };
                 if content.is_empty() {
+                    appended_origins.push(MessageOrigin::Ephemeral);
                     continue;
                 }
                 let to_record = redactor
@@ -1106,16 +1479,27 @@ async fn ask_inner_scoped(
                     .unwrap_or(content);
                 match db.record_message(sid, role, &to_record) {
                     Ok(msg_id) => {
+                        let origin = stored_replay_message(role, &to_record)
+                            .map(|replay| MessageOrigin::Raw { id: msg_id, replay })
+                            .unwrap_or(MessageOrigin::Ephemeral);
+                        appended_origins.push(origin);
                         if let Some(ix) = &semantic_indexer {
-                            ix.spawn_index(sid.to_string(), role, msg_id, to_record);
+                            ix.spawn_index(sid.to_string(), role, msg_id, to_record.clone());
                         }
                     }
                     Err(e) => {
+                        appended_origins.push(MessageOrigin::Ephemeral);
                         tracing::warn!("memory: failed to record {role} message: {e}");
                     }
                 }
             }
+        } else {
+            appended_origins.resize(
+                messages.len().saturating_sub(len_before),
+                MessageOrigin::Ephemeral,
+            );
         }
+        origins.extend(appended_origins);
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
@@ -1181,7 +1565,7 @@ async fn ask_inner_streaming(
     compressor: Option<Arc<dyn Compressor>>,
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
-    initial_messages: Vec<Message>,
+    initial_messages: ConversationSeed,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
     if crate::caps::approval_gateway::installed().is_some() {
@@ -1234,7 +1618,7 @@ async fn ask_inner_streaming_scoped(
     compressor: Option<Arc<dyn Compressor>>,
     sink: Arc<dyn StreamSink>,
     progress: Arc<dyn ProgressSink>,
-    initial_messages: Vec<Message>,
+    initial_messages: ConversationSeed,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
     let sink = super::presentation::user_visible_stream_sink(sink);
@@ -1254,6 +1638,7 @@ async fn ask_inner_streaming_scoped(
     };
     let auto_curator = recorder.and_then(|(db, _)| AutoCurator::from_cfg_logged(cfg, db));
 
+    let mut user_origin = MessageOrigin::Ephemeral;
     if let Some((db, sid)) = recorder {
         let to_record = redactor
             .as_ref()
@@ -1261,8 +1646,11 @@ async fn ask_inner_streaming_scoped(
             .unwrap_or_else(|| user_prompt.to_string());
         match db.record_message(sid, "user", &to_record) {
             Ok(msg_id) => {
+                if let Some(replay) = stored_replay_message("user", &to_record) {
+                    user_origin = MessageOrigin::Raw { id: msg_id, replay };
+                }
                 if let Some(ix) = &semantic_indexer {
-                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record);
+                    ix.spawn_index(sid.to_string(), "user", msg_id, to_record.clone());
                 }
             }
             Err(e) => tracing::warn!("memory: failed to record user prompt: {e}"),
@@ -1271,15 +1659,16 @@ async fn ask_inner_streaming_scoped(
 
     let system = resolve_system_prompt(cfg, user_prompt, recorder)?;
 
-    let mut messages: Vec<Message> = {
-        let mut v = initial_messages;
-        v.push(build_request_user_message(
-            user_prompt,
-            transient_context,
-            recorder,
-        ));
-        v
-    };
+    let ConversationSeed {
+        mut messages,
+        mut origins,
+    } = initial_messages;
+    messages.push(build_request_user_message(
+        user_prompt,
+        transient_context,
+        recorder,
+    ));
+    origins.push(user_origin);
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     let interrupt_handle = if let Some(scope) = interrupt_scope {
@@ -1341,16 +1730,26 @@ async fn ask_inner_streaming_scoped(
         }
 
         if cfg.think_scrub_enabled {
-            let new_msgs = ThinkScrubber::new().scrub_messages(std::mem::take(&mut messages));
-            messages = new_msgs;
+            (messages, origins) = scrub_messages_with_origins(
+                std::mem::take(&mut messages),
+                std::mem::take(&mut origins),
+            );
         }
 
         if let Some(c) = compressor.as_ref() {
-            if c.should_compress(Some(turn_system), &messages) {
-                messages = c
-                    .compress(Some(turn_system), std::mem::take(&mut messages))
-                    .await;
-            }
+            let provider_name = provider.effective_provider_name();
+            let model_name = provider.effective_model_name(&cfg.model);
+            maybe_compress_messages(
+                c,
+                turn_system,
+                &mut messages,
+                &mut origins,
+                recorder,
+                redactor.as_ref(),
+                &provider_name,
+                &model_name,
+            )
+            .await?;
         }
 
         let len_before = messages.len();
@@ -1489,6 +1888,7 @@ async fn ask_inner_streaming_scoped(
         };
         evidence_ledger.observe(&messages[len_before..]);
 
+        let mut appended_origins = Vec::with_capacity(messages.len().saturating_sub(len_before));
         if let Some((db, sid)) = recorder {
             for new_msg in &messages[len_before..] {
                 let role = sqlite_fts::role_str(new_msg.role);
@@ -1499,6 +1899,7 @@ async fn ask_inner_streaming_scoped(
                     content
                 };
                 if content.is_empty() {
+                    appended_origins.push(MessageOrigin::Ephemeral);
                     continue;
                 }
                 let to_record = redactor
@@ -1507,16 +1908,27 @@ async fn ask_inner_streaming_scoped(
                     .unwrap_or(content);
                 match db.record_message(sid, role, &to_record) {
                     Ok(msg_id) => {
+                        let origin = stored_replay_message(role, &to_record)
+                            .map(|replay| MessageOrigin::Raw { id: msg_id, replay })
+                            .unwrap_or(MessageOrigin::Ephemeral);
+                        appended_origins.push(origin);
                         if let Some(ix) = &semantic_indexer {
-                            ix.spawn_index(sid.to_string(), role, msg_id, to_record);
+                            ix.spawn_index(sid.to_string(), role, msg_id, to_record.clone());
                         }
                     }
                     Err(e) => {
+                        appended_origins.push(MessageOrigin::Ephemeral);
                         tracing::warn!("memory: failed to record {role} message: {e}");
                     }
                 }
             }
+        } else {
+            appended_origins.resize(
+                messages.len().saturating_sub(len_before),
+                MessageOrigin::Ephemeral,
+            );
         }
+        origins.extend(appended_origins);
 
         if let super::turn::TurnOutcome::Final(answer) = outcome {
             let evidence = evidence_ledger.verify(user_prompt, &answer);
@@ -1593,7 +2005,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 &exposure,
                 Some((&db, session_id.as_str())),
                 compressor,
-                Vec::new(),
+                ConversationSeed::empty(),
             )
             .await
         }
@@ -1612,7 +2024,7 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
                 &exposure,
                 None,
                 compressor,
-                Vec::new(),
+                ConversationSeed::empty(),
             )
             .await
         }

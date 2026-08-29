@@ -153,8 +153,10 @@ pub struct AgentConfig {
     /// Enable provider-backed conversation compression. When the
     /// estimated total token count of the system prompt, visible tool schemas,
     /// and running conversation exceeds `compress_trigger_tokens`, the head is
-    /// summarised by the same provider and replaced with a single
-    /// `[CONTEXT SUMMARY]` user message; the tail is kept verbatim.
+    /// deterministically pruned and, when still necessary, summarised by the
+    /// same provider. `MemoryDb` sessions persist a content-addressed
+    /// `[CONTEXT SUMMARY]` assistant projection while keeping raw rows
+    /// searchable; the protected tail is kept verbatim.
     /// Defaults to `true` — long-running sessions on a system-level
     /// agent OS are the norm, not the exception, and a runaway context
     /// is the difference between "agent that quietly keeps working"
