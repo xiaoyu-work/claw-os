@@ -21,6 +21,8 @@ fn default_config_has_sensible_values() {
     assert_eq!(cfg.web.engine, "cos-browser");
     assert_eq!(cfg.web.cdp_port, 9222);
     assert_eq!(cfg.web.max_content_length, 50000);
+    assert_eq!(cfg.agent.max_turns, 50);
+    assert!(cfg.agent.progressive_tools_enabled);
 }
 
 #[test]

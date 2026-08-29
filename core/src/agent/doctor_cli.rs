@@ -267,6 +267,7 @@ fn check_provider(probe_network: bool, probe_timeout_secs: u64) -> Value {
         "available": available,
         "model": cfg.model,
         "max_turns": cfg.max_turns,
+        "progressive_tools_enabled": cfg.progressive_tools_enabled,
         "configured": active_configured,
         "configuration_error": configuration_error,
         "matrix": matrix,

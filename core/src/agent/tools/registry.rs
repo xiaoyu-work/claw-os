@@ -14,8 +14,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use super::guardrails::Guardrails;
-use super::Tool;
+use super::{progressive, Tool, ToolResult};
 use crate::agent::llm;
+use crate::agent::llm::ToolCall;
 use crate::agent::runtime::approval::ApprovalGate;
 use crate::config::CosConfig;
 
@@ -292,6 +293,81 @@ impl ToolRegistry {
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    pub fn as_llm_tools_progressive(&self) -> Vec<llm::Tool> {
+        let (mut visible, deferred) = progressive::partition_tools(self.as_llm_tools());
+        visible.extend(progressive::bridge_tools(&deferred));
+        visible.sort_by(|left, right| left.name.cmp(&right.name));
+        visible
+    }
+
+    fn deferred_llm_tools(&self) -> Vec<llm::Tool> {
+        let (_, deferred) = progressive::partition_tools(self.as_llm_tools());
+        deferred
+    }
+
+    pub fn execute_progressive_catalog(
+        &self,
+        name: &str,
+        input: &serde_json::Value,
+    ) -> Option<ToolResult> {
+        let deferred = self.deferred_llm_tools();
+        match name {
+            progressive::TOOL_SEARCH => Some(progressive::search_tools(&deferred, input)),
+            progressive::TOOL_DESCRIBE => Some(progressive::describe_tools(&deferred, input)),
+            _ => None,
+        }
+    }
+
+    pub fn resolve_progressive_invocation(&self, call: &ToolCall) -> (ToolCall, Option<String>) {
+        if call.name != progressive::TOOL_CALL {
+            return (call.clone(), None);
+        }
+        let (target_name, input) = match progressive::resolve_call_envelope(&call.input) {
+            Ok(resolved) => resolved,
+            Err(error) => return (call.clone(), Some(error)),
+        };
+        let resolved = progressive::resolved_tool_call(call, target_name.clone(), input);
+        let error = if !self.guardrails.permits(&target_name) {
+            Some(format!(
+                "deferred tool `{target_name}` is denied in this session"
+            ))
+        } else if !progressive::is_deferred_tool_name(&target_name) {
+            Some(format!(
+                "`{target_name}` is already a direct tool and cannot be invoked through `{}`",
+                progressive::TOOL_CALL
+            ))
+        } else if let Some(tool) = self.tools.get(target_name.as_str()) {
+            let schema = llm::Tool {
+                name: target_name,
+                description: tool.description().to_string(),
+                input_schema: tool.input_schema(),
+            };
+            progressive::validate_required(&schema, &resolved.input).err()
+        } else {
+            Some(format!("deferred tool `{target_name}` is not registered"))
+        };
+        (resolved, error)
+    }
+
+    pub fn resolve_progressive_call(&self, call: &ToolCall) -> Result<ToolCall, String> {
+        let (resolved, error) = self.resolve_progressive_invocation(call);
+        if let Some(error) = error {
+            return Err(error);
+        }
+        Ok(resolved)
+    }
+
+    pub fn is_progressive_parallel_safe(&self, call: &ToolCall) -> bool {
+        match call.name.as_str() {
+            progressive::TOOL_SEARCH | progressive::TOOL_DESCRIBE => true,
+            progressive::TOOL_CALL => self
+                .resolve_progressive_call(call)
+                .ok()
+                .is_some_and(|resolved| self.is_parallel_safe(&resolved.name)),
+            _ => self.is_parallel_safe(&call.name),
+        }
     }
 }
 

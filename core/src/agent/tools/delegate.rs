@@ -277,6 +277,10 @@ where
             .clamp(1, HARD_MAX_TURNS),
         max_tokens: parent_cfg.max_tokens,
         temperature: parent_cfg.temperature,
+        // Delegates already receive an explicit, narrow tool allowlist.
+        // A search bridge over that tiny surface adds round trips without
+        // reducing schema cost and complicates parent/child policy scoping.
+        progressive_tools_enabled: false,
         // Child uses a clean system prompt — no MEMORY.md / USER.md
         // injection, since the child has a fresh, isolated trajectory and
         // those are properties of the parent's session.

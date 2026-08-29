@@ -11,6 +11,8 @@ which tool calls are exposed and executed.
 - Let an attended local system Agent initiate trusted account authorization
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
+- Keep core schemas direct while progressively disclosing App/MCP tools through
+  a fixed search/describe/call bridge.
 - Apply guardrails and session/capability context.
 - Keep untrusted tool output inside explicit model-data boundaries.
 
@@ -19,6 +21,7 @@ which tool calls are exposed and executed.
 | Path | Role |
 | --- | --- |
 | `registry.rs` | Tool registration, filtering, lookup, and explicit registry resources/paths |
+| `progressive.rs` | Deferred-tool classification, compact catalog, bridge schemas, and envelope validation |
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_help.rs` | Read-only progressive discovery over the shared public `cos` command tree |
 | `cos_proxy/` | Structured `cos` primitive tools |
@@ -39,7 +42,8 @@ generic App catalog/run root, and one notes store shared by prompt reads,
 remain only as compatibility composition wrappers. Tools
 consume stable service/capability definitions. Model output and external tool
 results are untrusted; authority comes only from session and capability
-context.
+context. A bridge call is resolved before hooks, approval, and parallel
+planning; synthetic bridge names are never registered as executable tools.
 
 ## Tests
 

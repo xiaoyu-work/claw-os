@@ -92,6 +92,19 @@ impl CosPrimitiveTool {
             parallel_safe: true,
         }
     }
+
+    fn success_result(&self, value: Value) -> ToolResult {
+        let serialized = serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
+        if self.name == "cos_sandbox"
+            && value
+                .get("exit_code")
+                .and_then(Value::as_i64)
+                .is_some_and(|code| code != 0)
+        {
+            return ToolResult::err(serialized);
+        }
+        ToolResult::ok(serialized)
+    }
 }
 
 #[async_trait]
@@ -157,20 +170,14 @@ impl Tool for CosPrimitiveTool {
             || crate::paths::current_home_override().is_some()
         {
             return match tokio::task::block_in_place(|| primitive(&command, &args)) {
-                Ok(value) => ToolResult::ok(
-                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string()),
-                ),
+                Ok(value) => self.success_result(value),
                 Err(message) => ToolResult::err(message),
             };
         }
         let join = tokio::task::spawn_blocking(move || primitive(&command, &args)).await;
 
         match join {
-            Ok(Ok(value)) => {
-                let serialized =
-                    serde_json::to_string(&value).unwrap_or_else(|_| value.to_string());
-                ToolResult::ok(serialized)
-            }
+            Ok(Ok(value)) => self.success_result(value),
             Ok(Err(message)) => ToolResult::err(message),
             Err(join_err) => ToolResult::err(format!("primitive panicked: {join_err}")),
         }
@@ -225,7 +232,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
         description: "Read live Linux system telemetry. Commands:\n\
                       identity: info (host distribution + Claw Agent layer) | env | uptime | who | desktop;\n\
                       load: resources | loadavg | sensors | cgroup;\n\
-                      processes: proc | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
+                      processes: proc | process <pid> [pid ...] (owner, command, cwd, ancestry) | top [--top N --by cpu|mem --interval ms] | threads <pid> | port <port>;\n\
                       network: net | net_rate [--interval ms];\n\
                       storage: mounts | disk_io [--interval ms] | largest_files <path> [--top N --min-mb N];\n\
                       logs: journal [--unit X --since X --lines N --priority N --kernel] | dmesg [--lines N];\n\
@@ -243,6 +250,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
             "sensors",
             "cgroup",
             "proc",
+            "process",
             "top",
             "threads",
             "port",

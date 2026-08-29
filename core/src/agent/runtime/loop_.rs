@@ -815,6 +815,15 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
     } else {
         None
     };
+    let progress = match recorder {
+        Some((db, sid)) => progress::recording_progress(
+            progress,
+            db.clone(),
+            sid,
+            cfg.redact_memory_enabled,
+        ),
+        None => progress,
+    };
 
     // Semantic auto-indexer: opt-in via `[embed]` config. Mirrors
     // every recorded message into the semantic store so the LLM can
@@ -865,7 +874,11 @@ async fn ask_inner_scoped(request: LifecycleRequest<'_>) -> Result<AskResult, Ag
         transient_context,
         recorder,
     ));
-    let llm_tools = tools.as_llm_tools();
+    let llm_tools = if cfg.progressive_tools_enabled {
+        tools.as_llm_tools_progressive()
+    } else {
+        tools.as_llm_tools()
+    };
     let session_id = recorder.map(|(_, sid)| sid.to_string()).unwrap_or_default();
 
     // Register this session in the global interrupt registry. When the

@@ -54,6 +54,7 @@ surfaces.
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
 | `tools/registry.rs` | Tool exposure, dispatch lookup, and explicit registry dependencies |
+| `tools/progressive.rs` | Stable search/describe/call projection for deferred App/MCP tools |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |

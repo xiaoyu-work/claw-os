@@ -121,6 +121,55 @@ fn sample_proc_stats_returns_self() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn process_inspection_returns_owner_command_and_ancestry() {
+    let pid = std::process::id();
+    let value = cmd_process(&[pid.to_string()]).expect("inspect current process");
+    assert_eq!(value["requested"], 1);
+    assert_eq!(value["found"], 1);
+
+    let process = &value["processes"][0];
+    assert_eq!(process["pid"], pid);
+    assert!(process["ppid"].as_u64().is_some());
+    assert!(process["uid"].as_u64().is_some());
+    assert!(process["name"]
+        .as_str()
+        .is_some_and(|name| !name.is_empty()));
+    assert!(process["command"]
+        .as_str()
+        .is_some_and(|command| !command.is_empty()));
+    assert!(process["ancestors"].is_array());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn process_inspection_rejects_non_numeric_pid() {
+    let error = cmd_process(&["not-a-pid".into()]).unwrap_err();
+    assert_eq!(error, "invalid pid: not-a-pid");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn top_processes_include_provenance() {
+    let value = cmd_top(&[
+        "--top".into(),
+        "4".into(),
+        "--by".into(),
+        "mem".into(),
+        "--interval".into(),
+        "1".into(),
+    ])
+    .expect("sample top processes");
+    let processes = value["processes"].as_array().expect("process rows");
+    assert!(!processes.is_empty());
+    for process in processes {
+        for key in ["ppid", "uid", "user", "command", "cwd", "executable"] {
+            assert!(process.get(key).is_some(), "missing {key}: {process}");
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn clk_tck_is_sensible() {
     let v = clk_tck();
     assert!(v >= 50 && v <= 10_000, "clk_tck out of range: {v}");

@@ -268,8 +268,11 @@ CLI / web UI / bridge
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)
+  -> session-stable tool projection:
+       core tools stay direct
+       App/MCP schemas become cos_tool_search / cos_tool_describe / cos_tool_call
   -> compact tool registry / guardrails / hooks
-     (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
+  -> bridge envelopes resolve to the underlying tool before policy and scheduling
   -> parallel-safe or serial tool execution
   -> denied capability files an approval and releases the worker
   -> task waits durably in waiting_approval
@@ -305,6 +308,12 @@ exchange, rejected-token refresh, live model-catalog negotiation, and the
 final chat/Responses request. Process-backed constructors and auth functions
 remain source-compatible legacy composition boundaries; production registry
 and fallback assembly use only injected variants.
+
+Deferred calls retain their provider-facing bridge envelope in the live
+trajectory, while progress, hooks, evidence, and persisted/searchable history
+use the resolved underlying tool identity. The provider tool array therefore
+stays stable for prompt caching without weakening capability or approval
+checks.
 
 Standalone and `claw-agentd` audit hooks are installed into that
 exact registry, and delegated children inherit it. App-session tools retain

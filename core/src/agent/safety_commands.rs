@@ -174,9 +174,14 @@ pub(super) fn tools_cmd(args: &[String]) -> Result<Value, String> {
             }))
         }
         "llm-list" => {
-            let llm_tools = tools::guardrails::filter_llm_tools(&registry, registry.guardrails());
+            let llm_tools = if cfg.progressive_tools_enabled {
+                registry.as_llm_tools_progressive()
+            } else {
+                tools::guardrails::filter_llm_tools(&registry, registry.guardrails())
+            };
             Ok(json!({
                 "count": llm_tools.len(),
+                "progressive_tools_enabled": cfg.progressive_tools_enabled,
                 "tools": llm_tools.iter().map(|t| json!({
                     "name": t.name,
                     "description": t.description,

@@ -7,7 +7,8 @@ results, and curates durable notes from completed work.
 
 ## Responsibilities
 
-- Store sessions, messages, prompt injections, and searchable text.
+- Store sessions, messages, prompt injections, searchable text, and in-flight
+  tool invocation state.
 - Freeze content-addressed canonical system prompts per session.
 - Provide FTS and semantic recall behind stable interfaces.
 - Curate notes with crash-safe run bracketing.
@@ -18,7 +19,7 @@ results, and curates durable notes from completed work.
 
 | Path | Role |
 | --- | --- |
-| `sqlite_fts.rs` | SQLite/WAL/FTS persistence |
+| `sqlite_fts.rs` | SQLite/WAL/FTS persistence plus pending/completed tool invocations |
 | `semantic.rs` | Vector/semantic recall integration |
 | `curator.rs` | Automatic memory curation |
 | `notes.rs` | Durable note storage |

@@ -20,7 +20,7 @@
 //! - A function call is a content part — `{functionCall: {name, args}}` —
 //!   inside a `model` turn. There is **no upstream call ID** — Gemini
 //!   matches function responses by `name`. We synthesize a synthetic
-//!   `id = "<name>::<seq>"` so the runtime's per-call tracking still
+//!   `id = "<name>::<unique-id>"` so the runtime's per-call tracking still
 //!   works, then strip the suffix when serialising the response part.
 //! - Tool result is `{functionResponse: {name, response}}` inside a
 //!   `user` turn.
@@ -57,10 +57,15 @@ pub const API_VERSION: &str = "v1beta";
 /// pinning a sensible default keeps cost predictable.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Marker we splice into our internal call IDs so we can recover the
-/// function name later. `<name>::<seq>` round-trips losslessly through
-/// the runtime even though Gemini itself doesn't track call IDs.
+/// Marker we splice into our internal call IDs so we can recover the function
+/// name later. The suffix is a UUID because Gemini omits call IDs; restarting
+/// a numeric sequence for every response or process overwrites
+/// invocation/audit rows in long-lived resumed sessions.
 const ID_SEP: &str = "::";
+
+fn next_tool_call_id(name: &str) -> String {
+    format!("{name}{ID_SEP}{}", uuid::Uuid::new_v4().simple())
+}
 
 pub fn default_base_url() -> &'static str {
     DEFAULT_BASE
@@ -443,19 +448,23 @@ pub(crate) mod wire {
     fn content_block_to_part(b: &ContentBlock) -> Option<serde_json::Value> {
         match b {
             ContentBlock::Text { text } => Some(serde_json::json!({"text": text})),
-            ContentBlock::ToolUse { name, input, .. } => Some(serde_json::json!({
-                "functionCall": {
+            ContentBlock::ToolUse { id, name, input } => {
+                let mut function_call = serde_json::json!({
                     "name": name,
                     "args": input,
+                });
+                if let Some(id) = tool_id_suffix(id) {
+                    function_call["id"] = serde_json::json!(id);
                 }
-            })),
+                Some(serde_json::json!({"functionCall": function_call}))
+            }
             ContentBlock::ToolResult {
                 tool_use_id,
                 content,
                 ..
             } => {
                 // Recover the function name from our synthetic id
-                // ("<name>::<seq>"). If a caller hands us a non-synthetic
+                // ("<name>::<unique-id>"). If a caller hands us a non-synthetic
                 // id (no separator), treat the whole thing as the name.
                 let name = strip_id_seq(tool_use_id);
                 // Gemini's `response` is an arbitrary JSON object; if our
@@ -463,12 +472,14 @@ pub(crate) mod wire {
                 // otherwise wrap it as `{"content": "..."}`.
                 let response_value = serde_json::from_str::<serde_json::Value>(content)
                     .unwrap_or_else(|_| serde_json::json!({"content": content}));
-                Some(serde_json::json!({
-                    "functionResponse": {
-                        "name": name,
-                        "response": response_value,
-                    }
-                }))
+                let mut function_response = serde_json::json!({
+                    "name": name,
+                    "response": response_value,
+                });
+                if let Some(id) = tool_id_suffix(tool_use_id) {
+                    function_response["id"] = serde_json::json!(id);
+                }
+                Some(serde_json::json!({"functionResponse": function_response}))
             }
             ContentBlock::Reasoning { summary, .. } => {
                 (!summary.is_empty()).then(|| serde_json::json!({"text": summary.join("\n")}))
@@ -483,13 +494,19 @@ pub(crate) mod wire {
         }
     }
 
-    /// Strip our `<name>::<seq>` synthetic id back down to `<name>`.
+    /// Strip our `<name>::<unique-id>` synthetic id back down to `<name>`.
     /// Idempotent — IDs without the separator pass through unchanged.
     pub(crate) fn strip_id_seq(id: &str) -> &str {
         match id.split_once(ID_SEP) {
             Some((name, _)) => name,
             None => id,
         }
+    }
+
+    fn tool_id_suffix(id: &str) -> Option<&str> {
+        id.split_once(ID_SEP)
+            .map(|(_, suffix)| suffix)
+            .filter(|suffix| !suffix.is_empty())
     }
 
     fn tool_to_json(t: &Tool) -> serde_json::Value {
@@ -560,6 +577,8 @@ pub(crate) mod wire {
 
     #[derive(Debug, Deserialize)]
     pub(crate) struct FunctionCall {
+        #[serde(default)]
+        pub id: Option<String>,
         pub name: String,
         #[serde(default)]
         pub args: serde_json::Value,
@@ -584,8 +603,6 @@ pub(crate) mod wire {
 
         let mut content_blocks: Vec<ContentBlock> = Vec::new();
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-        let mut fc_seq: u32 = 0;
-
         if let Some(content) = candidate.content {
             for part in content.parts {
                 match part {
@@ -595,8 +612,10 @@ pub(crate) mod wire {
                         }
                     }
                     Part::FunctionCall { function_call } => {
-                        let id = format!("{}{}{}", function_call.name, ID_SEP, fc_seq);
-                        fc_seq += 1;
+                        let id = match function_call.id.filter(|id| !id.is_empty()) {
+                            Some(id) => format!("{}{ID_SEP}{id}", function_call.name),
+                            None => next_tool_call_id(&function_call.name),
+                        };
                         content_blocks.push(ContentBlock::ToolUse {
                             id: id.clone(),
                             name: function_call.name.clone(),

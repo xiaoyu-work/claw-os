@@ -45,6 +45,19 @@ pub struct MessageRow {
     pub ts_ms: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolInvocationRow {
+    pub session_id: String,
+    pub tool_call_id: String,
+    pub tool_name: String,
+    pub input: String,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub success: Option<bool>,
+    pub latency_ms: Option<u64>,
+    pub error: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSystemPrompt {
     pub prompt: String,
@@ -138,6 +151,22 @@ CREATE INDEX IF NOT EXISTS messages_session_ts
 
 CREATE INDEX IF NOT EXISTS messages_ts
     ON messages(ts_ms);
+
+CREATE TABLE IF NOT EXISTS tool_invocations (
+    session_id      TEXT NOT NULL,
+    tool_call_id    TEXT NOT NULL,
+    tool_name       TEXT NOT NULL,
+    input           TEXT NOT NULL,
+    started_at_ms   INTEGER NOT NULL,
+    completed_at_ms INTEGER,
+    success         INTEGER,
+    latency_ms      INTEGER,
+    error           TEXT,
+    PRIMARY KEY (session_id, tool_call_id)
+);
+
+CREATE INDEX IF NOT EXISTS tool_invocations_session_started
+    ON tool_invocations(session_id, started_at_ms);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
     content,
@@ -297,6 +326,96 @@ impl MemoryDb {
     ) -> Result<i64, MemoryError> {
         let body = format!("[{source}]\n{content}");
         self.record_message_at(session_id, INJECTED_ROLE, &body, current_ts_ms())
+    }
+
+    pub fn record_tool_start(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        tool_name: &str,
+        input: &str,
+    ) -> Result<(), MemoryError> {
+        const MAX_INPUT_CHARS: usize = 16 * 1024;
+        let input = truncate_chars(input, MAX_INPUT_CHARS);
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "INSERT INTO tool_invocations (
+                 session_id, tool_call_id, tool_name, input, started_at_ms,
+                 completed_at_ms, success, latency_ms, error
+             ) VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL)
+             ON CONFLICT(session_id, tool_call_id) DO UPDATE SET
+                 tool_name = excluded.tool_name,
+                 input = excluded.input,
+                 started_at_ms = excluded.started_at_ms,
+                 completed_at_ms = NULL,
+                 success = NULL,
+                 latency_ms = NULL,
+                 error = NULL",
+            params![session_id, tool_call_id, tool_name, input, current_ts_ms()],
+        )?;
+        Ok(())
+    }
+
+    pub fn record_tool_result(
+        &self,
+        session_id: &str,
+        tool_call_id: &str,
+        success: bool,
+        latency_ms: u64,
+        error: Option<&str>,
+    ) -> Result<(), MemoryError> {
+        const MAX_ERROR_CHARS: usize = 16 * 1024;
+        let error = error.map(|value| truncate_chars(value, MAX_ERROR_CHARS));
+        let conn = self.lock_conn()?;
+        conn.execute(
+            "UPDATE tool_invocations
+             SET completed_at_ms = ?, success = ?, latency_ms = ?, error = ?
+             WHERE session_id = ? AND tool_call_id = ?",
+            params![
+                current_ts_ms(),
+                success,
+                latency_ms.min(i64::MAX as u64) as i64,
+                error,
+                session_id,
+                tool_call_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn recent_tool_invocations(
+        &self,
+        session_id: &str,
+        limit: usize,
+    ) -> Result<Vec<ToolInvocationRow>, MemoryError> {
+        let conn = self.lock_conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT session_id, tool_call_id, tool_name, input, started_at_ms,
+                    completed_at_ms, success, latency_ms, error
+             FROM tool_invocations
+             WHERE session_id = ?
+             ORDER BY started_at_ms DESC
+             LIMIT ?",
+        )?;
+        let mut rows = stmt
+            .query_map(params![session_id, limit as i64], |row| {
+                Ok(ToolInvocationRow {
+                    session_id: row.get(0)?,
+                    tool_call_id: row.get(1)?,
+                    tool_name: row.get(2)?,
+                    input: row.get(3)?,
+                    started_at_ms: row.get(4)?,
+                    completed_at_ms: row.get(5)?,
+                    success: row.get(6)?,
+                    latency_ms: row
+                        .get::<_, Option<i64>>(7)?
+                        .map(|value| value.max(0) as u64),
+                    error: row.get(8)?,
+                })
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.reverse();
+        Ok(rows)
     }
 
     /// Return the canonical system prompt frozen for `session_id`.
@@ -543,6 +662,10 @@ impl MemoryDb {
             params![session_id],
         )?;
         tx.execute(
+            "DELETE FROM tool_invocations WHERE session_id = ?",
+            params![session_id],
+        )?;
+        tx.execute(
             "DELETE FROM session_system_prompts WHERE session_id = ?",
             params![session_id],
         )?;
@@ -579,6 +702,10 @@ impl MemoryDb {
             .unwrap_or(0);
         let messages_deleted = tx.execute(
             "DELETE FROM messages WHERE ts_ms < ?",
+            params![cutoff_ts_ms],
+        )?;
+        tx.execute(
+            "DELETE FROM tool_invocations WHERE started_at_ms < ?",
             params![cutoff_ts_ms],
         )?;
         let sessions_after: usize = tx
@@ -939,6 +1066,15 @@ fn current_ts_ms() -> i64 {
         .unwrap_or(0)
 }
 
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+    let mut truncated = value.chars().take(max_chars).collect::<String>();
+    truncated.push_str("\n…[truncated]");
+    truncated
+}
+
 fn system_prompt_hash(prompt: &str) -> String {
     hex::encode(Sha256::digest(prompt.as_bytes()))
 }
@@ -993,11 +1129,14 @@ pub fn render_message_content(msg: &crate::agent::llm::Message) -> String {
                 out.push_str(text);
             }
             crate::agent::llm::ContentBlock::ToolUse { name, input, .. } => {
+                let (name, input) =
+                    crate::agent::tools::progressive::resolve_visible_identity(name, input)
+                        .unwrap_or_else(|| (name.clone(), input.clone()));
                 if !out.is_empty() {
                     out.push('\n');
                 }
                 out.push_str("[tool_use:");
-                out.push_str(name);
+                out.push_str(&name);
                 out.push_str("] ");
                 out.push_str(&input.to_string());
             }
