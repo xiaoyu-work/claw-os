@@ -38,20 +38,24 @@ pub fn run_typed(command: &str, args: &[String]) -> CredentialResult<Value> {
         "list" => cmd_list(args),
         "bundle" => cmd_bundle(args),
         "load-bundle" => cmd_load_bundle(args),
-        "oauth-login" => oauth_login::cmd_oauth_login(&FILE_STORE, args),
-        "oauth-refresh" => cmd_oauth_refresh(&FILE_STORE, args),
-        _ => {
-            return Err(CredentialError::invalid(
-                "credential.command",
-                format!("unknown credential command: {command}"),
-            ))
-        }
+        "oauth-login" => oauth_login::cmd_oauth_login(&FILE_STORE, args)
+            .map_err(|message| CredentialError::external("oauth.login", message)),
+        "oauth-refresh" => cmd_oauth_refresh(&FILE_STORE, args)
+            .map_err(|message| CredentialError::external("oauth.refresh", message)),
+        _ => Err(CredentialError::invalid(
+            "credential.command",
+            format!("unknown credential command: {command}"),
+        )),
     }
-    .map_err(|message| CredentialError::external("credential.command", message))
 }
 
 pub(crate) fn run_agent_oauth_login(args: &[String]) -> Result<Value, String> {
+    run_agent_oauth_login_typed(args).map_err(|error| error.to_string())
+}
+
+pub(crate) fn run_agent_oauth_login_typed(args: &[String]) -> CredentialResult<Value> {
     oauth_login::cmd_agent_oauth_login(&FILE_STORE, args)
+        .map_err(|message| CredentialError::external("oauth.login", message))
 }
 
 // ===========================================================================
@@ -61,13 +65,16 @@ pub(crate) fn run_agent_oauth_login(args: &[String]) -> Result<Value, String> {
 /// Store a credential.
 ///
 /// Usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS]
-pub(super) fn cmd_store(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_store(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, args) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
     let mut min_tier = effective_session_tier();
     if min_tier > 3 {
-        return Err("active session has no valid credential tier".to_string());
+        return Err(CredentialError::unauthorized(
+            "credential.store",
+            "active session has no valid credential tier",
+        ));
     }
     let mut ttl: Option<u64> = None;
     let mut refresh_cmd: Option<String> = None;
@@ -77,26 +84,33 @@ pub(super) fn cmd_store(args: &[String]) -> Result<Value, String> {
     while i < args.len() {
         match args[i].as_str() {
             "--tier" if i + 1 < args.len() => {
-                min_tier = args[i + 1]
-                    .parse::<u8>()
-                    .map_err(|_| "tier must be 0-3".to_string())?;
+                min_tier = args[i + 1].parse::<u8>().map_err(|_| {
+                    CredentialError::invalid("credential.store", "tier must be 0-3")
+                })?;
                 if min_tier > 3 {
-                    return Err("tier must be 0-3".into());
+                    return Err(CredentialError::invalid(
+                        "credential.store",
+                        "tier must be 0-3",
+                    ));
                 }
                 i += 2;
             }
             "--ttl" if i + 1 < args.len() => {
-                ttl = Some(
-                    args[i + 1]
-                        .parse::<u64>()
-                        .map_err(|_| "ttl must be a positive integer (seconds)".to_string())?,
-                );
+                ttl = Some(args[i + 1].parse::<u64>().map_err(|_| {
+                    CredentialError::invalid(
+                        "credential.store",
+                        "ttl must be a positive integer (seconds)",
+                    )
+                })?);
                 i += 2;
             }
             "--refresh-cmd" if i + 1 < args.len() => {
                 let cmd = args[i + 1].trim().to_string();
                 if !cmd.starts_with("cos ") {
-                    return Err("--refresh-cmd must be a cos command (e.g., 'cos credential oauth-refresh google')".into());
+                    return Err(CredentialError::invalid(
+                        "credential.store",
+                        "--refresh-cmd must be a cos command (e.g., 'cos credential oauth-refresh google')",
+                    ));
                 }
                 refresh_cmd = Some(cmd);
                 i += 2;
@@ -109,28 +123,26 @@ pub(super) fn cmd_store(args: &[String]) -> Result<Value, String> {
     }
 
     if positional.len() < 2 {
-        return Err(
-            "usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]"
-                .into(),
-        );
+        return Err(CredentialError::invalid(
+            "credential.store",
+            "usage: cos credential store <name> <value> [--tier N] [--namespace NS] [--ttl SECS] [--refresh-cmd CMD]",
+        ));
     }
 
     let name = &positional[0];
     let value = &positional[1];
 
-    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
+    let id = CredentialId::parse(&namespace, name)?;
     let scope = credential_scope(id.namespace(), id.name())?;
     require_secret(Verb::SECRET_WRITE, scope)?;
 
-    let stored = FILE_STORE
-        .store(StoreRequest {
-            id: &id,
-            value,
-            min_tier,
-            ttl,
-            refresh_cmd,
-        })
-        .map_err(|error| error.to_string())?;
+    let stored = FILE_STORE.store(StoreRequest {
+        id: &id,
+        value,
+        min_tier,
+        ttl,
+        refresh_cmd,
+    })?;
     let mut result = json!({
         "stored": id.name(),
         "namespace": id.namespace(),
@@ -143,18 +155,25 @@ pub(super) fn cmd_store(args: &[String]) -> Result<Value, String> {
     Ok(result)
 }
 
-pub(super) fn cmd_revoke(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_revoke(args: &[String]) -> CredentialResult<Value> {
     let (namespace, rest) = parse_namespace_flag(args);
     let namespace = namespace.unwrap_or_else(|| "default".into());
-    let name = rest.first().ok_or("usage: cos credential revoke <name>")?;
-    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
+    let name = rest.first().ok_or_else(|| {
+        CredentialError::invalid("credential.revoke", "usage: cos credential revoke <name>")
+    })?;
+    let id = CredentialId::parse(&namespace, name)?;
     require_secret(
         Verb::SECRET_WRITE,
         credential_scope(id.namespace(), id.name())?,
     )?;
 
-    if !revoke(&id).map_err(|error| format!("failed to revoke credential: {error}"))? {
-        return Err(format!("credential not found: {name}"));
+    if !revoke(&id)
+        .map_err(|error| error.context("credential.revoke", "failed to revoke credential"))?
+    {
+        return Err(CredentialError::not_found(
+            "credential.revoke",
+            format!("credential not found: {name}"),
+        ));
     }
 
     Ok(json!({
@@ -163,12 +182,12 @@ pub(super) fn cmd_revoke(args: &[String]) -> Result<Value, String> {
     }))
 }
 
-pub(super) fn cmd_list(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_list(args: &[String]) -> CredentialResult<Value> {
     let (namespace, _rest) = parse_namespace_flag(args);
     match namespace {
         Some(namespace) => {
             require_secret(Verb::SECRET_READ, namespace_scope(&namespace)?)?;
-            let namespace = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
+            let namespace = NamespaceId::parse(&namespace)?;
             let credentials = list_namespace(&namespace)?
                 .into_iter()
                 .map(|credential| {
@@ -221,7 +240,7 @@ pub(super) fn cmd_list(args: &[String]) -> Result<Value, String> {
 /// so callers can capture secrets without ever piping them through
 /// stdout / shell history / IPC log sinks. See the audit's MEDIUM "secret
 /// values returned in JSON cross IPC boundary" finding.
-pub(super) fn cmd_load(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_load(args: &[String]) -> CredentialResult<Value> {
     let (namespace, rest) = parse_namespace_flag(args);
     let namespace = namespace.unwrap_or_else(|| "default".into());
     let mut fd_target = None;
@@ -230,11 +249,17 @@ pub(super) fn cmd_load(args: &[String]) -> Result<Value, String> {
     while index < rest.len() {
         match rest[index].as_str() {
             "--fd" if index + 1 < rest.len() => {
-                let fd = rest[index + 1]
-                    .parse::<i32>()
-                    .map_err(|_| "--fd must be a non-negative integer".to_string())?;
+                let fd = rest[index + 1].parse::<i32>().map_err(|_| {
+                    CredentialError::invalid(
+                        "credential.load",
+                        "--fd must be a non-negative integer",
+                    )
+                })?;
                 if fd < 0 {
-                    return Err("--fd must be a non-negative integer".into());
+                    return Err(CredentialError::invalid(
+                        "credential.load",
+                        "--fd must be a non-negative integer",
+                    ));
                 }
                 fd_target = Some(fd);
                 index += 2;
@@ -246,10 +271,10 @@ pub(super) fn cmd_load(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let name = positional
-        .first()
-        .ok_or("usage: cos credential load <name>")?;
-    let id = CredentialId::parse(&namespace, name).map_err(|error| error.to_string())?;
+    let name = positional.first().ok_or_else(|| {
+        CredentialError::invalid("credential.load", "usage: cos credential load <name>")
+    })?;
+    let id = CredentialId::parse(&namespace, name)?;
     require_secret(
         Verb::SECRET_READ,
         credential_scope(id.namespace(), id.name())?,
@@ -263,7 +288,7 @@ pub(super) fn cmd_load(args: &[String]) -> Result<Value, String> {
 /// newline) to file descriptor `n` and the `"value"` key is replaced by
 /// `"value_fd": n` so the secret never crosses the IPC / stdout boundary.
 /// Otherwise the value is embedded in the JSON as before.
-fn build_load_result(loaded: LoadedCredential, fd_target: Option<i32>) -> Result<Value, String> {
+fn build_load_result(loaded: LoadedCredential, fd_target: Option<i32>) -> CredentialResult<Value> {
     let mut result = json!({
         "name": loaded.name,
         "namespace": loaded.namespace,
@@ -295,7 +320,7 @@ fn build_load_result(loaded: LoadedCredential, fd_target: Option<i32>) -> Result
 /// transfer — never via stdout (where shell history / pipes / audit sinks
 /// can capture them).
 #[cfg(unix)]
-fn write_value_to_fd(fd: i32, bytes: &[u8]) -> Result<(), String> {
+fn write_value_to_fd(fd: i32, bytes: &[u8]) -> CredentialResult<()> {
     let mut remaining = bytes;
     while !remaining.is_empty() {
         let n = unsafe {
@@ -306,13 +331,17 @@ fn write_value_to_fd(fd: i32, bytes: &[u8]) -> Result<(), String> {
             )
         };
         if n < 0 {
-            return Err(format!(
-                "failed to write to fd {fd}: {}",
-                std::io::Error::last_os_error()
+            return Err(CredentialError::io(
+                "credential.write_fd",
+                format!("failed to write to fd {fd}"),
+                std::io::Error::last_os_error(),
             ));
         }
         if n == 0 {
-            return Err(format!("write to fd {fd} returned 0 bytes"));
+            return Err(CredentialError::unavailable(
+                "credential.write_fd",
+                format!("write to fd {fd} returned 0 bytes"),
+            ));
         }
         remaining = &remaining[(n as usize)..];
     }
@@ -320,14 +349,17 @@ fn write_value_to_fd(fd: i32, bytes: &[u8]) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn write_value_to_fd(_fd: i32, _bytes: &[u8]) -> Result<(), String> {
-    Err("--fd is only supported on Unix".into())
+fn write_value_to_fd(_fd: i32, _bytes: &[u8]) -> CredentialResult<()> {
+    Err(CredentialError::invalid(
+        "credential.write_fd",
+        "--fd is only supported on Unix",
+    ))
 }
 
 /// Create a credential bundle — a named group of credential keys.
 ///
 /// Usage: cos credential bundle <bundle-name> --keys key1,key2,key3 [--namespace NS]
-pub(super) fn cmd_bundle(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_bundle(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
@@ -348,15 +380,26 @@ pub(super) fn cmd_bundle(args: &[String]) -> Result<Value, String> {
         }
     }
 
-    let bundle_name = positional
-        .first()
-        .ok_or("usage: cos credential bundle <name> --keys key1,key2,key3 [--namespace NS]")?;
+    let bundle_name = positional.first().ok_or_else(|| {
+        CredentialError::invalid(
+            "credential.bundle",
+            "usage: cos credential bundle <name> --keys key1,key2,key3 [--namespace NS]",
+        )
+    })?;
 
-    let keys_str = keys.ok_or("--keys is required (comma-separated list of credential names)")?;
+    let keys_str = keys.ok_or_else(|| {
+        CredentialError::invalid(
+            "credential.bundle",
+            "--keys is required (comma-separated list of credential names)",
+        )
+    })?;
     let key_list: Vec<String> = keys_str.split(',').map(|s| s.trim().to_string()).collect();
 
     if key_list.is_empty() {
-        return Err("--keys must specify at least one credential name".into());
+        return Err(CredentialError::invalid(
+            "credential.bundle",
+            "--keys must specify at least one credential name",
+        ));
     }
     validate_credential_component("bundle name", bundle_name)?;
     for key in &key_list {
@@ -367,10 +410,8 @@ pub(super) fn cmd_bundle(args: &[String]) -> Result<Value, String> {
         require_secret(Verb::SECRET_GRANT, credential_scope(&namespace, key)?)?;
     }
 
-    let namespace_id = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
-    let manifest = FILE_STORE
-        .write_bundle(&namespace_id, bundle_name, key_list)
-        .map_err(|error| error.to_string())?;
+    let namespace_id = NamespaceId::parse(&namespace)?;
+    let manifest = FILE_STORE.write_bundle(&namespace_id, bundle_name, key_list)?;
 
     Ok(json!({
         "bundle": manifest.name,
@@ -383,23 +424,33 @@ pub(super) fn cmd_bundle(args: &[String]) -> Result<Value, String> {
 /// Load all credentials in a bundle as a JSON object.
 ///
 /// Usage: cos credential load-bundle <bundle-name> [--namespace NS]
-pub(super) fn cmd_load_bundle(args: &[String]) -> Result<Value, String> {
+pub(super) fn cmd_load_bundle(args: &[String]) -> CredentialResult<Value> {
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
 
-    let bundle_name = rest
-        .first()
-        .ok_or("usage: cos credential load-bundle <name> [--namespace NS]")?;
-    let namespace_id = NamespaceId::parse(&namespace).map_err(|error| error.to_string())?;
+    let bundle_name = rest.first().ok_or_else(|| {
+        CredentialError::invalid(
+            "credential.load_bundle",
+            "usage: cos credential load-bundle <name> [--namespace NS]",
+        )
+    })?;
+    let namespace_id = NamespaceId::parse(&namespace)?;
     validate_credential_component("bundle name", bundle_name)?;
     require_secret(Verb::SECRET_READ, bundle_scope(&namespace, bundle_name)?)?;
 
     let manifest = FILE_STORE
-        .read_bundle(&namespace_id, bundle_name)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| format!("bundle not found: {bundle_name}"))?;
+        .read_bundle(&namespace_id, bundle_name)?
+        .ok_or_else(|| {
+            CredentialError::not_found(
+                "credential.load_bundle",
+                format!("bundle not found: {bundle_name}"),
+            )
+        })?;
     if manifest.name != *bundle_name || manifest.namespace != namespace {
-        return Err("bundle metadata does not match its storage path".to_string());
+        return Err(CredentialError::corrupt(
+            "credential.load_bundle",
+            "bundle metadata does not match its storage path",
+        ));
     }
 
     // A bundle is grouping metadata, not an authority container. Authorize

@@ -185,8 +185,28 @@ impl OpenAICompatConfig {
     }
 
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(alias, model, agent)
-            .expect("test credential configuration should resolve")
+        Self::try_from_agent_config(alias, model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy OpenAI-compatible configuration failed");
+            Self::unconfigured(alias, model, agent)
+        })
+    }
+
+    fn unconfigured(alias: &str, model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            alias: alias.to_string(),
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url_for(alias).to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
@@ -194,6 +214,7 @@ pub struct OpenAICompatProvider {
     cfg: OpenAICompatConfig,
     transport: HttpTransport,
     copilot_auth: Arc<dyn CopilotAuthSource>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 struct RequestTarget {
@@ -303,6 +324,7 @@ impl OpenAICompatProvider {
             cfg,
             transport: transport.clone(),
             copilot_auth: Arc::new(LiveCopilotAuthSource::new(transport)),
+            initialization_error: None,
         }
     }
 
@@ -326,18 +348,34 @@ impl OpenAICompatProvider {
             cfg,
             transport: transport.clone(),
             copilot_auth: Arc::new(LiveCopilotAuthSource::with_endpoints(transport, endpoints)),
+            initialization_error: None,
         }
     }
 
     pub fn try_from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(OpenAICompatConfig::try_from_agent_config(
-            alias, model, agent,
-        )?))
+        let config = OpenAICompatConfig::try_from_agent_config(alias, model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
     }
 
     pub fn from_agent_config(alias: &str, model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(alias, model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(alias, model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(
+                    error = %error,
+                    "legacy OpenAI-compatible provider initialization failed"
+                );
+                let transport = HttpTransport::legacy_default();
+                Self {
+                    cfg: OpenAICompatConfig::unconfigured(alias, model, agent),
+                    transport: transport.clone(),
+                    copilot_auth: Arc::new(LiveCopilotAuthSource::new(transport)),
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new("openai_compat", error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -360,6 +398,7 @@ impl OpenAICompatProvider {
                 Some(q) => {
                     format!("{base}/openai/deployments/{deployment}/chat/completions?{q}")
                 }
+
                 None => format!("{base}/openai/deployments/{deployment}/chat/completions"),
             };
         }
@@ -369,6 +408,13 @@ impl OpenAICompatProvider {
         // `/chat/completions` plus any trailing query string the
         // user may have configured for a proxy.
         endpoint_from_base(&self.cfg.base_url)
+    }
+
+    fn ensure_initialized(&self) -> Result<()> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => Ok(()),
+        }
     }
 
     async fn request_target(
@@ -508,6 +554,7 @@ fn map_copilot_error(error: super::copilot_auth::CopilotAuthError) -> LlmError {
                 component: resource,
             },
         ),
+        CopilotAuthError::Infrastructure(error) => LlmError::from(error),
     }
 }
 
@@ -632,6 +679,9 @@ impl Provider for OpenAICompatProvider {
     }
 
     fn is_configured(&self) -> bool {
+        if self.initialization_error.is_some() || !self.transport.is_ready() {
+            return false;
+        }
         // Azure requires both a key and the deployment URL — no
         // sensible default base.
         if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
@@ -643,6 +693,7 @@ impl Provider for OpenAICompatProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        self.ensure_initialized()?;
         if self.cfg.alias == "azure" && self.cfg.base_url.is_empty() {
             return Err(LlmError::NotConfigured(
                 "azure provider needs `agent.base_url` set to the Azure OpenAI \
@@ -694,7 +745,7 @@ impl Provider for OpenAICompatProvider {
 
             let mut http = self
                 .transport
-                .post(&target.endpoint_url, self.cfg.request_timeout)
+                .post(&target.endpoint_url, self.cfg.request_timeout)?
                 .header("Content-Type", "application/json")
                 .json(&body);
 
@@ -806,6 +857,7 @@ impl Provider for OpenAICompatProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        self.ensure_initialized()?;
         // HIGH-4: real SSE delta streaming. Build the request body
         // with stream:true, POST it, validate the HTTP status
         // synchronously (so 401/429/5xx surface immediately), then
@@ -855,7 +907,7 @@ impl Provider for OpenAICompatProvider {
 
             let mut http = self
                 .transport
-                .post(&target.endpoint_url, self.cfg.request_timeout)
+                .post(&target.endpoint_url, self.cfg.request_timeout)?
                 .header("Content-Type", "application/json")
                 .header("Accept", "text/event-stream")
                 .json(&body);

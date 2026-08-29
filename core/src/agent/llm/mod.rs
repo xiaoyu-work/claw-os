@@ -88,11 +88,25 @@ pub enum LlmError {
 pub type Result<T> = std::result::Result<T, LlmError>;
 
 #[derive(Debug, thiserror::Error)]
+#[error("{provider} provider initialization failed")]
+pub struct ProviderInitializationError {
+    provider: &'static str,
+    #[source]
+    source: LlmError,
+}
+
+impl ProviderInitializationError {
+    pub(crate) fn new(provider: &'static str, source: LlmError) -> Self {
+        Self { provider, source }
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum ProviderInfrastructureError {
     #[error("failed to build provider HTTP transport")]
     HttpTransport {
         #[source]
-        source: reqwest::Error,
+        source: std::sync::Arc<construction::HttpTransportInitializationError>,
     },
 
     #[error(transparent)]
@@ -102,11 +116,40 @@ pub enum ProviderInfrastructureError {
         "provider infrastructure state '{component}' is unavailable because its lock was poisoned"
     )]
     StatePoisoned { component: &'static str },
+
+    #[error(transparent)]
+    Initialization {
+        #[from]
+        source: std::sync::Arc<ProviderInitializationError>,
+    },
+}
+
+pub(crate) fn deferred_initialization_error(
+    source: &std::sync::Arc<ProviderInitializationError>,
+) -> LlmError {
+    ProviderInfrastructureError::Initialization {
+        source: std::sync::Arc::clone(source),
+    }
+    .into()
 }
 
 impl From<credential_pool::PoolError> for LlmError {
     fn from(error: credential_pool::PoolError) -> Self {
-        ProviderInfrastructureError::from(error).into()
+        match error {
+            credential_pool::PoolError::AllCoolingDown { wait_ms, .. } => Self::RateLimited {
+                retry_after_ms: u64::try_from(wait_ms).unwrap_or(u64::MAX),
+            },
+            credential_pool::PoolError::Empty { .. }
+            | credential_pool::PoolError::InvalidEntry { .. } => {
+                Self::NotConfigured(error.to_string())
+            }
+            credential_pool::PoolError::CredentialSource {
+                credential, source, ..
+            } => Self::CredentialStore { credential, source },
+            credential_pool::PoolError::StatePoisoned { .. } => {
+                ProviderInfrastructureError::from(error).into()
+            }
+        }
     }
 }
 

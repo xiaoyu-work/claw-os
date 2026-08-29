@@ -100,14 +100,34 @@ impl GeminiConfig {
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy Gemini configuration failed");
+            Self::unconfigured(model, agent)
+        })
+    }
+
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url().to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
 pub struct GeminiProvider {
     cfg: GeminiConfig,
     transport: HttpTransport,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl GeminiProvider {
@@ -116,18 +136,32 @@ impl GeminiProvider {
     }
 
     pub fn new_with_transport(cfg: GeminiConfig, transport: HttpTransport) -> Self {
-        Self { cfg, transport }
+        Self {
+            cfg,
+            transport,
+            initialization_error: None,
+        }
     }
 
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(GeminiConfig::try_from_agent_config(
-            model, agent,
-        )?))
+        let config = GeminiConfig::try_from_agent_config(model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Gemini provider initialization failed");
+                Self {
+                    cfg: GeminiConfig::unconfigured(model, agent),
+                    transport: HttpTransport::legacy_default(),
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -135,6 +169,13 @@ impl GeminiProvider {
             "{}/{}/models/{}:generateContent",
             self.cfg.base_url, API_VERSION, self.cfg.model
         )
+    }
+
+    fn ensure_initialized(&self) -> Result<()> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -159,10 +200,14 @@ impl Provider for GeminiProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
+        self.initialization_error.is_none()
+            && self.transport.is_ready()
+            && (self.cfg.api_key.is_some()
+                || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        self.ensure_initialized()?;
         let body = wire::build_request_body(&request, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
@@ -177,7 +222,7 @@ impl Provider for GeminiProvider {
 
         let mut http = self
             .transport
-            .post(self.endpoint(), self.cfg.request_timeout)
+            .post(self.endpoint(), self.cfg.request_timeout)?
             .header("Content-Type", "application/json")
             .json(&body);
 
@@ -273,6 +318,7 @@ impl Provider for GeminiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        self.ensure_initialized()?;
         // HIGH-4: real SSE delta streaming requires speaking
         // Gemini's `:streamGenerateContent?alt=sse` endpoint, which
         // differs enough from generateContent that wiring it is a

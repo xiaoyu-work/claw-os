@@ -125,7 +125,8 @@ fn parse_args(args: &[String]) -> Result<(String, String, bool, u64), String> {
             }
         }
     }
-    super::validate_credential_component("namespace", &namespace)?;
+    super::validate_credential_component("namespace", &namespace)
+        .map_err(|error| error.to_string())?;
     let provider = provider.ok_or(
         "usage: cos credential oauth-login <google|microsoft> [--namespace NS] [--no-open] [--timeout SECS]",
     )?;
@@ -193,8 +194,10 @@ fn google_login(
     let granted_scopes = google_granted_scopes(&token)?;
     super::require_secret(
         Verb::SECRET_WRITE,
-        super::credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")?,
-    )?;
+        super::credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     store_token(
         store,
         namespace,
@@ -210,8 +213,10 @@ fn google_login(
     if let Some(refresh_token) = refresh_token {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, "GOOGLE_REFRESH_TOKEN")?,
-        )?;
+            super::credential_scope(namespace, "GOOGLE_REFRESH_TOKEN")
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
         store_token(
             store,
             namespace,
@@ -264,7 +269,8 @@ fn microsoft_login(
     timeout_secs: u64,
 ) -> Result<Value, String> {
     let (client_id, tenant_id) = microsoft_client_config(store, namespace)?;
-    super::validate_credential_component("Microsoft tenant", &tenant_id)?;
+    super::validate_credential_component("Microsoft tenant", &tenant_id)
+        .map_err(|error| error.to_string())?;
     preflight_token_storage(
         namespace,
         &["MICROSOFT_ACCESS_TOKEN", "MICROSOFT_REFRESH_TOKEN"],
@@ -372,8 +378,9 @@ fn microsoft_login(
     for name in ["MICROSOFT_ACCESS_TOKEN", "MICROSOFT_REFRESH_TOKEN"] {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, name)?,
-        )?;
+            super::credential_scope(namespace, name).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     }
     store_token(
         store,
@@ -412,8 +419,9 @@ fn preflight_token_storage(namespace: &str, names: &[&str]) -> Result<(), String
     for name in names {
         super::require_secret(
             Verb::SECRET_WRITE,
-            super::credential_scope(namespace, name)?,
-        )?;
+            super::credential_scope(namespace, name).map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string())?;
     }
     Ok(())
 }
@@ -563,8 +571,9 @@ fn client_setting(
         .map_err(|error| error.to_string())?;
     super::require_secret(
         Verb::SECRET_READ,
-        super::credential_scope(id.namespace(), id.name())?,
-    )?;
+        super::credential_scope(id.namespace(), id.name()).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     if !store.contains(&id).map_err(|error| error.to_string())? {
         return Ok(None);
     }

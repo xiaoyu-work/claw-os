@@ -527,3 +527,18 @@ fn every_route_is_reachable_by_name_and_declares_an_access_class() {
         assert!(matches!(route.kind, Kind::Query | Kind::Mutation));
     }
 }
+
+#[tokio::test]
+async fn socket_preparation_preserves_operation_and_io_source() {
+    let directory = tempfile::tempdir().unwrap();
+    let parent_file = directory.path().join("not-a-directory");
+    std::fs::write(&parent_file, "occupied").unwrap();
+    let socket = parent_file.join("clawd.sock");
+
+    let error = prepare_socket(&socket).await.unwrap_err();
+
+    assert_eq!(error.operation(), "socket.create_parent");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
+}

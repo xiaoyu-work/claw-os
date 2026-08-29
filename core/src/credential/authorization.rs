@@ -1,36 +1,38 @@
 use super::*;
 
-pub(super) fn validate_credential_component(kind: &str, value: &str) -> Result<(), String> {
+pub(super) fn validate_credential_component(kind: &str, value: &str) -> CredentialResult<()> {
     if value.is_empty()
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(format!(
-            "{kind} must be alphanumeric (hyphens/underscores allowed)"
+        return Err(CredentialError::invalid(
+            "credential.validate",
+            format!("{kind} must be alphanumeric (hyphens/underscores allowed)"),
         ));
     }
     Ok(())
 }
 
-pub(super) fn credential_scope(namespace: &str, name: &str) -> Result<Scope, String> {
-    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+pub(super) fn credential_scope(namespace: &str, name: &str) -> CredentialResult<Scope> {
+    let id = CredentialId::parse(namespace, name)?;
     Ok(Scope::name(format!("{}/{}", id.namespace(), id.name())))
 }
 
-pub(super) fn namespace_scope(namespace: &str) -> Result<Scope, String> {
-    let namespace = NamespaceId::parse(namespace).map_err(|error| error.to_string())?;
+pub(super) fn namespace_scope(namespace: &str) -> CredentialResult<Scope> {
+    let namespace = NamespaceId::parse(namespace)?;
     Ok(Scope::name(format!("{}/*", namespace.as_str())))
 }
 
-pub(super) fn bundle_scope(namespace: &str, bundle: &str) -> Result<Scope, String> {
+pub(super) fn bundle_scope(namespace: &str, bundle: &str) -> CredentialResult<Scope> {
     validate_credential_component("namespace", namespace)?;
     validate_credential_component("bundle name", bundle)?;
     Ok(Scope::name(format!("{namespace}/bundles/{bundle}")))
 }
 
-pub(super) fn require_secret(verb: Verb, scope: Scope) -> Result<(), String> {
-    require_or_json(verb, scope).map_err(|value| value.to_string())
+pub(super) fn require_secret(verb: Verb, scope: Scope) -> CredentialResult<()> {
+    require_or_json(verb, scope)
+        .map_err(|value| CredentialError::unauthorized("credential.authorize", value.to_string()))
 }
 
 // ===========================================================================
@@ -71,14 +73,20 @@ pub(super) fn require_credential_access(
     namespace: &str,
     name: &str,
     current_tier: u8,
-) -> Result<(), String> {
+) -> CredentialResult<()> {
     if cred.name != name || cred.namespace != namespace {
-        return Err("credential metadata does not match its storage path".to_string());
+        return Err(CredentialError::corrupt(
+            "credential.authorize",
+            "credential metadata does not match its storage path",
+        ));
     }
     if !tier_grants_access(current_tier, cred.min_tier) {
-        return Err(format!(
-            "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
-            name, cred.min_tier, current_tier
+        return Err(CredentialError::unauthorized(
+            "credential.authorize",
+            format!(
+                "insufficient tier: credential '{}' requires tier {} or stronger (lower number), current session has tier {}",
+                name, cred.min_tier, current_tier
+            ),
         ));
     }
     Ok(())

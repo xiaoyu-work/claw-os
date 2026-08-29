@@ -271,8 +271,8 @@ fn blank_stored_key_uses_env_fallback_for_all_text_providers() {
     assert_eq!(source.kind, "credential");
 }
 
-#[test]
-fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
+#[tokio::test]
+async fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
     let _g = env_lock();
     let store = CredentialTestEnv::new("corrupt-provider-key");
     let credential_name = format!("corrupt-key-{}", uuid::Uuid::new_v4().simple());
@@ -303,10 +303,7 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
             Err(error) => error,
         };
         match &error {
-            llm::LlmError::CredentialStore {
-                credential,
-                source,
-            } => {
+            llm::LlmError::CredentialStore { credential, source } => {
                 assert_eq!(credential, &credential_name);
                 assert!(source.to_string().contains("parse"));
             }
@@ -327,6 +324,40 @@ fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers() {
             .as_str()
             .is_some_and(|fix| fix.contains("cos credential revoke")));
         assert!(!readiness.contains(ENV_VALUE));
+
+        let legacy: std::sync::Arc<dyn llm::Provider> = match provider {
+            "openai" => std::sync::Arc::new(
+                llm::providers::openai_compat::OpenAICompatProvider::from_agent_config(
+                    provider, model, &cfg,
+                ),
+            ),
+            "anthropic" => std::sync::Arc::new(
+                llm::providers::anthropic::AnthropicProvider::from_agent_config(model, &cfg),
+            ),
+            "gemini" => std::sync::Arc::new(
+                llm::providers::gemini::GeminiProvider::from_agent_config(model, &cfg),
+            ),
+            _ => unreachable!(),
+        };
+        assert!(!legacy.is_configured());
+        let request = llm::ChatRequest {
+            model: model.to_string(),
+            messages: vec![llm::Message::user_text("hello")],
+            system: None,
+            tools: Vec::new(),
+            tool_choice: Default::default(),
+            max_tokens: None,
+            temperature: None,
+            top_p: None,
+            stop_sequences: Vec::new(),
+            extra: serde_json::Value::Null,
+        };
+        assert!(matches!(
+            legacy.chat(request).await,
+            Err(llm::LlmError::Infrastructure(
+                llm::ProviderInfrastructureError::Initialization { .. }
+            ))
+        ));
     }
 }
 
@@ -451,10 +482,7 @@ fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
             Err(error) => error,
         };
         match &error {
-            llm::LlmError::CredentialStore {
-                credential,
-                source,
-            } => {
+            llm::LlmError::CredentialStore { credential, source } => {
                 assert_eq!(credential, &credential_name);
                 assert!(source.to_string().contains("parse"));
             }

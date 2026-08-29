@@ -196,8 +196,10 @@ flooding the socket.
   locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
   unavailable state and are never recovered with `PoisonError::into_inner`.
 - `server::DaemonError` owns socket setup, daemon initialization, and state
-  recovery. The binary reports runtime/server initialization failures instead
-  of panicking.
+  recovery. Socket parent creation, stale removal, credential passing, bind,
+  chmod, and accept preserve their `io::Error` sources and operation names.
+  The binary reports runtime/server initialization failures instead of
+  panicking.
 - Context and transaction handlers preserve `StateError` until the route
   boundary. `protocol::BrokerError` translates it once: corruption and
   unavailable state use #39's stable `unavailable` wire code; authorization and

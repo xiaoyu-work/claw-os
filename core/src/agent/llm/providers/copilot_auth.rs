@@ -203,6 +203,7 @@ pub enum CopilotAuthError {
     NotAuthorized(String),
     UnsupportedModel(String),
     StateUnavailable { resource: &'static str },
+    Infrastructure(crate::agent::llm::ProviderInfrastructureError),
 }
 
 impl std::fmt::Display for CopilotAuthError {
@@ -218,11 +219,25 @@ impl std::fmt::Display for CopilotAuthError {
             CopilotAuthError::StateUnavailable { resource } => {
                 write!(f, "Copilot {resource} state is unavailable")
             }
+            CopilotAuthError::Infrastructure(error) => error.fmt(f),
         }
     }
 }
 
-impl std::error::Error for CopilotAuthError {}
+impl std::error::Error for CopilotAuthError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Infrastructure(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::agent::llm::ProviderInfrastructureError> for CopilotAuthError {
+    fn from(error: crate::agent::llm::ProviderInfrastructureError) -> Self {
+        Self::Infrastructure(error)
+    }
+}
 
 impl From<reqwest::Error> for CopilotAuthError {
     fn from(e: reqwest::Error) -> Self {
@@ -291,7 +306,7 @@ pub async fn start_device_flow_with_transport(
 ) -> Result<DeviceCode, CopilotAuthError> {
     let body = [("client_id", COPILOT_CLIENT_ID), ("scope", SCOPES)];
     let resp = transport
-        .post(DEVICE_CODE_URL, AUTH_HTTP_TIMEOUT)
+        .post(DEVICE_CODE_URL, AUTH_HTTP_TIMEOUT)?
         .header("Accept", "application/json")
         .form(&body)
         .send()
@@ -336,7 +351,7 @@ pub async fn poll_device_flow_with_transport(
         ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
     ];
     let resp = transport
-        .post(ACCESS_TOKEN_URL, AUTH_HTTP_TIMEOUT)
+        .post(ACCESS_TOKEN_URL, AUTH_HTTP_TIMEOUT)?
         .header("Accept", "application/json")
         .form(&body)
         .send()
@@ -410,7 +425,7 @@ pub(crate) async fn exchange_for_copilot_token_with_transport(
     endpoints: &CopilotAuthEndpoints,
 ) -> Result<CopilotToken, CopilotAuthError> {
     let resp = transport
-        .get(&endpoints.token_url, AUTH_HTTP_TIMEOUT)
+        .get(&endpoints.token_url, AUTH_HTTP_TIMEOUT)?
         .header("Accept", "application/json")
         .header("Editor-Version", EDITOR_VERSION)
         .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
@@ -661,7 +676,7 @@ async fn fetch_copilot_models(
 ) -> Result<Vec<CopilotModel>, CopilotAuthError> {
     let url = format!("{}/models", token.base_url.trim_end_matches('/'));
     let resp = transport
-        .get(&url, AUTH_HTTP_TIMEOUT)
+        .get(&url, AUTH_HTTP_TIMEOUT)?
         .header("Accept", "application/json")
         .header("Editor-Version", EDITOR_VERSION)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)

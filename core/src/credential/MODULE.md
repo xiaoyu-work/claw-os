@@ -43,14 +43,16 @@ material internals.
 
 ## Error Boundaries
 
-- `CredentialStore`, `run_typed`, and `try_load_typed` are the typed ownership
-  boundaries. Provider composition consumes `try_load_typed`.
+- `CredentialStore`, command handlers, `run_typed`, and `try_load_typed` are
+  typed ownership boundaries. Reads, parsing, crypto, randomness, persistence,
+  and locking remain `CredentialResult` end-to-end; provider composition
+  consumes `try_load_typed`.
 - `run` and `try_load` retain their historical `Result<_, String>` signatures
   for Rust/CLI compatibility and stringify exactly once.
-- CLI argument parsing, OAuth presentation, and legacy rollback adapters still
-  use strings internally. They do not own randomness, key material, files,
-  locks, or keyring state; those operations have already crossed the typed
-  boundary before these adapters render a public message.
+- OAuth transport remains an explicit external adapter and maps its
+  network/protocol strings to `CredentialErrorKind::External` at command
+  dispatch. It does not own randomness, key material, files, locks, or keyring
+  state.
 
 ## Change Together
 

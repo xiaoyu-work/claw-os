@@ -9,14 +9,19 @@ use std::time::Duration;
 
 use crate::agent::llm::credential_pool::{Pool, PoolEntry, SelectionStrategy};
 use crate::agent::llm::{LlmError, ProviderInfrastructureError, Result};
-use crate::credential::CredentialResult;
+use crate::credential::{CredentialError, CredentialResult};
 
 /// Read-only secret source used by provider composition.
 ///
 /// Implementations return owned values so providers never retain a handle to
 /// credential persistence or process environment state.
 pub trait CredentialSource: Send + Sync {
-    fn load_stored(&self, name: &str) -> CredentialResult<Option<String>>;
+    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String>;
+    fn load_environment(&self, name: &str) -> Option<String>;
+}
+
+pub trait TypedCredentialSource: Send + Sync {
+    fn load_stored_typed(&self, name: &str) -> CredentialResult<Option<String>>;
     fn load_environment(&self, name: &str) -> Option<String>;
 }
 
@@ -24,7 +29,17 @@ pub trait CredentialSource: Send + Sync {
 pub struct ProcessCredentialSource;
 
 impl CredentialSource for ProcessCredentialSource {
-    fn load_stored(&self, name: &str) -> CredentialResult<Option<String>> {
+    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
+        crate::credential::try_load(name, "agent")
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        std::env::var(name).ok()
+    }
+}
+
+impl TypedCredentialSource for ProcessCredentialSource {
+    fn load_stored_typed(&self, name: &str) -> CredentialResult<Option<String>> {
         crate::credential::try_load_typed(name, "agent")
     }
 
@@ -36,46 +51,93 @@ impl CredentialSource for ProcessCredentialSource {
 /// Shared HTTP connection pool and request timeout policy for LLM providers.
 #[derive(Clone)]
 pub struct HttpTransport {
-    client: reqwest::Client,
+    client: Option<reqwest::Client>,
+    initialization_error: Option<Arc<HttpTransportInitializationError>>,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("failed to build provider HTTP transport")]
+pub struct HttpTransportInitializationError {
+    #[source]
+    source: reqwest::Error,
 }
 
 impl HttpTransport {
     pub fn new() -> Result<Self> {
         build_http_client()
-            .map(|client| Self { client })
-            .map_err(|source| ProviderInfrastructureError::HttpTransport { source }.into())
+            .map(|client| Self {
+                client: Some(client),
+                initialization_error: None,
+            })
+            .map_err(|source| {
+                ProviderInfrastructureError::HttpTransport {
+                    source: Arc::new(HttpTransportInitializationError { source }),
+                }
+                .into()
+            })
     }
 
     /// Infallible compatibility boundary for legacy constructors whose return
     /// types cannot surface HTTP-client construction errors.
     pub fn legacy_default() -> Self {
-        let client = build_http_client().unwrap_or_else(|error| {
-            tracing::error!(
-                error = %error,
-                "legacy provider constructor could not initialize the configured HTTP transport"
-            );
-            // The legacy API cannot return an error. `Client::new` uses
-            // reqwest's compiled default TLS backend; failure to initialize
-            // that static backend is the one unrecoverable local invariant.
-            reqwest::Client::new()
-        });
-        Self { client }
+        match build_http_client() {
+            Ok(client) => Self {
+                client: Some(client),
+                initialization_error: None,
+            },
+            Err(source) => {
+                let error = Arc::new(HttpTransportInitializationError { source });
+                tracing::error!(error = %error, "legacy provider HTTP initialization failed");
+                Self {
+                    client: None,
+                    initialization_error: Some(error),
+                }
+            }
+        }
     }
 
     pub fn post(
         &self,
         url: impl reqwest::IntoUrl,
         request_timeout: Duration,
-    ) -> reqwest::RequestBuilder {
-        with_timeout(self.client.post(url), request_timeout)
+    ) -> std::result::Result<reqwest::RequestBuilder, ProviderInfrastructureError> {
+        Ok(with_timeout(self.client()?.post(url), request_timeout))
     }
 
     pub fn get(
         &self,
         url: impl reqwest::IntoUrl,
         request_timeout: Duration,
-    ) -> reqwest::RequestBuilder {
-        with_timeout(self.client.get(url), request_timeout)
+    ) -> std::result::Result<reqwest::RequestBuilder, ProviderInfrastructureError> {
+        Ok(with_timeout(self.client()?.get(url), request_timeout))
+    }
+
+    pub fn is_ready(&self) -> bool {
+        self.client.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn failed_for_test() -> Self {
+        let source = reqwest::Client::builder()
+            .user_agent("\n")
+            .build()
+            .expect_err("invalid user-agent must reject HTTP client initialization");
+        Self {
+            client: None,
+            initialization_error: Some(Arc::new(HttpTransportInitializationError { source })),
+        }
+    }
+
+    fn client(&self) -> std::result::Result<&reqwest::Client, ProviderInfrastructureError> {
+        match (&self.client, &self.initialization_error) {
+            (Some(client), _) => Ok(client),
+            (None, Some(source)) => Err(ProviderInfrastructureError::HttpTransport {
+                source: Arc::clone(source),
+            }),
+            (None, None) => Err(ProviderInfrastructureError::StatePoisoned {
+                component: "http_transport",
+            }),
+        }
     }
 }
 
@@ -102,26 +164,74 @@ fn with_timeout(
 #[derive(Clone)]
 pub struct ProviderBuildContext {
     credentials: Arc<dyn CredentialSource>,
+    typed_credentials: Arc<dyn TypedCredentialSource>,
     transport: HttpTransport,
+}
+
+struct LegacyTypedCredentialSource(Arc<dyn CredentialSource>);
+
+impl TypedCredentialSource for LegacyTypedCredentialSource {
+    fn load_stored_typed(&self, name: &str) -> CredentialResult<Option<String>> {
+        self.0
+            .load_stored(name)
+            .map_err(|message| CredentialError::external("credential.source", message))
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        self.0.load_environment(name)
+    }
+}
+
+struct TypedLegacyCredentialSource(Arc<dyn TypedCredentialSource>);
+
+impl CredentialSource for TypedLegacyCredentialSource {
+    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
+        self.0
+            .load_stored_typed(name)
+            .map_err(|error| error.to_string())
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        self.0.load_environment(name)
+    }
 }
 
 impl ProviderBuildContext {
     pub fn from_process() -> Result<Self> {
         Ok(Self {
             credentials: Arc::new(ProcessCredentialSource),
+            typed_credentials: Arc::new(ProcessCredentialSource),
             transport: HttpTransport::new()?,
         })
     }
 
     pub fn new(credentials: Arc<dyn CredentialSource>, transport: HttpTransport) -> Self {
+        let typed_credentials = Arc::new(LegacyTypedCredentialSource(Arc::clone(&credentials)));
         Self {
             credentials,
+            typed_credentials,
+            transport,
+        }
+    }
+
+    pub fn new_typed(
+        typed_credentials: Arc<dyn TypedCredentialSource>,
+        transport: HttpTransport,
+    ) -> Self {
+        let credentials = Arc::new(TypedLegacyCredentialSource(Arc::clone(&typed_credentials)));
+        Self {
+            credentials,
+            typed_credentials,
             transport,
         }
     }
 
     pub fn credentials(&self) -> &dyn CredentialSource {
         self.credentials.as_ref()
+    }
+
+    pub fn typed_credentials(&self) -> &dyn TypedCredentialSource {
+        self.typed_credentials.as_ref()
     }
 
     pub fn transport(&self) -> HttpTransport {
@@ -179,16 +289,38 @@ pub fn resolve_api_credentials(
     cfg: ApiCredentialConfig<'_>,
     source: &dyn CredentialSource,
 ) -> Result<ResolvedApiCredentials> {
+    try_resolve_api_credentials(pool_name, cfg, &BorrowedLegacyCredentialSource(source))
+}
+
+struct BorrowedLegacyCredentialSource<'a>(&'a dyn CredentialSource);
+
+impl TypedCredentialSource for BorrowedLegacyCredentialSource<'_> {
+    fn load_stored_typed(&self, name: &str) -> CredentialResult<Option<String>> {
+        self.0
+            .load_stored(name)
+            .map_err(|message| CredentialError::external("credential.source", message))
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        self.0.load_environment(name)
+    }
+}
+
+pub fn try_resolve_api_credentials(
+    pool_name: impl Into<String>,
+    cfg: ApiCredentialConfig<'_>,
+    source: &dyn TypedCredentialSource,
+) -> Result<ResolvedApiCredentials> {
     let pool_name = pool_name.into();
     if cfg.pool_declared() {
         let mut entries = Vec::new();
         for credential in cfg.pool_credentials {
-            match source
-                .load_stored(credential)
-                .map_err(|source| LlmError::CredentialStore {
+            match source.load_stored_typed(credential).map_err(|source| {
+                LlmError::CredentialStore {
                     credential: credential.clone(),
                     source,
-                })? {
+                }
+            })? {
                 Some(value) if !value.trim().is_empty() => entries.push(
                     PoolEntry::from_credential(credential.clone(), value.trim().to_string()),
                 ),
@@ -227,7 +359,7 @@ pub fn resolve_api_credentials(
     }
 
     Ok(ResolvedApiCredentials {
-        api_key: resolve_single_api_key(cfg.credential_name, cfg.environment_name, source)?,
+        api_key: try_resolve_single_api_key(cfg.credential_name, cfg.environment_name, source)?,
         pool: None,
     })
 }
@@ -237,9 +369,21 @@ pub fn resolve_single_api_key(
     environment_name: Option<&str>,
     source: &dyn CredentialSource,
 ) -> Result<Option<String>> {
+    try_resolve_single_api_key(
+        credential_name,
+        environment_name,
+        &BorrowedLegacyCredentialSource(source),
+    )
+}
+
+pub fn try_resolve_single_api_key(
+    credential_name: Option<&str>,
+    environment_name: Option<&str>,
+    source: &dyn TypedCredentialSource,
+) -> Result<Option<String>> {
     if let Some(name) = credential_name {
         match source
-            .load_stored(name)
+            .load_stored_typed(name)
             .map_err(|source| LlmError::CredentialStore {
                 credential: name.to_string(),
                 source,
@@ -263,7 +407,7 @@ pub fn resolve_process_api_key(
     credential_name: Option<&str>,
     environment_name: Option<&str>,
 ) -> Result<Option<String>> {
-    resolve_single_api_key(credential_name, environment_name, &ProcessCredentialSource)
+    try_resolve_single_api_key(credential_name, environment_name, &ProcessCredentialSource)
 }
 
 /// Resolve one AWS value using stored credential, configured env, then the
@@ -274,9 +418,27 @@ pub fn resolve_aws_value(
     environment_name: Option<&str>,
     default_environment_name: &str,
     source: &dyn CredentialSource,
+) -> Option<String> {
+    if let Some(name) = credential_name {
+        if let Ok(Some(value)) = source.load_stored(name) {
+            if !value.is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    source
+        .load_environment(environment_name.unwrap_or(default_environment_name))
+        .filter(|value| !value.is_empty())
+}
+
+pub fn try_resolve_aws_value(
+    credential_name: Option<&str>,
+    environment_name: Option<&str>,
+    default_environment_name: &str,
+    source: &dyn TypedCredentialSource,
 ) -> Result<Option<String>> {
     if let Some(name) = credential_name {
-        match source.load_stored(name) {
+        match source.load_stored_typed(name) {
             Ok(Some(value)) if !value.is_empty() => return Ok(Some(value)),
             Ok(_) => {}
             Err(source) => {

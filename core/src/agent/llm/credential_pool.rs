@@ -317,7 +317,10 @@ impl Pool {
                     return Err(PoolError::CredentialSource {
                         name,
                         credential: (*credential).to_string(),
-                        source,
+                        source: crate::credential::CredentialError::external(
+                            "credential.source",
+                            source,
+                        ),
                     })
                 }
             }

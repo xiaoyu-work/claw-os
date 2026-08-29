@@ -9,7 +9,21 @@ struct FakeCredentialSource {
 }
 
 impl CredentialSource for FakeCredentialSource {
-    fn load_stored(&self, name: &str) -> crate::credential::CredentialResult<Option<String>> {
+    fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
+        match self.stored.get(name) {
+            Some(Ok(value)) => Ok(value.clone()),
+            Some(Err(error)) => Err(error.to_string()),
+            None => Ok(None),
+        }
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        self.environment.get(name).cloned()
+    }
+}
+
+impl TypedCredentialSource for FakeCredentialSource {
+    fn load_stored_typed(&self, name: &str) -> crate::credential::CredentialResult<Option<String>> {
         match self.stored.get(name) {
             Some(Ok(value)) => Ok(value.clone()),
             Some(Err(error)) => Err(crate::credential::CredentialError::external(
@@ -131,21 +145,15 @@ fn aws_resolution_uses_stored_then_configured_then_default_environment() {
     };
 
     assert_eq!(
-        resolve_aws_value(Some("stored"), Some("CONFIGURED"), "DEFAULT", &source)
-            .unwrap()
-            .as_deref(),
+        resolve_aws_value(Some("stored"), Some("CONFIGURED"), "DEFAULT", &source).as_deref(),
         Some("stored-value")
     );
     assert_eq!(
-        resolve_aws_value(Some("missing"), Some("CONFIGURED"), "DEFAULT", &source)
-            .unwrap()
-            .as_deref(),
+        resolve_aws_value(Some("missing"), Some("CONFIGURED"), "DEFAULT", &source).as_deref(),
         Some("configured-value")
     );
     assert_eq!(
-        resolve_aws_value(Some("missing"), None, "DEFAULT", &source)
-            .unwrap()
-            .as_deref(),
+        resolve_aws_value(Some("missing"), None, "DEFAULT", &source).as_deref(),
         Some("default-value")
     );
 }
@@ -163,12 +171,30 @@ fn aws_stored_credential_failure_is_not_rescued_by_environment() {
         environment: HashMap::from([("DEFAULT".into(), "must-not-rescue".into())]),
     };
 
-    let error = resolve_aws_value(Some("broken"), None, "DEFAULT", &source).unwrap_err();
+    let error = try_resolve_aws_value(Some("broken"), None, "DEFAULT", &source).unwrap_err();
     assert!(matches!(
         &error,
         LlmError::CredentialStore { credential, .. } if credential == "broken"
     ));
     assert!(!error.to_string().contains("must-not-rescue"));
+}
+
+#[test]
+fn legacy_transport_stores_initialization_failure_without_panicking() {
+    let transport = HttpTransport::failed_for_test();
+
+    assert!(!transport.is_ready());
+    let error = transport
+        .post("https://example.invalid", Duration::from_secs(1))
+        .unwrap_err();
+    match error {
+        ProviderInfrastructureError::HttpTransport { source } => {
+            assert!(std::error::Error::source(source.as_ref())
+                .and_then(|source| source.downcast_ref::<reqwest::Error>())
+                .is_some());
+        }
+        other => panic!("expected HTTP initialization failure, got {other:?}"),
+    }
 }
 
 #[test]

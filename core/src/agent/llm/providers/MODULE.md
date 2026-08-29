@@ -43,11 +43,14 @@ wire formats. Setup/model discovery changes stay consistent with runtime
 routing.
 
 Provider constructors used by production composition are fallible. Legacy
-infallible constructors remain source-compatible, log deferred initialization
-failures, and produce an unconfigured provider rather than panicking or
-inventing credentials. Credential-pool observer methods likewise retain their
-old signatures for source compatibility; production request/accounting paths
-use `try_*` methods so poison becomes a typed infrastructure error.
+infallible constructors remain source-compatible and store deferred typed
+initialization failures; `is_configured` returns false and requests return that
+failure without creating a fallback HTTP client or inventing credentials.
+`CredentialSource` and `resolve_aws_value` retain their original public
+signatures, while `TypedCredentialSource` and `try_resolve_aws_value` drive
+source-preserving production composition. A pool whose keys are cooling maps
+to `RateLimited` so provider-chain fallback/retry semantics remain unchanged;
+only poisoned/unavailable pool state maps to infrastructure failure.
 
 ## Tests
 

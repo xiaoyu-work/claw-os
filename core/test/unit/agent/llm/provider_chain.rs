@@ -9,7 +9,57 @@ fn slot(name: &str, model: &str, responses: Vec<MockResponse>) -> ProviderSlot {
     for response in responses {
         provider.push_response(response);
     }
+
     ProviderSlot::new(provider, name, model)
+}
+
+struct CoolingProvider {
+    pool: crate::agent::llm::credential_pool::Pool,
+}
+
+impl CoolingProvider {
+    fn new() -> Self {
+        use crate::agent::llm::credential_pool::{
+            FailureClass, Pool, PoolEntry, SelectionStrategy,
+        };
+        let pool = Pool::from_entries(
+            "primary",
+            vec![PoolEntry::inline("primary-key")],
+            SelectionStrategy::Sticky,
+        )
+        .unwrap();
+        let lease = pool.acquire().unwrap();
+        pool.report_failure(&lease, FailureClass::CooldownWorthy);
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl Provider for CoolingProvider {
+    fn name(&self) -> &str {
+        "cooling-primary"
+    }
+
+    fn supported_models(&self) -> Vec<String> {
+        vec!["p-model".to_string()]
+    }
+
+    fn is_configured(&self) -> bool {
+        true
+    }
+
+    async fn chat(&self, _request: ChatRequest) -> Result<ChatResponse> {
+        self.pool.acquire()?;
+        unreachable!("a cooling pool must not return a lease")
+    }
+
+    async fn chat_stream(
+        &self,
+        _request: ChatRequest,
+    ) -> Result<futures_util::stream::BoxStream<'static, Result<StreamEvent>>> {
+        self.pool.acquire()?;
+        unreachable!("a cooling pool must not return a lease")
+    }
 }
 
 #[tokio::test]
@@ -41,6 +91,26 @@ async fn falls_back_on_transient_error_and_sticks() {
     assert_eq!(chain.effective_provider_name(), "fallback");
     let second = chain.chat(request("p-model")).await.unwrap();
     assert_eq!(text(&second), "still fallback");
+}
+
+#[tokio::test]
+async fn configured_primary_pool_cooldown_falls_back_and_preserves_retry_semantics() {
+    let chain = ProviderChain::new(vec![
+        ProviderSlot::new(Arc::new(CoolingProvider::new()), "primary", "p-model"),
+        slot(
+            "fallback",
+            "f-model",
+            vec![MockResponse::Text("fallback answer".to_string())],
+        ),
+    ])
+    .unwrap();
+
+    let response = chain.chat(request("p-model")).await.unwrap();
+
+    assert_eq!(text(&response), "fallback answer");
+    let state = chain.fallback_state_snapshot();
+    assert!(state.degraded);
+    assert_eq!(state.switches[0].failure_class, "cooldown-worthy");
 }
 
 #[tokio::test]

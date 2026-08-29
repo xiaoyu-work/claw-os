@@ -100,14 +100,34 @@ impl AnthropicConfig {
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy Anthropic configuration failed");
+            Self::unconfigured(model, agent)
+        })
+    }
+
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url().to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
 pub struct AnthropicProvider {
     cfg: AnthropicConfig,
     transport: HttpTransport,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl AnthropicProvider {
@@ -116,22 +136,43 @@ impl AnthropicProvider {
     }
 
     pub fn new_with_transport(cfg: AnthropicConfig, transport: HttpTransport) -> Self {
-        Self { cfg, transport }
+        Self {
+            cfg,
+            transport,
+            initialization_error: None,
+        }
     }
 
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(AnthropicConfig::try_from_agent_config(
-            model, agent,
-        )?))
+        let config = AnthropicConfig::try_from_agent_config(model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Anthropic provider initialization failed");
+                Self {
+                    cfg: AnthropicConfig::unconfigured(model, agent),
+                    transport: HttpTransport::legacy_default(),
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
         format!("{}/v1/messages", self.cfg.base_url)
+    }
+
+    fn ensure_initialized(&self) -> Result<()> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => Ok(()),
+        }
     }
 }
 
@@ -146,7 +187,10 @@ impl Provider for AnthropicProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty())
+        self.initialization_error.is_none()
+            && self.transport.is_ready()
+            && (self.cfg.api_key.is_some()
+                || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
 
     fn supports_prompt_cache(&self) -> bool {
@@ -154,6 +198,7 @@ impl Provider for AnthropicProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        self.ensure_initialized()?;
         let body = wire::build_request_body(&request, &self.cfg.model, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
@@ -168,7 +213,7 @@ impl Provider for AnthropicProvider {
 
         let mut http = self
             .transport
-            .post(self.endpoint(), self.cfg.request_timeout)
+            .post(self.endpoint(), self.cfg.request_timeout)?
             .header("Content-Type", "application/json")
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
@@ -257,6 +302,7 @@ impl Provider for AnthropicProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        self.ensure_initialized()?;
         // Real SSE streaming. Build the request body with stream:true,
         // hit /v1/messages with Accept: text/event-stream, validate
         // the HTTP status synchronously (so 401/429/etc surface
@@ -276,7 +322,7 @@ impl Provider for AnthropicProvider {
 
         let mut http = self
             .transport
-            .post(self.endpoint(), self.cfg.request_timeout)
+            .post(self.endpoint(), self.cfg.request_timeout)?
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .header("anthropic-version", ANTHROPIC_VERSION)

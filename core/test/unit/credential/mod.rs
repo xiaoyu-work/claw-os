@@ -738,10 +738,43 @@ fn random_failure_is_typed_and_preserves_its_source() {
 
     assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
     assert_eq!(error.operation(), "root_key.random");
-    assert!(std::error::Error::source(&error).is_some());
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
     assert!(!dir.join("credential-root.key").exists());
 
     fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn typed_load_preserves_corrupt_record_category_and_serde_source() {
+    perms_init();
+    setup();
+    let name = unique_name("typed-corrupt");
+    let path = namespace_dir("default").join(format!("{name}.json"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "{not valid credential json").unwrap();
+
+    let error = try_load_typed(&name, "default").unwrap_err();
+
+    assert_eq!(error.kind(), CredentialErrorKind::Corrupt);
+    assert_eq!(error.operation(), "credential.load");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<serde_json::Error>())
+        .is_some());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn typed_command_classifies_invalid_input_and_not_found() {
+    perms_init();
+    setup();
+
+    let invalid = run_typed("store", &["bad/name".into(), "value".into()]).unwrap_err();
+    assert_eq!(invalid.kind(), CredentialErrorKind::InvalidInput);
+
+    let missing = run_typed("load", &[unique_name("typed-missing")]).unwrap_err();
+    assert_eq!(missing.kind(), CredentialErrorKind::NotFound);
 }
 
 #[test]
@@ -901,7 +934,7 @@ fn test_concurrent_refresh_serialized() {
                 // would surface as concurrent observed > 1.
                 std::thread::sleep(std::time::Duration::from_millis(30));
                 in_flight.fetch_sub(1, Ordering::SeqCst);
-                Ok::<(), String>(())
+                Ok::<(), CredentialError>(())
             })
             .unwrap();
         }));

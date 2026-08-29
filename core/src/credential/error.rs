@@ -36,6 +36,12 @@ impl CredentialError {
         self.message.contains(pattern)
     }
 
+    pub(crate) fn context(self, operation: &'static str, message: impl Into<String>) -> Self {
+        let kind = self.kind;
+        let message = format!("{}: {self}", message.into());
+        Self::with_source(kind, operation, message, self)
+    }
+
     pub(crate) fn invalid(operation: &'static str, message: impl Into<String>) -> Self {
         Self::message(CredentialErrorKind::InvalidInput, operation, message)
     }
