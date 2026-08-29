@@ -32,6 +32,9 @@ pub struct NodeMeta {
     pub is_dir: bool,
     pub is_file: bool,
     pub is_symlink: bool,
+    /// `S_IFSOCK`. A transport, never data: the worker sandbox binds
+    /// one only under a kernel-side classification.
+    pub is_socket: bool,
     pub nlink: u64,
     pub size: u64,
     pub dev: u64,
@@ -197,6 +200,7 @@ mod unix {
             is_dir: fmt == libc::S_IFDIR,
             is_file: fmt == libc::S_IFREG,
             is_symlink: fmt == libc::S_IFLNK,
+            is_socket: fmt == libc::S_IFSOCK,
             nlink: st.st_nlink,
             size: st.st_size.max(0) as u64,
             dev: st.st_dev,

@@ -886,6 +886,106 @@ fn prepare_app_worker(
     Ok(prepared)
 }
 
+/// Runtime selection for an App's session server.
+///
+/// The interpreter comes from the same verified manifest as the entry,
+/// and the entry is the pinned path the caller's launch binding holds
+/// open, so the bytes that were signed and the process that runs them
+/// cannot be decided by two different reads. Returned as
+/// `(program, argv)` for a [`crate::worker::LaunchPolicy`]: the sandbox
+/// is the runner, so there is no wrapper process in between.
+pub(crate) fn session_program(
+    runtime: Runtime,
+    entry: &Path,
+) -> Result<(std::path::PathBuf, Vec<String>), String> {
+    let entry_arg = entry.to_string_lossy().into_owned();
+    let python = if cfg!(windows) { "python" } else { "python3" };
+    Ok(match runtime {
+        Runtime::Python => (interpreter_path(python)?, vec![entry_arg]),
+        Runtime::Node => (interpreter_path("node")?, vec![entry_arg]),
+        Runtime::Shell => (interpreter_path("bash")?, vec![entry_arg]),
+        Runtime::Binary => (
+            entry
+                .canonicalize()
+                .map_err(|error| format!("resolve App session entry: {error}"))?,
+            Vec::new(),
+        ),
+    })
+}
+
+/// Prepare the hostile-worker launch for one App session server.
+///
+/// The counterpart to [`prepare_app_worker`] for a process that serves
+/// the agent over stdio JSON-RPC. Two things differ and both are
+/// deliberate: the policy comes from
+/// [`crate::worker::derive::app_session`], which never derives a
+/// reusable worker's mounts or egress from a per-call capability set,
+/// and the stdio plan is `Streamed` because the child's stdin/stdout
+/// are the transport rather than something to capture.
+///
+/// The broker authority is the session's, so the worker's only route to
+/// kernel authority reads the live routed registry row: the transient
+/// set installed for one `tools/call` is honoured while it is set and
+/// gone the moment the launcher clears it.
+///
+/// `lifetime` selects which of the two shapes is derived, and
+/// `transports` is whatever [`crate::worker::trusted_desktop::classify`]
+/// granted — empty for everything a manifest can describe.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn prepare_app_session_worker(
+    session: &AppIdentitySession,
+    app_id: &str,
+    app_dir: &Path,
+    program: std::path::PathBuf,
+    argv: Vec<String>,
+    data_dir: &str,
+    apps_dir: &str,
+    extra_env: BTreeMap<String, String>,
+    binding: &LaunchBindingRef,
+    lifetime: crate::worker::derive::SessionLifetime,
+    transports: &[crate::worker::trusted_desktop::Transport],
+    call_caps: Option<&CapSet>,
+) -> Result<crate::worker::PreparedLaunch, String> {
+    let label = format!("app-session:{app_id}");
+    let tier = if transports.is_empty() {
+        crate::worker::TrustTier::McpServer
+    } else {
+        crate::worker::TrustTier::TrustedDesktopSession
+    };
+    // A reusable worker is shaped by what the session holds at rest; a
+    // single-call worker by the exact set bound to the one request it
+    // exists to serve.
+    let caps = call_caps.unwrap_or_else(|| session.granted_caps());
+    let policy = crate::worker::derive::app_session(crate::worker::derive::AppSessionInput {
+        app_id,
+        app_dir,
+        program,
+        argv,
+        caps,
+        lifetime,
+        session_id: session.id(),
+        data_dir,
+        apps_dir,
+        extra_env,
+        package_identity: binding.dir_identity(),
+        pinned_entries: binding.entries(),
+        transports,
+    })
+    .inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    let launch = crate::worker::WorkerLaunch::new(policy).with_authority(
+        session
+            .broker_authority(app_id)
+            .with_package(binding.package_ref()),
+    );
+    let prepared = crate::worker::prepare(&launch).inspect_err(|error| {
+        crate::worker::audit::refused(&label, tier.as_str(), error);
+    })?;
+    crate::worker::audit::launched(&prepared.facts, Some(session.id()));
+    Ok(prepared)
+}
+
 pub fn run_native_app_host(
     app_id: &str,
     app_dir: &Path,

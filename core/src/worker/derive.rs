@@ -142,6 +142,76 @@ pub struct McpServerInput<'a> {
     pub session_id: Option<String>,
 }
 
+/// How long the worker a policy describes is going to live.
+///
+/// This is the whole reason there are two shapes of App session policy.
+/// A reusable server is derived once and then serves calls whose
+/// capability sets differ, so nothing per-call may shape it. A
+/// single-call worker exists for exactly one request, so the resources
+/// that request was granted *are* its policy, and both die together.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SessionLifetime {
+    /// Long-lived stdio server. Mounts and egress come from the
+    /// standing grant only, which names no resource.
+    Reusable,
+    /// One request, one worker. Mounts and egress are derived from the
+    /// exact capability set the authority bound to that request.
+    SingleCall,
+}
+
+impl SessionLifetime {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            SessionLifetime::Reusable => "reusable",
+            SessionLifetime::SingleCall => "single-call",
+        }
+    }
+}
+
+/// Everything the kernel knows about one long-lived App session server.
+///
+/// An App with a `session` block runs its declared entry as a stdio
+/// JSON-RPC peer that outlives every individual tool call. That shape
+/// is the reason this is not [`AppOperationInput`]: an operation worker
+/// is derived once for one bound call and dies with it, while a session
+/// worker is derived once and then serves calls whose capability sets
+/// differ. Only the session's *standing* grant may shape a reusable
+/// sandbox; per-call authority is either brokered or given its own
+/// [`SessionLifetime::SingleCall`] worker.
+pub struct AppSessionInput<'a> {
+    pub app_id: &'a str,
+    /// Canonical package directory.
+    pub app_dir: &'a Path,
+    /// Program the runtime selection chose (interpreter or entry).
+    pub program: PathBuf,
+    /// Arguments after the program.
+    pub argv: Vec<String>,
+    /// For [`SessionLifetime::Reusable`], the capabilities the
+    /// authority granted the *session* — used to reject a grant whose
+    /// shape this launch cannot express, never to widen the sandbox.
+    /// For [`SessionLifetime::SingleCall`], the exact set bound to the
+    /// one request this worker exists to serve.
+    pub caps: &'a CapSet,
+    pub lifetime: SessionLifetime,
+    pub session_id: &'a str,
+    /// `COS_DATA_DIR` for this launch.
+    pub data_dir: &'a str,
+    /// `COS_APPS_DIR` for this launch.
+    pub apps_dir: &'a str,
+    /// Extra typed environment the runtime needs (`PYTHONPATH`,
+    /// `COS_MCP_SERVER`, …). Names are validated by the policy.
+    pub extra_env: BTreeMap<String, String>,
+    /// `(st_dev, st_ino)` of the verified package directory.
+    pub package_identity: Option<(u64, u64)>,
+    /// Absolute path plus required inode for the signed session entry
+    /// and the manifest that selected it.
+    pub pinned_entries: Vec<(PathBuf, (u64, u64))>,
+    /// Desktop transports a kernel-side classification granted this
+    /// App. Empty for everything a manifest can describe; see
+    /// [`super::trusted_desktop`].
+    pub transports: &'a [super::trusted_desktop::Transport],
+}
+
 /// A model-authored command run through the agent sandbox tool.
 pub struct AgentExecInput {
     pub workspace: PathBuf,
@@ -292,6 +362,162 @@ pub fn mcp_server(input: McpServerInput<'_>) -> Result<LaunchPolicy, String> {
         broker: input.session_id.is_some(),
         umask: 0o077,
     })
+}
+
+/// Derive the policy for one App session server.
+///
+/// The shape is the MCP-server shape — stdio JSON-RPC, the strict
+/// syscall filter — with the package material an App owns: its verified
+/// directory read-only and pinned by inode, its signed entrypoints
+/// bound over that directory, its own partition of the data root, and
+/// the `_shared` helper trees a bundled App imports.
+///
+/// ## Two lifetimes, one derivation
+///
+/// A [`SessionLifetime::Reusable`] worker is launched once and then
+/// serves many tool calls, each with its own capability set. Mounts and
+/// egress rules cannot be revised on a live worker, so deriving them
+/// from *any* per-call set would leave the first call's filesystem and
+/// network reach standing for every later call — including calls the
+/// authority denied. The standing grant a session holds is
+/// `agent.invoke` on itself, which names no path and no host, so a
+/// reusable policy mounts no host path and opens no egress at all. A
+/// standing grant that *would* need one is refused rather than
+/// honoured.
+///
+/// A [`SessionLifetime::SingleCall`] worker exists for exactly one
+/// request. Its mounts and egress come from the capability set the
+/// authority bound to that request, and it is destroyed with the
+/// response, so nothing it was granted can outlive the call or be
+/// observed by another one.
+///
+/// ## Transports
+///
+/// `transports` is non-empty only for the fixed vendor Apps
+/// [`super::trusted_desktop::classify`] recognises. It lifts the tier
+/// to [`TrustTier::TrustedDesktopSession`] and binds exactly the named
+/// sockets — never the directory holding them.
+pub fn app_session(input: AppSessionInput<'_>) -> Result<LaunchPolicy, String> {
+    let app_dir = canonical_dir(input.app_dir, "App package")?;
+    let data_dir = app_partition(Path::new(input.data_dir), input.app_id)?;
+
+    if matches!(input.lifetime, SessionLifetime::Reusable) {
+        reject_standing_resource_grants(input.caps, input.app_id)?;
+    }
+
+    let package_mount = match input.package_identity {
+        Some(identity) => Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package)
+            .expecting(identity),
+        None => Mount::read_only(app_dir.clone(), app_dir.clone(), MountClass::Package),
+    };
+    let mut mounts = vec![
+        package_mount,
+        Mount::read_write(data_dir.clone(), data_dir.clone(), MountClass::AppData),
+    ];
+    for (path, identity) in &input.pinned_entries {
+        if path == &app_dir {
+            continue;
+        }
+        mounts.push(
+            Mount::read_only(path.clone(), path.clone(), MountClass::Package).expecting(*identity),
+        );
+    }
+    mounts.extend(runtime_mounts());
+    mounts.extend(shared_library_mounts(&app_dir, Path::new(input.apps_dir)));
+    mounts.extend(program_mount(&input.program));
+
+    // Only a single-call worker turns capabilities into filesystem and
+    // network reach, because only a single-call worker dies before the
+    // next call can inherit it.
+    let network = match input.lifetime {
+        SessionLifetime::Reusable => NetworkPolicy::Denied,
+        SessionLifetime::SingleCall => {
+            mounts.extend(granted_path_mounts(input.caps)?);
+            egress_from_caps(input.caps)
+        }
+    };
+
+    let tier = if input.transports.is_empty() {
+        TrustTier::McpServer
+    } else {
+        TrustTier::TrustedDesktopSession
+    };
+    let mut env = base_env(&data_dir);
+    let (transport_mounts, transport_env) =
+        super::trusted_desktop::transport_mounts(input.transports);
+    mounts.extend(transport_mounts);
+    env.extend(transport_env);
+    dedupe_mounts(&mut mounts);
+
+    env.insert("COS_APP_ID".to_string(), input.app_id.to_string());
+    env.insert("COS_SESSION".to_string(), input.session_id.to_string());
+    env.insert(
+        "COS_DATA_DIR".to_string(),
+        data_dir.to_string_lossy().into_owned(),
+    );
+    env.insert("COS_APPS_DIR".to_string(), input.apps_dir.to_string());
+    for (name, value) in input.extra_env {
+        env.insert(name, value);
+    }
+    apply_egress_env(&mut env, &network);
+
+    let seccomp = seccomp_for(&network);
+    Ok(LaunchPolicy {
+        tier,
+        label: format!("app-session:{}", input.app_id),
+        program: input.program,
+        argv: input.argv,
+        workdir: data_dir,
+        mounts,
+        network,
+        env,
+        // A server is torn down with its handle; a single-call worker is
+        // bounded by the call it serves.
+        limits: match input.lifetime {
+            SessionLifetime::Reusable => Limits::server(),
+            SessionLifetime::SingleCall => Limits::operation(),
+        },
+        seccomp,
+        stdio: StdioPlan::Streamed,
+        broker: true,
+        umask: 0o077,
+    })
+}
+
+/// Refuse a session grant this launch shape cannot express.
+///
+/// A filesystem or network capability in a *standing* session grant
+/// would have to become a mount or an egress rule to mean anything, and
+/// a long-lived worker cannot have either revised later. Rather than
+/// widen the initial policy — which every subsequent call would inherit
+/// — the launch fails closed and says why. The scope shape does not
+/// change that: a wildcard filesystem grant held at rest is a broader
+/// claim than a path one, not a narrower one.
+fn reject_standing_resource_grants(caps: &CapSet, app_id: &str) -> Result<(), String> {
+    for cap in caps.iter() {
+        let resource = match cap.verb {
+            Verb::FS_READ
+            | Verb::FS_WRITE
+            | Verb::FS_DELETE
+            | Verb::FS_META
+            | Verb::FS_WATCH
+            | Verb::FS_EXEC => "filesystem",
+            Verb::NET_DIAL | Verb::NET_LISTEN => "network",
+            _ => match &cap.scope {
+                Scope::Path(_) => "filesystem",
+                Scope::Host(_) => "network",
+                _ => continue,
+            },
+        };
+        return Err(format!(
+            "App `{app_id}` session holds a standing {resource} grant (`{}`); \
+             session workers receive resources per call through the broker, \
+             so a standing grant cannot be honoured without widening every \
+             later call's sandbox",
+            cap.verb.as_str()
+        ));
+    }
+    Ok(())
 }
 
 /// Derive the policy for a model-authored command.

@@ -38,8 +38,9 @@ pub enum TrustTier {
     /// shell entry or a packaged binary running one manifest
     /// operation. Fully hostile.
     AppOperation,
-    /// A third-party MCP server or adapter speaking stdio JSON-RPC.
-    /// Fully hostile, and network-denied by default.
+    /// A third-party MCP server or adapter speaking stdio JSON-RPC, or
+    /// an App's own session server, which is the same shape. Fully
+    /// hostile, and network-denied by default.
     McpServer,
     /// A model-authored command run through the agent's sandbox tool.
     /// Fully hostile, and never given App identity.
@@ -48,6 +49,21 @@ pub enum TrustTier {
     /// and therefore needs a display transport that a headless
     /// operation worker must never receive.
     DesktopSurface,
+    /// A vendor-shipped App session server that cannot do its job
+    /// without one exact desktop transport — the session bus for MPRIS,
+    /// the screenshot portal, or `org.freedesktop.Notifications`.
+    ///
+    /// Sandboxed exactly like [`TrustTier::McpServer`]: private
+    /// namespaces, the strict syscall filter, a resource governor, no
+    /// egress and no host paths. The single difference is that it may
+    /// hold the named transport sockets.
+    ///
+    /// Reaching this tier requires an authenticated, kernel-side
+    /// allowlist entry checked against the package's vendor provenance
+    /// and the root ownership of the artifact it executes. No manifest
+    /// field, publisher signature, developer grant, path alias or App
+    /// id alone selects it.
+    TrustedDesktopSession,
     /// A built-in, root-owned native host that cannot run inside the
     /// sandbox (it drives privileged desktop/native transports).
     ///
@@ -63,6 +79,7 @@ impl TrustTier {
             TrustTier::McpServer => "mcp-server",
             TrustTier::AgentExec => "agent-exec",
             TrustTier::DesktopSurface => "desktop-surface",
+            TrustTier::TrustedDesktopSession => "trusted-desktop-session",
             TrustTier::TrustedNativeHost => "trusted-native-host",
         }
     }
@@ -80,7 +97,9 @@ impl TrustTier {
     pub const fn allows_display(self) -> bool {
         matches!(
             self,
-            TrustTier::DesktopSurface | TrustTier::TrustedNativeHost
+            TrustTier::DesktopSurface
+                | TrustTier::TrustedDesktopSession
+                | TrustTier::TrustedNativeHost
         )
     }
 }

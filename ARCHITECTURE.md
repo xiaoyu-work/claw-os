@@ -613,16 +613,17 @@ bounded by the same home-scoped ceiling the executor applies before it runs.
 ### Worker isolation
 
 Every process Claw OS did not write — an App operation, a GUI App
-surface, an MCP server, an adapter, a model-authored command — runs
-under one shared launch policy defined in `core/src/worker/`. The
-definition is typed and derived by trusted code from authenticated
-manifest, operation and capability data; the Linux provider enforces it
-with user/mount/PID/IPC/UTS/network namespaces, all capabilities
-dropped, a seccomp filter, a resource governor, a read-only root and an
-explicit mount list. There is no second, weaker launch path: the App
-bridge, the MCP attach path and the agent sandbox tool are consumers of
-the same provider, and a host that cannot enforce the policy refuses
-the launch instead of running the worker unsandboxed.
+surface, an App session server, an MCP server, an adapter, a
+model-authored command — runs under one shared launch policy defined in
+`core/src/worker/`. The definition is typed and derived by trusted code
+from authenticated manifest, operation and capability data; the Linux
+provider enforces it with user/mount/PID/IPC/UTS/network namespaces, all
+capabilities dropped, a seccomp filter, a resource governor, a read-only
+root and an explicit mount list. There is no second, weaker launch path:
+the App bridge, the App session bridge, the MCP attach path and the
+agent sandbox tool are consumers of the same provider, and a host that
+cannot enforce the policy refuses the launch instead of running the
+worker unsandboxed.
 
 Only a kernel-allowlisted, root-owned native host is exempt, and taking
 that exemption is recorded. Read

@@ -223,21 +223,134 @@ launch is bound to one snapshot like any other:
    every reuse of a cached session, and on every tool call. A warm
    cache is exactly where a replaced script would otherwise go
    unnoticed, so "it is already in the table" is never sufficient.
+5. The launch policy is derived from the verified snapshot and the
+   session grant, and the child starts inside the hostile-worker
+   sandbox. Reuse of a cached session re-derives that policy and
+   refuses the child if the digest moved.
 
-The same `(dev, ino)` identities a sandbox policy would bind through
-`package_identity` and `pinned_entries` are recorded in the launch
-audit, but on this path they are enforced by the held descriptors and
-the re-assertions rather than by a mount.
+The same `(dev, ino)` identities are recorded in the launch audit and
+bound by the sandbox as mounts, so the pinned set is enforced twice over
+and reconstructable from the audit log either way.
 
-**This path is not sandboxed.** The App-session stdio child is spawned
-directly rather than through `worker::prepare`, so it has no mount
-namespace, no egress policy and no seccomp filter. That is a
-pre-existing property of the App-session code path — the binding
-described above adds provenance pinning to it and changes nothing about
-isolation. It is not a deliberate trade-off either: `worker::derive`
-already supports `StdioPlan::Streamed`, which the MCP/adapter attach
-path uses for the same shape of child. Migrating the App-session launch
-onto the worker sandbox is tracked separately.
+**This path is sandboxed.** The App-session stdio child is launched
+through `worker::prepare` — the same hostile-worker provider every App
+operation, MCP server and adapter goes through — with
+`StdioPlan::Streamed`, because its stdin/stdout are the JSON-RPC
+transport rather than something to capture. It gets the `McpServer`
+tier: a private mount, PID, IPC, UTS, user and network namespace, the
+strict seccomp filter, a cgroup or rlimit governor, its package
+read-only and pinned by inode, its own partition of the data root, no
+egress at all, and a per-launch broker endpoint shadowing the real
+`clawd` socket. There is no unsandboxed fallback: a host that cannot
+enforce this refuses to open the session.
+
+The sandbox is derived from the session's *standing* grant, which is
+`agent.invoke` on itself and nothing more. A standing filesystem or
+network grant would have to be honoured for every later call, so it
+refuses the launch instead.
+
+### Where a call's own authority goes
+
+A reusable server serves calls whose capability sets differ, and a live
+worker's mounts and egress cannot be revised. So before anything is
+granted anywhere, the launcher classifies the set bound to the call:
+
+| Classification | Where it runs |
+| --- | --- |
+| every capability is answerable through the broker (`data.kv.*`, `memory.*`, `ui.notify`, an admitted `system.*` route) | the reusable server; nothing about its sandbox changes |
+| a filesystem or network capability naming one exact resource | a **single-call worker**, derived from exactly that set and destroyed with the response |
+| a filesystem or network capability naming no resolvable resource — a bare wildcard, a glob matching nothing | refused at authorization, with the reason |
+
+The third row is the one worth stating plainly: a grant that cannot
+become either a broker answer or a mount would look like success and
+behave like `EPERM` somewhere inside the App. Saying so up front is the
+difference between a clear refusal and a half-finished operation.
+
+A single-call worker has its own kernel session, its own broker
+endpoint, its own mounts and its own cgroup. Its transient grant is
+installed on *its* session, never the reusable one, and the whole
+process group is destroyed before the response is returned — on
+success, error, timeout and cancellation alike. Nothing it was granted
+outlives the call, and the reusable server never sees it.
+
+### Desktop transports
+
+Three bundled Apps expose their tool surface as a session server and
+reach the desktop over the **session bus**: `cosmic-player` (MPRIS),
+`cosmic-screenshot` (the screenshot portal, then a notification) and
+`cosmic-notifications` (`org.freedesktop.Notifications`). None of them
+initialises a compositor connection in MCP mode, so no Wayland socket,
+X authority or GPU node is granted — the session bus alone is the
+difference between a working tool and a syscall failure.
+
+They run in the `TrustedDesktopSession` tier: sandboxed exactly like
+any other hostile stdio server — private namespaces, strict seccomp, a
+resource governor, no egress, no host paths — plus one bind mount of
+the exact session-bus socket, at a fixed private sandbox path
+(`/run/cos/session-bus`). The directory holding the real socket is
+never exposed, and neither is its host path: the worker's
+`DBUS_SESSION_BUS_ADDRESS` names the sandbox path, so nothing about the
+owner's uid or runtime-directory layout crosses the boundary.
+
+The socket is authenticated before it is bound, from facts rather than
+from the environment:
+
+* the owner uid comes from the launch identity, never from a variable,
+  and root is refused outright;
+* the runtime directory is `/run/user/<uid>`, with a verified
+  `XDG_RUNTIME_DIR` as the only alternative — and "verified" means the
+  directory is owned by that uid, is not a symlink, is private to its
+  owner, and every ancestor is root-owned and not group/world-writable;
+* `DBUS_SESSION_BUS_ADDRESS` is parsed as a D-Bus address, not
+  pattern-matched: exactly one alternative from the `;`-separated list,
+  exactly the `unix` transport, exactly one percent-decoded `path`, an
+  optional `guid`, and nothing else. `abstract=` is refused by name
+  because the sandbox owns a private network namespace; `dir=`,
+  `tmpdir=`, duplicate keys, malformed escapes, and encoded NUL or
+  control bytes are all refused;
+* the resolved path must be `<runtime>/bus`, and `lstat` — never
+  following a symlink — must show a Unix socket owned by that uid.
+  Claw OS's own endpoints are refused by name as well as by location;
+* the socket is pinned by `(dev, ino)` like every other authenticated
+  mount, so one replaced between derivation and `execve` fails the
+  launch rather than being bound.
+
+Any failure grants **no** transport. There is no fallback mount and no
+best-effort address.
+
+**The session bus is an expanded TCB, and it is not filtered.** A
+process holding that socket can talk to every service the owner's
+session exposes, and Claw OS does not inspect method calls inside it.
+That is why the classification is not something a package can ask for.
+`worker::trusted_desktop::classify` grants it only when *all* of these
+hold:
+
+1. the App id is one of three fixed rows in kernel source;
+2. the package verified through **vendor** provenance — package-manager
+   trust under an approved system root, not a publisher signature;
+3. the package directory is under an approved vendor root *and* every
+   component of it is root-owned, non-symlink and not
+   group/world-writable;
+4. the artifact that executes is root-owned and immutable to the owner,
+   and — when the manifest names a program outside the package — is
+   byte-for-byte the absolute path the table names.
+
+A manifest field, a developer grant, a publisher-signed package that
+calls itself `cosmic-player`, a bind alias onto an approved root, and
+the App id on its own are each insufficient. Anything that fails leaves
+the App an ordinary `McpServer` with no transport, and its tools fail
+with a clear error rather than silently gaining reach. Revocation
+evicts and kills the worker like any other package. The reuse identity
+carries the resolved socket's inode, so a session whose bus was
+replaced — the login session restarted — is relaunched rather than
+handed back holding a descriptor on the old one.
+
+Provenance and isolation stay separate claims. The binding answers
+*which bytes run*; the sandbox answers *what they can reach*. Neither
+substitutes for the other, and both are re-asserted: the pinned inodes
+on every spawn, cache reuse and tool call, and the launch policy —
+including the desktop classification and the transports it granted —
+whenever a cached session is considered for reuse.
 
 **Honest limit.** None of this defends against root on the same
 machine, which can rewrite the trust files, the generation state and

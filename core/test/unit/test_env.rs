@@ -246,6 +246,36 @@ pub(crate) fn revoke_test_package(content_digest: &str) {
     }
 }
 
+/// Clear every revocation the process trust store carries.
+///
+/// [`revoke_test_package`] writes into the one shared root, and the
+/// root is created once per process — so a test that revokes an
+/// artifact would otherwise leave it revoked for every test that runs
+/// after it.
+#[allow(dead_code)]
+pub(crate) fn clear_test_revocations() {
+    #[cfg(unix)]
+    {
+        let root = install_test_trust_root();
+        let path = root.join("test.json");
+        let mut body: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).expect("read test trust"))
+                .expect("parse test trust");
+        body["revoked_packages"] = serde_json::json!([]);
+        std::fs::write(&path, serde_json::to_vec_pretty(&body).unwrap())
+            .expect("write test trust");
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        let roots = test_trust_roots(&root);
+        record_trust_state(&roots);
+        let store = crate::provenance::TrustStore::load_roots(&roots);
+        crate::provenance::set_trust_store_for_roots(store, roots);
+        crate::provenance::verify::invalidate_cache();
+    }
+}
+
 /// Sign `dir` as an App package and bind it for launch.
 ///
 /// The launch path takes one verified snapshot, so a test that runs an

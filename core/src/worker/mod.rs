@@ -13,8 +13,9 @@
 //! | --- | --- | --- | --- | --- |
 //! | `AppOperation` | `cos app fs read` | yes | no | brokered, exact hosts |
 //! | `DesktopSurface` | `cos app notes --gui` | yes | yes | brokered, exact hosts |
-//! | `McpServer` | a configured stdio MCP server, an adapter | yes | no | denied |
+//! | `McpServer` | a configured stdio MCP server, an adapter, an App session server | yes | no | denied |
 //! | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
+//! | `TrustedDesktopSession` | a vendor App session server that needs the session bus | yes | one exact socket | denied |
 //! | `TrustedNativeHost` | the root-owned `mail-ai` native host | no | yes | host |
 //!
 //! Only the last tier is exempt, it is selected by a kernel-side
@@ -45,6 +46,7 @@ pub mod provider;
 pub mod runtime;
 #[cfg(target_os = "linux")]
 pub mod seccomp;
+pub mod trusted_desktop;
 
 pub use exec::{run_captured, WorkerOutput};
 pub use policy::{

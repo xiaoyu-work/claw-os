@@ -4,14 +4,14 @@
 
 `core/src/worker/` is the single definition of how Claw OS runs code it
 did not write. Python and polyglot App operations, GUI App surfaces,
-MCP servers, adapters and model-authored commands are all launched
-through it, under the same enforceable namespace, seccomp, cgroup,
-filesystem and network policy.
+App session servers, MCP servers, adapters and model-authored commands
+are all launched through it, under the same enforceable namespace,
+seccomp, cgroup, filesystem and network policy.
 
 There is no second isolation implementation. `crate::sandbox`
-(`cos_sandbox`), `crate::bridge` (Apps and GUI surfaces) and
-`crate::agent::tools::mcp::integration` (MCP servers and adapters) are
-consumers of this module, not peers of it.
+(`cos_sandbox`), `crate::bridge` (Apps, GUI surfaces and App session
+servers) and `crate::agent::tools::mcp::integration` (MCP servers and
+adapters) are consumers of this module, not peers of it.
 
 ## Trust tiers
 
@@ -19,16 +19,21 @@ consumers of this module, not peers of it.
 | --- | --- | --- | --- | --- |
 | `AppOperation` | one manifest operation | yes | no | brokered, exact hosts |
 | `DesktopSurface` | a manifest `desktop.exec` launch | yes | yes | brokered, exact hosts |
-| `McpServer` | configured MCP servers and adapters | yes | no | denied |
+| `McpServer` | configured MCP servers, adapters, App session servers | yes | no | denied |
 | `AgentExec` | `cos_sandbox exec` | yes | no | brokered, exact hosts |
+| `TrustedDesktopSession` | the fixed vendor App session servers that need the session bus | yes | one exact socket | denied |
 | `TrustedNativeHost` | the root-owned `mail-ai` native host | no | yes | host |
 
 The tier is assigned by trusted code from how the worker is
 *installed*, never from a manifest field. `TrustedNativeHost` is the
-only exemption, it is reachable only through the kernel-side checks in
-`bridge::run_native_app_host` (fixed App id, root-owned package,
-root-owned interpreter, root-owned entry), and taking it writes a
-`worker.sandbox.exempt` audit record.
+only exemption from the sandbox, it is reachable only through the
+kernel-side checks in `bridge::run_native_app_host` (fixed App id,
+root-owned package, root-owned interpreter, root-owned entry), and
+taking it writes a `worker.sandbox.exempt` audit record.
+`TrustedDesktopSession` is *not* an exemption — it is fully sandboxed —
+and is reachable only through `trusted_desktop::classify`, which
+requires a fixed App id, vendor provenance, a root-owned package tree
+and a root-owned executed artifact.
 
 ## Responsibilities
 
@@ -48,6 +53,7 @@ root-owned interpreter, root-owned entry), and taking it writes a
 | --- | --- |
 | `policy.rs` | `LaunchPolicy`, tiers, mounts, limits, digest, audit facts |
 | `derive.rs` | Trusted derivation from manifest/caps/runtime |
+| `trusted_desktop.rs` | Fixed vendor table for App sessions that need the session bus |
 | `migrate.rs` | One-time move of legacy App state into its partition |
 | `provider.rs` | `WorkerSandbox` seam, availability, fail-closed `prepare` |
 | `linux.rs` | bubblewrap argv, `pre_exec`, rlimits, identity |

@@ -386,3 +386,141 @@ fn brokered_egress_advertises_the_endpoint_to_the_worker() {
     apply_egress_env(&mut denied, &NetworkPolicy::Denied);
     assert!(!denied.contains_key("COS_EGRESS_SOCKET"));
 }
+
+// ---------------------------------------------------------------------------
+// App session servers
+// ---------------------------------------------------------------------------
+
+fn app_session_input<'a>(
+    package: &'a std::path::Path,
+    data: &'a str,
+    apps: &'a str,
+    caps: &'a CapSet,
+) -> AppSessionInput<'a> {
+    AppSessionInput {
+        lifetime: SessionLifetime::Reusable,
+        transports: &[],
+        app_id: "probe",
+        app_dir: package,
+        program: PathBuf::from("/usr/bin/python3"),
+        argv: vec![package.join("server.py").to_string_lossy().into_owned()],
+        caps,
+        session_id: "app-probe",
+        data_dir: data,
+        apps_dir: apps,
+        extra_env: BTreeMap::new(),
+        package_identity: None,
+        pinned_entries: Vec::new(),
+    }
+}
+
+#[test]
+fn an_app_session_is_a_network_denied_stdio_server_over_its_own_package() {
+    let package = tempfile::tempdir().expect("package");
+    let data = tempfile::tempdir().expect("data");
+    std::fs::write(package.path().join("server.py"), "# fixture\n").unwrap();
+    let standing = caps(vec![Cap::new(Verb::AGENT_INVOKE, Scope::name("probe"))]);
+
+    let policy = app_session(app_session_input(
+        package.path(),
+        &data.path().to_string_lossy(),
+        &package.path().to_string_lossy(),
+        &standing,
+    ))
+    .expect("derive app session policy");
+
+    // Same shape as any other hostile stdio server, plus the App's own
+    // package and data partition.
+    assert_eq!(policy.tier, TrustTier::McpServer);
+    assert_eq!(policy.network.as_str(), "denied");
+    assert_eq!(policy.seccomp.as_str(), "strict");
+    assert_eq!(policy.stdio.as_str(), "streamed");
+    assert!(policy.broker, "a session server needs its broker endpoint");
+    // Long-lived: bounded by its handle, not by a wall clock.
+    assert!(policy.limits.deadline().is_none());
+
+    let canonical = package.path().canonicalize().unwrap();
+    let partition = data.path().join("apps/probe").canonicalize().unwrap();
+    let mounted = |source: &std::path::Path| {
+        policy
+            .mounts
+            .iter()
+            .find(|mount| mount.source == source)
+            .map(|mount| (mount.mode, mount.class))
+    };
+    assert_eq!(
+        mounted(&canonical),
+        Some((MountMode::ReadOnly, MountClass::Package))
+    );
+    assert_eq!(
+        mounted(&partition),
+        Some((MountMode::ReadWrite, MountClass::AppData))
+    );
+    assert_eq!(policy.workdir, partition);
+    // Exactly one writable mount: its own partition.
+    assert_eq!(policy.writable_mounts(), 1);
+    // The owner's data root itself is never mounted.
+    assert!(
+        mounted(&data.path().canonicalize().unwrap()).is_none(),
+        "the owner data root was mounted"
+    );
+}
+
+#[test]
+fn a_standing_resource_grant_refuses_an_app_session_rather_than_widening_it() {
+    let package = tempfile::tempdir().expect("package");
+    let data = tempfile::tempdir().expect("data");
+    let granted = tempfile::tempdir().expect("granted");
+    std::fs::write(package.path().join("server.py"), "# fixture\n").unwrap();
+
+    // A session's sandbox is derived once and serves calls whose
+    // capability sets differ, so a standing path or host grant cannot
+    // become a mount or an egress rule without every later call
+    // inheriting it.
+    for standing in [
+        caps(vec![Cap::new(
+            Verb::FS_READ,
+            Scope::path(granted.path().to_string_lossy()),
+        )]),
+        caps(vec![Cap::new(Verb::FS_WRITE, Scope::Wild)]),
+        caps(vec![Cap::new(Verb::NET_DIAL, Scope::host("example.com:443"))]),
+    ] {
+        let refused = app_session(app_session_input(
+            package.path(),
+            &data.path().to_string_lossy(),
+            &package.path().to_string_lossy(),
+            &standing,
+        ))
+        .expect_err("a standing resource grant must refuse the launch");
+        assert!(
+            refused.contains("standing filesystem grant")
+                || refused.contains("standing network grant"),
+            "unexpected refusal: {refused}"
+        );
+    }
+}
+
+#[test]
+fn two_app_sessions_of_one_package_derive_different_policies() {
+    let package = tempfile::tempdir().expect("package");
+    let data = tempfile::tempdir().expect("data");
+    std::fs::write(package.path().join("server.py"), "# fixture\n").unwrap();
+    let standing = CapSet::new();
+
+    let data_dir = data.path().to_string_lossy().into_owned();
+    let apps_dir = package.path().to_string_lossy().into_owned();
+    let first = app_session(app_session_input(
+        package.path(),
+        &data_dir,
+        &apps_dir,
+        &standing,
+    ))
+    .expect("first");
+    let mut input = app_session_input(package.path(), &data_dir, &apps_dir, &standing);
+    input.session_id = "app-other";
+    let second = app_session(input).expect("second");
+
+    // The policy digest binds the session identity, so the reuse check
+    // in the App-session bridge cannot mistake one launch for another.
+    assert_ne!(first.digest(), second.digest());
+}
