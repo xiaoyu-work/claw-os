@@ -993,6 +993,727 @@ impl Compressor for RaceAfterPlanCompressor {
     }
 }
 
+fn structured_tool_use(id: &str, name: &str) -> Message {
+    Message {
+        role: crate::agent::llm::Role::Assistant,
+        content: vec![crate::agent::llm::ContentBlock::ToolUse {
+            id: id.to_string(),
+            name: name.to_string(),
+            input: serde_json::json!({}),
+        }],
+    }
+}
+
+fn structured_tool_result(id: &str, content: &str) -> Message {
+    Message {
+        role: crate::agent::llm::Role::User,
+        content: vec![crate::agent::llm::ContentBlock::ToolResult {
+            tool_use_id: id.to_string(),
+            is_error: false,
+            content: content.to_string(),
+        }],
+    }
+}
+
+fn raw_origin_index(seed: &ConversationSeed, id: i64) -> usize {
+    seed.origins
+        .iter()
+        .position(|origin| matches!(origin, MessageOrigin::Raw { id: raw_id, .. } if *raw_id == id))
+        .expect("raw origin")
+}
+
+fn insert_ephemerals(seed: &mut ConversationSeed, index: usize, messages: Vec<Message>) {
+    let count = messages.len();
+    seed.messages.splice(index..index, messages);
+    seed.origins.splice(
+        index..index,
+        std::iter::repeat_n(MessageOrigin::Ephemeral, count),
+    );
+}
+
+fn live_message_labels(messages: &[Message]) -> Vec<String> {
+    messages
+        .iter()
+        .map(|message| {
+            message
+                .content
+                .iter()
+                .find_map(|block| match block {
+                    crate::agent::llm::ContentBlock::ToolUse { id, .. } => {
+                        Some(format!("tool-use:{id}"))
+                    }
+                    crate::agent::llm::ContentBlock::ToolResult {
+                        tool_use_id,
+                        content,
+                        ..
+                    } => Some(format!("tool-result:{tool_use_id}:{content}")),
+                    crate::agent::llm::ContentBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+async fn assert_provider_receives_tool_evidence(
+    messages: &[Message],
+    tool_use_id: &str,
+    evidence: &str,
+) {
+    let mock = MockProvider::new("mock-model", &cfg());
+    mock.push_response(MockResponse::Text("accepted".into()));
+    mock.chat(crate::agent::llm::ChatRequest {
+        model: "mock-model".into(),
+        messages: messages.to_vec(),
+        system: Some("system".into()),
+        tools: Vec::new(),
+        tool_choice: crate::agent::llm::ToolChoice::Auto,
+        max_tokens: Some(32),
+        temperature: Some(0.0),
+        top_p: None,
+        stop_sequences: Vec::new(),
+        extra: serde_json::Value::Null,
+    })
+    .await
+    .unwrap();
+    let request = mock.last_request().unwrap();
+    let mut use_index = None;
+    let mut result_index = None;
+    for (index, message) in request.messages.iter().enumerate() {
+        for block in &message.content {
+            match block {
+                crate::agent::llm::ContentBlock::ToolUse { id, .. } if id == tool_use_id => {
+                    assert!(use_index.replace(index).is_none(), "duplicate tool use");
+                }
+                crate::agent::llm::ContentBlock::ToolResult {
+                    tool_use_id: id,
+                    content,
+                    ..
+                } if id == tool_use_id => {
+                    assert!(content.contains(evidence));
+                    assert!(
+                        result_index.replace(index).is_none(),
+                        "duplicate tool result"
+                    );
+                }
+                _ => {}
+            }
+        }
+    }
+    assert!(
+        use_index.is_some_and(|use_index| {
+            result_index.is_some_and(|result_index| use_index < result_index)
+        }),
+        "provider request must contain the ordered tool use/result pair"
+    );
+}
+
+#[test]
+fn adoption_merges_ephemerals_before_between_and_after_raw_tail_in_order() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "ephemeral-merge-order";
+    let first = db.record_message(sid, "user", "covered user").unwrap();
+    let second = db
+        .record_message(sid, "assistant", "covered assistant")
+        .unwrap();
+    let tool_use = db
+        .record_message(sid, "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    let anchor = db.record_message(sid, "user", "real anchor").unwrap();
+    let final_raw = db
+        .record_message(sid, "assistant", "final durable")
+        .unwrap();
+    let attempt = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: first,
+                source_end_id: second,
+                source_count: 2,
+                protected_tail_start_id: Some(tool_use),
+                protected_user_message_id: Some(anchor),
+                algorithm: "winner".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected winner attempt, got {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nwinner summary")
+        .unwrap();
+    let projection = db.continuation_projection(sid, 100, true).unwrap();
+
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let inside_index = raw_origin_index(&live, second);
+    insert_ephemerals(
+        &mut live,
+        inside_index,
+        vec![Message::assistant_text("inside covered prefix")],
+    );
+    let before_tail = raw_origin_index(&live, tool_use);
+    insert_ephemerals(
+        &mut live,
+        before_tail,
+        vec![Message::assistant_text("before raw tail")],
+    );
+    let tool_index = raw_origin_index(&live, tool_use);
+    live.messages[tool_index] = structured_tool_use("call-1", "lookup");
+    insert_ephemerals(
+        &mut live,
+        tool_index + 1,
+        vec![
+            structured_tool_result("call-1", "critical evidence"),
+            Message::assistant_text("adjacent ephemeral one"),
+            Message::assistant_text("adjacent ephemeral two"),
+        ],
+    );
+    let after_tail = raw_origin_index(&live, final_raw) + 1;
+    insert_ephemerals(
+        &mut live,
+        after_tail,
+        vec![Message::assistant_text("after raw tail")],
+    );
+
+    let merged = adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap();
+    assert_eq!(
+        live_message_labels(&merged.messages),
+        vec![
+            "[CONTEXT SUMMARY]\n\nwinner summary",
+            "before raw tail",
+            "tool-use:call-1",
+            "tool-result:call-1:critical evidence",
+            "adjacent ephemeral one",
+            "adjacent ephemeral two",
+            "real anchor",
+            "final durable",
+            "after raw tail",
+        ]
+    );
+    assert!(
+        merged
+            .origins
+            .iter()
+            .filter(|origin| matches!(origin, MessageOrigin::Ephemeral))
+            .count()
+            == 5
+    );
+    assert!(!live_message_labels(&merged.messages)
+        .iter()
+        .any(|label| label == "inside covered prefix"));
+}
+
+#[test]
+fn ambiguous_ephemeral_position_rejects_adoption_with_compression_error() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "ephemeral-ambiguous";
+    let ids: Vec<i64> = ["covered zero", "covered one", "tail user", "tail assistant"]
+        .into_iter()
+        .enumerate()
+        .map(|(index, content)| {
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                content,
+            )
+            .unwrap()
+        })
+        .collect();
+    let attempt = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[1],
+                source_count: 2,
+                protected_tail_start_id: Some(ids[2]),
+                protected_user_message_id: Some(ids[2]),
+                algorithm: "winner".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected winner attempt, got {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nwinner summary")
+        .unwrap();
+    let projection = db.continuation_projection(sid, 100, true).unwrap();
+
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let covered_end = raw_origin_index(&live, ids[1]);
+    live.messages.remove(covered_end);
+    live.origins.remove(covered_end);
+    let ambiguous_index = raw_origin_index(&live, ids[2]);
+    insert_ephemerals(
+        &mut live,
+        ambiguous_index,
+        vec![structured_tool_result("unknown", "ambiguous evidence")],
+    );
+
+    let error = adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap_err();
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("cannot prove"));
+}
+
+#[test]
+fn ephemeral_order_rejects_unseen_winner_raw_between_live_anchors() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "ephemeral-unseen-raw";
+    let ids: Vec<i64> = (0..5)
+        .map(|index| {
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("row {index}"),
+            )
+            .unwrap()
+        })
+        .collect();
+    let attempt = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[1],
+                source_count: 2,
+                protected_tail_start_id: Some(ids[2]),
+                protected_user_message_id: Some(ids[2]),
+                algorithm: "winner".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected winner attempt, got {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nwinner summary")
+        .unwrap();
+    let projection = db.continuation_projection(sid, 100, true).unwrap();
+
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let unseen = raw_origin_index(&live, ids[3]);
+    live.messages.remove(unseen);
+    live.origins.remove(unseen);
+    let before_last = raw_origin_index(&live, ids[4]);
+    insert_ephemerals(
+        &mut live,
+        before_last,
+        vec![Message::assistant_text("order-sensitive ephemeral")],
+    );
+
+    let error = adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap_err();
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("unseen winner raw id"));
+}
+
+#[tokio::test]
+async fn non_race_compaction_preserves_ephemeral_tool_result_tail() {
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "non-race-ephemeral";
+    db.record_message(sid, "user", &format!("old user {}", "x".repeat(2000)))
+        .unwrap();
+    db.record_message(
+        sid,
+        "assistant",
+        &format!("old assistant {}", "x".repeat(2000)),
+    )
+    .unwrap();
+    let tool_use = db
+        .record_message(sid, "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    db.record_message(sid, "user", "real anchor").unwrap();
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let before_tool = raw_origin_index(&live, tool_use);
+    insert_ephemerals(
+        &mut live,
+        before_tool,
+        vec![Message::assistant_text("unpersisted before tail")],
+    );
+    let tool_index = raw_origin_index(&live, tool_use);
+    live.messages[tool_index] = structured_tool_use("non-race-call", "lookup");
+    insert_ephemerals(
+        &mut live,
+        tool_index + 1,
+        vec![
+            structured_tool_result("non-race-call", "unpersisted evidence"),
+            Message::assistant_text("unpersisted note"),
+        ],
+    );
+    let mut messages = live.messages;
+    let mut origins = live.origins;
+
+    let compressor_cfg = CompressorConfig {
+        trigger_tokens: 500,
+        keep_tail_tokens: 100,
+        ..CompressorConfig::default()
+    };
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    mock.push_response(MockResponse::Text("initial summary".into()));
+    let provider: Arc<dyn Provider> = mock;
+    let compressor: Arc<dyn Compressor> =
+        Arc::new(LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg));
+    assert!(maybe_compress_messages(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        Some((&db, sid)),
+        None,
+        "mock",
+        "mock-model",
+    )
+    .await
+    .unwrap());
+
+    assert!(!compressor.should_compress(Some("system"), &messages));
+    assert_eq!(
+        live_message_labels(&messages),
+        vec![
+            "[CONTEXT SUMMARY] (compressed 2 prior messages)\n\ninitial summary",
+            "unpersisted before tail",
+            "tool-use:non-race-call",
+            "tool-result:non-race-call:unpersisted evidence",
+            "unpersisted note",
+            "real anchor",
+        ]
+    );
+    assert_provider_receives_tool_evidence(&messages, "non-race-call", "unpersisted evidence")
+        .await;
+    validate_active_projection(&ConversationSeed { messages, origins }).unwrap();
+}
+
+#[tokio::test]
+async fn already_covered_race_preserves_ephemeral_tool_evidence_under_threshold() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "already-covered-ephemeral";
+    let covered_user = db
+        .record_message(sid, "user", &format!("covered user {}", "x".repeat(2000)))
+        .unwrap();
+    let covered_assistant = db
+        .record_message(
+            sid,
+            "assistant",
+            &format!("covered assistant {}", "x".repeat(2000)),
+        )
+        .unwrap();
+    let tool_use = db
+        .record_message(sid, "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    let anchor = db.record_message(sid, "user", "real anchor").unwrap();
+    let final_raw = db
+        .record_message(sid, "assistant", "final durable")
+        .unwrap();
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let before_tool = raw_origin_index(&live, tool_use);
+    insert_ephemerals(
+        &mut live,
+        before_tool,
+        vec![Message::assistant_text("before tail evidence")],
+    );
+    let tool_index = raw_origin_index(&live, tool_use);
+    live.messages[tool_index] = structured_tool_use("covered-call", "lookup");
+    insert_ephemerals(
+        &mut live,
+        tool_index + 1,
+        vec![
+            structured_tool_result("covered-call", "ephemeral tool evidence"),
+            Message::assistant_text("ephemeral note one"),
+            Message::assistant_text("ephemeral note two"),
+        ],
+    );
+    let after_raw = raw_origin_index(&live, final_raw) + 1;
+    insert_ephemerals(
+        &mut live,
+        after_raw,
+        vec![Message::assistant_text("ephemeral after tail")],
+    );
+    let mut messages = live.messages;
+    let mut origins = live.origins;
+
+    let compressor_cfg = CompressorConfig {
+        trigger_tokens: 500,
+        keep_tail_tokens: 100,
+        ..CompressorConfig::default()
+    };
+    let probe: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-model", &cfg()));
+    assert_eq!(
+        LlmCompressor::new(probe, "mock-model")
+            .with_config(compressor_cfg.clone())
+            .prepare_compaction(
+                Some("system"),
+                messages
+                    .iter()
+                    .zip(&origins)
+                    .map(|(message, origin)| durable_projection_message(origin, message))
+                    .collect(),
+            )
+            .unwrap()
+            .source_message_count(),
+        2
+    );
+
+    let (start_tx, start_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let winner_db = db.clone();
+    let winner = std::thread::spawn(move || {
+        start_rx.recv().unwrap();
+        let attempt = match winner_db
+            .begin_compaction(
+                sid,
+                NewCompaction {
+                    source_start_id: covered_user,
+                    source_end_id: covered_assistant,
+                    source_count: 2,
+                    protected_tail_start_id: Some(tool_use),
+                    protected_user_message_id: Some(anchor),
+                    algorithm: "winner".into(),
+                    algorithm_version: 1,
+                    provider: "mock".into(),
+                    model: "mock".into(),
+                    previous_compaction_id: None,
+                    pruned_tool_results: 0,
+                },
+            )
+            .unwrap()
+        {
+            BeginCompaction::Started(attempt) => attempt,
+            other => panic!("expected winner attempt, got {other:?}"),
+        };
+        attempt
+            .complete("[CONTEXT SUMMARY]\n\nalready-covered winner")
+            .unwrap();
+        done_tx.send(()).unwrap();
+    });
+
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    let provider: Arc<dyn Provider> = mock.clone();
+    let compressor: Arc<dyn Compressor> = Arc::new(RaceAfterPlanCompressor {
+        inner: LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg),
+        start_winner: std::sync::Mutex::new(Some(start_tx)),
+        winner_done: std::sync::Mutex::new(done_rx),
+    });
+    assert!(maybe_compress_messages(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        Some((&db, sid)),
+        None,
+        "mock",
+        "mock-model",
+    )
+    .await
+    .unwrap());
+    winner.join().unwrap();
+
+    assert!(!compressor.should_compress(Some("system"), &messages));
+    assert!(
+        mock.last_request().is_none(),
+        "under-threshold winner must be sent without another summary request"
+    );
+    assert_eq!(
+        live_message_labels(&messages),
+        vec![
+            "[CONTEXT SUMMARY]\n\nalready-covered winner",
+            "before tail evidence",
+            "tool-use:covered-call",
+            "tool-result:covered-call:ephemeral tool evidence",
+            "ephemeral note one",
+            "ephemeral note two",
+            "real anchor",
+            "final durable",
+            "ephemeral after tail",
+        ]
+    );
+    assert_provider_receives_tool_evidence(&messages, "covered-call", "ephemeral tool evidence")
+        .await;
+    validate_active_projection(&ConversationSeed { messages, origins }).unwrap();
+}
+
+#[tokio::test]
+async fn stale_plan_race_preserves_ephemeral_tool_evidence_through_successor() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "stale-plan-ephemeral";
+    let mut ids = Vec::new();
+    for (role, label) in [
+        ("user", "covered user"),
+        ("assistant", "covered assistant"),
+        ("user", "remaining user"),
+        ("assistant", "remaining assistant"),
+    ] {
+        ids.push(
+            db.record_message(sid, role, &format!("{label} {}", "x".repeat(2000)))
+                .unwrap(),
+        );
+    }
+    let tool_use = db
+        .record_message(sid, "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    let _anchor = db.record_message(sid, "user", "real anchor").unwrap();
+    let final_raw = db
+        .record_message(sid, "assistant", "final durable")
+        .unwrap();
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let before_tool = raw_origin_index(&live, tool_use);
+    insert_ephemerals(
+        &mut live,
+        before_tool,
+        vec![Message::assistant_text("before stale tail")],
+    );
+    let tool_index = raw_origin_index(&live, tool_use);
+    live.messages[tool_index] = structured_tool_use("stale-call", "lookup");
+    insert_ephemerals(
+        &mut live,
+        tool_index + 1,
+        vec![
+            structured_tool_result("stale-call", "stale ephemeral evidence"),
+            Message::assistant_text("stale ephemeral note one"),
+            Message::assistant_text("stale ephemeral note two"),
+        ],
+    );
+    let after_raw = raw_origin_index(&live, final_raw) + 1;
+    insert_ephemerals(
+        &mut live,
+        after_raw,
+        vec![Message::assistant_text("stale ephemeral after")],
+    );
+    let mut messages = live.messages;
+    let mut origins = live.origins;
+
+    let compressor_cfg = CompressorConfig {
+        trigger_tokens: 500,
+        keep_tail_tokens: 100,
+        ..CompressorConfig::default()
+    };
+    let probe: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-model", &cfg()));
+    assert_eq!(
+        LlmCompressor::new(probe, "mock-model")
+            .with_config(compressor_cfg.clone())
+            .prepare_compaction(
+                Some("system"),
+                messages
+                    .iter()
+                    .zip(&origins)
+                    .map(|(message, origin)| durable_projection_message(origin, message))
+                    .collect(),
+            )
+            .unwrap()
+            .source_message_count(),
+        4
+    );
+
+    let (start_tx, start_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let winner_db = db.clone();
+    let winner_ids = ids.clone();
+    let winner = std::thread::spawn(move || {
+        start_rx.recv().unwrap();
+        let attempt = match winner_db
+            .begin_compaction(
+                sid,
+                NewCompaction {
+                    source_start_id: winner_ids[0],
+                    source_end_id: winner_ids[1],
+                    source_count: 2,
+                    protected_tail_start_id: Some(winner_ids[2]),
+                    protected_user_message_id: Some(winner_ids[2]),
+                    algorithm: "winner".into(),
+                    algorithm_version: 1,
+                    provider: "mock".into(),
+                    model: "mock".into(),
+                    previous_compaction_id: None,
+                    pruned_tool_results: 0,
+                },
+            )
+            .unwrap()
+        {
+            BeginCompaction::Started(attempt) => attempt,
+            other => panic!("expected winner attempt, got {other:?}"),
+        };
+        attempt
+            .complete("[CONTEXT SUMMARY]\n\nshort stale winner")
+            .unwrap();
+        done_tx.send(()).unwrap();
+    });
+
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    mock.push_response(MockResponse::Text("stale successor".into()));
+    let provider: Arc<dyn Provider> = mock;
+    let compressor: Arc<dyn Compressor> = Arc::new(RaceAfterPlanCompressor {
+        inner: LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg),
+        start_winner: std::sync::Mutex::new(Some(start_tx)),
+        winner_done: std::sync::Mutex::new(done_rx),
+    });
+    assert!(maybe_compress_messages(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        Some((&db, sid)),
+        None,
+        "mock",
+        "mock-model",
+    )
+    .await
+    .unwrap());
+    winner.join().unwrap();
+
+    assert!(!compressor.should_compress(Some("system"), &messages));
+    assert_eq!(db.compactions_for_session(sid).unwrap().len(), 2);
+    assert_eq!(
+        live_message_labels(&messages),
+        vec![
+            "[CONTEXT SUMMARY] (compressed 3 prior messages)\n\nstale successor",
+            "before stale tail",
+            "tool-use:stale-call",
+            "tool-result:stale-call:stale ephemeral evidence",
+            "stale ephemeral note one",
+            "stale ephemeral note two",
+            "real anchor",
+            "final durable",
+            "stale ephemeral after",
+        ]
+    );
+    assert_provider_receives_tool_evidence(&messages, "stale-call", "stale ephemeral evidence")
+        .await;
+    validate_active_projection(&ConversationSeed { messages, origins }).unwrap();
+}
+
 #[tokio::test]
 async fn stale_runtime_plan_adopts_concurrent_winner_instead_of_restoring_old_history() {
     use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};

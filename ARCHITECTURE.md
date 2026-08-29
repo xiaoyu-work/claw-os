@@ -119,6 +119,12 @@ old tool results are deterministically stubbed before an LLM summary.
 Validation requires the protected tail to begin at the first uncompacted
 replayable row, rejects tool-pair splits, and rechecks that a verbatim real-user
 anchor and both protected row identities are unchanged.
+Winner adoption deterministically merges live messages whose persistence
+failed into positions anchored by neighboring raw row IDs. Ephemerals proven
+inside the winner's covered prefix are not reintroduced; those proven outside
+keep their exact order, including structured tool results. Ambiguous placement,
+orphaned tool pairs, or a missing real-user anchor fails compression rather
+than dropping, duplicating, or reordering active evidence.
 Repair reroots a valid descendant around a damaged predecessor and records the
 removed lineage; it drops the dependent chain only when no safe root remains.
 

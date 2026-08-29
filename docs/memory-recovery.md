@@ -70,6 +70,18 @@ winner adoption, and replanning are bounded; timeout, provider failure, or an
 uncompressible result returns an explicit non-integrity compression error, so
 known-over-threshold input is never sent as a fallback.
 
+Active turns can contain messages that reached the model but failed their
+best-effort SQLite append. These retain an in-memory `Ephemeral` origin.
+Concurrent winner adoption places each adjacent ephemeral run using its
+nearest live durable rows: runs proven after the winner boundary are inserted
+before the same next raw row (or after the tail), preserving exact order; runs
+proven inside the covered prefix are not duplicated. If the neighboring row
+IDs straddle the boundary without proving a side, or the winner contains an
+unseen raw row inside the proposed insertion slot, adoption returns an explicit
+compression error. The merged request is then checked for ordered raw IDs,
+complete structured or flattened tool pairs, and a real user anchor before it
+can reach a provider. The same checks apply after a non-race compaction.
+
 `cos agent replay <session-id>` continues to export the original message rows
 and now includes the compaction lifecycle metadata and raw-row recovery range.
 It does not substitute the summary for the audit source.

@@ -605,16 +605,78 @@ fn adopt_compaction_projection(
     projection: crate::agent::memory::compaction::ContinuationProjection,
     live_messages: &[Message],
     live_origins: &[MessageOrigin],
-) -> ConversationSeed {
-    let live_by_id: HashMap<i64, (&Message, &MessageOrigin)> = live_messages
+) -> Result<ConversationSeed, AgentError> {
+    merge_compaction_projection(projection, live_messages, live_origins).map_err(|reason| {
+        AgentError::Compression(format!(
+            "could not safely adopt concurrent compaction: {reason}"
+        ))
+    })
+}
+
+fn merge_compaction_projection(
+    projection: crate::agent::memory::compaction::ContinuationProjection,
+    live_messages: &[Message],
+    live_origins: &[MessageOrigin],
+) -> Result<ConversationSeed, String> {
+    if live_messages.len() != live_origins.len() {
+        return Err("live messages and origins have different lengths".to_string());
+    }
+    validate_origin_order(live_origins)?;
+
+    let covered_end = projection
+        .summary
+        .as_ref()
+        .map(|summary| summary.record.source_end_id);
+    let mut adopted = projection_to_seed(projection);
+    validate_origin_order(&adopted.origins)?;
+
+    let mut live_by_id: HashMap<i64, (&Message, &MessageOrigin)> = HashMap::new();
+    for (message, origin) in live_messages.iter().zip(live_origins) {
+        match origin {
+            MessageOrigin::Raw { id, .. } => {
+                if live_by_id.insert(*id, (message, origin)).is_some() {
+                    return Err(format!("live conversation repeats raw message id {id}"));
+                }
+            }
+            MessageOrigin::Summary(summary) => match covered_end {
+                Some(end) if summary.record.source_end_id <= end => {}
+                Some(end) => {
+                    return Err(format!(
+                        "live summary ends at {} after winner boundary {end}",
+                        summary.record.source_end_id
+                    ));
+                }
+                None => {
+                    return Err(
+                        "winner has no summary but live conversation already has one".to_string(),
+                    );
+                }
+            },
+            MessageOrigin::Ephemeral => {}
+        }
+    }
+
+    let adopted_raw_order: Vec<i64> = adopted
+        .origins
         .iter()
-        .zip(live_origins)
-        .filter_map(|(message, origin)| match origin {
-            MessageOrigin::Raw { id, .. } => Some((*id, (message, origin))),
+        .filter_map(|origin| match origin {
+            MessageOrigin::Raw { id, .. } => Some(*id),
             MessageOrigin::Summary(_) | MessageOrigin::Ephemeral => None,
         })
         .collect();
-    let mut adopted = projection_to_seed(projection);
+    let adopted_raw_ids: std::collections::HashSet<i64> =
+        adopted_raw_order.iter().copied().collect();
+    for id in live_by_id.keys().copied() {
+        if covered_end.is_some_and(|end| id <= end) {
+            continue;
+        }
+        if !adopted_raw_ids.contains(&id) {
+            return Err(format!(
+                "live raw message {id} is absent from the winner's uncompacted tail"
+            ));
+        }
+    }
+
     for (message, origin) in adopted.messages.iter_mut().zip(&mut adopted.origins) {
         let MessageOrigin::Raw { id, .. } = origin else {
             continue;
@@ -624,7 +686,298 @@ fn adopt_compaction_projection(
             *origin = (*live_origin).clone();
         }
     }
-    adopted
+
+    let next_durable = next_durable_anchors(live_origins);
+    let mut before_raw: HashMap<i64, Vec<(Message, MessageOrigin)>> = HashMap::new();
+    let mut after_tail = Vec::new();
+    let mut previous = None;
+    let mut index = 0;
+    while index < live_origins.len() {
+        match &live_origins[index] {
+            MessageOrigin::Ephemeral => {
+                let start = index;
+                while index < live_origins.len()
+                    && matches!(live_origins[index], MessageOrigin::Ephemeral)
+                {
+                    index += 1;
+                }
+                let next = next_durable[index];
+                let keep = ephemeral_is_outside_covered_prefix(previous, next, covered_end)?;
+                if !keep {
+                    continue;
+                }
+                ensure_ephemeral_slot_is_unambiguous(
+                    previous,
+                    next,
+                    covered_end,
+                    &adopted_raw_order,
+                )?;
+                let run: Vec<(Message, MessageOrigin)> = live_messages[start..index]
+                    .iter()
+                    .cloned()
+                    .zip(live_origins[start..index].iter().cloned())
+                    .collect();
+                match next {
+                    Some(DurableAnchor::Raw(id)) => {
+                        if !adopted_raw_ids.contains(&id) {
+                            return Err(format!(
+                                "cannot position ephemeral messages before missing raw id {id}"
+                            ));
+                        }
+                        before_raw.entry(id).or_default().extend(run);
+                    }
+                    Some(DurableAnchor::Summary(_)) => {
+                        return Err(
+                            "ephemeral messages cannot be positioned before a live summary"
+                                .to_string(),
+                        );
+                    }
+                    None => after_tail.extend(run),
+                }
+            }
+            origin => {
+                previous = durable_anchor(origin);
+                index += 1;
+            }
+        }
+    }
+
+    let mut merged = ConversationSeed {
+        messages: Vec::with_capacity(
+            adopted.messages.len()
+                + before_raw.values().map(Vec::len).sum::<usize>()
+                + after_tail.len(),
+        ),
+        origins: Vec::with_capacity(
+            adopted.origins.len()
+                + before_raw.values().map(Vec::len).sum::<usize>()
+                + after_tail.len(),
+        ),
+    };
+    for (message, origin) in adopted.messages.into_iter().zip(adopted.origins) {
+        if let MessageOrigin::Raw { id, .. } = &origin {
+            if let Some(run) = before_raw.remove(id) {
+                for (ephemeral_message, ephemeral_origin) in run {
+                    merged.messages.push(ephemeral_message);
+                    merged.origins.push(ephemeral_origin);
+                }
+            }
+        }
+        merged.messages.push(message);
+        merged.origins.push(origin);
+    }
+    if !before_raw.is_empty() {
+        return Err(
+            "ephemeral insertion anchors were not present in winner projection".to_string(),
+        );
+    }
+    for (message, origin) in after_tail {
+        merged.messages.push(message);
+        merged.origins.push(origin);
+    }
+    validate_active_projection(&merged)?;
+    Ok(merged)
+}
+
+fn ensure_ephemeral_slot_is_unambiguous(
+    previous: Option<DurableAnchor>,
+    next: Option<DurableAnchor>,
+    covered_end: Option<i64>,
+    adopted_raw_ids: &[i64],
+) -> Result<(), String> {
+    let lower = previous
+        .map(DurableAnchor::end_id)
+        .or(covered_end)
+        .unwrap_or(i64::MIN);
+    let unseen = match next {
+        Some(DurableAnchor::Raw(upper)) => adopted_raw_ids
+            .iter()
+            .copied()
+            .find(|id| *id > lower && *id < upper),
+        Some(DurableAnchor::Summary(_)) => {
+            return Err(
+                "ephemeral messages cannot be positioned before a live summary".to_string(),
+            );
+        }
+        None => adopted_raw_ids.iter().copied().find(|id| *id > lower),
+    };
+    if let Some(id) = unseen {
+        return Err(format!(
+            "cannot position live ephemeral messages relative to unseen winner raw id {id}"
+        ));
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, Copy)]
+enum DurableAnchor {
+    Summary(i64),
+    Raw(i64),
+}
+
+impl DurableAnchor {
+    fn end_id(self) -> i64 {
+        match self {
+            Self::Summary(id) | Self::Raw(id) => id,
+        }
+    }
+}
+
+fn durable_anchor(origin: &MessageOrigin) -> Option<DurableAnchor> {
+    match origin {
+        MessageOrigin::Summary(summary) => {
+            Some(DurableAnchor::Summary(summary.record.source_end_id))
+        }
+        MessageOrigin::Raw { id, .. } => Some(DurableAnchor::Raw(*id)),
+        MessageOrigin::Ephemeral => None,
+    }
+}
+
+fn next_durable_anchors(origins: &[MessageOrigin]) -> Vec<Option<DurableAnchor>> {
+    let mut result = vec![None; origins.len() + 1];
+    let mut next = None;
+    for index in (0..origins.len()).rev() {
+        if let Some(anchor) = durable_anchor(&origins[index]) {
+            next = Some(anchor);
+        }
+        result[index] = next;
+    }
+    result
+}
+
+fn ephemeral_is_outside_covered_prefix(
+    previous: Option<DurableAnchor>,
+    next: Option<DurableAnchor>,
+    covered_end: Option<i64>,
+) -> Result<bool, String> {
+    let Some(covered_end) = covered_end else {
+        return Ok(true);
+    };
+    if previous.is_some_and(|anchor| anchor.end_id() >= covered_end) {
+        return Ok(true);
+    }
+    if matches!(next, Some(DurableAnchor::Raw(id)) if id <= covered_end) {
+        return Ok(false);
+    }
+    Err(format!(
+        "cannot prove whether live ephemeral messages are before or after winner boundary {covered_end}"
+    ))
+}
+
+fn validate_origin_order(origins: &[MessageOrigin]) -> Result<(), String> {
+    let mut last_end = None;
+    let mut saw_summary = false;
+    for (index, origin) in origins.iter().enumerate() {
+        match origin {
+            MessageOrigin::Summary(summary) => {
+                if saw_summary || index != 0 {
+                    return Err(
+                        "conversation summary origin must appear exactly once at the head"
+                            .to_string(),
+                    );
+                }
+                saw_summary = true;
+                last_end = Some(summary.record.source_end_id);
+            }
+            MessageOrigin::Raw { id, .. } => {
+                if last_end.is_some_and(|last| *id <= last) {
+                    return Err(format!(
+                        "raw message id {id} is not ordered after durable boundary {}",
+                        last_end.unwrap_or_default()
+                    ));
+                }
+                last_end = Some(*id);
+            }
+            MessageOrigin::Ephemeral => {}
+        }
+    }
+    Ok(())
+}
+
+fn validate_active_projection(seed: &ConversationSeed) -> Result<(), String> {
+    if seed.messages.len() != seed.origins.len() {
+        return Err("projected messages and origins have different lengths".to_string());
+    }
+    validate_origin_order(&seed.origins)?;
+
+    let mut structured_tools = std::collections::HashSet::new();
+    let mut flattened_tools = 0usize;
+    let mut has_real_user = false;
+    for (message, origin) in seed.messages.iter().zip(&seed.origins) {
+        if matches!(origin, MessageOrigin::Summary(_)) {
+            continue;
+        }
+        has_real_user |= message_is_real_user(message);
+        for block in &message.content {
+            match block {
+                llm::ContentBlock::ToolUse { id, .. } => {
+                    if !structured_tools.insert(id.as_str()) {
+                        return Err(format!("tool use id {id} appears more than once"));
+                    }
+                }
+                llm::ContentBlock::ToolResult { tool_use_id, .. } => {
+                    if !structured_tools.remove(tool_use_id.as_str()) {
+                        return Err(format!(
+                            "tool result {tool_use_id} has no preceding live tool use"
+                        ));
+                    }
+                }
+                llm::ContentBlock::Text { text } => {
+                    for line in text.lines().map(str::trim_start) {
+                        if is_flattened_tool_use(line) {
+                            flattened_tools = flattened_tools.saturating_add(1);
+                        } else if is_flattened_tool_result(line) {
+                            if flattened_tools == 0 {
+                                return Err("flattened tool result has no preceding live tool use"
+                                    .to_string());
+                            }
+                            flattened_tools -= 1;
+                        }
+                    }
+                }
+                llm::ContentBlock::ToolState { .. }
+                | llm::ContentBlock::Reasoning { .. }
+                | llm::ContentBlock::Image { .. } => {}
+            }
+        }
+    }
+    if let Some(id) = structured_tools.iter().next() {
+        return Err(format!("live tool use {id} has no result"));
+    }
+    if flattened_tools > 0 {
+        return Err(format!(
+            "{flattened_tools} flattened live tool use(s) have no result"
+        ));
+    }
+    if !has_real_user {
+        return Err("projected conversation has no real user anchor".to_string());
+    }
+    Ok(())
+}
+
+fn message_is_real_user(message: &Message) -> bool {
+    message.role == llm::Role::User
+        && message.content.iter().any(|block| match block {
+            llm::ContentBlock::Text { text } => text
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .is_some_and(|line| {
+                    !is_flattened_tool_result(line) && !is_flattened_tool_use(line)
+                }),
+            _ => false,
+        })
+}
+
+fn is_flattened_tool_use(line: &str) -> bool {
+    line.starts_with("[tool: ") || line.starts_with("[tool_use:")
+}
+
+fn is_flattened_tool_result(line: &str) -> bool {
+    line.starts_with("[tool result]")
+        || line.starts_with("[tool result error]")
+        || line.starts_with("[tool_result]")
+        || line.starts_with("[tool_result:error]")
 }
 
 fn rows_to_seed(rows: &[sqlite_fts::MessageRow]) -> ConversationSeed {
@@ -709,11 +1062,18 @@ fn coverage_for_prefix(origins: &[MessageOrigin], count: usize) -> Option<Durabl
     coverage
 }
 
-fn raw_origin_id(origin: Option<&MessageOrigin>) -> Option<i64> {
-    match origin {
-        Some(MessageOrigin::Raw { id, .. }) => Some(*id),
-        _ => None,
-    }
+fn first_raw_origin_id(origins: &[MessageOrigin]) -> Option<i64> {
+    origins.iter().find_map(|origin| match origin {
+        MessageOrigin::Raw { id, .. } => Some(*id),
+        MessageOrigin::Summary(_) | MessageOrigin::Ephemeral => None,
+    })
+}
+
+fn last_real_raw_user_id(origins: &[MessageOrigin]) -> Option<i64> {
+    origins.iter().rev().find_map(|origin| match origin {
+        MessageOrigin::Raw { id, replay } if message_is_real_user(replay) => Some(*id),
+        MessageOrigin::Raw { .. } | MessageOrigin::Summary(_) | MessageOrigin::Ephemeral => None,
+    })
 }
 
 fn durable_projection_message(origin: &MessageOrigin, fallback: &Message) -> Message {
@@ -888,7 +1248,8 @@ async fn maybe_compress_messages_with_policy(
                 "over-threshold context has no durably reconstructable source range".to_string(),
             ));
         };
-        let Some(protected_tail_start_id) = raw_origin_id(current_origins.get(source_count)) else {
+        let Some(protected_tail_start_id) = first_raw_origin_id(&current_origins[source_count..])
+        else {
             *messages = current_messages;
             *origins = current_origins;
             return Err(AgentError::Compression(
@@ -896,7 +1257,7 @@ async fn maybe_compress_messages_with_policy(
             ));
         };
         let Some(protected_user_message_id) =
-            raw_origin_id(current_origins.get(plan.protected_user_index()))
+            last_real_raw_user_id(&current_origins[source_count..])
         else {
             *messages = current_messages;
             *origins = current_origins;
@@ -938,11 +1299,18 @@ async fn maybe_compress_messages_with_policy(
                         session_id,
                         "context: adopting concurrently completed durable compaction"
                     );
-                    let adopted = adopt_compaction_projection(
+                    let adopted = match adopt_compaction_projection(
                         projection,
                         &current_messages,
                         &current_origins,
-                    );
+                    ) {
+                        Ok(adopted) => adopted,
+                        Err(error) => {
+                            *messages = current_messages;
+                            *origins = current_origins;
+                            return Err(error);
+                        }
+                    };
                     current_messages = adopted.messages;
                     current_origins = adopted.origins;
                     changed = true;
@@ -954,11 +1322,18 @@ async fn maybe_compress_messages_with_policy(
                         session_id,
                         "context: compaction plan became stale; adopting winner projection"
                     );
-                    let adopted = adopt_compaction_projection(
+                    let adopted = match adopt_compaction_projection(
                         projection,
                         &current_messages,
                         &current_origins,
-                    );
+                    ) {
+                        Ok(adopted) => adopted,
+                        Err(error) => {
+                            *messages = current_messages;
+                            *origins = current_origins;
+                            return Err(error);
+                        }
+                    };
                     current_messages = adopted.messages;
                     current_origins = adopted.origins;
                     changed = true;
@@ -1008,8 +1383,19 @@ async fn maybe_compress_messages_with_policy(
                     Vec::with_capacity(current_origins.len() - source_count + 1);
                 compacted_origins.push(MessageOrigin::Summary(Box::new(summary)));
                 compacted_origins.extend(current_origins[source_count..].iter().cloned());
-                current_messages = compacted;
-                current_origins = compacted_origins;
+                let compacted = ConversationSeed {
+                    messages: compacted,
+                    origins: compacted_origins,
+                };
+                if let Err(reason) = validate_active_projection(&compacted) {
+                    *messages = compacted.messages;
+                    *origins = compacted.origins;
+                    return Err(AgentError::Compression(format!(
+                        "new durable compaction produced an unsafe live projection: {reason}"
+                    )));
+                }
+                current_messages = compacted.messages;
+                current_origins = compacted.origins;
                 changed = true;
                 replans += 1;
             }
