@@ -24,9 +24,9 @@ use crate::agent::runtime::approval::ApprovalGate;
 
 struct ToolEntry {
     tool: Arc<dyn Tool>,
-    descriptor: llm::Tool,
+    descriptor: Arc<llm::Tool>,
     exposure: ToolExposure,
-    disclosure: ToolDisclosure,
+    disclosure: Arc<ToolDisclosure>,
 }
 
 #[derive(Debug)]
@@ -151,11 +151,11 @@ impl ToolRegistry {
 
     /// Register a tool. Last write wins for duplicate names.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        let descriptor = llm::Tool {
+        let descriptor = Arc::new(llm::Tool {
             name: tool.name().to_string(),
             description: tool.description().to_string(),
             input_schema: tool.input_schema(),
-        };
+        });
         if progressive::is_bridge_tool(&descriptor.name) {
             tracing::warn!(
                 tool = %descriptor.name,
@@ -181,7 +181,7 @@ impl ToolRegistry {
                 tool,
                 descriptor,
                 exposure,
-                disclosure,
+                disclosure: Arc::new(disclosure),
             },
         );
         self.catalog_generation.fetch_add(1, Ordering::AcqRel);
@@ -235,7 +235,9 @@ impl ToolRegistry {
     }
 
     pub fn descriptor_unfiltered(&self, name: &str) -> Option<&llm::Tool> {
-        self.tools.get(name).map(|entry| &entry.descriptor)
+        self.tools
+            .get(name)
+            .map(|entry| entry.descriptor.as_ref())
     }
 
     /// Whether the named tool opts into concurrent dispatch with
@@ -321,22 +323,17 @@ impl ToolRegistry {
                     disclosure: entry.disclosure.clone(),
                 });
             } else {
-                direct.push(entry.descriptor.clone());
+                direct.push(entry.descriptor.as_ref().clone());
             }
         }
         direct.sort_by(|left, right| left.name.cmp(&right.name));
         eligible.sort_by(|left, right| left.descriptor.name.cmp(&right.descriptor.name));
 
-        let mut raw = direct.clone();
-        raw.extend(eligible.iter().map(|entry| entry.descriptor.clone()));
-        raw.sort_by(|left, right| left.name.cmp(&right.name));
-        let raw_schema_tokens = progressive::schema_tokens(&raw);
-        let deferred_schema_tokens = progressive::schema_tokens(
-            &eligible
-                .iter()
-                .map(|entry| entry.descriptor.clone())
-                .collect::<Vec<_>>(),
-        );
+        let deferred_schema_tokens = eligible.iter().fold(0u32, |total, entry| {
+            total.saturating_add(progressive::schema_tokens_for_tool(&entry.descriptor))
+        });
+        let raw_schema_tokens =
+            progressive::schema_tokens(&direct).saturating_add(deferred_schema_tokens);
         let progressive =
             !eligible.is_empty() && deferred_schema_tokens > context.tool_schema_budget_tokens();
 
@@ -349,7 +346,13 @@ impl ToolRegistry {
             direct.extend(bridges);
             (direct, eligible, direct_count)
         } else {
-            (raw, Vec::new(), direct.len() + eligible.len())
+            let direct_count = direct.len() + eligible.len();
+            direct.extend(
+                eligible
+                    .iter()
+                    .map(|entry| entry.descriptor.as_ref().clone()),
+            );
+            (direct, Vec::new(), direct_count)
         };
         tools.sort_by(|left, right| left.name.cmp(&right.name));
         let bridge_count = tools
@@ -385,7 +388,7 @@ impl ToolRegistry {
             .tools
             .iter()
             .filter(|(name, _)| self.exposure_decision(context, name).is_visible())
-            .map(|(_, entry)| entry.descriptor.clone())
+            .map(|(_, entry)| entry.descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
@@ -517,7 +520,7 @@ impl ToolRegistry {
         let mut out: Vec<llm::Tool> = self
             .tools
             .values()
-            .map(|entry| entry.descriptor.clone())
+            .map(|entry| entry.descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out

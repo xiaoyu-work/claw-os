@@ -57,6 +57,8 @@ untrusted; authority comes only from authenticated session/runtime facts.
 Bridge calls are resolved to the original tool identity before hooks,
 parallelism, approval, and execution. Direct calls to deferred names are
 rejected, and attachment liveness is rechecked immediately before execution.
+Search returns only length- and count-bounded metadata under a hard serialized
+response budget; exact schemas are returned only by `cos_tool_describe`.
 
 `auto_deny_tools` may block any tool early, but
 `dangerous_tools`/`auto_approve_tools` never grant capability authority. Only
