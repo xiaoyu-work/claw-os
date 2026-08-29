@@ -43,6 +43,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
+| Model-input trust | Closed trust lattice, model-input source registry, labelled segments, and the bounded data fence for non-policy content | `core/src/agent/trust/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Model-visible tool registry, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
 | Credential service | Validated credential identities, cryptography and master-key ownership, encrypted atomic persistence, authorization, refresh lifecycle, OAuth flows, and stable CLI facade | `core/src/credential/` |
@@ -101,11 +102,70 @@ or filesystem. Context-bearing requests use isolated transient overlay
 processes; only context-free activation uses the well-known D-Bus
 single-instance path.
 
+### Model-input trust provenance
+
+`core/src/agent/trust/` owns a closed provenance model for everything a model
+can see. It is deliberately separate from chat role: providers expose only
+`system`/`user`/`assistant`/`tool` channels, so role cannot distinguish operator
+policy from a `MEMORY.md` note or a remote MCP server's tool description.
+
+- `TrustClass` is an ordered lattice — `LegacyUnknown`,
+  `UntrustedExternalContent`, `ModelGenerated`, `ExtensionMetadata`,
+  `UserControlledContext`, `UserInstruction`, `SystemPolicy`.
+- `SourceKind` is the closed registry of every way bytes reach a model request.
+  One exhaustive `match` declares each source's class, persistence, provider
+  projection, and audit strategy, so a new model-visible source cannot compile
+  without declaring provenance. An unrecognised source is `LegacyUnknown`.
+- `PromptProjection` splits one request into three channels. **Only
+  `SystemPolicy` segments reach `system`/`developer`**: the compiled scaffold,
+  plus an operator prompt file that ownership verification proved is root-owned
+  and not owner-writable. The authenticated user instruction goes to `user`
+  verbatim. Everything else — memory notes, `USER.md`, recalled memory, nudges,
+  Skill metadata, tool metadata, external and model content, legacy rows —
+  becomes separate bounded `user` data messages placed before the turn, in
+  assembly order. A provider without a `developer` role may merge policy with
+  policy; it can never merge policy with data, because the two never share a
+  message.
+- `LabeledSegment` carries the bytes, source and class together. Concatenation,
+  summarisation, truncation and replay take the least-trusted class of their
+  inputs, so trust never rises under transformation. Tool results are labelled
+  from the tool's registered identity, which the registry fixes before the model
+  call; tool *definitions* stay unfenced valid JSON schemas, bounded and
+  marker-stripped at ingestion so no provider schema breaks.
+- Labels are constructed only by trusted ingestion adapters naming a source.
+  Any label recovered from bytes — a stored row, a serialized payload, an
+  envelope header, a database column — is clamped to `UserControlledContext` or
+  below, so no stored or model-authored content can deserialize itself into
+  policy.
+- `trust::envelope` fences each data segment. `encode` guarantees an encoded
+  payload contains no `[[` digraph for *any* Unicode input — a fixpoint, not a
+  single substitution pass — and `decode` inverts it exactly. `bytes=` is the
+  emitted payload length, so a reader verifies the fence instead of trusting it.
+- `trust::authority` states in the type system that a label is evidence, never a
+  capability, role, approval or policy decision.
+
+Threat statement: this is containment and provenance, not detection. A
+malicious web page, MCP server, App or Skill can still persuade the model to
+propose any text or any tool call. What labelling guarantees is that untrusted
+bytes never enter the policy channel, cannot gain trust by being concatenated,
+summarised, stored, replayed or re-serialised, and cannot forge or escape the
+fence around themselves. The security boundary remains capabilities,
+guardrails, approvals and the sandbox — none of which read a trust label.
+
 ### Persistence and observability
 
 Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
-approvals, and privileged actions cannot bypass the recording path.
+approvals, and privileged actions cannot bypass the recording path. The
+owner-private message store keeps `trust_class`, `trust_source` and
+`trust_lineage` beside each row; a database written before those columns existed
+migrates by adding them as nullable, and a `NULL` — or a tampered value — reads
+back as `LegacyUnknown`. The busy timeout is armed before the WAL switch and the
+migration so the broker, worker and a CLI can open concurrently. Injected prompt
+segments carry their `SourceKind` tag, and the Session Journal records a
+content-addressed `ContentRef` plus the segment's provenance projected onto
+`Origin`/`SegmentKind`/`Trust`; a fence recovered from stored bytes may refine
+the recorded segment kind but never widens its trust.
 
 Semantic primitives have a one-way dependency boundary: `claw-embed` owns
 embedding, extraction, chunking, walking, and storage contracts;
@@ -261,9 +321,12 @@ CLI / web UI / bridge
   -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
   -> composition snapshots Arc<CosConfig>, RegistryDeps, and RuntimeDeps
   -> runtime::loop_
-  -> restore the session's versioned content-addressed system prompt,
-     or build + freeze it once with the metadata-only Skill catalogue
-  -> append due reminders / transient App data to the current request only
+  -> restore the session's frozen content-addressed *policy* prompt, or
+     build + freeze it once (compiled scaffold, plus a root-owned
+     operator policy file when ownership verification passes)
+  -> rebuild the request prelude per turn: Skill catalogue, memory notes,
+     owner-writable prompt file, due reminders, transient App data —
+     each a separate fenced user data message before the owner's turn
   -> load persisted conversation and compress when the configured budget requires it
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation

@@ -293,7 +293,7 @@ pub fn search_tools(deferred: &[LlmTool], input: &Value) -> ToolResult {
         }));
     }
 
-    ToolResult::ok(
+    ToolResult::ok(fence_metadata(
         json!({
             "queries": queries,
             "total_available": deferred.len(),
@@ -303,7 +303,7 @@ pub fn search_tools(deferred: &[LlmTool], input: &Value) -> ToolResult {
             ),
         })
         .to_string(),
-    )
+    ))
 }
 
 pub fn describe_tools(deferred: &[LlmTool], input: &Value) -> ToolResult {
@@ -331,12 +331,29 @@ pub fn describe_tools(deferred: &[LlmTool], input: &Value) -> ToolResult {
             None => not_found.push(name),
         }
     }
-    ToolResult::ok(
+    ToolResult::ok(fence_metadata(
         json!({
             "tools": tools,
             "not_found": not_found,
         })
         .to_string(),
+    ))
+}
+
+/// Fence a bridge result.
+///
+/// A deferred tool's description and JSON schema are authored by an App
+/// manifest or a remote MCP server. Surfacing them through a tool result
+/// puts third-party text in the model's context, so it is labelled
+/// extension metadata and fenced like any other third-party payload.
+/// Which tools exist is still decided by the registry, guardrails and
+/// the capability authority before the model call; nothing inside this
+/// payload can add, rename or unlock one.
+fn fence_metadata(body: String) -> String {
+    crate::agent::safety::untrusted::wrap_labeled(
+        crate::agent::trust::SourceKind::McpToolMetadata,
+        None,
+        &body,
     )
 }
 

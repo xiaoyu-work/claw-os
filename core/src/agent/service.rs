@@ -2749,16 +2749,22 @@ fn seed_branch_context(
     session_id: &str,
     context: &str,
 ) -> Result<(), String> {
+    use crate::agent::trust::{envelope, LabeledSegment, SourceKind};
+
     let bounded = clip_progress_text(context.trim(), 32 * 1024);
-    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
-        crate::agent::safety::untrusted::APP_CONTEXT_TAG,
-        &bounded,
-    );
+    let segment = LabeledSegment::of(SourceKind::TransientAppContext, bounded);
+    let wrapped = segment.render_fenced(envelope::process_seal());
+    // Compare the fenced *payload*, not the fence: the envelope marker
+    // is minted per process, so a byte comparison would re-seed the
+    // same context after every restart.
     let already_seeded = db
         .recent(session_id, 20)
         .map_err(|error| error.to_string())?
         .iter()
-        .any(|row| row.role == "system" && row.content == wrapped);
+        .any(|row| {
+            row.role == "system"
+                && LabeledSegment::from_stored(&row.content).content() == segment.content()
+        });
     if !already_seeded {
         db.record_message(session_id, "system", &wrapped)
             .map_err(|error| error.to_string())?;

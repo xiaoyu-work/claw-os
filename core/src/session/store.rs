@@ -574,22 +574,37 @@ fn journal_turn(
             runtime: runtime.map(journal::Label::new),
             tool_calls,
         },
-        TurnRole::System => JournalEvent::PromptSegmentInjected {
-            turn: turn_index,
-            segment: reference,
-            segment_kind: SegmentKind::SystemPrompt,
-            origin: Origin::System,
-            trust: Trust::Trusted,
-        },
+        // A system-role turn is usually the frozen prompt, but a local
+        // surface can also seed one with App-supplied context. The
+        // trust registry decides which: a fenced body reports the
+        // source it was labelled with at ingestion, and only an
+        // unfenced body — the operator's own prompt snapshot — records
+        // as trusted policy.
+        TurnRole::System => {
+            let (segment_kind, origin, trust) =
+                classify_segment(content, SegmentKind::SystemPrompt);
+            JournalEvent::PromptSegmentInjected {
+                turn: turn_index,
+                segment: reference,
+                segment_kind,
+                origin,
+                trust,
+            }
+        }
         // Tool output is the classic injection carrier: it re-enters
-        // the model's context but nobody local authored it.
-        TurnRole::Tool => JournalEvent::PromptSegmentInjected {
-            turn: turn_index,
-            segment: reference,
-            segment_kind: SegmentKind::ToolResult,
-            origin: Origin::Tool,
-            trust: Trust::Untrusted,
-        },
+        // the model's context but nobody local authored it. It is
+        // recorded untrusted unconditionally — a fence recovered from
+        // the bytes may refine the segment kind, never the trust.
+        TurnRole::Tool => {
+            let (segment_kind, _, _) = classify_segment(content, SegmentKind::ToolResult);
+            JournalEvent::PromptSegmentInjected {
+                turn: turn_index,
+                segment: reference,
+                segment_kind,
+                origin: Origin::Tool,
+                trust: Trust::Untrusted,
+            }
+        }
     };
     journal::record_best_effort(
         &journal::Partition::Session(sid.clone()),
@@ -597,6 +612,44 @@ fn journal_turn(
         journal::EventSource::Kernel,
         event,
     );
+}
+
+/// Recover a turn's journal provenance from its trust fence.
+///
+/// `fallback_kind` applies only when the bytes carry no fence at all,
+/// which means they were produced by the runtime itself (the frozen
+/// prompt snapshot) rather than ingested from a third party.
+fn classify_segment(
+    content: &[u8],
+    fallback_kind: super::journal::SegmentKind,
+) -> (
+    super::journal::SegmentKind,
+    super::journal::Origin,
+    super::journal::Trust,
+) {
+    use super::journal::{Origin, Trust};
+    use crate::agent::trust::{self, LabeledSegment, SourceKind};
+
+    let Ok(text) = std::str::from_utf8(content) else {
+        return (fallback_kind, Origin::System, Trust::Unknown);
+    };
+    let segment = LabeledSegment::from_stored(text);
+    match segment.kind() {
+        SourceKind::LegacyStoredRow => (
+            fallback_kind,
+            Origin::System,
+            if fallback_kind == super::journal::SegmentKind::SystemPrompt {
+                Trust::Trusted
+            } else {
+                Trust::Untrusted
+            },
+        ),
+        kind => (
+            trust::journal_segment_kind(kind),
+            trust::journal_origin(kind),
+            trust::journal_trust(segment.class()),
+        ),
+    }
 }
 
 /// Iterate every turn in order. Tolerates a trailing partial line.

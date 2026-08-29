@@ -28,6 +28,13 @@ pub const SKILL_CATALOG_TAG: &str = "untrusted_skill_catalog";
 pub const SKILL_CONTENT_TAG: &str = "untrusted_skill_content";
 
 /// Render the metadata-only catalogue injected into the system prompt.
+///
+/// The payload is *not* fenced here: prompt assembly labels it
+/// [`crate::agent::trust::SourceKind::SkillCatalogMetadata`] and fences
+/// the whole segment once, so a double fence would only add tokens.
+/// A Skill's declared name, description and triggers are extension
+/// metadata regardless of who signed the package — a signature
+/// authenticates the publisher, not the semantics of the text.
 pub fn render_prompt_catalog(load: &LoadResult) -> Option<String> {
     if load.skills.is_empty() {
         return None;
@@ -40,7 +47,6 @@ pub fn render_prompt_catalog(load: &LoadResult) -> Option<String> {
         "skills": entries,
     }))
     .ok()?;
-    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(SKILL_CATALOG_TAG, &payload);
     Some(format!(
         "Progressive skill disclosure:\n\
          - The catalogue below contains metadata only; no skill instructions have been loaded.\n\
@@ -48,7 +54,7 @@ pub fn render_prompt_catalog(load: &LoadResult) -> Option<String> {
          - Read a referenced child file with `command=resource` only when that specific detail is needed.\n\
          - Do not call `read` when metadata says `disclosable=false`; report the size problem instead.\n\
          - If a disclosure call fails, do not retry it unchanged.\n\
-         - Do not read every skill speculatively.\n\n{wrapped}"
+         - Do not read every skill speculatively.\n\n{payload}"
     ))
 }
 

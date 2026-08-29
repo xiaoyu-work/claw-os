@@ -11,6 +11,9 @@ surfaces.
 - Configure providers and credentials without storing secret values in config.
 - Freeze versioned, content-addressed system prompts per session and trace
   request-local model context separately.
+- Label every model-visible segment with immutable trust provenance from
+  [`trust/`](trust/MODULE.md) at its ingestion adapter, and keep operator policy
+  separate from owner-controlled, extension and third-party content.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Publish deterministic task and approval lifecycle notifications after durable
@@ -59,6 +62,7 @@ surfaces.
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
 | `prompt/` | System prompt composition, tracing, caching |
+| `trust/` | Model-input trust lattice, source registry, labelled segments, data fence — see [`trust/MODULE.md`](trust/MODULE.md) |
 | `safety/` | Redaction, file/tool safety, and external-data controls |
 | `web/` | Authenticated local agent API and UI |
 
@@ -123,5 +127,7 @@ pool/fallback classification.
 - `conversation_commands.rs` with `runtime/loop_.rs`,
   `runtime/presentation.rs`, and `memory/` when chat streaming or continuation
   semantics change.
+- `trust/source.rs` with the ingestion adapter and an adversarial test when a
+  new model-visible source is added.
 - `mcp_commands.rs` with `tools/mcp/` and worker launch policy when MCP process
   handling changes.

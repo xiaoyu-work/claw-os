@@ -30,6 +30,7 @@ pub mod skills;
 pub mod summarise;
 pub mod title;
 pub mod tools;
+pub mod trust;
 pub mod util;
 pub mod web;
 

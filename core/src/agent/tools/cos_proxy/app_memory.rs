@@ -203,10 +203,12 @@ impl Tool for CosAppMemoryTool {
         match join {
             Ok(Ok(v)) => {
                 // App memory holds content apps recorded from external
-                // sources; wrap as untrusted prior-session data.
+                // sources; fence it as owner-controlled context whose
+                // producer was an App, not the owner directly.
                 let body = serde_json::to_string(&v).unwrap_or_else(|_| v.to_string());
-                ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
-                    crate::agent::safety::untrusted::MEMORY_TAG,
+                ToolResult::ok(crate::agent::safety::untrusted::wrap_labeled(
+                    crate::agent::trust::SourceKind::AppMemory,
+                    None,
                     &body,
                 ))
             }

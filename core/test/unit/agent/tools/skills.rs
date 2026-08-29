@@ -39,7 +39,8 @@ async fn list_discloses_metadata_without_body() {
     let result = tool.exec(json!({"command": "list"})).await;
 
     assert!(!result.is_error);
-    assert!(result.content.starts_with("<untrusted_skill_catalog>"));
+    assert!(result.content.contains("source=skills_catalog"));
+    assert!(result.content.contains("trust=extension-metadata"));
     assert!(result.content.contains("Claw system operations"));
     assert!(!result.content.contains("INSTRUCTION_BODY"));
 }
@@ -133,7 +134,8 @@ async fn user_skill_instructions_remain_inside_untrusted_boundary() {
         .await;
 
     assert!(!result.is_error);
-    assert!(result.content.starts_with("<untrusted_skill_content>"));
+    assert!(result.content.contains("source=skill_instructions:"));
+    assert!(result.content.contains("trust=extension-metadata"));
     assert!(result.content.contains("DO_SOMETHING"));
 }
 
@@ -154,7 +156,8 @@ async fn overridden_system_root_remains_local_and_untrusted() {
         .await;
 
     assert!(!result.is_error);
-    assert!(result.content.starts_with("<untrusted_skill_content>"));
+    assert!(result.content.contains("source=skill_instructions:"));
+    assert!(result.content.contains("trust=extension-metadata"));
     assert!(result.content.contains("OVERRIDDEN_SYSTEM_INSTRUCTIONS"));
 }
 

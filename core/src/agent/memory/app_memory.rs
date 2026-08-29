@@ -451,13 +451,13 @@ pub fn list(
     let conn = db.lock_conn()?;
     let (sql, sid) = match source {
         Some(s) => (
-            "SELECT id, session_id, role, content, ts_ms FROM messages
+            "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage FROM messages
              WHERE session_id = ? AND role = 'app'
              ORDER BY ts_ms DESC, id DESC LIMIT ?",
             Some(session_id_for(s)),
         ),
         None => (
-            "SELECT id, session_id, role, content, ts_ms FROM messages
+            "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage FROM messages
              WHERE session_id LIKE 'app:%' AND role = 'app'
              ORDER BY ts_ms DESC, id DESC LIMIT ?",
             None,
@@ -490,7 +490,7 @@ pub fn list(
 pub fn show(db: &MemoryDb, id: i64) -> Result<Option<AppMemoryRow>, MemoryError> {
     let conn = db.lock_conn()?;
     let mut stmt = conn.prepare(
-        "SELECT id, session_id, role, content, ts_ms FROM messages
+        "SELECT id, session_id, role, content, ts_ms, trust_class, trust_source, trust_lineage FROM messages
          WHERE id = ? AND role = 'app' AND session_id LIKE 'app:%'",
     )?;
     let mut rows = stmt.query_map(rusqlite::params![id], super::sqlite_fts::row_to_message)?;

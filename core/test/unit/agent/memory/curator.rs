@@ -381,6 +381,9 @@ other content
             role: "user".into(),
             content: "x".repeat(2000),
             ts_ms: 0,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
         assert!(out.contains("[user] "));
@@ -396,6 +399,9 @@ other content
             role: "assistant".into(),
             content: "short".into(),
             ts_ms: 0,
+            trust_class: None,
+            trust_source: None,
+            trust_lineage: None,
         }];
         let out = format_transcript(&rows, 100);
         assert!(out.contains("[assistant] short"));

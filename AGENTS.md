@@ -37,6 +37,7 @@ editing additional surfaces.
 | Task | Start here | Commonly coupled files |
 | --- | --- | --- |
 | `cos` CLI command or primitive | `core/src/main.rs`, `core/src/router.rs` | The primitive module, `core/src/clawd/`, inline Rust tests |
+| Model-visible content or prompt-injection containment | `core/src/agent/trust/` | `agent/prompt/`, `agent/safety/untrusted.rs`, the ingestion adapter, `test/unit/agent/trust/` |
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
@@ -167,6 +168,19 @@ Documentation-only changes do not require code tests.
 Trace the full chain: catalog/scope definition → enforcement/provider →
 consumer/tool or app manifest. Update policy-facing tests and audit behavior in
 the same change.
+
+### New model-visible content source
+
+1. Add the `SourceKind` variant in `core/src/agent/trust/source.rs`, giving it an
+   ordinal, an `ALL` entry, and a profile (class, persistence, projection,
+   audit). Omitting any of these fails to compile or fails the registry test.
+2. Label the bytes at the ingestion adapter, not at the prompt boundary.
+3. Let `PromptProjection` choose the channel. Only `SystemPolicy` reaches
+   `system`/`developer`; everything else is a fenced user data message.
+4. Add an adversarial test in `core/test/unit/agent/trust/adversarial.rs`
+   asserting the label cannot rise and the fence cannot be escaped.
+5. Never let a label reach `caps`, `policy`, `clawd`, the approvals store, or
+   the guarded tool registry.
 
 ### New or changed extension surface
 

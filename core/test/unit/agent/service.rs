@@ -166,7 +166,8 @@ fn retry_branch_context_is_seeded_once_as_hidden_system_memory() {
     let rows = db.recent("branch-session", 20).unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].role, "system");
-    assert!(rows[0].content.contains("<untrusted_app_context>"));
+    assert!(rows[0].content.contains("source=transient_app_context"));
+    assert!(rows[0].content.contains("trust=untrusted-external"));
     assert!(rows[0].content.chars().count() < 34 * 1024);
 }
 

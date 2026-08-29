@@ -409,11 +409,25 @@ fn rule_matches(rule: &TriggerRule, ev: &Value, raw: &str) -> bool {
 
 /// Compose the agent prompt for a fired rule, tagging the originating
 /// event so the agent has context for why it woke up.
-fn fired_prompt(rule: &TriggerRule, ev: &Value) -> String {
+/// Build the prompt a fired trigger submits.
+///
+/// The rule's own prompt is owner-authored and stays the request text.
+/// The event's `source` and `event_type` are chosen by whoever appended
+/// the context event, so they are fenced as
+/// [`SourceKind::ContextEvent`](crate::agent::trust::SourceKind::ContextEvent)
+/// data rather than interpolated beside the rule text where a crafted
+/// value would read as an equal-trust instruction.
+pub(crate) fn fired_prompt(rule: &TriggerRule, ev: &Value) -> String {
     let src = ev.get("source").and_then(|v| v.as_str()).unwrap_or("?");
     let et = ev.get("event_type").and_then(|v| v.as_str()).unwrap_or("?");
+    let fenced = crate::agent::safety::untrusted::wrap_labeled(
+        crate::agent::trust::SourceKind::ContextEvent,
+        Some(&rule.id),
+        &format!("source={src}\nevent_type={et}"),
+    );
     format!(
-        "{}\n\n[Fired by ClawOS trigger '{}' on system event: source={src}, type={et}]",
+        "{}\n\n[Fired by ClawOS trigger '{}' on a system event. The event's own \
+         fields follow as data.]\n{fenced}",
         rule.prompt, rule.id
     )
 }

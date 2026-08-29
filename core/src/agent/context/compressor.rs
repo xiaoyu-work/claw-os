@@ -381,10 +381,85 @@ impl LlmCompressor {
     /// chat-completion APIs require strict user/assistant alternation.
     /// Surfacing the summary as `assistant` keeps the boundary clean
     /// when the immediately-preserved tail message is from the user.
-    fn make_summary_message(summary: &str, head_count: usize) -> Message {
+    ///
+    /// Trust-wise the summary is
+    /// [`SourceKind::ModelCompressionSummary`]: model-authored text
+    /// standing in for whatever the head contained. Because compression
+    /// can only lower trust, the lineage of the replaced head is folded
+    /// in and the result is never more trusted than its least-trusted
+    /// input. Marker digraphs are stripped so a summary that quotes a
+    /// fenced payload cannot emit a fence of its own.
+    pub(crate) fn make_summary_message(summary: &str, head: &[Message]) -> Message {
+        use crate::agent::trust::{envelope, LabeledSegment, SourceKind};
+
+        let mut segment = LabeledSegment::of(SourceKind::ModelCompressionSummary, String::new());
+        for message in head {
+            segment = segment.concat(&Self::label_message(message));
+        }
+        let summarised = segment.into_model_summary(envelope::defang(summary));
+        let lineage = summarised
+            .lineage()
+            .iter()
+            .map(|kind| kind.tag())
+            .collect::<Vec<_>>()
+            .join(",");
         Message::assistant_text(format!(
-            "{SUMMARY_MARKER} (compressed {head_count} prior messages)\n\n{summary}"
+            "{SUMMARY_MARKER} (compressed {} prior messages; trust={}; sources={lineage})\n\n{}",
+            head.len(),
+            summarised.class(),
+            summarised.content(),
         ))
+    }
+
+    /// Label one history message for compression lineage.
+    ///
+    /// The label comes from the block's own fence when it has one, and
+    /// otherwise from the *structural* position the runtime itself
+    /// assigned — not from anything the bytes claim. A prior user turn
+    /// is owner-controlled context rather than
+    /// [`TrustClass::UserInstruction`](crate::agent::trust::TrustClass::UserInstruction):
+    /// it is no longer the request being served, so it must not carry
+    /// this turn's authority into a summary.
+    fn label_message(message: &Message) -> crate::agent::trust::LabeledSegment {
+        use crate::agent::trust::{LabeledSegment, SourceKind};
+
+        let mut segment = LabeledSegment::of(SourceKind::ModelCompressionSummary, String::new());
+        for block in &message.content {
+            let next = match block {
+                ContentBlock::Text { text } => {
+                    let recovered = LabeledSegment::from_stored(text);
+                    if recovered.kind() == SourceKind::LegacyStoredRow {
+                        let kind = match message.role {
+                            Role::Assistant => SourceKind::ModelResponse,
+                            _ => SourceKind::ReplayedUserTurn,
+                        };
+                        LabeledSegment::of(kind, text.clone())
+                    } else {
+                        recovered
+                    }
+                }
+                ContentBlock::ToolResult { content, .. } => {
+                    let recovered = LabeledSegment::from_stored(content);
+                    if recovered.kind() == SourceKind::LegacyStoredRow {
+                        LabeledSegment::of(SourceKind::BuiltinToolResult, content.clone())
+                    } else {
+                        recovered
+                    }
+                }
+                ContentBlock::ToolUse { name, .. } => {
+                    LabeledSegment::from_locator(SourceKind::ModelResponse, name, name.clone())
+                }
+                ContentBlock::Reasoning { summary, .. } => {
+                    LabeledSegment::of(SourceKind::ModelReasoning, summary.join("\n"))
+                }
+                ContentBlock::Image { media_type, .. } => {
+                    LabeledSegment::of(SourceKind::MediaTranscript, media_type.clone())
+                }
+                ContentBlock::ToolState { .. } => continue,
+            };
+            segment = segment.concat(&next);
+        }
+        segment
     }
 }
 
@@ -444,7 +519,7 @@ impl Compressor for LlmCompressor {
                     return tail;
                 }
                 let mut out = Vec::with_capacity(tail.len() + 1);
-                out.push(Self::make_summary_message(&summary_text, head.len()));
+                out.push(Self::make_summary_message(&summary_text, head));
                 out.extend(tail);
                 let _ = resp.finish_reason; // currently informational
                 out

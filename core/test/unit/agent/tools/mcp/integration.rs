@@ -49,11 +49,9 @@ fn render_call_result_concatenates_text() {
     };
     let r = render_call_result("mcp_x_y", res);
     assert!(!r.is_error);
-    // MCP results are wrapped in an untrusted-data boundary
-    // (prompt-injection defense); the concatenated body lives inside.
-    assert!(r.content.contains("hello\n\nworld"), "content: {}", r.content);
+    // MCP results are fenced as untrusted third-party content\n    // (prompt-injection defense); the concatenated body lives inside.\n    assert!(r.content.contains("hello\n\nworld"), "content: {}", r.content);
     assert!(
-        r.content.contains("<untrusted_tool_result>"),
+        r.content.contains("source=mcp_tool_result:x"),
         "content: {}",
         r.content
     );
@@ -71,7 +69,7 @@ fn render_call_result_marks_error_when_is_error_true() {
     assert!(r.is_error);
     assert!(r.content.contains("boom"), "content: {}", r.content);
     assert!(
-        r.content.contains("<untrusted_tool_result>"),
+        r.content.contains("source=mcp_tool_result:x"),
         "content: {}",
         r.content
     );
@@ -236,11 +234,17 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
     let dyn_tool = registry.get("mcp_svc_say").expect("tool registered");
     let result = dyn_tool.exec(json!({})).await;
     assert!(!result.is_error, "tool call should succeed: {:?}", result);
-    // The remote result is wrapped in the untrusted-tool-result
-    // boundary before it reaches the agent loop.
+    // The remote result is fenced as untrusted third-party content
+    // before it reaches the agent loop, and the fence names the server
+    // it came from.
     assert!(result.content.contains("pong"), "content: {}", result.content);
     assert!(
-        result.content.contains("<untrusted_tool_result>"),
+        result.content.contains("source=mcp_tool_result:svc"),
+        "content: {}",
+        result.content
+    );
+    assert!(
+        result.content.contains("trust=untrusted-external"),
         "content: {}",
         result.content
     );

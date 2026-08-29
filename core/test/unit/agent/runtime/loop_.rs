@@ -11,6 +11,9 @@ fn row(role: &str, content: &str) -> MessageRow {
         role: role.into(),
         content: content.into(),
         ts_ms: 0,
+        trust_class: None,
+        trust_source: None,
+        trust_lineage: None,
     }
 }
 
@@ -292,8 +295,16 @@ async fn turn_lease_orders_continuation_history_and_persistence() {
             })
         })
         .collect();
+    // Request-local prelude data (the Skill catalogue, memory notes)
+    // now travels as its own fenced user message rather than inside the
+    // system prompt, so drop it before comparing conversation order.
+    let conversation: Vec<(crate::agent::llm::Role, String)> = replayed
+        .iter()
+        .filter(|(_, text)| !crate::agent::trust::envelope::looks_enveloped(text))
+        .cloned()
+        .collect();
     assert_eq!(
-        replayed,
+        conversation,
         vec![
             (crate::agent::llm::Role::User, "first prompt".into()),
             (crate::agent::llm::Role::Assistant, "first answer".into()),
@@ -301,6 +312,19 @@ async fn turn_lease_orders_continuation_history_and_persistence() {
         ],
         "the next accepted turn must load the fully persisted prior turn"
     );
+    // Every prelude message is fenced, and the owner's turn is last.
+    assert!(replayed
+        .iter()
+        .filter(|(_, text)| crate::agent::trust::envelope::looks_enveloped(text))
+        .all(|(role, _)| *role == crate::agent::llm::Role::User));
+    assert_eq!(replayed.last().map(|(_, text)| text.as_str()), Some("second prompt"));
+    // The prelude is request-local: it must never be persisted as
+    // conversation history.
+    assert!(db
+        .recent_replayable(session_id, 100)
+        .unwrap()
+        .iter()
+        .all(|row| !crate::agent::trust::envelope::looks_enveloped(&row.content)));
 
     let all_rows = db.recent_replayable(session_id, 100).unwrap();
     let all_contents: Vec<(&str, &str)> = all_rows
@@ -435,7 +459,10 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
         .any(|text| text.contains("/private/example.txt")));
     assert!(request_texts
         .iter()
-        .any(|text| text.contains("<untrusted_app_context>")));
+        .any(|text| text.contains("source=transient_app_context")));
+    assert!(request_texts
+        .iter()
+        .any(|text| text.contains("trust=untrusted-external")));
     assert!(request
         .messages
         .iter()
@@ -450,7 +477,8 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
         row.role == crate::agent::memory::sqlite_fts::INJECTED_ROLE
             && row
                 .content
-                .starts_with("[transient_app_context]\n<untrusted_app_context>")
+                .starts_with("[transient_app_context]")
+            && row.content.contains("source=transient_app_context")
     }));
     let replayable = db.recent_replayable(sid, 20).unwrap();
     assert!(replayable
@@ -459,7 +487,7 @@ async fn scoped_streaming_continuation_excludes_injected_nudges_and_keeps_contex
 }
 
 #[tokio::test]
-async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
+async fn continuation_restores_frozen_policy_and_rebuilds_owner_context() {
     let db = MemoryDb::open_in_memory().unwrap();
     let sid = "frozen-system-prompt";
     let extra_dir = tempfile::tempdir().unwrap();
@@ -471,7 +499,7 @@ async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
     let first = Arc::new(MockProvider::new(&cfg.model, &cfg));
     first.push_response(MockResponse::Text("first answer".into()));
     ask_with_stream_continuation(
-        first,
+        first.clone(),
         &cfg,
         "first prompt",
         &builtin_only_registry(),
@@ -486,8 +514,11 @@ async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
     let frozen = db
         .system_prompt_for(sid, crate::agent::prompt::CANONICAL_PROMPT_VERSION)
         .unwrap()
-        .expect("first turn should freeze a system prompt");
-    assert!(frozen.contains("FIRST_SYSTEM_VERSION"));
+        .expect("first turn should freeze a policy prompt");
+    // The configured file lives under a temp dir the test owns, so it
+    // is owner-writable and must NOT be policy.
+    assert!(!frozen.contains("FIRST_SYSTEM_VERSION"));
+    assert!(!crate::agent::trust::envelope::looks_enveloped(&frozen));
 
     std::fs::write(&extra_path, "SECOND_SYSTEM_VERSION").unwrap();
     let second = Arc::new(MockProvider::new(&cfg.model, &cfg));
@@ -507,12 +538,33 @@ async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
     .unwrap();
 
     let request = second.last_request().expect("second provider request");
+    // The policy channel is stable across turns and carries neither
+    // version of the owner-writable file.
     assert_eq!(request.system.as_deref(), Some(frozen.as_str()));
-    assert!(!request
-        .system
-        .as_deref()
-        .unwrap_or_default()
-        .contains("SECOND_SYSTEM_VERSION"));
+    let system = request.system.as_deref().unwrap_or_default();
+    assert!(!system.contains("FIRST_SYSTEM_VERSION"));
+    assert!(!system.contains("SECOND_SYSTEM_VERSION"));
+
+    // The file's *current* content is rebuilt per request and arrives
+    // fenced in the user channel.
+    let prelude: Vec<&str> = request
+        .messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .filter(|text| crate::agent::trust::envelope::looks_enveloped(text))
+        .collect();
+    assert!(prelude
+        .iter()
+        .any(|text| text.contains("SECOND_SYSTEM_VERSION")
+            && text.contains("source=prompt_extra")
+            && text.contains("trust=user-context")));
+
+    // Owner-controlled context is request-local, so it is recorded once
+    // per turn as an audit row rather than frozen.
     let prompt_extra_rows = db
         .recent(sid, 100)
         .unwrap()
@@ -522,7 +574,7 @@ async fn continuation_restores_frozen_system_prompt_without_relogging_it() {
                 && row.content.starts_with("[prompt_extra]\n")
         })
         .count();
-    assert_eq!(prompt_extra_rows, 1);
+    assert_eq!(prompt_extra_rows, 2);
 }
 
 #[tokio::test]

@@ -56,21 +56,36 @@ pub(super) fn prompt_cmd(args: &[String]) -> Result<Value, String> {
     }
     let extra_ref = extra.as_deref();
     let prompt = crate::agent::prompt::build_system_prompt(extra_ref);
+    let (_, prelude_segments) = crate::agent::prompt::build_system_prompt_traced(extra_ref, None);
+    let prelude_chars: usize = prelude_segments
+        .iter()
+        .map(|segment| segment.content.chars().count())
+        .sum();
     let turn_context = crate::agent::prompt::build_turn_context_segments();
     let turn_context_chars: usize = turn_context
         .iter()
         .map(|segment| segment.content.chars().count())
         .sum();
-    let turn_context_sources: Vec<&str> =
-        turn_context.iter().map(|segment| segment.source).collect();
+    let turn_context_sources: Vec<&str> = turn_context
+        .iter()
+        .map(|segment| segment.source())
+        .collect();
     if raw {
         Ok(json!({
             "prompt": prompt,
             "chars": prompt.chars().count(),
             "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
             "scope": "new-session-candidate",
+            // Non-policy segments never enter `prompt`; they ride the
+            // user channel as fenced data messages before the turn.
+            "prelude": prelude_segments.iter().map(|segment| json!({
+                "source": segment.source(),
+                "trust": segment.class(),
+                "content": segment.content,
+            })).collect::<Vec<_>>(),
             "turn_context": turn_context.iter().map(|segment| json!({
-                "source": segment.source,
+                "source": segment.source(),
+                "trust": segment.class(),
                 "content": segment.content,
             })).collect::<Vec<_>>(),
         }))
@@ -98,10 +113,40 @@ pub(super) fn prompt_cmd(args: &[String]) -> Result<Value, String> {
             "approx_tokens": total_chars / 4,
             "prompt_version": crate::agent::prompt::CANONICAL_PROMPT_VERSION,
             "scope": "new-session-candidate",
+            "prelude_chars": prelude_chars,
+            "prelude_sources": prelude_segments
+                .iter()
+                .map(|segment| segment.source())
+                .collect::<Vec<_>>(),
             "turn_context_chars": turn_context_chars,
             "turn_context_sources": turn_context_sources,
+            "provenance": prompt_provenance(extra_ref),
         }))
     }
+}
+
+/// Secret-safe provenance of the assembled request.
+///
+/// Provenance is inspectable without exposing content. Each row names
+/// the source, its trust class, the byte count and a SHA-256 of the
+/// exact bytes, so a reviewer can confirm what the model saw and
+/// confirm that only operator policy reached the policy channel.
+fn prompt_provenance(extra: Option<&std::path::Path>) -> Value {
+    let (_, segments) = crate::agent::prompt::build_system_prompt_traced(extra, None);
+    json!({
+        "policy_sources": [
+            crate::agent::trust::SourceKind::SystemScaffold.tag(),
+            crate::agent::trust::SourceKind::RootOperatorPolicyFile.tag(),
+        ],
+        "segments": segments.iter().map(|segment| json!({
+            "source": segment.source(),
+            "trust": segment.class(),
+            "channel": if segment.class().is_policy() { "system" } else { "user-data" },
+            "bytes": segment.content.len(),
+            "digest": crate::crypto::sha256_hex(segment.content.as_bytes()),
+            "fenced": crate::agent::trust::envelope::looks_enveloped(&segment.content),
+        })).collect::<Vec<_>>(),
+    })
 }
 
 /// `cos agent think-scrub <text> [--check] [--strict]`

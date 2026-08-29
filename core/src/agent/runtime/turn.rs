@@ -984,10 +984,40 @@ async fn dispatch_calls(
         result_blocks.push(ContentBlock::ToolResult {
             tool_use_id: tool_calls[i].id.clone(),
             is_error: outcome.result.is_error,
-            content: outcome.result.content,
+            content: label_tool_result(&outcome.effective_call.name, outcome.result.content),
         });
     }
     Ok((result_blocks, pending_stop))
+}
+
+/// Label one tool result before it re-enters model context.
+///
+/// Tool output is the classic injection carrier: the model asked for
+/// it, but a third party wrote it. Three rules apply, in order:
+///
+/// 1. A result its own adapter already fenced (MCP, Skill disclosure,
+///    memory recall, the progressive bridge) is left alone — fencing
+///    twice only costs tokens.
+/// 2. Otherwise the tool's *identity* — decided by the registry before
+///    the model call, and not attacker-chosen — selects a
+///    [`SourceKind`] through [`SourceKind::for_tool_result`].
+/// 3. The body is fenced under that label. The fallback,
+///    [`SourceKind::BuiltinToolResult`], is still untrusted: a kernel
+///    primitive faithfully reports process names, file contents and
+///    network responses a third party may control.
+///
+/// This changes what the model *reads*. It changes nothing about what
+/// may *run*: the registry, guardrails and the capability authority
+/// already decided which tools exist and which calls were allowed
+/// before this function is reached, and none of them consults a label.
+fn label_tool_result(tool_name: &str, content: String) -> String {
+    use crate::agent::trust::{envelope, SourceKind};
+
+    if envelope::looks_enveloped(&content) {
+        return content;
+    }
+    let kind = SourceKind::for_tool_result(tool_name);
+    crate::agent::safety::untrusted::wrap_labeled(kind, Some(tool_name), &content)
 }
 
 #[cfg(test)]

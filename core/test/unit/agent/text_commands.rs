@@ -37,7 +37,7 @@ fn prompt_raw_omits_size_breakdown() {
 }
 
 #[test]
-fn prompt_extra_appends_file_content() {
+fn prompt_extra_is_reported_as_prelude_data_not_policy() {
     let dir = tempfile::tempdir().expect("tmp");
     let extra = dir.path().join("preface.md");
     std::fs::write(&extra, "ZZZUNIQUEMARKERZZZ_extra_preface_text").expect("write");
@@ -48,18 +48,60 @@ fn prompt_extra_appends_file_content() {
         extra.to_string_lossy().to_string(),
     ])
     .expect("with extra");
+
+    // An owner-writable file is user configuration, so it grows the
+    // request prelude rather than the policy channel.
     let baseline_chars = baseline.get("chars").and_then(|x| x.as_u64()).unwrap();
     let extra_chars = with_extra.get("chars").and_then(|x| x.as_u64()).unwrap();
-    assert!(extra_chars > baseline_chars, "extra should grow prompt");
+    assert_eq!(extra_chars, baseline_chars, "policy must not grow");
+    let baseline_prelude = baseline.get("prelude_chars").and_then(|x| x.as_u64()).unwrap();
+    let extra_prelude = with_extra
+        .get("prelude_chars")
+        .and_then(|x| x.as_u64())
+        .unwrap();
+    assert!(extra_prelude > baseline_prelude, "extra should grow prelude");
+
     let p = with_extra.get("prompt").and_then(|x| x.as_str()).unwrap();
     assert!(
-        p.contains("ZZZUNIQUEMARKERZZZ_extra_preface_text"),
-        "extra content must be in prompt"
+        !p.contains("ZZZUNIQUEMARKERZZZ_extra_preface_text"),
+        "owner-writable content must not reach the policy channel"
     );
     assert_eq!(
         with_extra.get("extra_path").and_then(|x| x.as_str()),
         Some(extra.to_string_lossy().as_ref())
     );
+
+    // It is inspectable in the raw view, fenced and labelled.
+    let raw = prompt_cmd(&[
+        "show".into(),
+        "--raw".into(),
+        "--extra".into(),
+        extra.to_string_lossy().to_string(),
+    ])
+    .expect("raw");
+    let prelude = raw.get("prelude").and_then(|x| x.as_array()).unwrap();
+    let entry = prelude
+        .iter()
+        .find(|entry| entry.get("source").and_then(|s| s.as_str()) == Some("prompt_extra"))
+        .expect("prompt_extra in prelude");
+    assert_eq!(
+        entry.get("trust").and_then(|t| t.as_str()),
+        Some("user-context")
+    );
+    assert!(entry
+        .get("content")
+        .and_then(|c| c.as_str())
+        .unwrap()
+        .contains("ZZZUNIQUEMARKERZZZ_extra_preface_text"));
+
+    // The provenance view reports the channel each segment lands in.
+    let provenance = with_extra.get("provenance").expect("provenance");
+    let segments = provenance.get("segments").and_then(|s| s.as_array()).unwrap();
+    assert!(segments
+        .iter()
+        .filter(|s| s.get("source").and_then(|x| x.as_str()) == Some("prompt_extra"))
+        .all(|s| s.get("channel").and_then(|x| x.as_str()) == Some("user-data")
+            && s.get("fenced").and_then(|x| x.as_bool()) == Some(true)));
 }
 
 #[test]

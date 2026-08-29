@@ -302,12 +302,13 @@ impl McpRemoteTool {
         instance: Option<Arc<McpInstance>>,
     ) -> Self {
         let name = format!("mcp_{prefix}_{}", descriptor.name);
-        let description = descriptor.description.unwrap_or_else(|| {
-            format!(
-                "Remote MCP tool `{}` from server `{prefix}`.",
-                descriptor.name
-            )
-        });
+        let description =
+            sanitise_remote_description(&descriptor.description.unwrap_or_else(|| {
+                format!(
+                    "Remote MCP tool `{}` from server `{prefix}`.",
+                    descriptor.name
+                )
+            }));
         // Some MCP servers report Null / missing `inputSchema`. The
         // LLM trait expects an object schema; coerce minimally so the
         // model doesn't see a `null` schema.
@@ -401,6 +402,11 @@ fn render_client_err(e: ClientError) -> String {
 /// rendered as a placeholder line so the model knows non-text content
 /// was returned without us double-encoding base64. `isError: true`
 /// from the server flips us to [`ToolResult::err`].
+///
+/// MCP servers are third parties, so the body is fenced as
+/// [`SourceKind::McpToolResult`] before it can reach the model. The
+/// fence names the server prefix, is bounded, and cannot be closed from
+/// inside the payload.
 fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> ToolResult {
     use super::protocol::ContentItem;
     let mut chunks: Vec<String> = Vec::new();
@@ -417,11 +423,9 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
     } else {
         chunks.join("\n\n")
     };
-    // MCP servers are third parties; their output is untrusted. Wrap it
-    // so a hostile server can't inject instructions into a kernel-
-    // resident agent via its tool result.
-    let wrapped = crate::agent::safety::untrusted::wrap_untrusted(
-        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+    let wrapped = crate::agent::safety::untrusted::wrap_labeled(
+        crate::agent::trust::SourceKind::McpToolResult,
+        server_prefix(tool_name),
         &body,
     );
     if res.is_error.unwrap_or(false) {
@@ -430,6 +434,63 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
         ToolResult::ok(wrapped)
     }
 }
+
+/// Recover the server prefix from a registered `mcp_<server>_<remote>`
+/// tool name, for the fence's source locator. Bounded again by
+/// [`crate::audit_policy::safe_reference`] inside the fence, so a
+/// hostile server name cannot widen the header.
+fn server_prefix(tool_name: &str) -> Option<&str> {
+    tool_name
+        .strip_prefix("mcp_")
+        .and_then(|rest| rest.split('_').next())
+        .filter(|prefix| !prefix.is_empty())
+}
+
+/// Test seam: drive [`render_call_result`] with a text body without
+/// standing up a server, so the ingestion inventory exercises the real
+/// fencing path rather than a re-implementation of it.
+#[cfg(test)]
+pub(crate) fn render_call_result_for_test(
+    tool_name: &str,
+    text: &str,
+    is_error: bool,
+) -> ToolResult {
+    use super::protocol::{CallToolResult, ContentItem};
+    render_call_result(
+        tool_name,
+        CallToolResult {
+            content: vec![ContentItem::Text {
+                text: text.to_string(),
+            }],
+            is_error: Some(is_error),
+        },
+    )
+}
+
+/// Bound and sanitise remote-authored tool metadata before it becomes a
+/// provider tool definition.
+///
+/// A description or schema from a remote server is
+/// [`SourceKind::McpToolMetadata`]: extension metadata, never operator
+/// rules, even when the package that declared the server is signed. A
+/// signature authenticates the publisher, not the semantics of the
+/// text. It reaches the model as a tool *definition* rather than as a
+/// message, so it is bounded and stripped of fence markers instead of
+/// being fenced.
+pub(crate) fn sanitise_remote_description(description: &str) -> String {
+    let defanged = crate::agent::trust::envelope::defang(description);
+    let mut bounded = defanged
+        .chars()
+        .take(MAX_REMOTE_DESCRIPTION_CHARS)
+        .collect::<String>();
+    if defanged.chars().count() > MAX_REMOTE_DESCRIPTION_CHARS {
+        bounded.push('…');
+    }
+    bounded
+}
+
+/// Longest remote-authored tool description kept for a tool definition.
+const MAX_REMOTE_DESCRIPTION_CHARS: usize = 4096;
 
 /// Spawn one server, run the handshake, register every tool it
 /// advertises, and return the live handle. Returns `Err` on any

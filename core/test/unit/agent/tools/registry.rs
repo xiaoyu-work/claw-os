@@ -183,13 +183,19 @@ async fn injected_notes_root_is_shared_by_memory_prompt_and_curator() {
     assert!(!result.is_error, "memory write failed: {}", result.content);
 
     let skills = crate::agent::skills::loader::LoadResult::default();
-    let (prompt, _) = crate::agent::prompt::build_system_prompt_traced_with(
+    let projection = crate::agent::prompt::build_projection(
         None,
         None,
         &skills,
         deps.runtime.notes(),
     );
-    assert!(prompt.contains("INJECTED_NOTE_ROOT"));
+    // Notes are owner-controlled context: they reach the model as
+    // fenced prelude data, never as policy.
+    assert!(!projection.system_text().contains("INJECTED_NOTE_ROOT"));
+    assert!(projection
+        .prelude_segments()
+        .iter()
+        .any(|segment| segment.content().contains("INJECTED_NOTE_ROOT")));
 
     let config = crate::config::AgentConfig {
         provider: "openai".into(),
