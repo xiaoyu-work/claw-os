@@ -59,26 +59,70 @@ impl StateError {
     }
 
     fn io(operation: &'static str, context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::with_source(StateErrorKind::Unavailable, operation, context, source)
+    }
+
+    fn with_source<E>(
+        kind: StateErrorKind,
+        operation: &'static str,
+        context: impl Into<String>,
+        source: E,
+    ) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
         let context = context.into();
         Self {
-            kind: StateErrorKind::Unavailable,
+            kind,
             operation,
             message: format!("{context}: {source}"),
             source: Some(Box::new(source)),
         }
     }
 
-    fn with_source<E>(operation: &'static str, context: impl Into<String>, source: E) -> Self
-    where
-        E: std::error::Error + Send + Sync + 'static,
-    {
-        let context = context.into();
-        Self {
-            kind: StateErrorKind::Unavailable,
-            operation,
-            message: format!("{context}: {source}"),
-            source: Some(Box::new(source)),
-        }
+    fn session(
+        operation: &'static str,
+        context: impl Into<String>,
+        source: session::SessionError,
+    ) -> Self {
+        let kind = match &source {
+            session::SessionError::NotFound(_) => StateErrorKind::NotFound,
+            session::SessionError::Decode { .. }
+            | session::SessionError::Encode(_)
+            | session::SessionError::Corrupt { .. } => StateErrorKind::Corrupt,
+            session::SessionError::Io { .. } | session::SessionError::Lock(_) => {
+                StateErrorKind::Unavailable
+            }
+        };
+        Self::with_source(kind, operation, context, source)
+    }
+
+    fn acquire(
+        operation: &'static str,
+        context: impl Into<String>,
+        source: session::AcquireError,
+    ) -> Self {
+        let kind = match &source {
+            session::AcquireError::NotFound(_) => StateErrorKind::NotFound,
+            session::AcquireError::Held { .. } => StateErrorKind::Conflict,
+            session::AcquireError::Io(_) => StateErrorKind::Unavailable,
+        };
+        Self::with_source(kind, operation, context, source)
+    }
+
+    fn parsed_time(session_id: &SessionId, value: &str) -> StateResult<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(value)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|source| {
+                StateError::with_source(
+                    StateErrorKind::Corrupt,
+                    "transaction.recover",
+                    format!(
+                        "clawd transaction recovery: session {session_id} has invalid created_at"
+                    ),
+                    source,
+                )
+            })
     }
 
     fn message(kind: StateErrorKind, operation: &'static str, message: impl Into<String>) -> Self {
@@ -315,7 +359,7 @@ fn recover_transactions() -> StateResult<BTreeMap<String, TransactionHandle>> {
             && meta.creator_runtime.as_deref() == Some("clawd-transaction-pending")
         {
             let lease = session::try_acquire(&meta.id).map_err(|source| {
-                StateError::with_source(
+                StateError::acquire(
                     "transaction.recover",
                     format!(
                         "clawd transaction recovery: acquire incomplete session {}",
@@ -326,7 +370,7 @@ fn recover_transactions() -> StateResult<BTreeMap<String, TransactionHandle>> {
             })?;
             drop(lease);
             session::end(&meta.id, SessionStatus::Failed).map_err(|source| {
-                StateError::with_source(
+                StateError::session(
                     "transaction.recover",
                     format!(
                         "clawd transaction recovery: fail incomplete session {}",
@@ -352,24 +396,13 @@ fn recover_transactions() -> StateResult<BTreeMap<String, TransactionHandle>> {
             ));
         };
         let lease = session::try_acquire(&meta.id).map_err(|source| {
-            StateError::with_source(
+            StateError::acquire(
                 "transaction.recover",
                 format!("clawd transaction recovery: acquire session {}", meta.id),
                 source,
             )
         })?;
-        let started_at = DateTime::parse_from_rfc3339(&meta.created_at)
-            .map(|value| value.with_timezone(&Utc))
-            .map_err(|source| {
-                StateError::with_source(
-                    "transaction.recover",
-                    format!(
-                        "clawd transaction recovery: session {} has invalid created_at",
-                        meta.id
-                    ),
-                    source,
-                )
-            })?;
+        let started_at = StateError::parsed_time(&meta.id, &meta.created_at)?;
         let id = meta.id.as_str().to_string();
         recovered.insert(
             id,
@@ -431,7 +464,7 @@ fn strict_session_list() -> StateResult<Vec<session::SessionMeta>> {
             ));
         }
         sessions.push(session::get_meta(&id).map_err(|source| {
-            StateError::with_source(
+            StateError::session(
                 "transaction.recover",
                 format!("clawd transaction recovery: read session {id} metadata"),
                 source,

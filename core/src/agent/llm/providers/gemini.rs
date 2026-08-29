@@ -126,19 +126,25 @@ impl GeminiConfig {
 
 pub struct GeminiProvider {
     cfg: GeminiConfig,
-    transport: HttpTransport,
+    transport: Option<HttpTransport>,
     initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl GeminiProvider {
     pub fn new(cfg: GeminiConfig) -> Self {
-        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
+        }
     }
 
     pub fn new_with_transport(cfg: GeminiConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            transport,
+            transport: Some(transport),
             initialization_error: None,
         }
     }
@@ -155,7 +161,7 @@ impl GeminiProvider {
                 tracing::error!(error = %error, "legacy Gemini provider initialization failed");
                 Self {
                     cfg: GeminiConfig::unconfigured(model, agent),
-                    transport: HttpTransport::legacy_default(),
+                    transport: None,
                     initialization_error: Some(Arc::new(
                         crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
                     )),
@@ -171,10 +177,15 @@ impl GeminiProvider {
         )
     }
 
-    fn ensure_initialized(&self) -> Result<()> {
+    fn transport(&self) -> Result<&HttpTransport> {
         match &self.initialization_error {
             Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
-            None => Ok(()),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "gemini.transport",
+                }
+                .into()
+            }),
         }
     }
 }
@@ -201,13 +212,13 @@ impl Provider for GeminiProvider {
 
     fn is_configured(&self) -> bool {
         self.initialization_error.is_none()
-            && self.transport.is_ready()
+            && self.transport.is_some()
             && (self.cfg.api_key.is_some()
                 || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        self.ensure_initialized()?;
+        let transport = self.transport()?;
         let body = wire::build_request_body(&request, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
@@ -220,9 +231,8 @@ impl Provider for GeminiProvider {
             None => self.cfg.api_key.as_deref(),
         };
 
-        let mut http = self
-            .transport
-            .post(self.endpoint(), self.cfg.request_timeout)?
+        let mut http = transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .json(&body);
 
@@ -318,7 +328,7 @@ impl Provider for GeminiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        self.ensure_initialized()?;
+        let _ = self.transport()?;
         // HIGH-4: real SSE delta streaming requires speaking
         // Gemini's `:streamGenerateContent?alt=sse` endpoint, which
         // differs enough from generateContent that wiring it is a

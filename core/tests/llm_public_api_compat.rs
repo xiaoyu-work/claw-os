@@ -23,15 +23,17 @@ impl CredentialSource for ExternalCredentialSource {
 
 #[test]
 fn legacy_provider_construction_api_remains_available_to_external_crates() {
-    let _: fn(
-        Option<&str>,
-        Option<&str>,
-        &str,
-        &dyn CredentialSource,
-    ) -> Option<String> = resolve_aws_value;
+    let _: fn(Option<&str>, Option<&str>, &str, &dyn CredentialSource) -> Option<String> =
+        resolve_aws_value;
     let source = Arc::new(ExternalCredentialSource);
-    let _: ProviderBuildContext =
-        ProviderBuildContext::new(source.clone(), HttpTransport::new().unwrap());
+    let transport = HttpTransport::new().unwrap();
+    let _: reqwest::RequestBuilder = transport
+        .post("https://example.invalid", std::time::Duration::from_secs(1))
+        .header("x-compat", "post");
+    let _: reqwest::RequestBuilder = transport
+        .get("https://example.invalid", std::time::Duration::from_secs(1))
+        .header("x-compat", "get");
+    let _: ProviderBuildContext = ProviderBuildContext::new(source.clone(), transport);
     let source_ref: &dyn CredentialSource = source.as_ref();
     assert_eq!(
         resolve_aws_value(

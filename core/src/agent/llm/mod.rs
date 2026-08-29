@@ -133,6 +133,53 @@ pub(crate) fn deferred_initialization_error(
     .into()
 }
 
+pub(crate) fn legacy_provider_transport(
+    provider: &'static str,
+) -> (
+    Option<construction::HttpTransport>,
+    Option<std::sync::Arc<ProviderInitializationError>>,
+) {
+    legacy_provider_transport_from_result(provider, construction::HttpTransport::try_build())
+}
+
+fn legacy_provider_transport_from_result(
+    provider: &'static str,
+    result: std::result::Result<
+        construction::HttpTransport,
+        std::sync::Arc<construction::HttpTransportInitializationError>,
+    >,
+) -> (
+    Option<construction::HttpTransport>,
+    Option<std::sync::Arc<ProviderInitializationError>>,
+) {
+    match result {
+        Ok(transport) => (Some(transport), None),
+        Err(source) => {
+            let error = LlmError::from(ProviderInfrastructureError::HttpTransport { source });
+            tracing::error!(provider, error = %error, "legacy provider transport initialization failed");
+            (
+                None,
+                Some(std::sync::Arc::new(ProviderInitializationError::new(
+                    provider, error,
+                ))),
+            )
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn failed_legacy_provider_transport_for_test(
+    provider: &'static str,
+) -> (
+    Option<construction::HttpTransport>,
+    Option<std::sync::Arc<ProviderInitializationError>>,
+) {
+    legacy_provider_transport_from_result(
+        provider,
+        Err(construction::HttpTransport::initialization_failure_for_test()),
+    )
+}
+
 impl From<credential_pool::PoolError> for LlmError {
     fn from(error: credential_pool::PoolError) -> Self {
         match error {

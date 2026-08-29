@@ -29,8 +29,11 @@ material internals.
   obtains a unique 12-byte nonce from the OS CSPRNG.
 - The master-key source order is Linux session keyring, SHA-256 of
   `/etc/machine-id`, then the 32-byte persistent random root key.
-- Root keys and credential temporary files are created as `0600`; writes use
-  write-lock, exclusive temporary creation, fsync, rename, and parent fsync.
+- Root keys and credential temporary files are created as `0600`. A root key
+  is fully written and fsynced on a unique same-directory inode, then
+  atomically published without replacement by hard link; race losers can only
+  read the complete winner. Temporary files are cleaned on every return path
+  and the parent directory is fsynced after publication.
 - Refresh locks are distinct from write locks. Revoke takes them in
   refresh-then-write order.
 - Scheduled reads reject symlinks, non-regular files, wrong ownership, home

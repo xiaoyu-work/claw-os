@@ -104,8 +104,17 @@ fn load_persistent_root_key() -> CredentialResult<Option<[u8; 32]>> {
 /// helpers against a per-test scratch path without mutating process-global
 /// env vars (which races other tests).
 pub(super) fn load_persistent_root_key_at(path: &Path) -> CredentialResult<Option<[u8; 32]>> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
+    use std::io::Read;
+
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    let mut file = match options.open(path) {
+        Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(CredentialError::io_at(
@@ -116,6 +125,15 @@ pub(super) fn load_persistent_root_key_at(path: &Path) -> CredentialResult<Optio
             ))
         }
     };
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|error| {
+        CredentialError::io_at(
+            "root_key.load",
+            "failed to read credential root key",
+            path,
+            error,
+        )
+    })?;
     if bytes.len() != 32 {
         return Err(CredentialError::corrupt(
             "root_key.load",
@@ -147,18 +165,49 @@ fn generate_and_persist_root_key() -> CredentialResult<[u8; 32]> {
 /// path. Exists so unit tests can exercise the generator without mutating
 /// process-global env vars.
 pub(super) fn generate_and_persist_root_key_at(path: &Path) -> CredentialResult<[u8; 32]> {
-    generate_and_persist_root_key_at_with(path, os_random_bytes)
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        os_random_bytes,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(key)?;
+            file.sync_all()
+        },
+        || {},
+    )
 }
 
 fn generate_and_persist_root_key_at_with(
     path: &Path,
     random: impl FnOnce(&mut [u8]) -> Result<(), std::io::Error>,
 ) -> CredentialResult<[u8; 32]> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|error| {
-            CredentialError::io_at("root_key.persist", "failed to create", parent, error)
-        })?;
-    }
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        random,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(key)?;
+            file.sync_all()
+        },
+        || {},
+    )
+}
+
+fn generate_and_persist_root_key_at_with_hooks(
+    path: &Path,
+    random: impl FnOnce(&mut [u8]) -> Result<(), std::io::Error>,
+    write_and_sync: impl FnOnce(&mut fs::File, &[u8]) -> Result<(), std::io::Error>,
+    before_publish: impl FnOnce(),
+) -> CredentialResult<[u8; 32]> {
+    let parent = path.parent().ok_or_else(|| {
+        CredentialError::invalid(
+            "root_key.persist",
+            format!("credential root key path has no parent: {}", path.display()),
+        )
+    })?;
+    fs::create_dir_all(parent).map_err(|error| {
+        CredentialError::io_at("root_key.persist", "failed to create", parent, error)
+    })?;
 
     let mut key = [0u8; 32];
     random(&mut key).map_err(|error| {
@@ -169,55 +218,40 @@ fn generate_and_persist_root_key_at_with(
         )
     })?;
 
-    // Atomic: O_CREAT|O_EXCL with mode 0o600 *at create time*.
-    #[cfg(unix)]
-    let open_result = {
-        use std::os::unix::fs::OpenOptionsExt;
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(path)
-    };
-    #[cfg(not(unix))]
-    let open_result = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(path);
+    let (temp_path, mut file) = create_root_key_temp(parent, path)?;
+    let write_result = write_and_sync(&mut file, &key).map_err(|error| {
+        CredentialError::io_at(
+            "root_key.persist",
+            "failed to write and fsync temporary credential root key",
+            &temp_path,
+            error,
+        )
+    });
+    drop(file);
+    if let Err(error) = write_result {
+        cleanup_root_key_temp(&temp_path, Some(&error));
+        return Err(error);
+    }
 
-    match open_result {
-        Ok(mut f) => {
-            use std::io::Write;
-            f.write_all(&key).map_err(|error| {
-                CredentialError::io(
-                    "root_key.persist",
-                    "failed to write credential root key",
-                    error,
-                )
-            })?;
-            f.sync_all().map_err(|error| {
-                CredentialError::io(
-                    "root_key.persist",
-                    "failed to fsync credential root key",
-                    error,
-                )
-            })?;
-            if let Some(parent) = path.parent() {
-                std::fs::File::open(parent)
-                    .and_then(|directory| directory.sync_all())
-                    .map_err(|error| {
-                        CredentialError::io_at(
-                            "root_key.persist",
-                            "failed to fsync root key directory",
-                            parent,
-                            error,
-                        )
-                    })?;
-            }
+    before_publish();
+    let publish_result = fs::hard_link(&temp_path, path);
+    match publish_result {
+        Ok(()) => {
+            remove_root_key_temp(&temp_path)?;
+            fs::File::open(parent)
+                .and_then(|directory| directory.sync_all())
+                .map_err(|error| {
+                    CredentialError::io_at(
+                        "root_key.persist",
+                        "failed to fsync root key directory",
+                        parent,
+                        error,
+                    )
+                })?;
             Ok(key)
         }
-        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-            // Race: another process wrote the key. Read what they wrote.
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            remove_root_key_temp(&temp_path)?;
             load_persistent_root_key_at(path)?.ok_or_else(|| {
                 CredentialError::unavailable(
                     "root_key.persist",
@@ -225,12 +259,77 @@ fn generate_and_persist_root_key_at_with(
                 )
             })
         }
+        Err(error) => {
+            let failure = CredentialError::io_at(
+                "root_key.persist",
+                "failed to publish credential root key",
+                path,
+                error,
+            );
+            cleanup_root_key_temp(&temp_path, Some(&failure));
+            Err(failure)
+        }
+    }
+}
+
+fn create_root_key_temp(parent: &Path, path: &Path) -> CredentialResult<(PathBuf, fs::File)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("credential-root.key");
+    for _ in 0..32 {
+        let sequence = NEXT_TEMP.fetch_add(1, Ordering::Relaxed);
+        let temp_path = parent.join(format!(".{name}.{}.{}.tmp", std::process::id(), sequence));
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600).custom_flags(libc::O_NOFOLLOW);
+        }
+        match options.open(&temp_path) {
+            Ok(file) => return Ok((temp_path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(CredentialError::io_at(
+                    "root_key.persist",
+                    "failed to create temporary credential root key",
+                    &temp_path,
+                    error,
+                ))
+            }
+        }
+    }
+    Err(CredentialError::unavailable(
+        "root_key.persist",
+        "failed to allocate a unique temporary credential root key path",
+    ))
+}
+
+fn remove_root_key_temp(path: &Path) -> CredentialResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(CredentialError::io_at(
             "root_key.persist",
-            "failed to create credential root key at",
+            "failed to remove temporary credential root key",
             path,
             error,
         )),
+    }
+}
+
+fn cleanup_root_key_temp(path: &Path, primary: Option<&CredentialError>) {
+    if let Err(cleanup) = remove_root_key_temp(path) {
+        tracing::error!(
+            path = %path.display(),
+            primary = primary.map(ToString::to_string),
+            error = %cleanup,
+            "credential root key operation and temporary cleanup both failed"
+        );
     }
 }
 
@@ -240,6 +339,40 @@ pub(super) fn inject_root_key_random_failure(path: &Path) -> CredentialError {
         Err(std::io::Error::other("injected random failure"))
     })
     .expect_err("injected random source must fail")
+}
+
+#[cfg(test)]
+pub(super) fn inject_root_key_write_failure(path: &Path) -> CredentialError {
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        os_random_bytes,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(&key[..8])?;
+            Err(std::io::Error::other("injected root key write failure"))
+        },
+        || {},
+    )
+    .expect_err("injected root key writer must fail")
+}
+
+#[cfg(test)]
+pub(super) fn generate_root_key_at_barrier(
+    path: &Path,
+    barrier: &std::sync::Barrier,
+) -> CredentialResult<[u8; 32]> {
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        os_random_bytes,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(key)?;
+            file.sync_all()
+        },
+        || {
+            barrier.wait();
+        },
+    )
 }
 
 /// Derive a 256-bit encryption key.

@@ -184,19 +184,25 @@ fn host_from_url(url: &str) -> Option<String> {
 
 pub struct BedrockProvider {
     cfg: BedrockConfig,
-    transport: HttpTransport,
+    transport: Option<HttpTransport>,
     initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
+        }
     }
 
     pub fn new_with_transport(cfg: BedrockConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            transport,
+            transport: Some(transport),
             initialization_error: None,
         }
     }
@@ -208,7 +214,7 @@ impl BedrockProvider {
                 tracing::error!(error = %error, "legacy Bedrock provider initialization failed");
                 Self {
                     cfg: BedrockConfig::unconfigured(model, agent),
-                    transport: HttpTransport::legacy_default(),
+                    transport: None,
                     initialization_error: Some(Arc::new(
                         crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
                     )),
@@ -230,10 +236,15 @@ impl BedrockProvider {
         )
     }
 
-    fn ensure_initialized(&self) -> Result<()> {
+    fn transport(&self) -> Result<&HttpTransport> {
         match &self.initialization_error {
             Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
-            None => Ok(()),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "bedrock.transport",
+                }
+                .into()
+            }),
         }
     }
 
@@ -279,7 +290,7 @@ impl Provider for BedrockProvider {
 
     fn is_configured(&self) -> bool {
         self.initialization_error.is_none()
-            && self.transport.is_ready()
+            && self.transport.is_some()
             && self.cfg.credentials.is_some()
     }
 
@@ -291,7 +302,7 @@ impl Provider for BedrockProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        self.ensure_initialized()?;
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -324,9 +335,8 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .transport
-            .post(self.full_url(), self.cfg.request_timeout)?
+        let mut http = transport
+            .post(self.full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             // accept identifies us in CloudTrail logs
             .header("Accept", "application/json")
@@ -376,7 +386,7 @@ impl Provider for BedrockProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        self.ensure_initialized()?;
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -412,9 +422,8 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .transport
-            .post(self.stream_full_url(), self.cfg.request_timeout)?
+        let mut http = transport
+            .post(self.stream_full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header(
                 "X-Amzn-Bedrock-Accept",

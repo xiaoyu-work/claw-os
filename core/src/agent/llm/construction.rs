@@ -51,8 +51,7 @@ impl TypedCredentialSource for ProcessCredentialSource {
 /// Shared HTTP connection pool and request timeout policy for LLM providers.
 #[derive(Clone)]
 pub struct HttpTransport {
-    client: Option<reqwest::Client>,
-    initialization_error: Option<Arc<HttpTransportInitializationError>>,
+    client: reqwest::Client,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -64,80 +63,61 @@ pub struct HttpTransportInitializationError {
 
 impl HttpTransport {
     pub fn new() -> Result<Self> {
+        Self::try_build()
+            .map_err(|source| ProviderInfrastructureError::HttpTransport { source }.into())
+    }
+
+    pub(crate) fn try_build() -> std::result::Result<Self, Arc<HttpTransportInitializationError>> {
         build_http_client()
-            .map(|client| Self {
-                client: Some(client),
-                initialization_error: None,
-            })
-            .map_err(|source| {
-                ProviderInfrastructureError::HttpTransport {
-                    source: Arc::new(HttpTransportInitializationError { source }),
-                }
-                .into()
-            })
+            .map(|client| Self { client })
+            .map_err(|source| Arc::new(HttpTransportInitializationError { source }))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn initialization_failure_for_test() -> Arc<HttpTransportInitializationError> {
+        let source = reqwest::Client::builder()
+            .user_agent("\n")
+            .build()
+            .expect_err("invalid user-agent must reject HTTP client initialization");
+        Arc::new(HttpTransportInitializationError { source })
     }
 
     /// Infallible compatibility boundary for legacy constructors whose return
     /// types cannot surface HTTP-client construction errors.
     pub fn legacy_default() -> Self {
-        match build_http_client() {
-            Ok(client) => Self {
-                client: Some(client),
-                initialization_error: None,
-            },
-            Err(source) => {
-                let error = Arc::new(HttpTransportInitializationError { source });
-                tracing::error!(error = %error, "legacy provider HTTP initialization failed");
-                Self {
-                    client: None,
-                    initialization_error: Some(error),
-                }
-            }
-        }
+        Self::try_build().unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy direct HTTP transport initialization failed");
+            let client = reqwest::Client::builder()
+                .build()
+                .unwrap_or_else(|fallback| {
+                    tracing::error!(
+                        error = %fallback,
+                        "default HTTP transport initialization failed; aborting"
+                    );
+                    std::process::abort();
+                });
+            Self { client }
+        })
     }
 
     pub fn post(
         &self,
         url: impl reqwest::IntoUrl,
         request_timeout: Duration,
-    ) -> std::result::Result<reqwest::RequestBuilder, ProviderInfrastructureError> {
-        Ok(with_timeout(self.client()?.post(url), request_timeout))
+    ) -> reqwest::RequestBuilder {
+        with_timeout(self.client.post(url), request_timeout)
     }
 
     pub fn get(
         &self,
         url: impl reqwest::IntoUrl,
         request_timeout: Duration,
-    ) -> std::result::Result<reqwest::RequestBuilder, ProviderInfrastructureError> {
-        Ok(with_timeout(self.client()?.get(url), request_timeout))
+    ) -> reqwest::RequestBuilder {
+        with_timeout(self.client.get(url), request_timeout)
     }
 
     pub fn is_ready(&self) -> bool {
-        self.client.is_some()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn failed_for_test() -> Self {
-        let source = reqwest::Client::builder()
-            .user_agent("\n")
-            .build()
-            .expect_err("invalid user-agent must reject HTTP client initialization");
-        Self {
-            client: None,
-            initialization_error: Some(Arc::new(HttpTransportInitializationError { source })),
-        }
-    }
-
-    fn client(&self) -> std::result::Result<&reqwest::Client, ProviderInfrastructureError> {
-        match (&self.client, &self.initialization_error) {
-            (Some(client), _) => Ok(client),
-            (None, Some(source)) => Err(ProviderInfrastructureError::HttpTransport {
-                source: Arc::clone(source),
-            }),
-            (None, None) => Err(ProviderInfrastructureError::StatePoisoned {
-                component: "http_transport",
-            }),
-        }
+        true
     }
 }
 

@@ -126,19 +126,25 @@ impl AnthropicConfig {
 
 pub struct AnthropicProvider {
     cfg: AnthropicConfig,
-    transport: HttpTransport,
+    transport: Option<HttpTransport>,
     initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl AnthropicProvider {
     pub fn new(cfg: AnthropicConfig) -> Self {
-        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
+        }
     }
 
     pub fn new_with_transport(cfg: AnthropicConfig, transport: HttpTransport) -> Self {
         Self {
             cfg,
-            transport,
+            transport: Some(transport),
             initialization_error: None,
         }
     }
@@ -155,7 +161,7 @@ impl AnthropicProvider {
                 tracing::error!(error = %error, "legacy Anthropic provider initialization failed");
                 Self {
                     cfg: AnthropicConfig::unconfigured(model, agent),
-                    transport: HttpTransport::legacy_default(),
+                    transport: None,
                     initialization_error: Some(Arc::new(
                         crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
                     )),
@@ -168,10 +174,15 @@ impl AnthropicProvider {
         format!("{}/v1/messages", self.cfg.base_url)
     }
 
-    fn ensure_initialized(&self) -> Result<()> {
+    fn transport(&self) -> Result<&HttpTransport> {
         match &self.initialization_error {
             Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
-            None => Ok(()),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "anthropic.transport",
+                }
+                .into()
+            }),
         }
     }
 }
@@ -188,7 +199,7 @@ impl Provider for AnthropicProvider {
 
     fn is_configured(&self) -> bool {
         self.initialization_error.is_none()
-            && self.transport.is_ready()
+            && self.transport.is_some()
             && (self.cfg.api_key.is_some()
                 || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
@@ -198,7 +209,7 @@ impl Provider for AnthropicProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
-        self.ensure_initialized()?;
+        let transport = self.transport()?;
         let body = wire::build_request_body(&request, &self.cfg.model, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
@@ -211,9 +222,8 @@ impl Provider for AnthropicProvider {
             None => self.cfg.api_key.as_deref(),
         };
 
-        let mut http = self
-            .transport
-            .post(self.endpoint(), self.cfg.request_timeout)?
+        let mut http = transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header("anthropic-version", ANTHROPIC_VERSION)
             .json(&body);
@@ -302,7 +312,7 @@ impl Provider for AnthropicProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
-        self.ensure_initialized()?;
+        let transport = self.transport()?;
         // Real SSE streaming. Build the request body with stream:true,
         // hit /v1/messages with Accept: text/event-stream, validate
         // the HTTP status synchronously (so 401/429/etc surface
@@ -320,9 +330,8 @@ impl Provider for AnthropicProvider {
             None => self.cfg.api_key.as_deref(),
         };
 
-        let mut http = self
-            .transport
-            .post(self.endpoint(), self.cfg.request_timeout)?
+        let mut http = transport
+            .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header("Accept", "text/event-stream")
             .header("anthropic-version", ANTHROPIC_VERSION)

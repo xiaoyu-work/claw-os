@@ -747,6 +747,65 @@ fn random_failure_is_typed_and_preserves_its_source() {
 }
 
 #[test]
+fn root_key_write_failure_leaves_no_final_or_temporary_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-write-failure-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+
+    let error = inject_root_key_write_failure(&key_path);
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert!(!key_path.exists());
+    let leftovers = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "temporary files remained: {leftovers:?}"
+    );
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn concurrent_root_key_publishers_only_observe_a_complete_winner() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-race-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let path = key_path.clone();
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || {
+            generate_root_key_at_barrier(&path, &barrier).unwrap()
+        }));
+    }
+    let first = threads.remove(0).join().unwrap();
+    let second = threads.remove(0).join().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(fs::read(&key_path).unwrap(), first);
+    let leftovers = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path() != key_path)
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "temporary files remained");
+
+    fs::remove_file(key_path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
 fn typed_load_preserves_corrupt_record_category_and_serde_source() {
     perms_init();
     setup();

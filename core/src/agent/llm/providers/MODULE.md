@@ -46,6 +46,9 @@ Provider constructors used by production composition are fallible. Legacy
 infallible constructors remain source-compatible and store deferred typed
 initialization failures; `is_configured` returns false and requests return that
 failure without creating a fallback HTTP client or inventing credentials.
+Every `HttpTransport` contains a successfully built client, and its public
+`get`/`post` methods retain the original infallible `RequestBuilder` chaining
+surface; fallible construction is handled before a provider stores transport.
 `CredentialSource` and `resolve_aws_value` retain their original public
 signatures, while `TypedCredentialSource` and `try_resolve_aws_value` drive
 source-preserving production composition. A pool whose keys are cooling maps

@@ -195,6 +195,9 @@ flooding the socket.
 - `state::StateError` owns transaction recovery, in-memory context/transaction
   locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
   unavailable state and are never recovered with `PoisonError::into_inner`.
+  Session decode/corruption and invalid persisted timestamps remain `Corrupt`;
+  missing sessions, held leases, and I/O/lock failures retain their distinct
+  not-found, conflict, and unavailable categories with original sources.
 - `server::DaemonError` owns socket setup, daemon initialization, and state
   recovery. Socket parent creation, stale removal, credential passing, bind,
   chmod, and accept preserve their `io::Error` sources and operation names.

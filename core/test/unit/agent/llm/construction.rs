@@ -181,20 +181,25 @@ fn aws_stored_credential_failure_is_not_rescued_by_environment() {
 
 #[test]
 fn legacy_transport_stores_initialization_failure_without_panicking() {
-    let transport = HttpTransport::failed_for_test();
+    let (transport, error) =
+        crate::agent::llm::failed_legacy_provider_transport_for_test("test-provider");
+    assert!(transport.is_none());
+    let error = error.expect("deferred initialization error");
+    assert!(matches!(
+        crate::agent::llm::deferred_initialization_error(&error),
+        LlmError::Infrastructure(ProviderInfrastructureError::Initialization { .. })
+    ));
 
-    assert!(!transport.is_ready());
-    let error = transport
-        .post("https://example.invalid", Duration::from_secs(1))
-        .unwrap_err();
-    match error {
-        ProviderInfrastructureError::HttpTransport { source } => {
-            assert!(std::error::Error::source(source.as_ref())
-                .and_then(|source| source.downcast_ref::<reqwest::Error>())
-                .is_some());
+    let mut source: &(dyn std::error::Error + 'static) = error.as_ref();
+    let mut found_reqwest = false;
+    while let Some(next) = source.source() {
+        if next.downcast_ref::<reqwest::Error>().is_some() {
+            found_reqwest = true;
+            break;
         }
-        other => panic!("expected HTTP initialization failure, got {other:?}"),
+        source = next;
     }
+    assert!(found_reqwest);
 }
 
 #[test]

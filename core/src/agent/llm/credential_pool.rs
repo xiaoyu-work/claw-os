@@ -347,8 +347,8 @@ impl Pool {
         crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg).pool_declared()
     }
 
-    /// Legacy process-backed config constructor. New provider composition
-    /// injects a `CredentialSource` and retains the returned pool in an `Arc`.
+    /// Legacy public constructor with source-preserving process resolution.
+    /// New provider composition injects `TypedCredentialSource` directly.
     pub fn try_from_agent_config(
         name: impl Into<String>,
         cfg: &crate::config::AgentConfig,
@@ -357,7 +357,7 @@ impl Pool {
             return Ok(None);
         }
         let source = crate::agent::llm::construction::ProcessCredentialSource;
-        let resolved = crate::agent::llm::construction::resolve_api_credentials(
+        let resolved = crate::agent::llm::construction::try_resolve_api_credentials(
             name,
             crate::agent::llm::construction::ApiCredentialConfig::from_agent_config(cfg),
             &source,

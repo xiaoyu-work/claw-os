@@ -53,7 +53,8 @@ use {
     keyring::MASTER_KEY_LABEL,
     lifecycle::{compute_original_ttl, execute_refresh},
     master_key::{
-        generate_and_persist_root_key_at, inject_root_key_random_failure, legacy_obfuscation_key,
+        generate_and_persist_root_key_at, generate_root_key_at_barrier,
+        inject_root_key_random_failure, inject_root_key_write_failure, legacy_obfuscation_key,
         load_persistent_root_key_at,
     },
     oauth::build_curl_post,

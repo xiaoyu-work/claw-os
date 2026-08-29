@@ -298,7 +298,7 @@ pub enum PollOutcome {
 /// user along with `verification_uri` and polls
 /// [`poll_device_flow`] every `interval` seconds.
 pub async fn start_device_flow() -> Result<DeviceCode, CopilotAuthError> {
-    start_device_flow_with_transport(legacy_http_transport()).await
+    start_device_flow_with_transport(legacy_http_transport()?).await
 }
 
 pub async fn start_device_flow_with_transport(
@@ -306,7 +306,7 @@ pub async fn start_device_flow_with_transport(
 ) -> Result<DeviceCode, CopilotAuthError> {
     let body = [("client_id", COPILOT_CLIENT_ID), ("scope", SCOPES)];
     let resp = transport
-        .post(DEVICE_CODE_URL, AUTH_HTTP_TIMEOUT)?
+        .post(DEVICE_CODE_URL, AUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json")
         .form(&body)
         .send()
@@ -338,7 +338,7 @@ struct TokenPollResponse {
 /// Single poll against the GitHub access-token endpoint. Returns
 /// immediately — the caller loops with its own scheduler.
 pub async fn poll_device_flow(device_code: &str) -> Result<PollOutcome, CopilotAuthError> {
-    poll_device_flow_with_transport(device_code, legacy_http_transport()).await
+    poll_device_flow_with_transport(device_code, legacy_http_transport()?).await
 }
 
 pub async fn poll_device_flow_with_transport(
@@ -351,7 +351,7 @@ pub async fn poll_device_flow_with_transport(
         ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
     ];
     let resp = transport
-        .post(ACCESS_TOKEN_URL, AUTH_HTTP_TIMEOUT)?
+        .post(ACCESS_TOKEN_URL, AUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json")
         .form(&body)
         .send()
@@ -413,7 +413,7 @@ pub async fn exchange_for_copilot_token(
 ) -> Result<CopilotToken, CopilotAuthError> {
     exchange_for_copilot_token_with_transport(
         github_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -425,7 +425,7 @@ pub(crate) async fn exchange_for_copilot_token_with_transport(
     endpoints: &CopilotAuthEndpoints,
 ) -> Result<CopilotToken, CopilotAuthError> {
     let resp = transport
-        .get(&endpoints.token_url, AUTH_HTTP_TIMEOUT)?
+        .get(&endpoints.token_url, AUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json")
         .header("Editor-Version", EDITOR_VERSION)
         .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
@@ -465,7 +465,7 @@ pub(crate) async fn exchange_for_copilot_token_with_transport(
 pub async fn ensure_copilot_token(github_token: &str) -> Result<CopilotToken, CopilotAuthError> {
     ensure_copilot_token_with_transport(
         github_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -514,7 +514,7 @@ pub async fn refresh_rejected_copilot_token(
     refresh_rejected_copilot_token_with_transport(
         github_token,
         rejected_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -601,7 +601,7 @@ pub fn try_forget_cached(github_token: &str) -> Result<(), CopilotAuthError> {
 pub async fn ensure_copilot_models(
     token: &CopilotToken,
 ) -> Result<Arc<Vec<CopilotModel>>, CopilotAuthError> {
-    ensure_copilot_models_with_transport(token, legacy_http_transport()).await
+    ensure_copilot_models_with_transport(token, legacy_http_transport()?).await
 }
 
 pub(crate) async fn ensure_copilot_models_with_transport(
@@ -633,7 +633,7 @@ pub async fn wire_api_for_model(
     token: &CopilotToken,
     model_id: &str,
 ) -> Result<CopilotWireApi, CopilotAuthError> {
-    wire_api_for_model_with_transport(token, model_id, legacy_http_transport()).await
+    wire_api_for_model_with_transport(token, model_id, legacy_http_transport()?).await
 }
 
 pub(crate) async fn wire_api_for_model_with_transport(
@@ -676,7 +676,7 @@ async fn fetch_copilot_models(
 ) -> Result<Vec<CopilotModel>, CopilotAuthError> {
     let url = format!("{}/models", token.base_url.trim_end_matches('/'));
     let resp = transport
-        .get(&url, AUTH_HTTP_TIMEOUT)?
+        .get(&url, AUTH_HTTP_TIMEOUT)
         .header("Accept", "application/json")
         .header("Editor-Version", EDITOR_VERSION)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
@@ -890,9 +890,21 @@ fn derive_base_url_from_token_with_fallback(
 // HTTP client
 // ---------------------------------------------------------------------------
 
-fn legacy_http_transport() -> &'static HttpTransport {
-    static TRANSPORT: OnceLock<HttpTransport> = OnceLock::new();
-    TRANSPORT.get_or_init(HttpTransport::legacy_default)
+fn legacy_http_transport() -> Result<&'static HttpTransport, CopilotAuthError> {
+    static TRANSPORT: OnceLock<
+        std::result::Result<
+            HttpTransport,
+            Arc<crate::agent::llm::construction::HttpTransportInitializationError>,
+        >,
+    > = OnceLock::new();
+    match TRANSPORT.get_or_init(HttpTransport::try_build) {
+        Ok(transport) => Ok(transport),
+        Err(source) => Err(CopilotAuthError::Infrastructure(
+            crate::agent::llm::ProviderInfrastructureError::HttpTransport {
+                source: Arc::clone(source),
+            },
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------

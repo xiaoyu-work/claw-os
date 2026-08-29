@@ -305,7 +305,14 @@ async fn corrupt_stored_key_is_typed_and_blocks_readiness_for_all_text_providers
         match &error {
             llm::LlmError::CredentialStore { credential, source } => {
                 assert_eq!(credential, &credential_name);
+                assert_eq!(
+                    source.kind(),
+                    crate::credential::CredentialErrorKind::Corrupt
+                );
                 assert!(source.to_string().contains("parse"));
+                assert!(std::error::Error::source(source)
+                    .and_then(|source| source.downcast_ref::<serde_json::Error>())
+                    .is_some());
             }
             other => panic!("expected typed credential-store error, got {other:?}"),
         }
@@ -469,6 +476,22 @@ fn corrupt_pool_credential_stays_typed_and_never_uses_legacy_key() {
     cfg.api_key_credential = None;
     cfg.api_key_env = Some(LEGACY_ENV.into());
     cfg.api_key_credentials = vec![credential_name.clone()];
+
+    let pool_error =
+        llm::credential_pool::Pool::try_from_agent_config("direct-pool", &cfg).unwrap_err();
+    match pool_error {
+        llm::LlmError::CredentialStore { credential, source } => {
+            assert_eq!(credential, credential_name);
+            assert_eq!(
+                source.kind(),
+                crate::credential::CredentialErrorKind::Corrupt
+            );
+            assert!(std::error::Error::source(&source)
+                .and_then(|source| source.downcast_ref::<serde_json::Error>())
+                .is_some());
+        }
+        other => panic!("expected typed direct pool error, got {other:?}"),
+    }
 
     for (provider, model) in [
         ("openai", "gpt-test"),
