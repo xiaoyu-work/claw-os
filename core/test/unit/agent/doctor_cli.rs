@@ -152,6 +152,7 @@ fn focused_memory_doctor_reports_integrity_dimensions_without_creating_db() {
         "fts",
         "prompt_references",
         "prompt_hashes",
+        "compactions",
         "titles",
         "repair_lifecycle",
     ] {

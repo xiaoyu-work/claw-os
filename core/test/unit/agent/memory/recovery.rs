@@ -61,9 +61,323 @@ fn clean_database_reports_separate_health_checks() {
     assert_eq!(report.fts.status, "ok");
     assert_eq!(report.prompt_references.status, "ok");
     assert_eq!(report.prompt_hashes.status, "ok");
+    assert_eq!(report.compactions.status, "ok");
     assert_eq!(report.titles.status, "ok");
     assert_eq!(report.repair_lifecycle.status, "ok");
     assert_eq!(report.stats.expect("stats").total_messages, 1);
+}
+
+fn complete_test_compaction(db: &MemoryDb, session_id: &str) {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let rows = db.recent_replayable(session_id, 10).expect("rows");
+    assert!(rows.len() >= 3);
+    let attempt = match db
+        .begin_compaction(
+            session_id,
+            NewCompaction {
+                source_start_id: rows[0].id,
+                source_end_id: rows[1].id,
+                source_count: 2,
+                protected_tail_start_id: Some(rows[2].id),
+                protected_user_message_id: Some(rows[2].id),
+                algorithm: "test".to_string(),
+                algorithm_version: 1,
+                provider: "mock".to_string(),
+                model: "mock-model".to_string(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .expect("begin compaction")
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("unexpected compaction result: {other:?}"),
+    };
+    attempt
+        .complete("[CONTEXT SUMMARY]\n\nrecovered summary")
+        .expect("complete compaction");
+}
+
+fn complete_test_compaction_chain(db: &MemoryDb, session_id: &str) -> (Vec<i64>, Vec<i64>) {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let ids: Vec<i64> = (0..8)
+        .map(|index| {
+            db.record_message(
+                session_id,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("chain row {index}"),
+            )
+            .unwrap()
+        })
+        .collect();
+    let mut chain = Vec::new();
+    for end in [2_usize, 4, 6] {
+        let previous_compaction_id = chain.last().copied();
+        let attempt = match db
+            .begin_compaction(
+                session_id,
+                NewCompaction {
+                    source_start_id: ids[0],
+                    source_end_id: ids[end - 1],
+                    source_count: end,
+                    protected_tail_start_id: Some(ids[end]),
+                    protected_user_message_id: Some(ids[end]),
+                    algorithm: "test".into(),
+                    algorithm_version: 1,
+                    provider: "mock".into(),
+                    model: "mock".into(),
+                    previous_compaction_id,
+                    pruned_tool_results: 0,
+                },
+            )
+            .unwrap()
+        {
+            BeginCompaction::Started(attempt) => attempt,
+            other => panic!("unexpected compaction result: {other:?}"),
+        };
+        chain.push(
+            attempt
+                .complete(&format!("[CONTEXT SUMMARY]\n\nchain {end}"))
+                .unwrap()
+                .record
+                .id,
+        );
+    }
+    (ids, chain)
+}
+
+#[test]
+fn invalid_compaction_projection_is_repaired_without_losing_raw_messages() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first searchable raw")
+        .unwrap();
+    db.record_message("session", "assistant", "second raw")
+        .unwrap();
+    db.record_message("session", "user", "protected tail")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE compaction_summaries SET summary = 'tampered summary'",
+            [],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert_eq!(health.compactions.status, "fail");
+    assert!(!health.requires_quarantine);
+    assert!(health
+        .planned_repairs
+        .iter()
+        .any(|action| action == "repair_compaction_projection"));
+
+    repair(&path, RepairOptions::default()).expect("repair projection");
+    let repaired = MemoryDb::open(&path).expect("reopen");
+    assert!(repaired
+        .latest_valid_compaction("session")
+        .unwrap()
+        .0
+        .is_none());
+    assert_eq!(
+        repaired
+            .search_session("session", "searchable", 10)
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn protected_row_mutation_is_detected_and_repaired_by_shared_validation() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first raw").unwrap();
+    db.record_message("session", "assistant", "second raw")
+        .unwrap();
+    let protected = db
+        .record_message("session", "user", "protected user")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE messages SET content = 'changed protected user' WHERE id = ?",
+            params![protected],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert_eq!(health.compactions.status, "fail");
+    repair(&path, RepairOptions::default()).expect("repair projection");
+    let repaired = MemoryDb::open(&path).expect("reopen");
+    assert!(repaired.compactions_for_session("session").unwrap().is_empty());
+    drop(repaired);
+    assert_eq!(diagnose(&path).unwrap().compactions.status, "ok");
+}
+
+#[test]
+fn one_repair_reroots_valid_descendants_and_leaves_compaction_health_ok() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    let (_ids, chain) = complete_test_compaction_chain(&db, "session");
+    {
+        let conn = db.lock_conn().unwrap();
+        let middle_hash: String = conn
+            .query_row(
+                "SELECT summary_hash FROM session_compactions WHERE id = ?",
+                params![chain[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE compaction_summaries SET summary = 'tampered middle'
+             WHERE hash = ?",
+            params![middle_hash],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    assert_eq!(diagnose(&path).unwrap().compactions.status, "fail");
+    repair(&path, RepairOptions::default()).expect("repair");
+    let repaired = MemoryDb::open(&path).expect("reopen");
+    let records = repaired.compactions_for_session("session").unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.id).collect::<Vec<_>>(),
+        vec![chain[0], chain[2]]
+    );
+    let latest = records.last().unwrap();
+    assert_eq!(latest.previous_compaction_id, Some(chain[0]));
+    assert!(latest
+        .recovery_metadata
+        .rerooted_from_compaction_ids
+        .contains(&chain[1]));
+    assert_eq!(
+        repaired
+            .latest_valid_compaction("session")
+            .unwrap()
+            .0
+            .unwrap()
+            .record
+            .id,
+        chain[2]
+    );
+    drop(repaired);
+    assert_eq!(diagnose(&path).unwrap().compactions.status, "ok");
+}
+
+#[test]
+fn quarantine_recovery_preserves_valid_compaction_and_raw_sources() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first recovery source")
+        .unwrap();
+    db.record_message("session", "assistant", "second recovery source")
+        .unwrap();
+    db.record_message("session", "user", "protected tail")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+    drop(db);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("quarantine repair");
+    assert_eq!(report.recovered.compactions, 1);
+    let repaired = MemoryDb::open(&path).expect("replacement");
+    let (summary, rejected) = repaired.latest_valid_compaction("session").unwrap();
+    assert_eq!(rejected, 0);
+    assert!(summary
+        .expect("recovered summary")
+        .summary
+        .contains("recovered summary"));
+    assert_eq!(
+        repaired
+            .search_session("session", "recovery source", 10)
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn quarantine_recovery_reroots_valid_descendant_around_invalid_predecessor() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    let (_ids, chain) = complete_test_compaction_chain(&db, "session");
+    db.freeze_system_prompt("session", "trusted prompt", 1)
+        .unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        let middle_hash: String = conn
+            .query_row(
+                "SELECT summary_hash FROM session_compactions WHERE id = ?",
+                params![chain[1]],
+                |row| row.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "UPDATE compaction_summaries SET summary = 'tampered middle'
+             WHERE hash = ?",
+            params![middle_hash],
+        )
+        .unwrap();
+        conn.execute("UPDATE system_prompts SET prompt = 'tampered prompt'", [])
+            .unwrap();
+    }
+    drop(db);
+
+    let report = repair(
+        &path,
+        RepairOptions {
+            allow_quarantine: true,
+            ..RepairOptions::default()
+        },
+    )
+    .expect("quarantine repair");
+    assert_eq!(report.recovered.compactions, 2);
+    assert_eq!(report.recovered.skipped_compactions, 1);
+
+    let repaired = MemoryDb::open(&path).expect("replacement");
+    let records = repaired.compactions_for_session("session").unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.id).collect::<Vec<_>>(),
+        vec![chain[0], chain[2]]
+    );
+    assert_eq!(records[1].previous_compaction_id, Some(chain[0]));
+    assert!(records[1]
+        .recovery_metadata
+        .rerooted_from_compaction_ids
+        .contains(&chain[1]));
+    assert_eq!(
+        repaired
+            .latest_valid_compaction("session")
+            .unwrap()
+            .0
+            .unwrap()
+            .record
+            .id,
+        chain[2]
+    );
 }
 
 #[test]

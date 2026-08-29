@@ -21,6 +21,8 @@
 //!   requiring the operator to copy a UUID.
 //! - `--limit N` — cap the number of returned rows (default 1000;
 //!   the underlying [`MemoryDb::recent`] returns oldest-first).
+//! - Raw rows are never replaced by durable context summaries. Replay exports
+//!   those rows plus compaction recovery metadata.
 //! - `--role <user|assistant|tool|system>` — filter by role
 //!   (post-query, after the limit). Use to extract just the user
 //!   prompts or just the model's replies.
@@ -131,6 +133,9 @@ fn replay_with(db: &MemoryDb, opts: &ReplayOpts) -> Result<Value, String> {
     let title = db
         .title_for(&session_id)
         .map_err(|e| format!("title query failed: {e}"))?;
+    let compactions = db
+        .compactions_for_session(&session_id)
+        .map_err(|e| format!("compaction query failed: {e}"))?;
 
     let filtered: Vec<&MessageRow> = match &opts.role_filter {
         Some(r) => rows.iter().filter(|m| &m.role == r).collect(),
@@ -156,6 +161,7 @@ fn replay_with(db: &MemoryDb, opts: &ReplayOpts) -> Result<Value, String> {
         "role_filter": opts.role_filter,
         "message_count": messages.len(),
         "messages": messages,
+        "compactions": compactions,
     }))
 }
 

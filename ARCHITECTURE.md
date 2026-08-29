@@ -99,6 +99,37 @@ Anything inserted into a model request must be reconstructable from session or
 audit records. Prompt injections, memory, tool calls/results, provider usage,
 approvals, and privileged actions cannot bypass the recording path.
 
+Long `MemoryDb` conversations use durable compaction projections rather than
+rewriting their authoritative transcript. Each per-session attempt records a
+monotonic `started` then `completed`/`failed` lifecycle, the exact raw row IDs
+and inclusive range plus SHA-256 digest, algorithm version, protected
+tail/user IDs and row-identity digests, provider/model identity, frozen-prompt
+hash/version, and recovery metadata.
+Completed summary text is content-addressed. Continuations verify and load the
+latest valid summary plus every uncompacted row; raw rows remain searchable and
+exportable. A per-session advisory lock prevents duplicate concurrent
+compaction, and reacquiring that lock closes a crash-left `started` attempt
+before retry. Plans prepared before the lock carry their observed predecessor;
+if another worker wins first, `AlreadyCovered` or `StalePlan` returns that
+winner's verified summary and tail for adoption instead of treating the race
+as corruption or restoring stale context. The runtime rechecks the complete
+compression predicate after every adoption and uses a bounded wait/replan loop;
+failure is explicit rather than sending known-over-threshold input. Oversized
+old tool results are deterministically stubbed before an LLM summary.
+Validation requires the protected tail to begin at the first uncompacted
+replayable row, rejects tool-pair splits, and rechecks that a verbatim real-user
+anchor and both protected row identities are unchanged.
+Winner adoption deterministically merges live messages whose persistence
+failed into positions anchored by neighboring raw row IDs. Ephemerals proven
+outside keep their exact order, including structured tool results. An
+ephemeral between rows collapsed into the winner cannot have been part of the
+durable digest, so adoption rejects it rather than silently treating it as
+summarized. Covered or otherwise ambiguous placement, orphaned tool pairs, or
+a missing real-user anchor fails compression rather than dropping, duplicating,
+or reordering active evidence.
+Repair reroots a valid descendant around a damaged predecessor and records the
+removed lineage; it drops the dependent chain only when no safe root remains.
+
 Curated `MEMORY.md` facts are an append-only history, not a live inventory.
 Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
 aliases, classifies durable knowledge versus observed environment state, bounds
@@ -242,7 +273,9 @@ CLI / web UI / bridge
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
   -> append due reminders / transient App data to the current request only
-  -> load persisted conversation and compress when the configured budget requires it
+  -> load the latest verified durable compaction plus its uncompacted raw tail
+  -> deterministically prune old tool output, then start/complete a serialized
+     durable summary only when the configured budget still requires it
   -> Provider::chat or Provider::chat_stream
   -> StreamEvent accumulation
   -> user-visible stream projection (tool identity only; evidence markers hidden)

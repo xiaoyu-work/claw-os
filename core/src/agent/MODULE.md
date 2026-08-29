@@ -37,7 +37,7 @@ surfaces.
 | `tools/registry.rs`, `tools/exposure.rs`, `tools/progressive.rs` | Immutable tool catalogue, session-scoped exposure, and budgeted extension disclosure |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
-| `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |
+| `memory/sqlite_fts.rs`, `memory/compaction.rs` | Durable messages, content-addressed prompts/summaries, compaction lifecycle, and FTS |
 | `memory/recovery.rs` | Memory health, serialized repair, FTS rebuild, and evidence-preserving quarantine |
 | `prompt/` | System prompt composition, tracing, caching |
 | `safety/` | Redaction, file/tool safety, and external-data controls |

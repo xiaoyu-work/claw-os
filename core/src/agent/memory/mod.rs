@@ -7,6 +7,7 @@
 //!   - curator                             — async fact extractor
 
 pub mod app_memory;
+pub mod compaction;
 pub mod curator;
 pub mod history;
 pub mod notes;

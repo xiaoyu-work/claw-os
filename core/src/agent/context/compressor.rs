@@ -38,14 +38,17 @@
 //!
 //! ## Failure mode
 //!
-//! If the summarisation Provider call fails for any reason, we fall
-//! back to **truncate-only** — the head is dropped without a summary
-//! and the tail is returned. Better to lose old context than to crash
-//! the agent loop mid-conversation.
+//! Compression is prepared deterministically before the provider call. Old
+//! oversized tool results in the compactable head are replaced with
+//! content-addressed stubs first; when that alone brings the request below the
+//! trigger, no model call is made. If provider summarisation still is needed
+//! and fails, the original history is returned unchanged. The runtime can
+//! therefore mark a durable attempt failed without silently losing context.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use sha2::{Digest, Sha256};
 
 use crate::agent::llm::{
     types::{ContentBlock, FinishReason, Role, ToolChoice},
@@ -68,10 +71,115 @@ pub const DEFAULT_KEEP_TAIL_TOKENS: u32 = 20_000;
 /// Default cap on the summary's own token budget.
 pub const DEFAULT_SUMMARY_MAX_TOKENS: u32 = 1024;
 
+/// Tool results older than the protected tail are reduced to a deterministic
+/// content-addressed stub before an LLM summary is attempted.
+pub const DEFAULT_TOOL_RESULT_PRUNE_CHARS: usize = 512;
+
 /// Marker prefix on the synthesised summary message. Used so future
 /// compress passes can detect they're re-summarising a prior summary
-/// (currently informational; the next pass still re-summarises).
+/// and so persisted projections can be distinguished from raw conversation.
 pub const SUMMARY_MARKER: &str = "[CONTEXT SUMMARY]";
+
+pub const MODEL_SUMMARY_ALGORITHM: &str = "llm-summary";
+pub const DETERMINISTIC_PRUNE_ALGORITHM: &str = "deterministic-tool-prune";
+pub const COMPACTION_ALGORITHM_VERSION: u32 = 1;
+
+/// A deterministic plan produced before any provider call.
+#[derive(Debug, Clone)]
+pub struct PreparedCompression {
+    original: Vec<Message>,
+    pruned_head: Vec<Message>,
+    tail: Vec<Message>,
+    source_message_count: usize,
+    protected_user_index: usize,
+    strategy: PreparedStrategy,
+    pruned_tool_results: usize,
+}
+
+impl PreparedCompression {
+    pub fn source_message_count(&self) -> usize {
+        self.source_message_count
+    }
+
+    pub fn protected_user_index(&self) -> usize {
+        self.protected_user_index
+    }
+
+    pub fn algorithm(&self) -> &'static str {
+        match &self.strategy {
+            PreparedStrategy::Deterministic { .. } => DETERMINISTIC_PRUNE_ALGORITHM,
+            PreparedStrategy::Model { .. } => MODEL_SUMMARY_ALGORITHM,
+        }
+    }
+
+    pub fn algorithm_version(&self) -> u32 {
+        COMPACTION_ALGORITHM_VERSION
+    }
+
+    pub fn pruned_tool_results(&self) -> usize {
+        self.pruned_tool_results
+    }
+}
+
+#[derive(Debug, Clone)]
+enum PreparedStrategy {
+    Deterministic { summary: String },
+    Model { prompt: String },
+}
+
+/// Exact model-visible projection produced by a successful compression.
+#[derive(Debug, Clone)]
+pub struct CompressionProjection {
+    pub summary_text: String,
+    pub source_message_count: usize,
+    pub protected_user_index: usize,
+    pub algorithm: &'static str,
+    pub algorithm_version: u32,
+    pub pruned_tool_results: usize,
+}
+
+/// Result of executing a prepared compression.
+#[derive(Debug, Clone)]
+pub struct CompressionExecution {
+    pub messages: Vec<Message>,
+    pub projection: Option<CompressionProjection>,
+    /// Stable failure class only. Provider error bodies remain in tracing and
+    /// are never copied into durable lifecycle metadata.
+    pub failure: Option<&'static str>,
+}
+
+impl CompressionExecution {
+    fn completed(summary: Message, summary_text: String, plan: PreparedCompression) -> Self {
+        let source_message_count = plan.source_message_count;
+        let protected_user_index = plan.protected_user_index;
+        let algorithm = plan.algorithm();
+        let algorithm_version = plan.algorithm_version();
+        let pruned_tool_results = plan.pruned_tool_results;
+        let mut messages = Vec::with_capacity(plan.tail.len() + 1);
+        messages.push(summary);
+        messages.extend(plan.tail);
+        Self {
+            messages,
+            projection: Some(CompressionProjection {
+                summary_text,
+                source_message_count,
+                protected_user_index,
+                algorithm,
+                algorithm_version,
+                pruned_tool_results,
+            }),
+            failure: None,
+        }
+    }
+
+    fn failed(plan: PreparedCompression, failure: &'static str) -> Self {
+        Self {
+            messages: plan.original,
+            projection: None,
+            failure: Some(failure),
+        }
+    }
+}
 
 /// Cheap char-to-token heuristic. Mirrors the OpenAI rule of thumb of
 /// ~4 chars per token for English / code; close enough for budget
@@ -170,6 +278,22 @@ pub trait Compressor: Send + Sync {
     /// impossible (too few messages, head boundary at 0, etc.) the
     /// input is returned unchanged.
     async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message>;
+
+    /// Prepare a durable-capable compaction before any provider call. Custom
+    /// compressors may keep returning `None`; the runtime then uses the legacy
+    /// request-local [`Self::compress`] path.
+    fn prepare_compaction(
+        &self,
+        _system: Option<&str>,
+        _messages: Vec<Message>,
+    ) -> Option<PreparedCompression> {
+        None
+    }
+
+    /// Execute a plan returned by [`Self::prepare_compaction`].
+    async fn execute_compaction(&self, plan: PreparedCompression) -> CompressionExecution {
+        CompressionExecution::failed(plan, "unsupported_compressor")
+    }
 }
 
 /// Tunables for [`LlmCompressor`].
@@ -311,7 +435,126 @@ impl LlmCompressor {
             }
             break;
         }
+
+        // Persisted continuation rows intentionally flatten tool blocks to
+        // text. Preserve those adjacent call/result pairs conservatively too.
+        loop {
+            if boundary == 0 || boundary >= messages.len() {
+                break;
+            }
+            if Self::has_flattened_tool_result(&messages[boundary]) {
+                if let Some(use_idx) = (0..boundary)
+                    .rev()
+                    .find(|idx| Self::has_flattened_tool_use(&messages[*idx]))
+                {
+                    boundary = use_idx;
+                    continue;
+                }
+            }
+            break;
+        }
         boundary
+    }
+
+    fn has_flattened_tool_use(message: &Message) -> bool {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::Text { text }
+                    if text.contains("[tool: ") || text.contains("[tool_use:")
+            )
+        })
+    }
+
+    fn has_flattened_tool_result(message: &Message) -> bool {
+        message.content.iter().any(|block| {
+            matches!(
+                block,
+                ContentBlock::Text { text }
+                    if text.trim_start().starts_with("[tool result")
+                        || text.trim_start().starts_with("[tool_result")
+            )
+        })
+    }
+
+    fn is_real_user_message(message: &Message) -> bool {
+        message.role == Role::User
+            && message.content.iter().any(|block| match block {
+                ContentBlock::Text { text } => {
+                    let trimmed = text.trim_start();
+                    !trimmed.is_empty()
+                        && !trimmed.starts_with("[tool result")
+                        && !trimmed.starts_with("[tool_result")
+                }
+                _ => false,
+            })
+    }
+
+    fn protect_user_anchor(messages: &[Message], boundary: usize) -> (usize, usize) {
+        if let Some(index) = (boundary..messages.len())
+            .rev()
+            .find(|index| Self::is_real_user_message(&messages[*index]))
+        {
+            return (boundary, index);
+        }
+        match (0..boundary)
+            .rev()
+            .find(|index| Self::is_real_user_message(&messages[*index]))
+        {
+            Some(index) => (index, index),
+            None => (boundary, boundary.min(messages.len().saturating_sub(1))),
+        }
+    }
+
+    fn prune_old_tool_results(messages: &[Message]) -> (Vec<Message>, usize) {
+        let mut pruned = messages.to_vec();
+        let mut count = 0;
+        for message in &mut pruned {
+            for block in &mut message.content {
+                match block {
+                    ContentBlock::ToolResult {
+                        content, is_error, ..
+                    } if content.chars().count() > DEFAULT_TOOL_RESULT_PRUNE_CHARS => {
+                        let digest = hex::encode(Sha256::digest(content.as_bytes()));
+                        let chars = content.chars().count();
+                        *content = format!(
+                            "[tool result pruned: error={is_error} chars={chars} sha256={digest}]"
+                        );
+                        count += 1;
+                    }
+                    ContentBlock::Text { text } => {
+                        let trimmed = text.trim_start();
+                        let marker = if trimmed.starts_with("[tool result error]") {
+                            Some("[tool result error]")
+                        } else if trimmed.starts_with("[tool result]") {
+                            Some("[tool result]")
+                        } else if trimmed.starts_with("[tool_result:error]") {
+                            Some("[tool_result:error]")
+                        } else if trimmed.starts_with("[tool_result]") {
+                            Some("[tool_result]")
+                        } else {
+                            None
+                        };
+                        let Some(marker) = marker else {
+                            continue;
+                        };
+                        let body = trimmed
+                            .strip_prefix(marker)
+                            .unwrap_or_default()
+                            .trim_start();
+                        if body.chars().count() <= DEFAULT_TOOL_RESULT_PRUNE_CHARS {
+                            continue;
+                        }
+                        let digest = hex::encode(Sha256::digest(body.as_bytes()));
+                        let chars = body.chars().count();
+                        *text = format!("{marker} [pruned chars={chars} sha256={digest}]");
+                        count += 1;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        (pruned, count)
     }
 
     /// Render the head into a compact transcript suitable for
@@ -386,6 +629,108 @@ impl LlmCompressor {
             "{SUMMARY_MARKER} (compressed {head_count} prior messages)\n\n{summary}"
         ))
     }
+
+    fn prepare(&self, system: Option<&str>, messages: Vec<Message>) -> Option<PreparedCompression> {
+        if !self.should_compress(system, &messages) {
+            return None;
+        }
+        let raw = self.raw_boundary(&messages);
+        let paired = Self::adjust_for_tool_pairs(&messages, raw);
+        let (anchored, protected_user_index) = Self::protect_user_anchor(&messages, paired);
+        let boundary = Self::adjust_for_tool_pairs(&messages, anchored);
+        if boundary <= 1 {
+            return None;
+        }
+
+        let (pruned_head, pruned_tool_results) =
+            Self::prune_old_tool_results(&messages[..boundary]);
+        let tail = messages[boundary..].to_vec();
+        let transcript = Self::render_transcript(&pruned_head);
+        let deterministic_summary =
+            format!("Deterministically pruned earlier transcript:\n{transcript}");
+        let deterministic_message =
+            Self::make_summary_message(&deterministic_summary, pruned_head.len());
+        let mut deterministic_projection = Vec::with_capacity(tail.len() + 1);
+        deterministic_projection.push(deterministic_message);
+        deterministic_projection.extend(tail.iter().cloned());
+        let strategy = if pruned_tool_results > 0
+            && estimate_total_tokens(system, &deterministic_projection) < self.cfg.trigger_tokens
+        {
+            PreparedStrategy::Deterministic {
+                summary: deterministic_summary,
+            }
+        } else {
+            PreparedStrategy::Model {
+                prompt: Self::build_summary_prompt(&transcript),
+            }
+        };
+
+        Some(PreparedCompression {
+            original: messages,
+            pruned_head,
+            tail,
+            source_message_count: boundary,
+            protected_user_index,
+            strategy,
+            pruned_tool_results,
+        })
+    }
+
+    async fn execute(&self, plan: PreparedCompression) -> CompressionExecution {
+        match &plan.strategy {
+            PreparedStrategy::Deterministic { summary } => {
+                let summary_text = format!(
+                    "{SUMMARY_MARKER} (compressed {} prior messages)\n\n{summary}",
+                    plan.pruned_head.len()
+                );
+                let summary = Message::assistant_text(summary_text.clone());
+                CompressionExecution::completed(summary, summary_text, plan)
+            }
+            PreparedStrategy::Model { prompt } => {
+                let request = ChatRequest {
+                    model: self.model.clone(),
+                    messages: vec![Message::user_text(prompt.clone())],
+                    system: Some(
+                        "You compress conversation histories. Be terse, \
+                         factual, and structured."
+                            .to_string(),
+                    ),
+                    tools: Vec::new(),
+                    tool_choice: ToolChoice::Auto,
+                    max_tokens: Some(self.cfg.summary_max_tokens),
+                    temperature: Some(0.0),
+                    top_p: None,
+                    stop_sequences: Vec::new(),
+                    extra: serde_json::json!({"_cos_initiator": "agent"}),
+                };
+
+                match self.provider.chat(request).await {
+                    Ok(resp) => {
+                        let summary = extract_text(&resp.content);
+                        if summary.is_empty() {
+                            tracing::warn!(
+                                "context compressor: provider returned empty summary; preserving original history"
+                            );
+                            return CompressionExecution::failed(plan, "empty_provider_summary");
+                        }
+                        let summary_text = format!(
+                            "{SUMMARY_MARKER} (compressed {} prior messages)\n\n{summary}",
+                            plan.pruned_head.len()
+                        );
+                        let message = Message::assistant_text(summary_text.clone());
+                        let _ = resp.finish_reason;
+                        CompressionExecution::completed(message, summary_text, plan)
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            "context compressor: provider call failed ({error}); preserving original history"
+                        );
+                        CompressionExecution::failed(plan, "provider_summary_failed")
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -399,63 +744,22 @@ impl Compressor for LlmCompressor {
     }
 
     async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
-        if !self.should_compress(system, &messages) {
+        let Some(plan) = self.prepare(system, messages.clone()) else {
             return messages;
-        }
-        let raw = self.raw_boundary(&messages);
-        let boundary = Self::adjust_for_tool_pairs(&messages, raw);
-        // If the boundary is at or before 1, there isn't a meaningful
-        // head to summarise — return unchanged.
-        if boundary <= 1 {
-            return messages;
-        }
-        let head = &messages[..boundary];
-        let tail = messages[boundary..].to_vec();
-
-        let transcript = Self::render_transcript(head);
-        let prompt = Self::build_summary_prompt(&transcript);
-
-        let request = ChatRequest {
-            model: self.model.clone(),
-            messages: vec![Message::user_text(prompt)],
-            system: Some(
-                "You compress conversation histories. Be terse, \
-                 factual, and structured."
-                    .to_string(),
-            ),
-            tools: Vec::new(),
-            tool_choice: ToolChoice::Auto,
-            max_tokens: Some(self.cfg.summary_max_tokens),
-            temperature: Some(0.0),
-            top_p: None,
-            stop_sequences: Vec::new(),
-            extra: serde_json::json!({"_cos_initiator": "agent"}),
         };
+        self.execute(plan).await.messages
+    }
 
-        match self.provider.chat(request).await {
-            Ok(resp) => {
-                let summary_text = extract_text(&resp.content);
-                if summary_text.is_empty() {
-                    // Provider gave us nothing useful — fall back to
-                    // truncate-only. Better than carrying a "" summary.
-                    tracing::warn!(
-                        "context compressor: provider returned empty summary; truncating without summary"
-                    );
-                    return tail;
-                }
-                let mut out = Vec::with_capacity(tail.len() + 1);
-                out.push(Self::make_summary_message(&summary_text, head.len()));
-                out.extend(tail);
-                let _ = resp.finish_reason; // currently informational
-                out
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "context compressor: provider call failed ({e}); truncating without summary"
-                );
-                tail
-            }
-        }
+    fn prepare_compaction(
+        &self,
+        system: Option<&str>,
+        messages: Vec<Message>,
+    ) -> Option<PreparedCompression> {
+        self.prepare(system, messages)
+    }
+
+    async fn execute_compaction(&self, plan: PreparedCompression) -> CompressionExecution {
+        self.execute(plan).await
     }
 }
 

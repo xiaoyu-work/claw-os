@@ -7,8 +7,11 @@ model/user-visible text.
 
 ## Responsibilities
 
-- Estimate context usage and compress older conversation safely.
+- Estimate context usage and prepare versioned, durable-capable compression.
+- Deterministically prune oversized old tool results before spending a model
+  call.
 - Preserve tool-call/result integrity across compression boundaries.
+- Keep at least one real user message in the protected verbatim tail.
 - Extract references/citations without executing or trusting them.
 - Remove hidden thinking blocks where configured.
 
@@ -16,7 +19,7 @@ model/user-visible text.
 
 | Path | Role |
 | --- | --- |
-| `compressor.rs` | Token estimates, tail preservation, LLM summary |
+| `compressor.rs` | Token estimates, deterministic pruning, protected-boundary planning, and LLM summary execution |
 | `references.rs` | Reference extraction/normalization |
 | `think_scrub.rs` | Hidden reasoning tag removal |
 
