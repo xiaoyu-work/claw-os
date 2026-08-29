@@ -250,6 +250,8 @@ CLI / web UI / bridge
      -> rebuild session-scoped tool projection from trusted runtime facts
         (never request fields or process environment)
      (Apps default to cos_app_catalog + cos_app_run progressive disclosure)
+     (oversized extension catalogs use stable cos_tool_search /
+      cos_tool_describe / cos_tool_call schemas)
   -> parallel-safe or serial tool execution
   -> tool results appended to conversation
   -> repeat until final response or max_turns
@@ -272,6 +274,10 @@ Direct CLI, authenticated web and external MCP surfaces construct the same
 context from their verified process session and trusted entry-point facts.
 There is no process-global authorization or availability cache; concurrent
 sessions project independently even when they share one descriptor registry.
+The extension-schema budget is evaluated after that projection. Discovery and
+bridge dispatch resolve the original registry entry again, so guardrails,
+capabilities, approval, hooks, audit, timeouts, cancellation, and untrusted
+result wrapping remain attached to the real tool identity.
 Detached `proc spawn` children receive a derived `child-process` source and
 never inherit the parent's attended bit; only the signed, expiring task
 presence lease can cross a process boundary.
@@ -567,12 +573,17 @@ bounded by the same home-scoped ceiling the executor applies before it runs.
 config or discovered agent-API sidecar
   -> MCP transport/client initialization
   -> tools/list
-  -> prefixed tool registration
-  -> normal tool registry + guardrail dispatch
+  -> prefixed tool registration + attachment generation
+  -> session projection
+       -> small catalog: direct schemas
+       -> oversized catalog: stable search/describe/call bridge
+  -> original registry entry + normal guardrail dispatch
 ```
 
 An MCP server is optional. Failure to attach one is logged and skipped rather
-than preventing the core agent from starting.
+than preventing the core agent from starting. Dropping its handle invalidates
+every proxy registered by that attachment before the child or transport is
+torn down, so stale catalog entries cannot be invoked.
 
 ### Image and package publication
 

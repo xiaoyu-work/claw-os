@@ -69,6 +69,7 @@ pub struct ToolExposureContext {
     host: ExecutionHost,
     transports: BTreeSet<ToolTransport>,
     enabled_extensions: BTreeSet<String>,
+    tool_schema_budget_tokens: u32,
     guardrails: Guardrails,
 }
 
@@ -128,6 +129,7 @@ impl ToolExposureContext {
             host,
             transports,
             enabled_extensions: BTreeSet::new(),
+            tool_schema_budget_tokens: super::progressive::DEFAULT_TOOL_SCHEMA_BUDGET_TOKENS,
             guardrails,
         }
     }
@@ -208,6 +210,7 @@ impl ToolExposureContext {
             host: ExecutionHost::Direct,
             transports: BTreeSet::from([ToolTransport::LocalProcess]),
             enabled_extensions: BTreeSet::new(),
+            tool_schema_budget_tokens: super::progressive::DEFAULT_TOOL_SCHEMA_BUDGET_TOKENS,
             guardrails,
         }
     }
@@ -252,6 +255,15 @@ impl ToolExposureContext {
 
     pub(crate) fn enable_extension(&mut self, extension: impl Into<String>) {
         self.enabled_extensions.insert(extension.into());
+    }
+
+    pub(crate) fn set_tool_schema_budget_tokens(&mut self, budget: u32) {
+        self.tool_schema_budget_tokens = budget;
+    }
+
+    pub(crate) fn with_tool_schema_budget_tokens(mut self, budget: u32) -> Self {
+        self.set_tool_schema_budget_tokens(budget);
+        self
     }
 
     pub(crate) fn set_conversation_session_id(&mut self, session_id: impl Into<String>) {
@@ -382,6 +394,10 @@ impl ToolExposureContext {
         self.enabled_extensions.iter().map(String::as_str)
     }
 
+    pub fn tool_schema_budget_tokens(&self) -> u32 {
+        self.tool_schema_budget_tokens
+    }
+
     pub fn is_attended_local(&self) -> bool {
         self.attended_now()
             && self.client.local
@@ -469,6 +485,10 @@ impl ToolExposure {
     pub fn requiring_extension(mut self, extension: impl Into<String>) -> Self {
         self.extension = Some(extension.into());
         self
+    }
+
+    pub(crate) fn extension_id(&self) -> Option<&str> {
+        self.extension.as_deref()
     }
 
     pub fn requiring_memory(

@@ -245,15 +245,18 @@ fn collect_sources(messages: &[Message]) -> (Vec<EvidenceSource>, Vec<String>) {
     for message in messages {
         for block in &message.content {
             if let ContentBlock::ToolUse { id, name, input } = block {
+                let (visible_name, visible_input) =
+                    crate::agent::tools::progressive::resolve_visible_identity(name, input)
+                        .unwrap_or_else(|| (name.clone(), input.clone()));
                 match tools.get(id) {
-                    Some((existing, _)) if existing != name => {
+                    Some((existing, _)) if existing != &visible_name => {
                         ambiguous.insert(id.clone());
                     }
                     Some(_) => {
                         ambiguous.insert(id.clone());
                     }
                     None => {
-                        tools.insert(id.clone(), (name.clone(), input.clone()));
+                        tools.insert(id.clone(), (visible_name, visible_input));
                     }
                 }
             }

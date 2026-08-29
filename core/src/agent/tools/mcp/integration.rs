@@ -26,7 +26,7 @@
 //! struct fields in declaration order, so the field ordering in
 //! [`McpServerHandle`] is load-bearing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -41,7 +41,8 @@ use super::client::{ClientError, McpClient};
 use super::protocol::{ClientCapabilities, Implementation, ToolDescriptor, PROTOCOL_VERSION};
 use super::transport::StdioTransport;
 use crate::agent::tools::exposure::{ToolExposure, ToolTransport};
-use crate::agent::tools::registry::ToolRegistry;
+use crate::agent::tools::progressive::ToolDisclosure;
+use crate::agent::tools::registry::{ToolAttachment, ToolRegistry};
 use crate::agent::tools::{Tool, ToolResult};
 
 /// Configuration for one MCP server the agent should attach to.
@@ -90,6 +91,7 @@ impl McpServerSpec {
 /// so the reader task's `Arc<Transport>` is released before the
 /// child's stdio fds are closed by `kill`/`wait`.
 pub struct McpServerHandle {
+    attachment: ToolAttachment,
     /// Shared with every `McpRemoteTool` registered for this server;
     /// kept here so even if the registry is dropped first, the
     /// client (and thus the reader task) lives until handle drop.
@@ -124,6 +126,7 @@ impl McpServerHandle {
 
 impl Drop for McpServerHandle {
     fn drop(&mut self) {
+        self.attachment.detach();
         // Releasing this Arc lets the McpClient::Drop fire (if no
         // tool still holds a clone), which signals the reader task
         // to exit. Then we best-effort kill + reap the child.
@@ -156,27 +159,39 @@ pub struct McpRemoteTool {
     schema: Value,
     /// Untransformed remote tool name to send back over the wire.
     remote_name: String,
+    server_name: String,
+    transport: ToolTransport,
     client: Arc<McpClient>,
     timeout: Duration,
     exposure: ToolExposure,
+    attachment: ToolAttachment,
 }
 
 impl McpRemoteTool {
+    #[cfg(test)]
     fn new(
         prefix: &str,
         descriptor: ToolDescriptor,
         client: Arc<McpClient>,
         timeout: Duration,
     ) -> Self {
-        Self::new_with_transport(prefix, descriptor, client, timeout, ToolTransport::McpStdio)
+        Self::new_with_attachment(
+            prefix,
+            descriptor,
+            client,
+            timeout,
+            ToolTransport::McpStdio,
+            ToolAttachment::standalone(),
+        )
     }
 
-    fn new_with_transport(
+    fn new_with_attachment(
         prefix: &str,
         descriptor: ToolDescriptor,
         client: Arc<McpClient>,
         timeout: Duration,
         transport: ToolTransport,
+        attachment: ToolAttachment,
     ) -> Self {
         let name = format!("mcp_{prefix}_{}", descriptor.name);
         let description = descriptor.description.unwrap_or_else(|| {
@@ -198,11 +213,14 @@ impl McpRemoteTool {
             description,
             schema,
             remote_name: descriptor.name,
+            server_name: prefix.to_string(),
+            transport,
             client,
             timeout,
             exposure: ToolExposure::always()
                 .requiring_transport(transport)
                 .requiring_extension(format!("mcp:{prefix}")),
+            attachment,
         }
     }
 }
@@ -225,7 +243,23 @@ impl Tool for McpRemoteTool {
         self.exposure.clone()
     }
 
+    fn disclosure(&self) -> ToolDisclosure {
+        ToolDisclosure::extension(
+            "mcp",
+            Some(self.server_name.clone()),
+            Some(self.remote_name.clone()),
+            ["mcp".to_string(), self.transport.as_str().to_string()],
+        )
+    }
+
+    fn is_available(&self) -> bool {
+        self.attachment.is_active()
+    }
+
     async fn exec(&self, input: Value) -> ToolResult {
+        if !self.attachment.is_active() {
+            return ToolResult::err(format!("MCP `{}` is detached", self.name));
+        }
         // MCP's `arguments` is `Option<Value>`. Treat empty/null
         // input as None so servers that pattern-match on absence
         // (vs. empty object) work correctly.
@@ -490,20 +524,40 @@ pub async fn attach_server(
         }
     };
 
+    let attachment = registry.new_attachment();
     let mut registered = 0usize;
+    let mut remote_names = HashSet::new();
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new_with_transport(
+        if !remote_names.insert(descriptor.name.clone()) {
+            tracing::warn!(
+                server = %spec.name,
+                tool = %descriptor.name,
+                "MCP server advertised a duplicate tool name; keeping the first descriptor"
+            );
+            continue;
+        }
+        let tool = McpRemoteTool::new_with_attachment(
             &spec.name,
             descriptor,
             client.clone(),
             timeout_dur,
             ToolTransport::McpStdio,
+            attachment.clone(),
         );
+        if registry.get_unfiltered(tool.name()).is_some() {
+            tracing::warn!(
+                server = %spec.name,
+                tool = %tool.name(),
+                "MCP registry name collides with an existing tool; skipping attachment entry"
+            );
+            continue;
+        }
         registry.register(Arc::new(tool));
         registered += 1;
     }
 
     Ok(McpServerHandle {
+        attachment,
         client,
         child: Some(child),
         name: spec.name.clone(),
@@ -571,20 +625,40 @@ pub async fn attach_http_server(
         }
     };
 
+    let attachment = registry.new_attachment();
     let mut registered = 0usize;
+    let mut remote_names = HashSet::new();
     for descriptor in tools.tools {
-        let tool = McpRemoteTool::new_with_transport(
+        if !remote_names.insert(descriptor.name.clone()) {
+            tracing::warn!(
+                server = %spec.name,
+                tool = %descriptor.name,
+                "MCP server advertised a duplicate tool name; keeping the first descriptor"
+            );
+            continue;
+        }
+        let tool = McpRemoteTool::new_with_attachment(
             &spec.name,
             descriptor,
             client.clone(),
             timeout_dur,
             ToolTransport::McpHttp,
+            attachment.clone(),
         );
+        if registry.get_unfiltered(tool.name()).is_some() {
+            tracing::warn!(
+                server = %spec.name,
+                tool = %tool.name(),
+                "MCP registry name collides with an existing tool; skipping attachment entry"
+            );
+            continue;
+        }
         registry.register(Arc::new(tool));
         registered += 1;
     }
 
     Ok(McpServerHandle {
+        attachment,
         client,
         child: None,
         name: spec.name.clone(),

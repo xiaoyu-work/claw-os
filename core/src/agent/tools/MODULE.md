@@ -12,6 +12,9 @@ which tool calls are exposed and executed.
   per-request visibility decisions.
 - Project descriptors through trusted session owner, source, attendance,
   capabilities, host transports, enabled extensions, and guardrails.
+- Replace oversized permitted extension catalogs with fixed
+  `cos_tool_search`, `cos_tool_describe`, and `cos_tool_call` schemas while
+  keeping core and small catalogs direct.
 - Let an attended local system Agent initiate trusted account authorization
   without exposing OAuth tokens or client secrets to the model.
 - Convert tool schemas into LLM-facing definitions.
@@ -34,6 +37,7 @@ which tool calls are exposed and executed.
 | --- | --- |
 | `registry.rs` | Immutable descriptor/tool registration and projected lookup |
 | `exposure.rs` | Typed session facts, availability requirements, projection decisions |
+| `progressive.rs` | Schema budgeting plus stable extension search/describe/call bridges |
 | `guardrails.rs` | Tool exposure/dispatch policy |
 | `cos_proxy/` | Structured `cos` primitive tools |
 | `cos_proxy/oauth_login.rs` | Agent-initiated trusted OAuth browser flow |
@@ -49,6 +53,12 @@ dispatch; only immutable descriptors may be cached. Tools consume stable
 service/capability definitions and still perform exact argument-derived checks.
 Model output, client fields, process environment, and external tool results are
 untrusted; authority comes only from authenticated session/runtime facts.
+
+Bridge calls are resolved to the original tool identity before hooks,
+parallelism, approval, and execution. Direct calls to deferred names are
+rejected, and attachment liveness is rechecked immediately before execution.
+Search returns only length- and count-bounded metadata under a hard serialized
+response budget; exact schemas are returned only by `cos_tool_describe`.
 
 `auto_deny_tools` may block any tool early, but
 `dangerous_tools`/`auto_approve_tools` never grant capability authority. Only

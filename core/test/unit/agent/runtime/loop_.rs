@@ -2063,11 +2063,59 @@ impl crate::agent::tools::Tool for BlockingTool {
         serde_json::json!({"type": "object"})
     }
 
+    fn disclosure(&self) -> crate::agent::tools::progressive::ToolDisclosure {
+        crate::agent::tools::progressive::ToolDisclosure::extension(
+            "mcp",
+            Some("cancellation".to_string()),
+            Some("blocking_tool".to_string()),
+            ["mcp".to_string(), "test".to_string()],
+        )
+    }
+
     async fn exec(&self, _input: serde_json::Value) -> crate::agent::tools::ToolResult {
         let _drop_flag = DropFlag(self.dropped.clone());
         self.entered.notify_one();
         std::future::pending().await
     }
+}
+
+#[tokio::test]
+async fn progressive_tool_schema_is_stable_and_prompt_cacheable_across_requests() {
+    let mut cfg = cfg();
+    cfg.tool_schema_budget_tokens = 0;
+    let mock = MockProvider::new(&cfg.model, &cfg);
+    mock.set_supports_prompt_cache(true);
+    mock.push_response(MockResponse::Text("first".into()));
+    mock.push_response(MockResponse::Text("second".into()));
+    let mock = Arc::new(mock);
+    let provider: Arc<dyn Provider> = mock.clone();
+    let mut tools = crate::agent::tools::registry::ToolRegistry::new();
+    tools.register(Arc::new(BlockingTool {
+        entered: Arc::new(tokio::sync::Notify::new()),
+        dropped: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    }));
+
+    ask_with(provider.clone(), &cfg, "first", &tools)
+        .await
+        .unwrap();
+    let first = mock.last_request().expect("first request");
+    ask_with(provider, &cfg, "second", &tools).await.unwrap();
+    let second = mock.last_request().expect("second request");
+
+    assert_eq!(
+        serde_json::to_value(&first.tools).unwrap(),
+        serde_json::to_value(&second.tools).unwrap()
+    );
+    assert!(first
+        .tools
+        .iter()
+        .any(|tool| tool.name == crate::agent::tools::progressive::TOOL_CALL));
+    assert!(!first
+        .tools
+        .iter()
+        .any(|tool| tool.name == "cancellation_blocking_tool"));
+    assert!(crate::agent::prompt::caching::is_tools_cached(&first));
+    assert!(crate::agent::prompt::caching::is_tools_cached(&second));
 }
 
 #[tokio::test]
@@ -2114,6 +2162,57 @@ async fn interrupt_drops_in_flight_tool_future() {
     assert!(
         dropped.load(std::sync::atomic::Ordering::SeqCst),
         "interrupt must drop the in-flight tool future"
+    );
+}
+
+#[tokio::test]
+async fn interrupt_drops_in_flight_tool_future_through_progressive_bridge() {
+    let mut cfg = cfg();
+    cfg.tool_schema_budget_tokens = 0;
+    let mock = MockProvider::new(&cfg.model, &cfg);
+    mock.push_response(MockResponse::ToolUse(vec![ToolCall {
+        id: "cancel-running-bridged-tool".into(),
+        name: crate::agent::tools::progressive::TOOL_CALL.into(),
+        input: serde_json::json!({
+            "name": "cancellation_blocking_tool",
+            "arguments": {},
+        }),
+    }]));
+    let provider: Arc<dyn Provider> = Arc::new(mock);
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut tools = crate::agent::tools::registry::ToolRegistry::new();
+    tools.register(Arc::new(BlockingTool {
+        entered: entered.clone(),
+        dropped: dropped.clone(),
+    }));
+    let session_id = format!("bridged-tool-cancel-{}", uuid::Uuid::new_v4().simple());
+
+    let run = ask_with_stream_scoped(
+        provider,
+        &cfg,
+        "start blocking tool through the bridge",
+        None,
+        &tools,
+        None,
+        Arc::new(CapturingSink::default()),
+        progress::null_progress(),
+        &session_id,
+    );
+    let signal = async {
+        entered.notified().await;
+        assert!(interrupt::signal(&session_id));
+    };
+    let (result, ()) = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        tokio::join!(run, signal)
+    })
+    .await
+    .expect("bridged tool cancellation timed out");
+
+    assert!(matches!(result, Err(AgentError::Interrupted(_))));
+    assert!(
+        dropped.load(std::sync::atomic::Ordering::SeqCst),
+        "interrupt must drop the bridged in-flight tool future"
     );
 }
 
@@ -2580,6 +2679,19 @@ fn merge_specs_configured_wins_on_collision() {
     );
     assert_eq!(merged.len(), 1);
     assert_eq!(merged[0].command, "/bin/configured");
+}
+
+#[test]
+fn merge_specs_drops_duplicate_configured_names() {
+    let merged = merge_mcp_specs(
+        vec![
+            spec("dup", "/bin/configured-first"),
+            spec("dup", "/bin/configured-second"),
+        ],
+        vec![],
+    );
+    assert_eq!(merged.len(), 1);
+    assert_eq!(merged[0].command, "/bin/configured-first");
 }
 
 #[test]

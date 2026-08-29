@@ -815,6 +815,11 @@ async fn ask_inner_scoped(
     compressor: Option<Arc<dyn Compressor>>,
     initial_messages: Vec<Message>,
 ) -> Result<AskResult, AgentError> {
+    let scoped_exposure = exposure
+        .clone()
+        .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
+    let exposure = &scoped_exposure;
+    log_tool_projection(tools, exposure);
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
         Some(Redactor::default_set())
     } else {
@@ -1237,6 +1242,11 @@ async fn ask_inner_streaming_scoped(
     initial_messages: Vec<Message>,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
+    let scoped_exposure = exposure
+        .clone()
+        .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
+    let exposure = &scoped_exposure;
+    log_tool_projection(tools, exposure);
     let sink = super::presentation::user_visible_stream_sink(sink);
     let progress = super::presentation::user_visible_progress_sink(progress);
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
@@ -1624,10 +1634,9 @@ pub async fn ask(user_prompt: &str) -> Result<AskResult, AgentError> {
 /// manifests, and attach each enabled entry. Returns the live handles
 /// (drop terminates the children).
 ///
-/// Merge policy: configured servers take precedence on `name`
-/// collisions. Discovered manifests sharing a `name` with a
-/// configured server (or with each other) are skipped with a
-/// `tracing::warn!`.
+/// Merge policy: the first configured server wins each `name`; configured
+/// servers take precedence over discovery. Later configured entries and
+/// discovered manifests sharing a name are skipped with a `tracing::warn!`.
 async fn attach_mcp_servers(
     tools: &mut ToolRegistry,
     cfg: &AgentConfig,
@@ -1637,6 +1646,7 @@ async fn attach_mcp_servers(
     use crate::agent::tools::mcp::integration::attach_all;
     use std::path::PathBuf;
 
+    exposure.set_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
     let configured = configured_specs(cfg);
 
     let discovered = if cfg.agent_api_discovery_enabled {
@@ -1711,7 +1721,18 @@ fn merge_mcp_specs(
     discovered: Vec<crate::agent::tools::mcp::integration::McpServerSpec>,
 ) -> Vec<crate::agent::tools::mcp::integration::McpServerSpec> {
     use std::collections::HashSet;
-    let mut taken: HashSet<String> = configured.iter().map(|s| s.name.clone()).collect();
+    let mut taken = HashSet::new();
+    configured.retain(|spec| {
+        if taken.insert(spec.name.clone()) {
+            true
+        } else {
+            tracing::warn!(
+                "agent-api: skipping configured server `{}` (duplicate name)",
+                spec.name
+            );
+            false
+        }
+    });
     for s in discovered {
         if taken.contains(&s.name) {
             tracing::warn!(
@@ -1757,7 +1778,11 @@ fn compressor_from_cfg(
     if !cfg.compress_enabled {
         return None;
     }
-    let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools_for(exposure));
+    let projection_exposure = exposure
+        .clone()
+        .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
+    let tool_tokens =
+        compressor::estimate_tools_tokens(&tools.as_llm_tools_for(&projection_exposure));
     let target_tokens = cfg
         .compress_target_tokens
         .saturating_sub(tool_tokens)
@@ -1774,6 +1799,20 @@ fn compressor_from_cfg(
     };
     let comp = LlmCompressor::new(provider, &cfg.model).with_config(compressor_cfg);
     Some(Arc::new(comp))
+}
+
+fn log_tool_projection(tools: &ToolRegistry, exposure: &ToolExposureContext) {
+    let projection = tools.projection_for(exposure);
+    let diagnostics = projection.diagnostics();
+    tracing::debug!(
+        tool_schema_tokens = diagnostics.schema_tokens,
+        raw_tool_schema_tokens = diagnostics.raw_schema_tokens,
+        deferred_tool_count = diagnostics.deferred_count,
+        tool_schema_budget_tokens = diagnostics.budget_tokens,
+        catalog_generation = diagnostics.catalog_generation,
+        progressive = diagnostics.progressive,
+        "agent tool schema projection"
+    );
 }
 
 /// Build a [`Guardrails`] from the [`AgentConfig`] tool_allow / tool_deny

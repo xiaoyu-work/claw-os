@@ -6,6 +6,41 @@ use crate::agent::tools::builtin::Echo;
 
 struct Restricted;
 
+struct ExtensionEcho;
+
+#[async_trait::async_trait]
+impl crate::agent::tools::Tool for ExtensionEcho {
+    fn name(&self) -> &str {
+        "mcp_alpha_echo"
+    }
+
+    fn description(&self) -> &str {
+        "Echo through a deferred MCP tool."
+    }
+
+    fn input_schema(&self) -> serde_json::Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {"text": {"type": "string"}},
+            "required": ["text"],
+            "additionalProperties": false,
+        })
+    }
+
+    fn disclosure(&self) -> crate::agent::tools::progressive::ToolDisclosure {
+        crate::agent::tools::progressive::ToolDisclosure::extension(
+            "mcp",
+            Some("alpha".to_string()),
+            Some("echo".to_string()),
+            ["mcp".to_string()],
+        )
+    }
+
+    async fn exec(&self, input: serde_json::Value) -> crate::agent::tools::ToolResult {
+        crate::agent::tools::ToolResult::ok(input["text"].as_str().unwrap_or_default())
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::agent::tools::Tool for Restricted {
     fn name(&self) -> &str {
@@ -92,7 +127,67 @@ async fn tools_call_executes_registered_tool() {
         Some(ContentItem::Text { text }) => assert!(text.contains("hi")),
         _ => panic!("expected text content"),
     }
+    drop(client);
+    let _ = server_handle.await;
+}
 
+#[tokio::test]
+async fn large_catalog_is_listed_and_called_through_stable_bridge() {
+    let (client_t, server_t) = in_memory_pair();
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(Echo));
+    registry.register(Arc::new(ExtensionEcho));
+    let context = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    )
+    .with_tool_schema_budget_tokens(0);
+    let server = McpServer::new_with_context("cos", "0", Arc::new(registry), context);
+    let server_handle = tokio::spawn(server.serve(server_t));
+
+    let client = McpClient::new(client_t);
+    client.start().await;
+    let listing = client.list_tools().await.unwrap();
+    let names = listing
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    assert!(names.contains(&"echo"));
+    assert!(names.contains(&crate::agent::tools::progressive::TOOL_SEARCH));
+    assert!(names.contains(&crate::agent::tools::progressive::TOOL_DESCRIBE));
+    assert!(names.contains(&crate::agent::tools::progressive::TOOL_CALL));
+    assert!(!names.contains(&"mcp_alpha_echo"));
+
+    let result = client
+        .call_tool(
+            crate::agent::tools::progressive::TOOL_CALL,
+            Some(serde_json::json!({
+                "name": "mcp_alpha_echo",
+                "arguments": {"text": "hello"}
+            })),
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.is_error, None);
+    assert!(matches!(
+        result.content.first(),
+        Some(ContentItem::Text { text }) if text == "hello"
+    ));
+
+    let direct = client
+        .call_tool(
+            "mcp_alpha_echo",
+            Some(serde_json::json!({"text": "bypass"})),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        direct,
+        ClientError::Server {
+            code: ERR_INVALID_PARAMS,
+            ..
+        }
+    ));
     drop(client);
     let _ = server_handle.await;
 }

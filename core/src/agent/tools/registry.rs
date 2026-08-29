@@ -10,25 +10,138 @@
 //! session cannot populate process-global availability state for another.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use super::exposure::{ExposureDecision, ToolExposure, ToolExposureContext};
+use super::progressive::{self, CatalogEntry, ToolDisclosure};
 use super::{Tool, ToolResult};
-use crate::agent::llm;
+use crate::agent::llm::{self, ToolCall};
 use crate::agent::runtime::approval::ApprovalGate;
 
 struct ToolEntry {
     tool: Arc<dyn Tool>,
-    descriptor: llm::Tool,
+    descriptor: Arc<llm::Tool>,
     exposure: ToolExposure,
+    disclosure: Arc<ToolDisclosure>,
 }
 
-#[derive(Default)]
+#[derive(Debug)]
+struct ToolAttachmentState {
+    active: AtomicBool,
+    generation: Arc<AtomicU64>,
+}
+
+/// Shared liveness token for one dynamically attached extension server.
+///
+/// Every proxy registered from the same attachment holds a clone. Dropping
+/// the owning server handle deactivates the token and increments the registry
+/// generation, so subsequent projection and dispatch checks fail closed.
+#[derive(Clone, Debug)]
+pub(crate) struct ToolAttachment {
+    state: Arc<ToolAttachmentState>,
+}
+
+impl ToolAttachment {
+    fn new(generation: Arc<AtomicU64>) -> Self {
+        Self {
+            state: Arc::new(ToolAttachmentState {
+                active: AtomicBool::new(true),
+                generation,
+            }),
+        }
+    }
+
+    pub(crate) fn standalone() -> Self {
+        Self::new(Arc::new(AtomicU64::new(0)))
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.state.active.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn detach(&self) {
+        if self.state.active.swap(false, Ordering::AcqRel) {
+            self.state.generation.fetch_add(1, Ordering::AcqRel);
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct ToolProjectionDiagnostics {
+    pub catalog_generation: u64,
+    pub budget_tokens: u32,
+    pub raw_schema_tokens: u32,
+    pub schema_tokens: u32,
+    pub deferred_schema_tokens: u32,
+    pub permitted_count: usize,
+    pub direct_count: usize,
+    pub deferred_count: usize,
+    pub bridge_count: usize,
+    pub progressive: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct ToolProjection {
+    tools: Vec<llm::Tool>,
+    deferred: Vec<CatalogEntry>,
+    diagnostics: ToolProjectionDiagnostics,
+}
+
+impl ToolProjection {
+    pub fn tools(&self) -> &[llm::Tool] {
+        &self.tools
+    }
+
+    pub fn into_tools(self) -> Vec<llm::Tool> {
+        self.tools
+    }
+
+    pub fn diagnostics(&self) -> &ToolProjectionDiagnostics {
+        &self.diagnostics
+    }
+
+    fn contains_model_tool(&self, name: &str) -> bool {
+        self.tools.iter().any(|tool| tool.name == name)
+    }
+
+    fn deferred_entry(&self, name: &str) -> Option<&CatalogEntry> {
+        self.deferred
+            .iter()
+            .find(|entry| entry.descriptor.name == name)
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum ResolvedToolKind {
+    Registry,
+    Catalog,
+    Rejected(String),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ResolvedToolCall {
+    pub call: ToolCall,
+    pub kind: ResolvedToolKind,
+}
+
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
     approval: ApprovalGate,
+    catalog_generation: Arc<AtomicU64>,
+}
+
+impl Default for ToolRegistry {
+    fn default() -> Self {
+        Self {
+            tools: HashMap::new(),
+            approval: ApprovalGate::default(),
+            catalog_generation: Arc::new(AtomicU64::new(0)),
+        }
+    }
 }
 
 impl ToolRegistry {
@@ -38,20 +151,48 @@ impl ToolRegistry {
 
     /// Register a tool. Last write wins for duplicate names.
     pub fn register(&mut self, tool: Arc<dyn Tool>) {
-        let descriptor = llm::Tool {
+        let descriptor = Arc::new(llm::Tool {
             name: tool.name().to_string(),
             description: tool.description().to_string(),
             input_schema: tool.input_schema(),
-        };
+        });
+        if progressive::is_bridge_tool(&descriptor.name) {
+            tracing::warn!(
+                tool = %descriptor.name,
+                "refusing to register reserved progressive-disclosure bridge name"
+            );
+            return;
+        }
         let exposure = tool.exposure();
+        let mut disclosure = tool.disclosure();
+        if !disclosure.defer_eligible {
+            if let Some(extension) = exposure.extension_id() {
+                disclosure = ToolDisclosure::extension(
+                    "extension",
+                    Some(extension.to_string()),
+                    None,
+                    ["extension".to_string()],
+                );
+            }
+        }
         self.tools.insert(
             descriptor.name.clone(),
             ToolEntry {
                 tool,
                 descriptor,
                 exposure,
+                disclosure: Arc::new(disclosure),
             },
         );
+        self.catalog_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn new_attachment(&self) -> ToolAttachment {
+        ToolAttachment::new(self.catalog_generation.clone())
+    }
+
+    pub fn catalog_generation(&self) -> u64 {
+        self.catalog_generation.load(Ordering::Acquire)
     }
 
     /// Replace the active approval gate. Call once at construction time.
@@ -66,6 +207,9 @@ impl ToolRegistry {
         };
         if let super::guardrails::Decision::Deny(reason) = context.guardrails().decide(name) {
             return ExposureDecision::Hidden(reason);
+        }
+        if !entry.tool.is_available() {
+            return ExposureDecision::Hidden("tool attachment is detached".to_string());
         }
         entry.exposure.decide(context)
     }
@@ -91,7 +235,9 @@ impl ToolRegistry {
     }
 
     pub fn descriptor_unfiltered(&self, name: &str) -> Option<&llm::Tool> {
-        self.tools.get(name).map(|entry| &entry.descriptor)
+        self.tools
+            .get(name)
+            .map(|entry| entry.descriptor.as_ref())
     }
 
     /// Whether the named tool opts into concurrent dispatch with
@@ -159,14 +305,214 @@ impl ToolRegistry {
     /// Convert the current session projection to the representation passed in
     /// `ChatRequest.tools`.
     pub fn as_llm_tools_for(&self, context: &ToolExposureContext) -> Vec<llm::Tool> {
+        self.projection_for(context).into_tools()
+    }
+
+    /// Build one deterministic model projection from the current trusted
+    /// exposure facts. No authorization decision is cached across contexts.
+    pub fn projection_for(&self, context: &ToolExposureContext) -> ToolProjection {
+        let mut direct = Vec::new();
+        let mut eligible = Vec::new();
+        for (name, entry) in &self.tools {
+            if !self.exposure_decision(context, name).is_visible() {
+                continue;
+            }
+            if entry.disclosure.defer_eligible {
+                eligible.push(CatalogEntry {
+                    descriptor: entry.descriptor.clone(),
+                    disclosure: entry.disclosure.clone(),
+                });
+            } else {
+                direct.push(entry.descriptor.as_ref().clone());
+            }
+        }
+        direct.sort_by(|left, right| left.name.cmp(&right.name));
+        eligible.sort_by(|left, right| left.descriptor.name.cmp(&right.descriptor.name));
+
+        let deferred_schema_tokens = eligible.iter().fold(0u32, |total, entry| {
+            total.saturating_add(progressive::schema_tokens_for_tool(&entry.descriptor))
+        });
+        let raw_schema_tokens =
+            progressive::schema_tokens(&direct).saturating_add(deferred_schema_tokens);
+        let progressive =
+            !eligible.is_empty() && deferred_schema_tokens > context.tool_schema_budget_tokens();
+
+        let (mut tools, deferred, direct_count) = if progressive {
+            let direct_count = direct.len();
+            let bridges = progressive::bridge_tools()
+                .into_iter()
+                .filter(|tool| !context.guardrails().explicitly_denies(&tool.name))
+                .collect::<Vec<_>>();
+            direct.extend(bridges);
+            (direct, eligible, direct_count)
+        } else {
+            let direct_count = direct.len() + eligible.len();
+            direct.extend(
+                eligible
+                    .iter()
+                    .map(|entry| entry.descriptor.as_ref().clone()),
+            );
+            (direct, Vec::new(), direct_count)
+        };
+        tools.sort_by(|left, right| left.name.cmp(&right.name));
+        let bridge_count = tools
+            .iter()
+            .filter(|tool| progressive::is_bridge_tool(&tool.name))
+            .count();
+        let diagnostics = ToolProjectionDiagnostics {
+            catalog_generation: self.catalog_generation(),
+            budget_tokens: context.tool_schema_budget_tokens(),
+            raw_schema_tokens,
+            schema_tokens: progressive::schema_tokens(&tools),
+            deferred_schema_tokens: if progressive {
+                deferred_schema_tokens
+            } else {
+                0
+            },
+            permitted_count: direct_count + deferred.len(),
+            direct_count,
+            deferred_count: deferred.len(),
+            bridge_count,
+            progressive,
+        };
+        ToolProjection {
+            tools,
+            deferred,
+            diagnostics,
+        }
+    }
+
+    /// The direct per-session projection before schema-budget disclosure.
+    pub fn direct_llm_tools_for(&self, context: &ToolExposureContext) -> Vec<llm::Tool> {
         let mut out: Vec<llm::Tool> = self
             .tools
             .iter()
             .filter(|(name, _)| self.exposure_decision(context, name).is_visible())
-            .map(|(_, entry)| entry.descriptor.clone())
+            .map(|(_, entry)| entry.descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out
+    }
+
+    pub(crate) fn resolve_model_call(
+        &self,
+        context: &ToolExposureContext,
+        call: &ToolCall,
+    ) -> ResolvedToolCall {
+        if progressive::is_bridge_tool(&call.name)
+            && self.approval.config().auto_deny.contains(&call.name)
+        {
+            return ResolvedToolCall {
+                call: call.clone(),
+                kind: ResolvedToolKind::Rejected(format!(
+                    "approval denied for `{}`: tool is in auto_deny list",
+                    call.name
+                )),
+            };
+        }
+        let projection = self.projection_for(context);
+        match call.name.as_str() {
+            progressive::TOOL_SEARCH | progressive::TOOL_DESCRIBE => {
+                if projection.contains_model_tool(&call.name) {
+                    ResolvedToolCall {
+                        call: call.clone(),
+                        kind: ResolvedToolKind::Catalog,
+                    }
+                } else {
+                    ResolvedToolCall {
+                        call: call.clone(),
+                        kind: ResolvedToolKind::Rejected(format!(
+                            "tool `{}` is unavailable for the current catalog",
+                            call.name
+                        )),
+                    }
+                }
+            }
+            progressive::TOOL_CALL => {
+                let (target_name, input) = match progressive::resolve_call_envelope(&call.input) {
+                    Ok(resolved) => resolved,
+                    Err(error) => {
+                        return ResolvedToolCall {
+                            call: call.clone(),
+                            kind: ResolvedToolKind::Rejected(error),
+                        }
+                    }
+                };
+                let resolved = progressive::resolved_tool_call(call, target_name.clone(), input);
+                if !projection.contains_model_tool(progressive::TOOL_CALL) {
+                    return ResolvedToolCall {
+                        call: resolved,
+                        kind: ResolvedToolKind::Rejected(
+                            "progressive tool invocation is unavailable for the current catalog"
+                                .to_string(),
+                        ),
+                    };
+                }
+                if projection.deferred_entry(&target_name).is_none() {
+                    return ResolvedToolCall {
+                        call: resolved,
+                        kind: ResolvedToolKind::Rejected(format!(
+                            "tool `{target_name}` is not available in the current deferred catalog"
+                        )),
+                    };
+                }
+                ResolvedToolCall {
+                    call: resolved,
+                    kind: ResolvedToolKind::Registry,
+                }
+            }
+            _ if projection.deferred_entry(&call.name).is_some() => ResolvedToolCall {
+                call: call.clone(),
+                kind: ResolvedToolKind::Rejected(format!(
+                    "tool `{}` is deferred; invoke it through `{}`",
+                    call.name,
+                    progressive::TOOL_CALL
+                )),
+            },
+            _ => ResolvedToolCall {
+                call: call.clone(),
+                kind: ResolvedToolKind::Registry,
+            },
+        }
+    }
+
+    pub(crate) fn is_parallel_safe_resolved(
+        &self,
+        context: &ToolExposureContext,
+        resolved: &ResolvedToolCall,
+    ) -> bool {
+        match resolved.kind {
+            ResolvedToolKind::Catalog => true,
+            ResolvedToolKind::Registry => self.is_parallel_safe_for(context, &resolved.call.name),
+            ResolvedToolKind::Rejected(_) => false,
+        }
+    }
+
+    pub(crate) fn execute_catalog(
+        &self,
+        context: &ToolExposureContext,
+        name: &str,
+        input: &Value,
+    ) -> ToolResult {
+        let projection = self.projection_for(context);
+        if !projection.contains_model_tool(name) {
+            return ToolResult::err(format!(
+                "tool `{name}` is unavailable for the current catalog"
+            ));
+        }
+        match name {
+            progressive::TOOL_SEARCH => progressive::search_tools(
+                &projection.deferred,
+                projection.diagnostics.catalog_generation,
+                input,
+            ),
+            progressive::TOOL_DESCRIBE => progressive::describe_tool(
+                &projection.deferred,
+                projection.diagnostics.catalog_generation,
+                input,
+            ),
+            _ => ToolResult::err(format!("tool `{name}` is not a catalog operation")),
+        }
     }
 
     /// Every immutable descriptor, without session projection.
@@ -174,7 +520,7 @@ impl ToolRegistry {
         let mut out: Vec<llm::Tool> = self
             .tools
             .values()
-            .map(|entry| entry.descriptor.clone())
+            .map(|entry| entry.descriptor.as_ref().clone())
             .collect();
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out

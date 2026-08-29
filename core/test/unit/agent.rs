@@ -810,6 +810,9 @@ fn mcp_status_returns_catalogue() {
     assert!(v.get("tools_registered").is_some());
     assert!(v.get("tools_permitted").is_some());
     assert!(v.get("tools").and_then(|x| x.as_array()).is_some());
+    assert!(v.get("schema_tokens").is_some());
+    assert!(v.get("deferred_count").is_some());
+    assert!(v.get("projection").is_some());
 }
 
 #[test]
@@ -842,6 +845,18 @@ fn mcp_servers_without_probe_does_not_spawn_anything() {
     assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
     assert_eq!(v.get("probed").and_then(|x| x.as_bool()), Some(false));
     assert!(v.get("servers").and_then(|x| x.as_array()).is_some());
+}
+
+#[test]
+fn mcp_servers_probe_empty_config_returns_diagnostic_shape() {
+    let v = mcp_cmd(&["servers".into(), "--probe".into()]).expect("mcp probe ok");
+    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(v.get("probed").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(v.get("count").and_then(|x| x.as_u64()), Some(0));
+    assert_eq!(
+        v.get("servers").and_then(|x| x.as_array()).map(Vec::len),
+        Some(0)
+    );
 }
 
 #[test]
@@ -1800,6 +1815,9 @@ fn tools_cmd_llm_list_returns_serialised_tool_blob() {
         .and_then(|t| t.as_array())
         .expect("tools array");
     assert!(!arr.is_empty());
+    assert!(v.get("schema_tokens").is_some());
+    assert!(v.get("deferred_count").is_some());
+    assert!(v.get("projection").is_some());
     for entry in arr {
         assert!(entry.get("name").and_then(|n| n.as_str()).is_some());
         assert!(entry.get("input_schema").is_some());

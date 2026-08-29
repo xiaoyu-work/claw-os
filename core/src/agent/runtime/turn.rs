@@ -18,7 +18,8 @@ use crate::agent::runtime::hooks::{self, HookContext};
 use crate::agent::runtime::interrupt;
 use crate::agent::runtime::progress::{self, ProgressSink};
 use crate::agent::tools::exposure::ToolExposureContext;
-use crate::agent::tools::{registry::ToolRegistry, ToolResult};
+use crate::agent::tools::registry::{ResolvedToolCall, ResolvedToolKind, ToolRegistry};
+use crate::agent::tools::ToolResult;
 
 /// Outcome of one turn.
 #[derive(Debug)]
@@ -792,17 +793,24 @@ fn effective_tool_input(
 async fn dispatch_tool(
     registry: &ToolRegistry,
     exposure: &ToolExposureContext,
+    kind: &ResolvedToolKind,
     call: &ToolCall,
     session_id: Option<&str>,
 ) -> ToolResult {
-    registry
-        .execute(
-            exposure,
-            &call.name,
-            effective_tool_input(call, session_id, exposure),
-            "policy: dangerous_tools",
-        )
-        .await
+    match kind {
+        ResolvedToolKind::Registry => {
+            registry
+                .execute(
+                    exposure,
+                    &call.name,
+                    effective_tool_input(call, session_id, exposure),
+                    "policy: dangerous_tools",
+                )
+                .await
+        }
+        ResolvedToolKind::Catalog => registry.execute_catalog(exposure, &call.name, &call.input),
+        ResolvedToolKind::Rejected(reason) => ToolResult::err(reason.clone()),
+    }
 }
 
 /// Outcome of a single dispatch: the (possibly-overridden) call, the
@@ -865,13 +873,13 @@ async fn dispatch_one(
     tools: &ToolRegistry,
     exposure: &ToolExposureContext,
     hook_ctx: Option<&HookContext>,
-    call: &ToolCall,
+    resolved: &ResolvedToolCall,
     session_id: Option<&str>,
     progress: &dyn ProgressSink,
     interrupt: Option<&interrupt::Handle>,
 ) -> Result<DispatchOutcome, super::loop_::AgentError> {
     check_interrupted(interrupt)?;
-    let (effective_call, decision_error) = apply_pre_hook(hook_ctx, call);
+    let (effective_call, decision_error) = apply_pre_hook(hook_ctx, &resolved.call);
 
     wait_progress_ready(progress, interrupt).await?;
     progress.on_tool_start(
@@ -887,7 +895,7 @@ async fn dispatch_one(
     } else {
         await_interruptible(
             interrupt,
-            dispatch_tool(tools, exposure, &effective_call, session_id),
+            dispatch_tool(tools, exposure, &resolved.kind, &effective_call, session_id),
         )
         .await?
     };
@@ -936,12 +944,16 @@ async fn dispatch_calls(
     interrupt: Option<&interrupt::Handle>,
 ) -> Result<(Vec<ContentBlock>, Option<String>), super::loop_::AgentError> {
     check_interrupted(interrupt)?;
+    let resolved = tool_calls
+        .iter()
+        .map(|call| tools.resolve_model_call(exposure, call))
+        .collect::<Vec<_>>();
     // Partition into parallel-safe vs serial groups, preserving the
     // original index so we can interleave the results back in order.
     let mut parallel: Vec<usize> = Vec::new();
     let mut serial: Vec<usize> = Vec::new();
-    for (i, call) in tool_calls.iter().enumerate() {
-        if tools.is_parallel_safe_for(exposure, &call.name) {
+    for (i, call) in resolved.iter().enumerate() {
+        if tools.is_parallel_safe_resolved(exposure, call) {
             parallel.push(i);
         } else {
             serial.push(i);
@@ -957,7 +969,7 @@ async fn dispatch_calls(
     // task; no `spawn` is needed and no `Send` bound creeps in.
     if !parallel.is_empty() {
         let futs = parallel.iter().map(|&i| {
-            let call = &tool_calls[i];
+            let call = &resolved[i];
             async move {
                 let outcome = dispatch_one(
                     tools, exposure, hook_ctx, call, session_id, progress, interrupt,
@@ -983,7 +995,7 @@ async fn dispatch_calls(
             tools,
             exposure,
             hook_ctx,
-            &tool_calls[i],
+            &resolved[i],
             session_id,
             progress,
             interrupt,

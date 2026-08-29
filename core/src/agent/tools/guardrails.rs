@@ -149,6 +149,12 @@ impl Guardrails {
     pub fn permits(&self, name: &str) -> bool {
         self.decide(name).is_allow()
     }
+
+    /// Synthetic transport tools may be needed to reach entries that already
+    /// passed the allow-list. An explicit deny still disables that transport.
+    pub fn explicitly_denies(&self, name: &str) -> bool {
+        self.deny.contains(name)
+    }
 }
 
 /// Filter the LLM-facing tool list emitted by `registry` to only the

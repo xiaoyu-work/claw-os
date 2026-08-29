@@ -97,3 +97,34 @@ fn unrelated_tool_use_does_not_force_evidence() {
     assert!(!report.required);
     assert_eq!(report.sources.len(), 1);
 }
+
+#[test]
+fn progressive_call_records_underlying_tool_identity() {
+    let messages = vec![
+        Message {
+            role: Role::Assistant,
+            content: vec![ContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: crate::agent::tools::progressive::TOOL_CALL.to_string(),
+                input: json!({
+                    "name": "mcp_alpha_status",
+                    "arguments": {"detail": true},
+                }),
+            }],
+        },
+        Message {
+            role: Role::User,
+            content: vec![ContentBlock::ToolResult {
+                tool_use_id: "call_1".to_string(),
+                is_error: false,
+                content: "ok".to_string(),
+            }],
+        },
+    ];
+    let report = verify_answer(
+        "what is the current status?",
+        "It is healthy. [evidence:call_1 confidence=0.9]",
+        &messages,
+    );
+    assert_eq!(report.sources[0].tool_name, "mcp_alpha_status");
+}
