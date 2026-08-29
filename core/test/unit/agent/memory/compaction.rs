@@ -95,6 +95,76 @@ fn completed_source_range_is_not_started_again() {
 }
 
 #[test]
+fn first_compaction_cannot_skip_earlier_replayable_rows() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 5);
+    let error = db
+        .begin_compaction("session", spec(&ids[1..3], ids[4]))
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("first compaction must start at earliest replayable row"));
+    assert!(db.compactions_for_session("session").unwrap().is_empty());
+}
+
+#[test]
+fn first_compaction_cannot_claim_a_predecessor() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 4);
+    let mut invalid = spec(&ids[..2], ids[2]);
+    invalid.previous_compaction_id = Some(42);
+    let error = db.begin_compaction("session", invalid).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("first compaction cannot reference a predecessor"));
+}
+
+#[test]
+fn successor_must_extend_and_reference_the_latest_valid_predecessor() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 6);
+    let first = match db
+        .begin_compaction("session", spec(&ids[..2], ids[2]))
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected first attempt, got {other:?}"),
+    };
+    let first = first.complete("[CONTEXT SUMMARY]\n\nfirst").unwrap();
+
+    let missing_predecessor = spec(&ids[..4], ids[4]);
+    let error = db
+        .begin_compaction("session", missing_predecessor)
+        .unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("must reference the latest valid predecessor"));
+
+    let mut shifted_start = spec(&ids[1..4], ids[4]);
+    shifted_start.previous_compaction_id = Some(first.record.id);
+    let error = db.begin_compaction("session", shifted_start).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("must retain predecessor source start"));
+
+    let mut valid = spec(&ids[..4], ids[4]);
+    valid.previous_compaction_id = Some(first.record.id);
+    let successor = match db.begin_compaction("session", valid).unwrap() {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected successor attempt, got {other:?}"),
+    };
+    let successor = successor
+        .complete("[CONTEXT SUMMARY]\n\nsuccessor")
+        .unwrap();
+    assert_eq!(
+        successor.record.previous_compaction_id,
+        Some(first.record.id)
+    );
+    assert_eq!(successor.record.source_start_id, ids[0]);
+    assert_eq!(successor.record.source_end_id, ids[3]);
+}
+
+#[test]
 fn compaction_retains_the_exact_frozen_prompt_blob_after_upgrade() {
     let db = db();
     let ids = seed_rows(&db, "session", 4);

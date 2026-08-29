@@ -331,6 +331,49 @@ impl MemoryDb {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         close_interrupted_locked(&tx, session_id)?;
 
+        let earliest_replayable: Option<i64> = tx.query_row(
+            "SELECT MIN(id) FROM messages WHERE session_id = ? AND role <> ?",
+            params![session_id, INJECTED_ROLE],
+            |row| row.get(0),
+        )?;
+        let earliest_replayable = earliest_replayable.ok_or_else(|| {
+            MemoryError::Integrity(
+                "cannot compact a session without replayable message rows".to_string(),
+            )
+        })?;
+        let (latest, _) = latest_valid_locked(&tx, session_id)?;
+        match latest.as_ref() {
+            None => {
+                if spec.previous_compaction_id.is_some() {
+                    return Err(MemoryError::Integrity(
+                        "first compaction cannot reference a predecessor".to_string(),
+                    ));
+                }
+                if spec.source_start_id != earliest_replayable {
+                    return Err(MemoryError::Integrity(format!(
+                        "first compaction must start at earliest replayable row {earliest_replayable}"
+                    )));
+                }
+            }
+            Some(previous) => {
+                if spec.source_end_id <= previous.record.source_end_id {
+                    return Ok(BeginCompaction::AlreadyCovered);
+                }
+                if spec.previous_compaction_id != Some(previous.record.id) {
+                    return Err(MemoryError::Integrity(
+                        "successor compaction must reference the latest valid predecessor"
+                            .to_string(),
+                    ));
+                }
+                if spec.source_start_id != previous.record.source_start_id {
+                    return Err(MemoryError::Integrity(format!(
+                        "successor compaction must retain predecessor source start {}",
+                        previous.record.source_start_id
+                    )));
+                }
+            }
+        }
+
         let rows =
             source_rows_for_range(&tx, session_id, spec.source_start_id, spec.source_end_id)?;
         if rows.len() != spec.source_count
@@ -348,21 +391,6 @@ impl MemoryDb {
             spec.protected_tail_start_id,
             spec.protected_user_message_id,
         )?;
-
-        let (latest, _) = latest_valid_locked(&tx, session_id)?;
-        if latest
-            .as_ref()
-            .is_some_and(|summary| summary.record.source_end_id >= spec.source_end_id)
-        {
-            return Ok(BeginCompaction::AlreadyCovered);
-        }
-        if let Some(previous_id) = spec.previous_compaction_id {
-            if latest.as_ref().map(|summary| summary.record.id) != Some(previous_id) {
-                return Err(MemoryError::Integrity(
-                    "compaction predecessor is not the latest valid summary".to_string(),
-                ));
-            }
-        }
 
         let source_digest = digest_rows(&rows);
         let source_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
