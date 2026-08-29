@@ -1384,7 +1384,7 @@ fn validate_static_native_elf(
 fn validate_native_invocation(
     executable: &Path,
     args: &[String],
-    workdir: &Path,
+    _workdir: &Path,
 ) -> Result<(), String> {
     let name = executable
         .file_name()
@@ -1454,25 +1454,6 @@ fn validate_native_invocation(
                 executable,
                 "argument names a script or runtime module",
             ));
-        }
-        let resolved = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            workdir.join(path)
-        };
-        if resolved.exists() {
-            let metadata = fs::symlink_metadata(&resolved).map_err(|error| {
-                format!(
-                    "inspect possible process code input {}: {error}",
-                    resolved.display()
-                )
-            })?;
-            if metadata.file_type().is_symlink() || metadata.is_file() || metadata.is_dir() {
-                return Err(interpreter_refusal(
-                    executable,
-                    "existing filesystem arguments are not pinned",
-                ));
-            }
         }
     }
     Ok(())
@@ -1759,6 +1740,7 @@ fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<P
 #[allow(clippy::too_many_arguments)]
 fn spawn_operation_digest(
     allowlist: &proc_spawn_allowlist::Authorization,
+    outputs: &[proc_spawn_allowlist::OutputBinding],
     executable: &SpawnResourceBinding,
     argv: &[String],
     requested_session: Option<&str>,
@@ -1774,6 +1756,7 @@ fn spawn_operation_digest(
 ) -> Result<String, String> {
     let canonical = serde_json::to_vec(&json!({
         "allowlist": allowlist,
+        "outputs": outputs,
         "executable": executable,
         "argv": argv,
         "requested_session": requested_session,
@@ -2129,10 +2112,15 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         content_sha256: None,
     };
     #[cfg(target_os = "linux")]
-    let allowlist =
-        proc_spawn_allowlist::authorize(&executable_binding, &command_args[1..], &workdir_binding)?;
+    let allowed = proc_spawn_allowlist::authorize(
+        &executable_binding,
+        &command_args[1..],
+        &pinned_workdir,
+        &execution_identity,
+    )?;
     let operation_digest = spawn_operation_digest(
-        &allowlist,
+        &allowed.authorization,
+        &allowed.output_bindings,
         &executable_binding,
         &command_args[1..],
         requested_session.as_deref(),
@@ -2205,7 +2193,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         use std::os::unix::process::CommandExt;
         cmd.arg0(&executable);
     }
-    cmd.args(&command_args[1..])
+    cmd.args(&allowed.argv)
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
@@ -2234,6 +2222,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         });
         let euid = libc::geteuid() as u32;
         let fd_limit = spawn_fd_limit();
+        let output_fds = allowed.output_fds();
         cmd.pre_exec(move || {
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
@@ -2262,6 +2251,14 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             if fd_flags < 0 || libc::fcntl(exec_fd, libc::F_SETFD, fd_flags & !libc::FD_CLOEXEC) < 0
             {
                 return Err(std::io::Error::last_os_error());
+            }
+            for output_fd in &output_fds {
+                let flags = libc::fcntl(*output_fd, libc::F_GETFD);
+                if flags < 0
+                    || libc::fcntl(*output_fd, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                {
+                    return Err(std::io::Error::last_os_error());
+                }
             }
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());

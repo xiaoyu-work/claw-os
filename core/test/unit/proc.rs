@@ -410,7 +410,9 @@ fn approve_spawn_permissions(args: &[String]) -> String {
 fn wait_for_spawn_result(path: &std::path::Path) -> String {
     for _ in 0..200 {
         if let Ok(value) = std::fs::read_to_string(path) {
-            return value;
+            if !value.is_empty() {
+                return value;
+            }
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
@@ -554,7 +556,7 @@ fn mutable_package_directory_argument_is_rejected_even_if_schema_lists_it() {
         package.to_string_lossy().into_owned(),
     ])
     .unwrap_err();
-    assert!(error.contains("filesystem arguments"), "{error}");
+    assert!(error.contains("path arguments"), "{error}");
     assert!(error.contains("cos_sandbox"), "{error}");
     assert!(crate::approvals::list_pending().is_empty());
 }
@@ -645,6 +647,273 @@ fn user_owned_or_unknown_static_binary_is_not_unsandboxed_authority() {
     assert!(error.contains("cos_sandbox"), "{error}");
     assert!(crate::approvals::list_pending().is_empty());
     assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+fn output_test_args(
+    executable: &std::path::Path,
+    workdir: &std::path::Path,
+    output: &std::path::Path,
+) -> Vec<String> {
+    vec![
+        "--workdir".to_string(),
+        workdir.to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+        output.to_string_lossy().into_owned(),
+        "trusted".to_string(),
+    ]
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn fifo_output_is_rejected_without_opening_an_exfiltration_channel() {
+    use std::os::unix::ffi::OsStrExt;
+
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("fifo-writer");
+    let output_parent = temp.path().join("secure-output");
+    let output = output_parent.join("exfiltration-fifo");
+    std::fs::create_dir(&output_parent).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let encoded = std::ffi::CString::new(output.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(encoded.as_ptr(), 0o600) }, 0);
+    let argv = vec![output.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist =
+        install_test_proc_allowlist("fifo-writer", &executable, &argv, &[0], temp.path());
+
+    let error = cmd_spawn(&output_test_args(&executable, temp.path(), &output)).unwrap_err();
+    assert!(error.contains("not a regular file"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn socket_and_device_outputs_are_rejected_as_non_regular() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("special-writer");
+    let output_parent = temp.path().join("secure-output");
+    let socket = output_parent.join("output.sock");
+    std::fs::create_dir(&output_parent).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let _listener = std::os::unix::net::UnixListener::bind(&socket).unwrap();
+
+    let socket_argv = vec![socket.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _socket_allowlist = install_test_proc_allowlist(
+        "socket-writer",
+        &executable,
+        &socket_argv,
+        &[0],
+        temp.path(),
+    );
+    let socket_error = cmd_spawn(&output_test_args(&executable, temp.path(), &socket)).unwrap_err();
+    assert!(
+        socket_error.contains("not a regular file"),
+        "{socket_error}"
+    );
+    assert!(crate::approvals::list_pending().is_empty());
+    drop(_socket_allowlist);
+
+    let device = std::path::Path::new("/dev/null");
+    let device_argv = vec![device.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _device_allowlist = install_test_proc_allowlist(
+        "device-writer",
+        &executable,
+        &device_argv,
+        &[0],
+        temp.path(),
+    );
+    let device_error = cmd_spawn(&output_test_args(&executable, temp.path(), device)).unwrap_err();
+    assert!(
+        device_error.contains("not a regular file"),
+        "{device_error}"
+    );
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn attacker_writable_output_parent_is_rejected_before_creation() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("tmp-writer");
+    let output =
+        std::path::PathBuf::from(format!("/tmp/cos-output-{}", uuid::Uuid::new_v4().simple()));
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![output.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist =
+        install_test_proc_allowlist("tmp-writer", &executable, &argv, &[0], temp.path());
+
+    let error = cmd_spawn(&output_test_args(&executable, temp.path(), &output)).unwrap_err();
+    assert!(error.contains("non-attacker-writable"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(!output.exists());
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn output_inode_replacement_changes_the_approval_digest() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("identity-writer");
+    let output_parent = temp.path().join("secure-output");
+    let output = output_parent.join("result");
+    let old_output = output_parent.join("old-result");
+    std::fs::create_dir(&output_parent).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![output.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist =
+        install_test_proc_allowlist("identity-writer", &executable, &argv, &[0], temp.path());
+    let args = output_test_args(&executable, temp.path(), &output);
+
+    crate::approvals::LocalApprovalInvocation::new("web:output-identity:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            cmd_spawn(&args).expect_err("proc.spawn must require approval");
+            let original = crate::approvals::list_pending()
+                .into_iter()
+                .find(|request| request.verb == Verb::PROC_SPAWN.as_str())
+                .unwrap();
+            let original_digest = original.operation_digest.clone().unwrap();
+            crate::approvals::approve(
+                &original.id,
+                crate::approvals::GrantDuration::Session,
+                None,
+                None,
+            )
+            .unwrap();
+            std::fs::rename(&output, &old_output).unwrap();
+            std::fs::write(&output, "").unwrap();
+            std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600)).unwrap();
+
+            cmd_spawn(&args).expect_err("replacement output needs fresh consent");
+            let replacement = crate::approvals::list_pending()
+                .into_iter()
+                .find(|request| request.verb == Verb::PROC_SPAWN.as_str())
+                .unwrap();
+            assert_ne!(
+                replacement.operation_digest.as_deref(),
+                Some(original_digest.as_str())
+            );
+        });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn symlink_swap_after_output_pinning_writes_only_the_opened_fd() {
+    use std::os::unix::fs::symlink;
+
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("symlink-output-writer");
+    let output_parent = temp.path().join("secure-output");
+    let output = output_parent.join("result");
+    let pinned_output = output_parent.join("pinned-result");
+    let attacker = output_parent.join("attacker-target");
+    std::fs::create_dir(&output_parent).unwrap();
+    std::fs::write(&attacker, "unchanged").unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![output.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist = install_test_proc_allowlist(
+        "symlink-output-writer",
+        &executable,
+        &argv,
+        &[0],
+        temp.path(),
+    );
+    let args = output_test_args(&executable, temp.path(), &output);
+
+    crate::approvals::LocalApprovalInvocation::new("web:output-symlink:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            approve_spawn_permissions(&args);
+            let output_for_hook = output.clone();
+            let pinned_for_hook = pinned_output.clone();
+            let attacker_for_hook = attacker.clone();
+            set_pre_spawn_test_hook(move || {
+                std::fs::rename(&output_for_hook, &pinned_for_hook).unwrap();
+                symlink(attacker_for_hook, &output_for_hook).unwrap();
+            });
+            cmd_spawn(&args).expect("the pinned output fd may be written");
+            assert_eq!(wait_for_spawn_result(&pinned_output), "trusted");
+            assert_eq!(std::fs::read_to_string(&attacker).unwrap(), "unchanged");
+            assert!(std::fs::symlink_metadata(&output)
+                .unwrap()
+                .file_type()
+                .is_symlink());
+        });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn secure_private_output_is_created_and_passed_by_descriptor() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("secure-output-writer");
+    let output_parent = temp.path().join("secure-output");
+    let output = output_parent.join("result");
+    std::fs::create_dir(&output_parent).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![output.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist = install_test_proc_allowlist(
+        "secure-output-writer",
+        &executable,
+        &argv,
+        &[0],
+        temp.path(),
+    );
+    let args = output_test_args(&executable, temp.path(), &output);
+
+    crate::approvals::LocalApprovalInvocation::new("web:secure-output:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            approve_spawn_permissions(&args);
+            cmd_spawn(&args).expect("secure output may be written");
+            assert_eq!(wait_for_spawn_result(&output), "trusted");
+            assert!(std::fs::metadata(&output).unwrap().is_file());
+        });
 }
 
 #[cfg(target_os = "linux")]
@@ -895,7 +1164,7 @@ fn executable_replacement_while_approval_is_pending_invalidates_the_decision() {
             let error = cmd_spawn(&args).expect_err("the replacement inode must fail closed");
             assert!(error.contains("allowlisted hash"), "{error}");
             assert!(error.contains("cos_sandbox"), "{error}");
-            assert!(!marker.exists(), "the replacement executable must not run");
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "");
             assert!(!approved_digest.is_empty());
         });
 }
@@ -974,7 +1243,7 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
             let error = cmd_spawn(&args).expect_err("changed bytes must fail closed");
             assert!(error.contains("allowlisted hash"), "{error}");
             assert!(error.contains("cos_sandbox"), "{error}");
-            assert!(!marker.exists(), "the rewritten executable must not run");
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "");
             assert!(!approved_digest.is_empty());
         });
 }
@@ -1045,7 +1314,7 @@ fn shebang_swap_while_approval_is_pending_cannot_reuse_native_consent() {
             let error = cmd_spawn(&args).unwrap_err();
             assert!(error.contains("shebang script"), "{error}");
             assert!(error.contains("cos_sandbox"), "{error}");
-            assert!(!marker.exists());
+            assert_eq!(std::fs::read_to_string(&marker).unwrap(), "");
         });
 }
 

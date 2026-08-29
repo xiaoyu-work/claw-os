@@ -337,6 +337,14 @@ executables, mutable package or project directories, dynamically linked
 executables, and file arguments are rejected before consent and routed to
 `cos_sandbox`. Non-Linux process spawn fails closed rather than using a weaker
 pathname-based fallback.
+
+Allowlisted outputs are descriptor capabilities rather than path capabilities.
+`openat2` pins a root- or execution-user-owned, non-group/world-writable parent
+with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, then exclusively creates the
+output with `O_NOFOLLOW` or pins an explicitly permitted existing single-link
+regular file. FIFO, socket, device, directory, symlink, and attacker-writable
+parents are rejected. Parent/output identities and descriptor roles are bound
+into consent, and the child receives only `/proc/self/fd/<fd>` for each output.
 `cos_sysinfo` additionally requires
 `secret.read:name:environment` before honoring `env --include-secrets`.
 

@@ -69,7 +69,7 @@ binds:
 - a canonical root-owned executable path and exact SHA-256;
 - one exact argv vector;
 - one canonical root-owned, non-writable working directory; and
-- the argv indices that are output paths.
+- the argv indices that are descriptor-backed outputs.
 
 All remaining argv elements are scalar literals: absolute paths, path
 separators, and existing filesystem objects are refused. Directory and
@@ -79,6 +79,19 @@ enter the operation digest, so changing the allowlist also invalidates prior
 consent. A missing, malformed, empty, stale, or non-root-owned manifest grants
 nothing. Proc children receive a minimal deterministic environment rather than
 language/plugin loader variables.
+
+An output argument never reaches the child as its original pathname. The
+parent pins its directory and requires it to be owned by root or the execution
+user without group/other write access. It opens the leaf with Linux `openat2`
+using `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` and
+`O_NOFOLLOW | O_CREAT | O_EXCL`; an explicitly listed existing target is
+opened through a pinned descriptor only when it is a single-link regular file
+with safe ownership and mode. FIFOs, sockets, devices, directories, symlinks,
+and `/tmp`-style writable parents are refused. The output and parent
+device/inode identities plus a stable descriptor role enter the operation
+digest. The child receives `/proc/self/fd/<fd>`, and only those output fds and
+the sealed executable fd survive exec. A newly reserved empty output may
+remain when consent is still pending.
 
 Model output cannot approve a request. The worker channel has no decision
 route, and a request id is metadata rather than authority. Broker replies echo

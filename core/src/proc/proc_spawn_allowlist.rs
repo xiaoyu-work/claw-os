@@ -8,11 +8,16 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::io::Read;
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use super::SpawnResourceBinding;
+use super::{
+    PinnedSpawnDirectory, SpawnExecutionIdentity, SpawnFileIdentity, SpawnResourceBinding,
+};
 
 const ALLOWLIST_VERSION: u32 = 1;
 const ALLOWLIST_PATH: &str = "/etc/cos/proc-spawn-allowlist.json";
@@ -48,6 +53,47 @@ pub(super) struct Authorization {
     policy_sha256: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub(super) struct OutputBinding {
+    arg_index: usize,
+    descriptor_role: String,
+    path: String,
+    parent: SpawnFileIdentity,
+    output: OutputIdentity,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct OutputIdentity {
+    device: u64,
+    inode: u64,
+    mode: u32,
+    owner_uid: u32,
+    owner_gid: u32,
+    size: u64,
+    links: u64,
+}
+
+pub(super) struct PinnedOutput {
+    _parent: fs::File,
+    file: fs::File,
+}
+
+pub(super) struct AuthorizedInvocation {
+    pub authorization: Authorization,
+    pub argv: Vec<String>,
+    pub output_bindings: Vec<OutputBinding>,
+    pub outputs: Vec<PinnedOutput>,
+}
+
+impl AuthorizedInvocation {
+    pub fn output_fds(&self) -> Vec<RawFd> {
+        self.outputs
+            .iter()
+            .map(|output| output.file.as_raw_fd())
+            .collect()
+    }
+}
+
 struct LoadedAllowlist {
     policy: Allowlist,
     sha256: String,
@@ -56,11 +102,13 @@ struct LoadedAllowlist {
 pub(super) fn authorize(
     executable: &SpawnResourceBinding,
     args: &[String],
-    workdir: &SpawnResourceBinding,
-) -> Result<Authorization, String> {
+    workdir: &PinnedSpawnDirectory,
+    execution: &SpawnExecutionIdentity,
+) -> Result<AuthorizedInvocation, String> {
     let trusted_uid = trusted_owner_uid();
+    let workdir_binding = workdir.binding();
     validate_immutable_resource(executable, trusted_uid, "executable")?;
-    validate_immutable_resource(workdir, trusted_uid, "working directory")?;
+    validate_immutable_resource(&workdir_binding, trusted_uid, "working directory")?;
     let loaded = load(trusted_uid)?;
     validate_policy(&loaded.policy)?;
 
@@ -87,18 +135,23 @@ pub(super) fn authorize(
     }
     let Some(command) = hash_matches
         .into_iter()
-        .find(|command| command.argv_exact == args && command.workdir == workdir.path)
+        .find(|command| command.argv_exact == args && command.workdir == workdir_binding.path)
     else {
         return Err(refusal(
             "argv or working directory does not match the command-specific schema",
         ));
     };
-    validate_argument_schema(command, workdir)?;
+    let (argv, outputs, output_bindings) = pin_outputs(command, workdir, execution)?;
 
-    Ok(Authorization {
-        version: loaded.policy.version,
-        command_id: command.id.clone(),
-        policy_sha256: loaded.sha256,
+    Ok(AuthorizedInvocation {
+        authorization: Authorization {
+            version: loaded.policy.version,
+            command_id: command.id.clone(),
+            policy_sha256: loaded.sha256,
+        },
+        argv,
+        output_bindings,
+        outputs,
     })
 }
 
@@ -196,51 +249,241 @@ fn validate_policy(policy: &Allowlist) -> Result<(), String> {
     Ok(())
 }
 
-fn validate_argument_schema(
+fn pin_outputs(
     command: &Command,
-    workdir: &SpawnResourceBinding,
-) -> Result<(), String> {
+    workdir: &PinnedSpawnDirectory,
+    execution: &SpawnExecutionIdentity,
+) -> Result<(Vec<String>, Vec<PinnedOutput>, Vec<OutputBinding>), String> {
     let output_args: BTreeSet<usize> = command.output_args.iter().copied().collect();
+    let mut argv = command.argv_exact.clone();
+    let mut outputs = Vec::with_capacity(output_args.len());
+    let mut bindings = Vec::with_capacity(output_args.len());
     for (index, argument) in command.argv_exact.iter().enumerate() {
         if output_args.contains(&index) {
-            validate_output_path(argument, &workdir.path)?;
+            let (output, binding) = pin_output(index, argument, workdir, execution)?;
+            argv[index] = format!("/proc/self/fd/{}", output.file.as_raw_fd());
+            outputs.push(output);
+            bindings.push(binding);
         } else {
             validate_scalar_argument(argument, &workdir.path)?;
         }
     }
-    Ok(())
+    Ok((argv, outputs, bindings))
 }
 
-fn validate_output_path(argument: &str, workdir: &str) -> Result<(), String> {
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+fn openat2(dirfd: RawFd, path: &Path, flags: i32, mode: u32) -> std::io::Result<fs::File> {
+    const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+    const RESOLVE_BENEATH: u64 = 0x08;
+
+    let encoded = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let how = OpenHow {
+        flags: flags as u64,
+        mode: mode as u64,
+        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS,
+    };
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            dirfd,
+            encoded.as_ptr(),
+            &how,
+            std::mem::size_of::<OpenHow>(),
+        ) as i32
+    };
+    if fd < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+fn open_root() -> Result<fs::File, String> {
+    let encoded = std::ffi::CString::new("/").expect("static path");
+    let fd = unsafe {
+        libc::open(
+            encoded.as_ptr(),
+            libc::O_PATH | libc::O_DIRECTORY | libc::O_CLOEXEC,
+        )
+    };
+    if fd < 0 {
+        return Err(refusal(&format!(
+            "open filesystem root for output: {}",
+            std::io::Error::last_os_error()
+        )));
+    }
+    Ok(unsafe { fs::File::from_raw_fd(fd) })
+}
+
+fn pin_output(
+    arg_index: usize,
+    argument: &str,
+    workdir: &PinnedSpawnDirectory,
+    execution: &SpawnExecutionIdentity,
+) -> Result<(PinnedOutput, OutputBinding), String> {
     if argument.is_empty() || argument.as_bytes().contains(&0) {
         return Err(refusal("allowlisted output path is invalid"));
     }
     let path = Path::new(argument);
-    let resolved = if path.is_absolute() {
-        path.to_path_buf()
+    let root;
+    let (base_fd, relative) = if path.is_absolute() {
+        root = Some(open_root()?);
+        (
+            root.as_ref().expect("root is set").as_raw_fd(),
+            path.strip_prefix("/").unwrap_or(path),
+        )
     } else {
-        Path::new(workdir).join(path)
+        root = None;
+        (workdir.descriptor.as_raw_fd(), path)
     };
-    if let Ok(metadata) = fs::symlink_metadata(&resolved) {
-        if metadata.file_type().is_symlink() || metadata.is_dir() {
-            return Err(refusal(
-                "allowlisted output path resolves to a symlink or directory",
-            ));
-        }
-    }
-    let parent = resolved
+    let leaf = relative
+        .file_name()
+        .filter(|leaf| *leaf != "." && *leaf != "..")
+        .ok_or_else(|| refusal("allowlisted output path has no file name"))?;
+    let parent_relative = relative
         .parent()
-        .ok_or_else(|| refusal("allowlisted output path has no parent"))?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|error| refusal(&format!("canonicalize output parent: {error}")))?;
-    if !canonical_parent.is_dir() {
-        return Err(refusal("allowlisted output parent is not a directory"));
+        .filter(|path| !path.as_os_str().is_empty());
+    let parent = openat2(
+        base_fd,
+        parent_relative.unwrap_or_else(|| Path::new(".")),
+        libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+    )
+    .map_err(|error| refusal(&format!("pin output parent: {error}")))?;
+    let parent_metadata = parent
+        .metadata()
+        .map_err(|error| refusal(&format!("inspect output parent: {error}")))?;
+    let parent_identity = spawn_identity(&parent_metadata);
+    if !parent_metadata.is_dir()
+        || (parent_identity.owner_uid != 0 && parent_identity.owner_uid != execution.uid)
+        || parent_identity.mode & 0o022 != 0
+    {
+        return Err(refusal(
+            "output parent is not a trusted non-attacker-writable directory",
+        ));
+    }
+
+    let leaf_path = Path::new(leaf);
+    let create_flags =
+        libc::O_WRONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW | libc::O_CREAT | libc::O_EXCL;
+    let file = match openat2(parent.as_raw_fd(), leaf_path, create_flags, 0o600) {
+        Ok(file) => file,
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {
+            open_existing_regular(parent.as_raw_fd(), leaf_path, execution)?
+        }
+        Err(error) => {
+            return Err(refusal(&format!("reserve allowlisted output: {error}")));
+        }
+    };
+    let metadata = file
+        .metadata()
+        .map_err(|error| refusal(&format!("inspect reserved output: {error}")))?;
+    let output_identity = output_identity(&metadata);
+    validate_output_identity(&metadata, &output_identity, execution)?;
+
+    let pinned_parent_path = fs::read_link(format!("/proc/self/fd/{}", parent.as_raw_fd()))
+        .map_err(|error| refusal(&format!("resolve pinned output parent: {error}")))?;
+    let pinned_path = pinned_parent_path.join(leaf);
+    let binding = OutputBinding {
+        arg_index,
+        descriptor_role: format!("output:{arg_index}"),
+        path: pinned_path.to_string_lossy().into_owned(),
+        parent: parent_identity,
+        output: output_identity,
+    };
+    drop(root);
+    Ok((
+        PinnedOutput {
+            _parent: parent,
+            file,
+        },
+        binding,
+    ))
+}
+
+fn open_existing_regular(
+    parent_fd: RawFd,
+    leaf: &Path,
+    execution: &SpawnExecutionIdentity,
+) -> Result<fs::File, String> {
+    let inspection = openat2(
+        parent_fd,
+        leaf,
+        libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        0,
+    )
+    .map_err(|error| refusal(&format!("pin existing output: {error}")))?;
+    let metadata = inspection
+        .metadata()
+        .map_err(|error| refusal(&format!("inspect existing output: {error}")))?;
+    let identity = output_identity(&metadata);
+    validate_output_identity(&metadata, &identity, execution)?;
+
+    let descriptor_path = format!("/proc/self/fd/{}", inspection.as_raw_fd());
+    let file = fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_CLOEXEC)
+        .open(&descriptor_path)
+        .map_err(|error| refusal(&format!("open pinned existing output: {error}")))?;
+    let opened = output_identity(
+        &file
+            .metadata()
+            .map_err(|error| refusal(&format!("reinspect existing output: {error}")))?,
+    );
+    if opened != identity {
+        return Err(refusal("existing output changed while it was pinned"));
+    }
+    Ok(file)
+}
+
+fn validate_output_identity(
+    metadata: &fs::Metadata,
+    identity: &OutputIdentity,
+    execution: &SpawnExecutionIdentity,
+) -> Result<(), String> {
+    if !metadata.is_file() {
+        return Err(refusal("existing output is not a regular file"));
+    }
+    if identity.owner_uid != 0 && identity.owner_uid != execution.uid {
+        return Err(refusal("existing output is owned by an untrusted user"));
+    }
+    if identity.mode & 0o022 != 0 || identity.links != 1 {
+        return Err(refusal(
+            "existing output is writable by another principal or has aliases",
+        ));
     }
     Ok(())
 }
 
-fn validate_scalar_argument(argument: &str, workdir: &str) -> Result<(), String> {
+fn spawn_identity(metadata: &fs::Metadata) -> SpawnFileIdentity {
+    SpawnFileIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        owner_uid: metadata.uid(),
+        owner_gid: metadata.gid(),
+    }
+}
+
+fn output_identity(metadata: &fs::Metadata) -> OutputIdentity {
+    OutputIdentity {
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        mode: metadata.mode(),
+        owner_uid: metadata.uid(),
+        owner_gid: metadata.gid(),
+        size: metadata.len(),
+        links: metadata.nlink(),
+    }
+}
+
+fn validate_scalar_argument(argument: &str, workdir: &Path) -> Result<(), String> {
     if argument.is_empty() || argument.as_bytes().contains(&0) {
         return Err(refusal("allowlisted scalar argument is invalid"));
     }
@@ -254,7 +497,7 @@ fn validate_scalar_argument(argument: &str, workdir: &str) -> Result<(), String>
             "non-output path arguments are not supported by the unsandboxed schema",
         ));
     }
-    if fs::symlink_metadata(Path::new(workdir).join(path)).is_ok() {
+    if fs::symlink_metadata(workdir.join(path)).is_ok() {
         return Err(refusal(
             "existing filesystem arguments are not supported by the unsandboxed schema",
         ));
