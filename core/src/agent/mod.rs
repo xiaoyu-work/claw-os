@@ -3278,6 +3278,7 @@ async fn chat_cmd_async(
         crate::agent::tools::exposure::ExecutionHost::Direct,
         runtime::loop_::guardrails_from_cfg(cfg),
     )?;
+    exposure.set_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
 
     // Build the registry once. MCP servers attach the same way as
     // `live`/`ask`, so the model has the full toolbox.
@@ -3326,7 +3327,12 @@ async fn chat_cmd_async(
         );
         let _ = writeln!(e, "Type /help for commands. Ctrl-D or /quit to exit.");
         if show_tools {
-            let names = tools.names_for(&exposure);
+            let projection = tools.projection_for(&exposure);
+            let names = projection
+                .tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>();
             let _ = writeln!(e, "tools ({}): {}", names.len(), names.join(", "));
         }
     }
@@ -3575,7 +3581,12 @@ async fn chat_cmd_async(
                     }
                 }
                 "tools" => {
-                    let names = tools.names_for(&exposure);
+                    let projection = tools.projection_for(&exposure);
+                    let names = projection
+                        .tools()
+                        .iter()
+                        .map(|tool| tool.name.as_str())
+                        .collect::<Vec<_>>();
                     let _ = writeln!(
                         stderr.lock(),
                         "tools ({}): {}",
@@ -4489,10 +4500,12 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
         tools::exposure::ExecutionHost::Direct,
         crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
     )
+    .map(|context| context.with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens))
     .unwrap_or_else(|_| {
         tools::exposure::ToolExposureContext::isolated(
             crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
         )
+        .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens)
     });
     let mut registry = registry;
     registry.set_approval(crate::agent::runtime::loop_::approval_from_cfg(cfg));
@@ -4511,28 +4524,47 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
                     }
                 }
             }
-            let names: Vec<&str> = if unfiltered {
-                registry.names_unfiltered()
-            } else {
-                registry.names_for(&exposure)
-            };
-            let entries: Vec<Value> = names
-                .iter()
-                .filter_map(|n| {
-                    registry.descriptor_unfiltered(n).map(|descriptor| {
-                        let decision = registry.exposure_decision(&exposure, n);
-                        json!({
-                            "name": n,
-                            "description": descriptor.description,
-                            "permitted": decision.is_visible(),
-                            "hidden_reason": decision.reason(),
+            let projection = registry.projection_for(&exposure);
+            let entries: Vec<Value> = if unfiltered {
+                registry
+                    .names_unfiltered()
+                    .iter()
+                    .filter_map(|name| {
+                        registry.descriptor_unfiltered(name).map(|descriptor| {
+                            let decision = registry.exposure_decision(&exposure, name);
+                            json!({
+                                "name": name,
+                                "description": descriptor.description,
+                                "permitted": decision.is_visible(),
+                                "hidden_reason": decision.reason(),
+                            })
                         })
                     })
-                })
-                .collect();
+                    .collect()
+            } else {
+                projection
+                    .tools()
+                    .iter()
+                    .map(|descriptor| {
+                        json!({
+                            "name": descriptor.name,
+                            "description": descriptor.description,
+                            "permitted": true,
+                            "hidden_reason": Value::Null,
+                        })
+                    })
+                    .collect()
+            };
             Ok(json!({
                 "registered_total": registry.names_unfiltered().len(),
-                "permitted_count": registry.names_for(&exposure).len(),
+                "permitted_count": if unfiltered {
+                    registry.names_for(&exposure).len()
+                } else {
+                    entries.len()
+                },
+                "model_visible_count": projection.tools().len(),
+                "underlying_permitted_count": registry.names_for(&exposure).len(),
+                "projection": projection.diagnostics(),
                 "source": exposure.client().source.as_str(),
                 "attended": exposure.client().attended,
                 "local": exposure.client().local,
@@ -4550,6 +4582,17 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
                 .get(1)
                 .cloned()
                 .ok_or_else(|| "usage: cos agent tools show <name>".to_string())?;
+            let projection = registry.projection_for(&exposure);
+            if let Some(tool) = projection.tools().iter().find(|tool| tool.name == name) {
+                return Ok(json!({
+                    "name": tool.name,
+                    "description": tool.description,
+                    "input_schema": tool.input_schema,
+                    "permitted": true,
+                    "model_visible": true,
+                    "hidden_reason": Value::Null,
+                }));
+            }
             let tool = registry
                 .descriptor_unfiltered(&name)
                 .ok_or_else(|| format!("tool '{name}' not registered"))?;
@@ -4559,13 +4602,19 @@ fn tools_cmd(args: &[String]) -> Result<Value, String> {
                 "description": tool.description,
                 "input_schema": tool.input_schema,
                 "permitted": decision.is_visible(),
+                "model_visible": false,
                 "hidden_reason": decision.reason(),
             }))
         }
         "llm-list" => {
-            let llm_tools = registry.as_llm_tools_for(&exposure);
+            let projection = registry.projection_for(&exposure);
+            let diagnostics = projection.diagnostics().clone();
+            let llm_tools = projection.into_tools();
             Ok(json!({
                 "count": llm_tools.len(),
+                "schema_tokens": diagnostics.schema_tokens,
+                "deferred_count": diagnostics.deferred_count,
+                "projection": diagnostics,
                 "tools": llm_tools.iter().map(|t| json!({
                     "name": t.name,
                     "description": t.description,
@@ -7197,10 +7246,12 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 tools::exposure::ExecutionHost::Direct,
                 crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
             )
+            .map(|context| context.with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens))
             .unwrap_or_else(|_| {
                 tools::exposure::ToolExposureContext::isolated(
                     crate::agent::runtime::loop_::guardrails_from_cfg(cfg),
                 )
+                .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens)
             });
             let configured_servers: Vec<Value> = cfg
                 .mcp_servers
@@ -7217,13 +7268,23 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 })
                 .collect();
             let enabled_count = cfg.mcp_servers.iter().filter(|s| s.enabled).count();
+            let projection = tools.projection_for(&exposure);
+            let model_tools = projection
+                .tools()
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>();
             Ok(json!({
                 "status": "ready",
                 "transport": "stdio",
                 "server_name": format!("cos-agent/{}", env!("CARGO_PKG_VERSION")),
                 "tools_registered": tools.names_unfiltered().len(),
-                "tools_permitted": tools.names_for(&exposure).len(),
-                "tools": tools.names_for(&exposure),
+                "tools_permitted": model_tools.len(),
+                "underlying_tools_permitted": tools.names_for(&exposure).len(),
+                "tools": model_tools,
+                "schema_tokens": projection.diagnostics().schema_tokens,
+                "deferred_count": projection.diagnostics().deferred_count,
+                "projection": projection.diagnostics(),
                 "source": exposure.client().source.as_str(),
                 "attended": exposure.client().attended,
                 "local": exposure.client().local,
@@ -7274,6 +7335,19 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 .enable_all()
                 .build()
                 .map_err(|e| format!("tokio runtime: {e}"))?;
+            let base_exposure = tools::exposure::ToolExposureContext::from_current_session(
+                None,
+                None,
+                tools::exposure::ExecutionHost::Direct,
+                runtime::loop_::guardrails_from_cfg(cfg),
+            )
+            .map(|context| context.with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens))
+            .unwrap_or_else(|_| {
+                tools::exposure::ToolExposureContext::isolated(
+                    runtime::loop_::guardrails_from_cfg(cfg),
+                )
+                .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens)
+            });
             let report = runtime.block_on(async {
                 let mut out: Vec<Value> = Vec::with_capacity(cfg.mcp_servers.len());
                 for s in &cfg.mcp_servers {
@@ -7300,12 +7374,18 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                     match attach_server(&spec, &mut throwaway_registry).await {
                         Ok(handle) => {
                             let tools = throwaway_registry.names_unfiltered();
+                            let mut exposure = base_exposure.clone();
+                            exposure.enable_extension(format!("mcp:{}", handle.name()));
+                            let projection = throwaway_registry.projection_for(&exposure);
                             out.push(json!({
                                 "name": s.name,
                                 "enabled": true,
                                 "ok": true,
                                 "tool_count": handle.tool_count(),
                                 "tools": tools,
+                                "schema_tokens": projection.diagnostics().schema_tokens,
+                                "deferred_count": projection.diagnostics().deferred_count,
+                                "projection": projection.diagnostics(),
                             }));
                             // handle dropped here — child killed
                         }
@@ -7379,7 +7459,8 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                 tools::exposure::ExecutionHost::Direct,
                 crate::agent::runtime::loop_::guardrails_from_cfg(&merged),
             )?
-            .for_external_mcp();
+            .for_external_mcp()
+            .with_tool_schema_budget_tokens(cfg.tool_schema_budget_tokens);
             let registry = Arc::new(tools);
             let server = McpServer::new_with_context(
                 "cos-agent",

@@ -18,6 +18,10 @@ fn default_config_has_sensible_values() {
     assert_eq!(cfg.web.engine, "cos-browser");
     assert_eq!(cfg.web.cdp_port, 9222);
     assert_eq!(cfg.web.max_content_length, 50000);
+    assert_eq!(
+        cfg.agent.tool_schema_budget_tokens,
+        crate::agent::tools::progressive::DEFAULT_TOOL_SCHEMA_BUDGET_TOKENS
+    );
 }
 
 #[test]
@@ -30,6 +34,13 @@ fn parse_partial_config() {
     assert_eq!(cfg.exec.timeout, 300);
     assert_eq!(cfg.web.engine, "cos-browser");
     assert_eq!(cfg.web.cdp_port, 9222);
+}
+
+#[test]
+fn parse_extension_tool_schema_budget() {
+    let cfg: CosConfig =
+        serde_json::from_str(r#"{"agent":{"tool_schema_budget_tokens":0}}"#).unwrap();
+    assert_eq!(cfg.agent.tool_schema_budget_tokens, 0);
 }
 
 #[test]

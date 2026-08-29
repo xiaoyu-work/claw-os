@@ -31,6 +31,7 @@ use serde_json::{json, Value};
 use crate::caps::manifest::Manifest;
 
 use super::exposure::ToolExposure;
+use super::progressive::ToolDisclosure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
@@ -196,6 +197,15 @@ impl Tool for CosAppTool {
             crate::caps::Verb::AGENT_INVOKE,
             crate::caps::Scope::name(&self.app),
         )])
+    }
+
+    fn disclosure(&self) -> ToolDisclosure {
+        ToolDisclosure::extension(
+            "app",
+            Some(self.app.clone()),
+            None,
+            ["app".to_string(), "stateless".to_string()],
+        )
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

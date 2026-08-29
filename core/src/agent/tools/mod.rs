@@ -15,6 +15,7 @@ pub mod exposure;
 pub mod guardrails;
 pub mod mcp;
 pub mod media;
+pub mod progressive;
 pub mod registry;
 pub mod skills;
 pub mod todo;
@@ -104,6 +105,18 @@ pub trait Tool: Send + Sync {
     /// argument-derived authorization still runs inside [`Tool::exec`].
     fn exposure(&self) -> exposure::ToolExposure {
         exposure::ToolExposure::always()
+    }
+
+    /// Discovery metadata for budget-driven schema disclosure. Core tools
+    /// remain direct by default; extension-backed tools opt in explicitly.
+    fn disclosure(&self) -> progressive::ToolDisclosure {
+        progressive::ToolDisclosure::default()
+    }
+
+    /// Dynamic liveness for attached extension tools. The registry checks this
+    /// both while projecting schemas and immediately before dispatch.
+    fn is_available(&self) -> bool {
+        true
     }
 
     /// Execute the tool. Errors should be returned via `ToolResult::err`,

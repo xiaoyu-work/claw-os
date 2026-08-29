@@ -14,6 +14,8 @@ through model turns, tools, hooks, progress, and final records.
 - Dispatch parallel-safe and serial tools deterministically.
 - Build every provider tool schema and dispatch lookup from the same
   session-scoped exposure context.
+- Keep provider tool schemas deterministic while a session's exposure and
+  attachment generation are unchanged; reproject after explicit invalidation.
 - Treat `dangerous_tools` as a legacy name filter only; capability-aware
   proxies reach exact execution-time consent instead.
 - Install a fresh task-local approval identity for every invocation and retire
@@ -40,6 +42,10 @@ executes a model-emitted tool call outside `turn.rs` dispatch. The dispatch
 path repeats exposure checks before tool execution; exact capability checks
 remain inside tools/providers after argument validation. Message order and
 opaque provider state must survive every turn.
+
+Progressive bridge envelopes are removed before pre-tool hooks, progress,
+approval, audit, and execution, so those layers observe the underlying tool
+identity rather than `cos_tool_call`.
 
 `auto_deny_tools` remains a hard pre-dispatch block. `dangerous_tools` and
 `auto_approve_tools` cannot grant or widen a capability; core primitive proxies

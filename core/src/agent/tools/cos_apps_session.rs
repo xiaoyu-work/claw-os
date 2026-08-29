@@ -63,6 +63,7 @@ use crate::agent::tools::mcp::transport::StdioTransport;
 use crate::caps::manifest::{Manifest, Runtime, SessionTransport};
 
 use super::exposure::{ToolExposure, ToolTransport};
+use super::progressive::ToolDisclosure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
 
@@ -885,6 +886,15 @@ impl Tool for AppSessionTool {
                 crate::caps::Scope::name(&self.app_id),
             )])
             .requiring_transport(ToolTransport::AppSession)
+    }
+
+    fn disclosure(&self) -> ToolDisclosure {
+        ToolDisclosure::extension(
+            "app-session",
+            Some(self.app_id.clone()),
+            Some(self.manifest_tool_name.clone()),
+            ["app".to_string(), "session".to_string()],
+        )
     }
 
     async fn exec(&self, input: Value) -> ToolResult {

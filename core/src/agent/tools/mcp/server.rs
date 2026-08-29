@@ -27,7 +27,7 @@ use super::protocol::{
 };
 use super::transport::{Transport, TransportError};
 use crate::agent::tools::exposure::ToolExposureContext;
-use crate::agent::tools::registry::ToolRegistry;
+use crate::agent::tools::registry::{ResolvedToolKind, ToolRegistry};
 
 #[derive(Debug, thiserror::Error)]
 pub enum ServerError {
@@ -354,19 +354,6 @@ impl McpServer {
                 );
             }
         };
-        if self
-            .registry
-            .get_for(&self.exposure, &params.name)
-            .is_none()
-        {
-            return JsonRpcResponse::err(
-                id,
-                JsonRpcError::new(
-                    ERR_INVALID_PARAMS,
-                    format!("tool not registered: {}", params.name),
-                ),
-            );
-        }
         let arguments = match params.arguments {
             Some(Value::Object(arguments)) => Value::Object(arguments),
             Some(_) => {
@@ -383,15 +370,50 @@ impl McpServer {
                 );
             }
         };
-        let result = self
-            .registry
-            .execute(
+        let resolved = self.registry.resolve_model_call(
+            &self.exposure,
+            &crate::agent::llm::ToolCall {
+                id: String::new(),
+                name: params.name,
+                input: arguments,
+            },
+        );
+        let result = match &resolved.kind {
+            ResolvedToolKind::Rejected(reason) => {
+                return JsonRpcResponse::err(
+                    id,
+                    JsonRpcError::new(ERR_INVALID_PARAMS, reason.clone()),
+                )
+            }
+            ResolvedToolKind::Catalog => self.registry.execute_catalog(
                 &self.exposure,
-                &params.name,
-                arguments,
-                "policy: external_mcp",
-            )
-            .await;
+                &resolved.call.name,
+                &resolved.call.input,
+            ),
+            ResolvedToolKind::Registry => {
+                if self
+                    .registry
+                    .get_for(&self.exposure, &resolved.call.name)
+                    .is_none()
+                {
+                    return JsonRpcResponse::err(
+                        id,
+                        JsonRpcError::new(
+                            ERR_INVALID_PARAMS,
+                            format!("tool not registered: {}", resolved.call.name),
+                        ),
+                    );
+                }
+                self.registry
+                    .execute(
+                        &self.exposure,
+                        &resolved.call.name,
+                        resolved.call.input.clone(),
+                        "policy: external_mcp",
+                    )
+                    .await
+            }
+        };
         let body = CallToolResult {
             content: vec![ContentItem::Text {
                 text: result.content,

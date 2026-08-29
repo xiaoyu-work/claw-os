@@ -34,7 +34,7 @@ surfaces.
 | `llm/registry.rs` | Provider construction |
 | `llm/providers/` | Provider-specific authentication and wire adapters |
 | `llm/accumulate.rs` | Streaming events to complete response/history |
-| `tools/registry.rs`, `tools/exposure.rs` | Immutable tool catalogue plus session-scoped exposure and dispatch lookup |
+| `tools/registry.rs`, `tools/exposure.rs`, `tools/progressive.rs` | Immutable tool catalogue, session-scoped exposure, and budgeted extension disclosure |
 | `skills/loader.rs`, `skills/disclosure.rs` | Layered Skill discovery and progressive model disclosure |
 | `tools/mcp/` | Outbound/inbound MCP and lifecycle integration |
 | `memory/sqlite_fts.rs` | Durable messages, content-addressed session prompts, and FTS |

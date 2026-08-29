@@ -173,6 +173,7 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         let read = dispatch_tool(
             &registry,
             &exposure,
+            &ResolvedToolKind::Registry,
             &ToolCall {
                 id: "read".to_string(),
                 name: "cos_mixed".to_string(),
@@ -186,6 +187,7 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         let write = dispatch_tool(
             &registry,
             &exposure,
+            &ResolvedToolKind::Registry,
             &ToolCall {
                 id: "write".to_string(),
                 name: "cos_mixed".to_string(),
@@ -550,6 +552,15 @@ impl Tool for SlowReader {
     fn parallel_safe(&self) -> bool {
         true
     }
+
+    fn disclosure(&self) -> crate::agent::tools::progressive::ToolDisclosure {
+        crate::agent::tools::progressive::ToolDisclosure::extension(
+            "mcp",
+            Some("runtime-test".to_string()),
+            Some(self.name.to_string()),
+            ["mcp".to_string(), "test".to_string()],
+        )
+    }
 }
 
 /// Side-effecting tool. Default `parallel_safe = false`.
@@ -644,7 +655,7 @@ async fn progress_sink_fires_for_every_dispatch_in_order() {
 /// sleeps must finish in well under 300ms.
 #[tokio::test]
 async fn parallel_safe_tools_dispatch_concurrently() {
-    let delay = std::time::Duration::from_millis(100);
+    let delay = std::time::Duration::from_millis(200);
     let registry = registry_with(vec![
         Arc::new(SlowReader { name: "r1", delay }),
         Arc::new(SlowReader { name: "r2", delay }),
@@ -757,6 +768,88 @@ async fn mixed_batch_preserves_declaration_order() {
         })
         .collect();
     assert_eq!(ids, vec!["id-w1", "id-r1", "id-w2"]);
+}
+
+#[tokio::test]
+async fn bridged_calls_use_underlying_identity_for_hooks_progress_and_parallelism() {
+    struct NameSpy {
+        seen: Arc<std::sync::Mutex<Vec<String>>>,
+    }
+    impl Hook for NameSpy {
+        fn name(&self) -> &str {
+            "bridged-name-spy"
+        }
+
+        fn pre_tool(&self, _ctx: &HookContext, call: &ToolCall) -> ToolDecision {
+            self.seen.lock().unwrap().push(call.name.clone());
+            ToolDecision::Allow
+        }
+    }
+
+    let delay = std::time::Duration::from_millis(100);
+    let registry = registry_with(vec![
+        Arc::new(SlowReader {
+            name: "mcp_runtime_r1",
+            delay,
+        }),
+        Arc::new(SlowReader {
+            name: "mcp_runtime_r2",
+            delay,
+        }),
+    ]);
+    let calls = vec![
+        ToolCall {
+            id: "a".to_string(),
+            name: crate::agent::tools::progressive::TOOL_CALL.to_string(),
+            input: serde_json::json!({
+                "name": "mcp_runtime_r1",
+                "arguments": {},
+            }),
+        },
+        ToolCall {
+            id: "b".to_string(),
+            name: crate::agent::tools::progressive::TOOL_CALL.to_string(),
+            input: serde_json::json!({
+                "name": "mcp_runtime_r2",
+                "arguments": {},
+            }),
+        },
+    ];
+    let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+    global_registry().register(Arc::new(NameSpy { seen: seen.clone() }));
+    let progress = Arc::new(RecordingProgress::default());
+    let exposure = exposure().with_tool_schema_budget_tokens(0);
+    let started = std::time::Instant::now();
+    let result = dispatch_calls(
+        &registry,
+        &exposure,
+        Some(&ctx()),
+        &calls,
+        None,
+        progress.as_ref(),
+        None,
+    )
+    .await;
+    global_registry().unregister("bridged-name-spy");
+
+    let (blocks, _) = result.unwrap();
+    assert_eq!(blocks.len(), 2);
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(350),
+        "bridged parallel-safe targets should overlap"
+    );
+    let mut hook_names = seen.lock().unwrap().clone();
+    hook_names.sort();
+    assert_eq!(hook_names, vec!["mcp_runtime_r1", "mcp_runtime_r2"]);
+    let mut progress_names = progress
+        .starts
+        .lock()
+        .unwrap()
+        .iter()
+        .map(|(_, name)| name.clone())
+        .collect::<Vec<_>>();
+    progress_names.sort();
+    assert_eq!(progress_names, vec!["mcp_runtime_r1", "mcp_runtime_r2"]);
 }
 
 struct FixedStreamProvider {

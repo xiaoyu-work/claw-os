@@ -223,6 +223,14 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_deny: Vec<String>,
 
+    /// Maximum estimated schema tokens for directly exposed non-core
+    /// extension tools. Catalogs above this threshold are replaced with the
+    /// stable `cos_tool_search` / `cos_tool_describe` / `cos_tool_call`
+    /// bridge. Core tools remain direct. `0` always defers an eligible
+    /// non-empty catalog.
+    #[serde(default = "default_tool_schema_budget_tokens")]
+    pub tool_schema_budget_tokens: u32,
+
     /// Deprecated tool-name approval filter for tools that do not
     /// expose a capability-aware execution boundary. Core proxies that
     /// declare that boundary ignore this coarse prompt and derive
@@ -485,8 +493,8 @@ impl ProviderFallbackConfig {
 pub struct McpServerConfig {
     /// Stable, snake_case identifier. Becomes the prefix in registered
     /// tool names: `mcp_<name>_<remote_tool>`. Must be unique across
-    /// all entries in this list (the registry will overwrite earlier
-    /// duplicates silently otherwise).
+    /// all entries in this list. Duplicate server or generated registry
+    /// names are skipped rather than overwriting an existing tool.
     pub name: String,
 
     /// Executable to spawn. Resolved against `PATH`.
@@ -735,6 +743,9 @@ fn default_think_scrub_enabled() -> bool {
 fn default_redact_memory_enabled() -> bool {
     true
 }
+fn default_tool_schema_budget_tokens() -> u32 {
+    crate::agent::tools::progressive::DEFAULT_TOOL_SCHEMA_BUDGET_TOKENS
+}
 fn default_auxiliary_max_tokens() -> u32 {
     1024
 }
@@ -929,6 +940,7 @@ impl Default for AgentConfig {
             redact_memory_enabled: default_redact_memory_enabled(),
             tool_allow: None,
             tool_deny: Vec::new(),
+            tool_schema_budget_tokens: default_tool_schema_budget_tokens(),
             dangerous_tools: Vec::new(),
             auto_approve_tools: Vec::new(),
             auto_deny_tools: Vec::new(),

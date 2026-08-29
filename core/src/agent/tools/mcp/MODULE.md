@@ -10,6 +10,8 @@ transports, discovery, and tool-registry integration.
 - Implement the validated JSON-RPC/MCP protocol subset.
 - Attach configured or discovered stdio/remote servers.
 - Prefix and register remote tools in the guarded registry.
+- Mark remote tools as budget-eligible extension descriptors and invalidate
+  their shared attachment generation when a server handle is dropped.
 - Expose only the external client's session-projected local tools and repeat
   the same projection check on `tools/call`.
 - Bound frames, handshakes, requests, and optional-server failures.
@@ -31,6 +33,8 @@ transports, discovery, and tool-registry integration.
 MCP attachment is optional and must not prevent the agent from starting.
 Remote tool descriptors/results remain untrusted and pass through the normal
 registry, session exposure, capability, and prompt-injection boundaries.
+Large permitted catalogs are discovered through the stable tool bridge; bridge
+calls resolve the live MCP proxy again, preserving timeout and result wrapping.
 Equivalent first-party MCP failures use the generated codes owned by
 `claw-os-sdk/wire/v1/contract.json`.
 
