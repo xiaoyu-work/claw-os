@@ -13,6 +13,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::caps::{require_or_json, Scope, Verb};
 
+#[cfg(target_os = "linux")]
+mod proc_spawn_allowlist;
+
 tokio::task_local! {
     static SESSION_OVERRIDE: String;
     static TRUSTED_SESSION_OVERRIDE: SessionInfo;
@@ -1464,10 +1467,10 @@ fn validate_native_invocation(
                     resolved.display()
                 )
             })?;
-            if metadata.file_type().is_symlink() || metadata.is_file() {
+            if metadata.file_type().is_symlink() || metadata.is_file() || metadata.is_dir() {
                 return Err(interpreter_refusal(
                     executable,
-                    "existing file arguments are not pinned",
+                    "existing filesystem arguments are not pinned",
                 ));
             }
         }
@@ -1755,6 +1758,7 @@ fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<P
 #[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 fn spawn_operation_digest(
+    allowlist: &proc_spawn_allowlist::Authorization,
     executable: &SpawnResourceBinding,
     argv: &[String],
     requested_session: Option<&str>,
@@ -1769,6 +1773,7 @@ fn spawn_operation_digest(
     isolated_workspace: bool,
 ) -> Result<String, String> {
     let canonical = serde_json::to_vec(&json!({
+        "allowlist": allowlist,
         "executable": executable,
         "argv": argv,
         "requested_session": requested_session,
@@ -2123,7 +2128,11 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         identity: None,
         content_sha256: None,
     };
+    #[cfg(target_os = "linux")]
+    let allowlist =
+        proc_spawn_allowlist::authorize(&executable_binding, &command_args[1..], &workdir_binding)?;
     let operation_digest = spawn_operation_digest(
+        &allowlist,
         &executable_binding,
         &command_args[1..],
         requested_session.as_deref(),
@@ -2200,32 +2209,17 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
         .stdin(Stdio::null())
         .stdout(stdout_file)
         .stderr(stderr_file)
-        // Agent-native: suppress all interactive prompts
-        .env("DEBIAN_FRONTEND", "noninteractive")
-        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_clear()
+        .env("HOME", &workdir_binding.path)
+        .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
+        .env("LANG", "C")
+        .env("LC_ALL", "C")
         .env("CI", "true")
-        .env("PAGER", "cat")
-        .env("GIT_PAGER", "cat")
-        .env("PIP_NO_INPUT", "1")
-        .env("NPM_CONFIG_YES", "true")
-        .env("PYTHONDONTWRITEBYTECODE", "1");
+        .env("COS_SESSION", &sid)
+        .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
 
     #[cfg(not(target_os = "linux"))]
     cmd.current_dir(&execution_workdir);
-    #[cfg(unix)]
-    if let Some((_, _, home)) = routed_identity.as_ref() {
-        cmd.env("HOME", home).env("COS_HOME", home);
-    }
-
-    // Inject session ID so child process can be identified by policy module
-    cmd.env("COS_SESSION", &sid)
-        .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
-    for (key, _) in std::env::vars_os() {
-        let rendered = key.to_string_lossy();
-        if rendered.starts_with("COS_AGENTD_") || rendered.starts_with("CLAWD_AGENTD_") {
-            cmd.env_remove(key);
-        }
-    }
 
     #[cfg(target_os = "linux")]
     unsafe {

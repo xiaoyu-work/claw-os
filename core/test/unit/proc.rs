@@ -164,6 +164,7 @@ struct StaticSpawnHelpers {
     trusted: std::path::PathBuf,
     attacker: std::path::PathBuf,
     descendant_probe: std::path::PathBuf,
+    cwd_loader: std::path::PathBuf,
 }
 
 #[cfg(target_os = "linux")]
@@ -240,11 +241,23 @@ fn main() {
 }
 "#,
         );
+        let cwd_loader = compile_static_spawn_helper(
+            dir.path(),
+            "cwd-loader",
+            r#"
+fn main() {
+    if std::path::Path::new("Makefile").exists() {
+        std::fs::write("loader-ran", "loaded").expect("write marker");
+    }
+}
+"#,
+        );
         StaticSpawnHelpers {
             _dir: dir,
             trusted,
             attacker,
             descendant_probe,
+            cwd_loader,
         }
     })
 }
@@ -255,6 +268,55 @@ fn install_static_spawn_helper(source: &std::path::Path, destination: &std::path
 
     std::fs::copy(source, destination).unwrap();
     std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+struct TestProcAllowlist {
+    _path: crate::test_env::TestEnvVarGuard,
+    _owner: crate::test_env::TestEnvVarGuard,
+}
+
+#[cfg(target_os = "linux")]
+fn install_test_proc_allowlist(
+    id: &str,
+    executable: &std::path::Path,
+    argv: &[String],
+    output_args: &[usize],
+    workdir: &std::path::Path,
+) -> TestProcAllowlist {
+    let executable = executable.canonicalize().unwrap();
+    let workdir = workdir.canonicalize().unwrap();
+    let policy_path = executable
+        .parent()
+        .unwrap()
+        .join(format!("{id}-proc-allowlist.json"));
+    let executable_bytes = std::fs::read(&executable).unwrap();
+    std::fs::write(
+        &policy_path,
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "version": 1,
+            "commands": [{
+                "id": id,
+                "executable": executable,
+                "sha256": crate::crypto::sha256_hex(&executable_bytes),
+                "argv_exact": argv,
+                "output_args": output_args,
+                "workdir": workdir,
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    TestProcAllowlist {
+        _path: crate::test_env::TestEnvVarGuard::set(
+            "COS_PROC_SPAWN_ALLOWLIST_TEST_PATH",
+            &policy_path,
+        ),
+        _owner: crate::test_env::TestEnvVarGuard::set(
+            "COS_PROC_SPAWN_ALLOWLIST_TEST_TRUST_CURRENT",
+            "1",
+        ),
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -433,6 +495,160 @@ fn shell_eval_is_rejected_before_approval() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn renamed_static_runtime_cannot_assume_allowlisted_path_semantics() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("allowlisted-native");
+    let marker = temp.path().join("renamed-runtime-result");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![marker.to_string_lossy().into_owned(), "trusted".to_string()];
+    let _allowlist =
+        install_test_proc_allowlist("allowlisted-native", &executable, &argv, &[0], temp.path());
+    std::fs::copy(&static_spawn_helpers().attacker, &executable).unwrap();
+
+    let error = cmd_spawn(&[
+        "--workdir".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+        marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("allowlisted hash"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn mutable_package_directory_argument_is_rejected_even_if_schema_lists_it() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("package-loader");
+    let package = temp.path().join("mutable-package");
+    std::fs::create_dir(&package).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let argv = vec![package.to_string_lossy().into_owned()];
+    let _allowlist =
+        install_test_proc_allowlist("package-loader", &executable, &argv, &[], temp.path());
+
+    let error = cmd_spawn(&[
+        "--workdir".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+        package.to_string_lossy().into_owned(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("filesystem arguments"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn make_like_loader_cannot_switch_to_a_mutable_project_cwd() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("make");
+    let safe_workdir = temp.path().join("safe-cwd");
+    let project = temp.path().join("mutable-project");
+    std::fs::create_dir(&safe_workdir).unwrap();
+    std::fs::create_dir(&project).unwrap();
+    std::fs::write(project.join("Makefile"), "attacker-controlled").unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().cwd_loader, &executable);
+    let _allowlist =
+        install_test_proc_allowlist("fixed-cwd-loader", &executable, &[], &[], &safe_workdir);
+
+    let error = cmd_spawn(&[
+        "--workdir".to_string(),
+        project.to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("command-specific schema"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(!project.join("loader-ran").exists());
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn user_owned_or_unknown_static_binary_is_not_unsandboxed_authority() {
+    let _lock = crate::test_env::lock_env();
+    let synthetic = SpawnResourceBinding {
+        path: "/home/user/tool".to_string(),
+        identity: Some(SpawnFileIdentity {
+            device: 1,
+            inode: 2,
+            mode: libc::S_IFREG | 0o700,
+            owner_uid: 1000,
+            owner_gid: 1000,
+        }),
+        content_sha256: Some(crate::crypto::sha256_hex(b"tool")),
+    };
+    assert!(!proc_spawn_allowlist::immutable_root_owned_for_test(
+        &synthetic
+    ));
+
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let allowlisted = temp.path().join("known-native");
+    let unknown = temp.path().join("unknown-native");
+    let marker = temp.path().join("unknown-native-result");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &allowlisted);
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &unknown);
+    let _allowlist = install_test_proc_allowlist(
+        "known-native",
+        &allowlisted,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
+
+    let error = cmd_spawn(&[
+        "--workdir".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        unknown.to_string_lossy().into_owned(),
+        marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("not in the audited allowlist"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn proc_descendant_cannot_inherit_agentd_channel_or_task_hints() {
     let _lock = crate::test_env::lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -463,6 +679,13 @@ fn proc_descendant_cannot_inherit_agentd_channel_or_task_hints() {
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "descendant-probe",
+        &executable,
+        &[marker.to_string_lossy().into_owned()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:descendant-probe:turn:1")
         .unwrap()
@@ -489,11 +712,20 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
     let executable = temp.path().join("approved-native");
     let marker = temp.path().join("approved-native-result");
     install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    let _allowlist = install_test_proc_allowlist(
+        "approved-native",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "hello".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     invocation.sync_scope(|| {
         let harmless = vec![
             "--session".to_string(),
             "safe-child".to_string(),
+            "--workdir".to_string(),
+            temp.path().to_string_lossy().into_owned(),
             "--".to_string(),
             executable.to_string_lossy().into_owned(),
             marker.to_string_lossy().into_owned(),
@@ -563,16 +795,16 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
         let changed_args = vec![
             "--session".to_string(),
             "safe-child".to_string(),
+            "--workdir".to_string(),
+            temp.path().to_string_lossy().into_owned(),
             "--".to_string(),
             executable.to_string_lossy().into_owned(),
             marker.to_string_lossy().into_owned(),
             "different".to_string(),
         ];
-        cmd_spawn(&changed_args).expect_err("changed argv must need a fresh approval");
-        assert!(crate::approvals::list_pending().iter().any(|request| {
-            request.verb == crate::caps::Verb::PROC_SPAWN.as_str()
-                && request.operation_digest.as_deref() != Some(harmless_digest.as_str())
-        }));
+        let error = cmd_spawn(&changed_args).expect_err("changed argv must fail its schema");
+        assert!(error.contains("command-specific schema"), "{error}");
+        assert!(error.contains("cos_sandbox"), "{error}");
 
         let shell_marker = temp.path().join("shell-substitution");
         let shell = vec![
@@ -621,6 +853,13 @@ fn executable_replacement_while_approval_is_pending_invalidates_the_decision() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "approval-race",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:approval-race:turn:1")
         .unwrap()
@@ -653,12 +892,11 @@ fn executable_replacement_while_approval_is_pending_invalidates_the_decision() {
             )
             .unwrap();
 
-            cmd_spawn(&args).expect_err("the replacement inode needs fresh consent");
+            let error = cmd_spawn(&args).expect_err("the replacement inode must fail closed");
+            assert!(error.contains("allowlisted hash"), "{error}");
+            assert!(error.contains("cos_sandbox"), "{error}");
             assert!(!marker.exists(), "the replacement executable must not run");
-            assert!(crate::approvals::list_pending().iter().any(|request| {
-                request.verb == Verb::PROC_SPAWN.as_str()
-                    && request.operation_digest.as_deref() != Some(approved_digest.as_str())
-            }));
+            assert!(!approved_digest.is_empty());
         });
 }
 
@@ -689,6 +927,13 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "rewrite-approval",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:rewrite-approval:turn:1")
         .unwrap()
@@ -726,12 +971,11 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
             )
             .unwrap();
 
-            cmd_spawn(&args).expect_err("changed bytes need fresh consent");
+            let error = cmd_spawn(&args).expect_err("changed bytes must fail closed");
+            assert!(error.contains("allowlisted hash"), "{error}");
+            assert!(error.contains("cos_sandbox"), "{error}");
             assert!(!marker.exists(), "the rewritten executable must not run");
-            assert!(crate::approvals::list_pending().iter().any(|request| {
-                request.verb == Verb::PROC_SPAWN.as_str()
-                    && request.operation_digest.as_deref() != Some(approved_digest.as_str())
-            }));
+            assert!(!approved_digest.is_empty());
         });
 }
 
@@ -761,6 +1005,13 @@ fn shebang_swap_while_approval_is_pending_cannot_reuse_native_consent() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "shebang-swap",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:shebang-approval:turn:1")
         .unwrap()
@@ -824,6 +1075,13 @@ fn same_path_inode_swap_after_authorization_executes_the_pinned_snapshot() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "inode-swap",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:inode-swap:turn:1")
         .unwrap()
@@ -870,6 +1128,13 @@ fn symlink_swap_after_authorization_executes_the_pinned_snapshot() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "symlink-swap",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:symlink-swap:turn:1")
         .unwrap()
@@ -913,6 +1178,13 @@ fn in_place_rewrite_after_authorization_cannot_change_executed_bytes() {
         marker.to_string_lossy().into_owned(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "rewrite-snapshot",
+        &executable,
+        &[marker.to_string_lossy().into_owned(), "trusted".to_string()],
+        &[0],
+        temp.path(),
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:rewrite:turn:1")
         .unwrap()
@@ -957,6 +1229,13 @@ fn workdir_replacement_after_authorization_uses_the_pinned_directory() {
         "relative-result".to_string(),
         "trusted".to_string(),
     ];
+    let _allowlist = install_test_proc_allowlist(
+        "workdir-pinned",
+        &executable,
+        &["relative-result".to_string(), "trusted".to_string()],
+        &[0],
+        &workdir,
+    );
 
     crate::approvals::LocalApprovalInvocation::new("web:workdir-swap:turn:1")
         .unwrap()

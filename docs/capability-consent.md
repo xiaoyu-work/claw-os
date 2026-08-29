@@ -61,6 +61,25 @@ linked programs, and existing file arguments fail before an approval request
 is created and direct the caller to `cos_sandbox`. Non-Linux platforms also
 fail closed until they provide an equivalent handle-pinned execution path.
 
+Static ELF shape is necessary but not sufficient. Every unsandboxed command
+must also match `/etc/cos/proc-spawn-allowlist.json`, a regular version-1
+manifest owned by root and not writable by group or other users. Each entry
+binds:
+
+- a canonical root-owned executable path and exact SHA-256;
+- one exact argv vector;
+- one canonical root-owned, non-writable working directory; and
+- the argv indices that are output paths.
+
+All remaining argv elements are scalar literals: absolute paths, path
+separators, and existing filesystem objects are refused. Directory and
+code-bearing inputs are not supported by the unsandboxed schema. The manifest
+content hash, entry ID, executable identity/hash, argv, and cwd identity all
+enter the operation digest, so changing the allowlist also invalidates prior
+consent. A missing, malformed, empty, stale, or non-root-owned manifest grants
+nothing. Proc children receive a minimal deterministic environment rather than
+language/plugin loader variables.
+
 Model output cannot approve a request. The worker channel has no decision
 route, and a request id is metadata rather than authority. Broker replies echo
 a fresh unpredictable ask nonce and the exact ask kind, verb, scope, and
@@ -119,4 +138,5 @@ The authoritative implementation is in
 [`core/src/approvals.rs`](../core/src/approvals.rs), and
 [`core/src/agentd/supervisor.rs`](../core/src/agentd/supervisor.rs). The
 descriptor-pinned process boundary is in
-[`core/src/proc.rs`](../core/src/proc.rs).
+[`core/src/proc.rs`](../core/src/proc.rs); the audited command schema is in
+[`core/src/proc/proc_spawn_allowlist.rs`](../core/src/proc/proc_spawn_allowlist.rs).

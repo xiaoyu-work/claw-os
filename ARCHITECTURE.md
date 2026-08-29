@@ -327,9 +327,16 @@ the snapshot's `/proc/self/fd` descriptor path, so pathname, inode, symlink,
 in-place content, and cwd replacement races cannot change what runs.
 The accepted image must be a static, fixed-address ELF for the host
 architecture with no interpreter, dynamic segment, or executable stack.
-Scripts, shells, language runtimes, dynamically linked executables, and file
-arguments are rejected before consent and routed to `cos_sandbox`. Non-Linux
-process spawn fails closed rather than using a weaker pathname-based fallback.
+It must additionally match the root-owned versioned manifest at
+`/etc/cos/proc-spawn-allowlist.json` by canonical path and SHA-256. Each
+manifest entry fixes the exact argv, explicitly identifies output-path
+positions, and fixes a root-owned non-writable cwd. Non-output arguments cannot
+name filesystem objects or contain paths, and the manifest hash is included in
+the approval digest. Scripts, shells, language runtimes, unknown/renamed static
+executables, mutable package or project directories, dynamically linked
+executables, and file arguments are rejected before consent and routed to
+`cos_sandbox`. Non-Linux process spawn fails closed rather than using a weaker
+pathname-based fallback.
 `cos_sysinfo` additionally requires
 `secret.read:name:environment` before honoring `env --include-secrets`.
 
