@@ -852,7 +852,7 @@ async fn persisted_compaction_summary_is_redacted_before_replay() {
 }
 
 #[tokio::test]
-async fn failed_summary_call_closes_lifecycle_without_dropping_history() {
+async fn failed_summary_call_is_explicit_and_does_not_send_oversized_history() {
     let db = MemoryDb::open_in_memory().unwrap();
     let sid = "failed-durable-compaction";
     for index in 0..6 {
@@ -871,8 +871,8 @@ async fn failed_summary_call_closes_lifecycle_without_dropping_history() {
 
     let mock = Arc::new(MockProvider::new(&cfg.model, &cfg));
     mock.push_response(MockResponse::Text(String::new()));
-    mock.push_response(MockResponse::Text("answer after failed summary".into()));
-    let result = ask_with_memory_continuation(
+    mock.push_response(MockResponse::Text("must not be sent".into()));
+    let error = ask_with_memory_continuation(
         mock.clone(),
         &cfg,
         "continue",
@@ -882,9 +882,10 @@ async fn failed_summary_call_closes_lifecycle_without_dropping_history() {
         100,
     )
     .await
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(result.answer, "answer after failed summary");
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("empty_provider_summary"));
     let records = db.compactions_for_session(sid).unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(
@@ -896,9 +897,16 @@ async fn failed_summary_call_closes_lifecycle_without_dropping_history() {
         Some("empty_provider_summary")
     );
     let request = mock.last_request().unwrap();
-    assert!(request.messages.iter().any(|message| message.content.iter().any(
-        |block| matches!(block, crate::agent::llm::ContentBlock::Text { text } if text.contains("preserve source 0"))
-    )));
+    assert_eq!(
+        request.system.as_deref(),
+        Some("You compress conversation histories. Be terse, factual, and structured.")
+    );
+    assert_eq!(
+        db.search_session(sid, "preserve source 0", 10)
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -946,46 +954,48 @@ async fn deterministic_tool_pruning_persists_without_a_summary_provider_call() {
     assert_eq!(records[0].recovery_metadata.pruned_tool_results, 1);
 }
 
+struct RaceAfterPlanCompressor {
+    inner: LlmCompressor,
+    start_winner: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
+    winner_done: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+}
+
+#[async_trait::async_trait]
+impl Compressor for RaceAfterPlanCompressor {
+    fn should_compress(&self, system: Option<&str>, messages: &[Message]) -> bool {
+        self.inner.should_compress(system, messages)
+    }
+
+    async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
+        self.inner.compress(system, messages).await
+    }
+
+    fn prepare_compaction(
+        &self,
+        system: Option<&str>,
+        messages: Vec<Message>,
+    ) -> Option<crate::agent::context::compressor::PreparedCompression> {
+        let plan = self.inner.prepare_compaction(system, messages);
+        if plan.is_some() {
+            if let Some(start) = self.start_winner.lock().unwrap().take() {
+                start.send(()).unwrap();
+                self.winner_done.lock().unwrap().recv().unwrap();
+            }
+        }
+        plan
+    }
+
+    async fn execute_compaction(
+        &self,
+        plan: crate::agent::context::compressor::PreparedCompression,
+    ) -> crate::agent::context::compressor::CompressionExecution {
+        self.inner.execute_compaction(plan).await
+    }
+}
+
 #[tokio::test]
 async fn stale_runtime_plan_adopts_concurrent_winner_instead_of_restoring_old_history() {
-    use crate::agent::context::compressor::{CompressionExecution, PreparedCompression};
     use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
-
-    struct RaceAfterPlanCompressor {
-        inner: LlmCompressor,
-        start_winner: std::sync::Mutex<Option<std::sync::mpsc::Sender<()>>>,
-        winner_done: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
-    }
-
-    #[async_trait::async_trait]
-    impl Compressor for RaceAfterPlanCompressor {
-        fn should_compress(&self, system: Option<&str>, messages: &[Message]) -> bool {
-            self.inner.should_compress(system, messages)
-        }
-
-        async fn compress(&self, system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
-            self.inner.compress(system, messages).await
-        }
-
-        fn prepare_compaction(
-            &self,
-            system: Option<&str>,
-            messages: Vec<Message>,
-        ) -> Option<PreparedCompression> {
-            let plan = self.inner.prepare_compaction(system, messages);
-            if plan.is_some() {
-                if let Some(start) = self.start_winner.lock().unwrap().take() {
-                    start.send(()).unwrap();
-                    self.winner_done.lock().unwrap().recv().unwrap();
-                }
-            }
-            plan
-        }
-
-        async fn execute_compaction(&self, plan: PreparedCompression) -> CompressionExecution {
-            self.inner.execute_compaction(plan).await
-        }
-    }
 
     let db = MemoryDb::open_in_memory().unwrap();
     let sid = "runtime-stale-plan";
@@ -1043,7 +1053,9 @@ async fn stale_runtime_plan_adopts_concurrent_winner_instead_of_restoring_old_hi
         keep_tail_tokens: 1,
         ..CompressorConfig::default()
     };
-    let provider: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-model", &cfg()));
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    mock.push_response(MockResponse::Text("successor summary".into()));
+    let provider: Arc<dyn Provider> = mock;
     let compressor: Arc<dyn Compressor> = Arc::new(RaceAfterPlanCompressor {
         inner: LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg),
         start_winner: std::sync::Mutex::new(Some(start_tx)),
@@ -1063,6 +1075,10 @@ async fn stale_runtime_plan_adopts_concurrent_winner_instead_of_restoring_old_hi
     .await
     .unwrap());
     winner.join().unwrap();
+    assert!(
+        !compressor.should_compress(Some("system"), &messages),
+        "shorter winner must be followed by a compliant successor"
+    );
 
     let text = messages
         .iter()
@@ -1073,9 +1089,369 @@ async fn stale_runtime_plan_adopts_concurrent_winner_instead_of_restoring_old_hi
         })
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(text.contains("concurrent winner"));
+    assert!(text.contains("successor summary"));
     assert!(!text.contains("stale raw 0"));
-    assert!(text.contains("stale raw 4"));
+    assert!(text.contains("stale raw 6"));
+    let records = db.compactions_for_session(sid).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(
+        records[1].previous_compaction_id,
+        Some(records[0].id),
+        "replan must persist a successor of the shorter winner"
+    );
+}
+
+#[tokio::test]
+async fn equal_and_longer_concurrent_winners_are_adopted_only_when_compliant() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    async fn run_case(longer: bool) {
+        let db = MemoryDb::open_in_memory().unwrap();
+        let sid = if longer {
+            "runtime-longer-winner"
+        } else {
+            "runtime-equal-winner"
+        };
+        let mut ids = Vec::new();
+        for index in 0..13 {
+            ids.push(
+                db.record_message(
+                    sid,
+                    if index % 2 == 0 { "user" } else { "assistant" },
+                    &format!("race row {index}"),
+                )
+                .unwrap(),
+            );
+        }
+        let seed = load_continuation_messages(&db, sid, 100, true);
+        let mut messages = seed.messages;
+        let mut origins = seed.origins;
+        let compressor_cfg = CompressorConfig {
+            trigger_tokens: 1,
+            keep_tail_tokens: 14,
+            ..CompressorConfig::default()
+        };
+        let probe: Arc<dyn Provider> = Arc::new(MockProvider::new("mock-model", &cfg()));
+        let probe = LlmCompressor::new(probe, "mock-model").with_config(compressor_cfg.clone());
+        let loser_count = probe
+            .prepare_compaction(Some("system"), messages.clone())
+            .unwrap()
+            .source_message_count();
+        assert_eq!(loser_count, 11);
+        let winner_count = loser_count + usize::from(longer);
+        let protected_user = (winner_count..ids.len())
+            .find(|index| index % 2 == 0)
+            .expect("winner must retain a real user");
+
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let winner_db = db.clone();
+        let winner_ids = ids.clone();
+        let winner = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let attempt = match winner_db
+                .begin_compaction(
+                    sid,
+                    NewCompaction {
+                        source_start_id: winner_ids[0],
+                        source_end_id: winner_ids[winner_count - 1],
+                        source_count: winner_count,
+                        protected_tail_start_id: Some(winner_ids[winner_count]),
+                        protected_user_message_id: Some(winner_ids[protected_user]),
+                        algorithm: "winner".into(),
+                        algorithm_version: 1,
+                        provider: "mock".into(),
+                        model: "mock".into(),
+                        previous_compaction_id: None,
+                        pruned_tool_results: 0,
+                    },
+                )
+                .unwrap()
+            {
+                BeginCompaction::Started(attempt) => attempt,
+                other => panic!("expected winner attempt, got {other:?}"),
+            };
+            attempt
+                .complete(if longer {
+                    "[CONTEXT SUMMARY]\n\nlonger winner"
+                } else {
+                    "[CONTEXT SUMMARY]\n\nequal winner"
+                })
+                .unwrap();
+            done_tx.send(()).unwrap();
+        });
+
+        let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+        let provider: Arc<dyn Provider> = mock.clone();
+        let compressor: Arc<dyn Compressor> = Arc::new(RaceAfterPlanCompressor {
+            inner: LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg),
+            start_winner: std::sync::Mutex::new(Some(start_tx)),
+            winner_done: std::sync::Mutex::new(done_rx),
+        });
+        assert!(maybe_compress_messages(
+            &compressor,
+            "system",
+            &mut messages,
+            &mut origins,
+            Some((&db, sid)),
+            None,
+            "mock",
+            "mock-model",
+        )
+        .await
+        .unwrap());
+        winner.join().unwrap();
+
+        assert!(!compressor.should_compress(Some("system"), &messages));
+        assert!(
+            mock.last_request().is_none(),
+            "compliant winner must not spend another summary call"
+        );
+        assert_eq!(db.compactions_for_session(sid).unwrap().len(), 1);
+        let text = messages
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|block| match block {
+                crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains(if longer {
+            "longer winner"
+        } else {
+            "equal winner"
+        }));
+        assert!(!text.contains("race row 0"));
+    }
+
+    run_case(false).await;
+    run_case(true).await;
+}
+
+#[tokio::test]
+async fn busy_compaction_completion_is_adopted_and_replanned_to_compliance() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "runtime-busy-winner";
+    let mut ids = Vec::new();
+    for index in 0..11 {
+        ids.push(
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("busy row {index}"),
+            )
+            .unwrap(),
+        );
+    }
+    let seed = load_continuation_messages(&db, sid, 100, true);
+    let mut messages = seed.messages;
+    let mut origins = seed.origins;
+
+    let active = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[3],
+                source_count: 4,
+                protected_tail_start_id: Some(ids[4]),
+                protected_user_message_id: Some(ids[4]),
+                algorithm: "winner".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected active winner, got {other:?}"),
+    };
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let winner = std::thread::spawn(move || {
+        release_rx.recv().unwrap();
+        active.complete("[CONTEXT SUMMARY]\n\nbusy winner").unwrap();
+    });
+
+    let compressor_cfg = CompressorConfig {
+        trigger_tokens: 1,
+        keep_tail_tokens: 14,
+        ..CompressorConfig::default()
+    };
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    mock.push_response(MockResponse::Text("busy successor".into()));
+    let provider: Arc<dyn Provider> = mock;
+    let compressor: Arc<dyn Compressor> =
+        Arc::new(LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg));
+    let compress = maybe_compress_messages_with_policy(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        Some((&db, sid)),
+        None,
+        "mock",
+        "mock-model",
+        CompressionRetryPolicy {
+            max_replans: 8,
+            busy_timeout: Duration::from_secs(2),
+            busy_poll_interval: Duration::from_millis(5),
+        },
+    );
+    let release = async move {
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        release_tx.send(()).unwrap();
+    };
+    let (result, ()) = tokio::join!(compress, release);
+    assert!(result.unwrap());
+    winner.join().unwrap();
+
+    assert!(!compressor.should_compress(Some("system"), &messages));
+    let records = db.compactions_for_session(sid).unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].previous_compaction_id, Some(records[0].id));
+    let text = messages
+        .iter()
+        .flat_map(|message| message.content.iter())
+        .filter_map(|block| match block {
+            crate::agent::llm::ContentBlock::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(text.contains("busy successor"));
+    assert!(!text.contains("busy row 0"));
+}
+
+#[tokio::test]
+async fn busy_compaction_timeout_is_explicit_instead_of_bypassing_trigger() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "runtime-busy-timeout";
+    let mut ids = Vec::new();
+    for index in 0..8 {
+        ids.push(
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("timeout row {index}"),
+            )
+            .unwrap(),
+        );
+    }
+    let seed = load_continuation_messages(&db, sid, 100, true);
+    let mut messages = seed.messages;
+    let mut origins = seed.origins;
+    let active = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[1],
+                source_count: 2,
+                protected_tail_start_id: Some(ids[2]),
+                protected_user_message_id: Some(ids[2]),
+                algorithm: "held".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected held attempt, got {other:?}"),
+    };
+
+    let compressor_cfg = CompressorConfig {
+        trigger_tokens: 1,
+        keep_tail_tokens: 1,
+        ..CompressorConfig::default()
+    };
+    let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+    let provider: Arc<dyn Provider> = mock.clone();
+    let compressor: Arc<dyn Compressor> =
+        Arc::new(LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg));
+    let error = maybe_compress_messages_with_policy(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        Some((&db, sid)),
+        None,
+        "mock",
+        "mock-model",
+        CompressionRetryPolicy {
+            max_replans: 8,
+            busy_timeout: Duration::from_millis(20),
+            busy_poll_interval: Duration::from_millis(5),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("timed out"));
+    assert!(compressor.should_compress(Some("system"), &messages));
+    assert!(
+        mock.last_request().is_none(),
+        "known-over-threshold history must not reach a provider"
+    );
+    active.fail("test_release").unwrap();
+}
+
+#[tokio::test]
+async fn no_progress_compressor_fails_after_bounded_replans() {
+    struct NoProgress;
+
+    #[async_trait::async_trait]
+    impl Compressor for NoProgress {
+        fn should_compress(&self, _system: Option<&str>, _messages: &[Message]) -> bool {
+            true
+        }
+
+        async fn compress(&self, _system: Option<&str>, messages: Vec<Message>) -> Vec<Message> {
+            messages
+        }
+    }
+
+    let compressor: Arc<dyn Compressor> = Arc::new(NoProgress);
+    let mut messages = vec![
+        Message::user_text("one"),
+        Message::assistant_text("two"),
+        Message::user_text("three"),
+        Message::assistant_text("four"),
+    ];
+    let mut origins = vec![MessageOrigin::Ephemeral; messages.len()];
+    let error = maybe_compress_messages_with_policy(
+        &compressor,
+        "system",
+        &mut messages,
+        &mut origins,
+        None,
+        None,
+        "test",
+        "test",
+        CompressionRetryPolicy {
+            max_replans: 2,
+            busy_timeout: Duration::from_millis(10),
+            busy_poll_interval: Duration::from_millis(1),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("2 bounded replans"));
+    assert!(compressor.should_compress(Some("system"), &messages));
 }
 
 fn cfg() -> AgentConfig {

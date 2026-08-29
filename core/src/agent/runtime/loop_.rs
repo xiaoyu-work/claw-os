@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::agent::context::compressor::{self, Compressor, CompressorConfig, LlmCompressor};
 use crate::agent::context::think_scrub::ThinkScrubber;
@@ -42,6 +43,10 @@ I stopped this attempt after reaching its tool-work limit before I could \
 finish the summary. Ask me to continue and I will resume from the results \
 already collected.";
 
+const MAX_COMPACTION_REPLANS: usize = 8;
+const COMPACTION_BUSY_TIMEOUT: Duration = Duration::from_secs(120);
+const COMPACTION_BUSY_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
 fn append_turn_limit_fallback(messages: &mut Vec<Message>) -> String {
     let answer = TURN_LIMIT_FALLBACK.to_string();
     messages.push(Message {
@@ -70,8 +75,28 @@ pub enum AgentError {
     #[error("memory integrity failure: {0}")]
     MemoryIntegrity(String),
 
+    #[error("context compression failed: {0}")]
+    Compression(String),
+
     #[error("internal: {0}")]
     Internal(String),
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CompressionRetryPolicy {
+    max_replans: usize,
+    busy_timeout: Duration,
+    busy_poll_interval: Duration,
+}
+
+impl Default for CompressionRetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_replans: MAX_COMPACTION_REPLANS,
+            busy_timeout: COMPACTION_BUSY_TIMEOUT,
+            busy_poll_interval: COMPACTION_BUSY_POLL_INTERVAL,
+        }
+    }
 }
 
 /// Result of a complete `ask` invocation.
@@ -754,174 +779,254 @@ async fn maybe_compress_messages(
     provider_name: &str,
     model_name: &str,
 ) -> Result<bool, AgentError> {
-    if !compressor.should_compress(Some(system), messages) {
-        return Ok(false);
-    }
+    maybe_compress_messages_with_policy(
+        compressor,
+        system,
+        messages,
+        origins,
+        recorder,
+        redactor,
+        provider_name,
+        model_name,
+        CompressionRetryPolicy::default(),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn maybe_compress_messages_with_policy(
+    compressor: &Arc<dyn Compressor>,
+    system: &str,
+    messages: &mut Vec<Message>,
+    origins: &mut Vec<MessageOrigin>,
+    recorder: Option<(&MemoryDb, &str)>,
+    redactor: Option<&Redactor>,
+    provider_name: &str,
+    model_name: &str,
+    retry: CompressionRetryPolicy,
+) -> Result<bool, AgentError> {
     if messages.len() != origins.len() {
         return Err(AgentError::Internal(
             "conversation origin tracking diverged from messages".to_string(),
         ));
     }
 
-    let original_messages = std::mem::take(messages);
-    let original_origins = std::mem::take(origins);
-    let mut projection_messages: Vec<Message> = original_messages
-        .iter()
-        .zip(&original_origins)
-        .map(|(message, origin)| durable_projection_message(origin, message))
-        .collect();
-    for message in &mut projection_messages {
-        redact_message(message, redactor);
-    }
+    let mut current_messages = std::mem::take(messages);
+    let mut current_origins = std::mem::take(origins);
+    let mut changed = false;
+    let mut replans = 0;
 
-    let Some(plan) = compressor.prepare_compaction(Some(system), projection_messages) else {
-        let compressed = compressor.compress(Some(system), original_messages).await;
-        *origins = vec![MessageOrigin::Ephemeral; compressed.len()];
-        *messages = compressed;
-        return Ok(true);
-    };
-    let source_count = plan.source_message_count();
-    if source_count > original_messages.len() {
-        *messages = original_messages;
-        *origins = original_origins;
-        return Err(AgentError::Internal(
-            "compressor returned an invalid source boundary".to_string(),
-        ));
-    }
-
-    let Some((db, session_id)) = recorder else {
-        let execution = compressor.execute_compaction(plan).await;
-        *origins = vec![MessageOrigin::Ephemeral; execution.messages.len()];
-        *messages = execution.messages;
-        return Ok(true);
-    };
-    let Some(coverage) = coverage_for_prefix(&original_origins, source_count) else {
-        tracing::warn!(
-            session_id,
-            "context: skipped compression because the source range is not durably reconstructable"
-        );
-        *messages = original_messages;
-        *origins = original_origins;
-        return Ok(false);
-    };
-    let Some(protected_tail_start_id) = raw_origin_id(original_origins.get(source_count)) else {
-        tracing::warn!(
-            session_id,
-            "context: skipped compaction because the protected tail is not durable"
-        );
-        *messages = original_messages;
-        *origins = original_origins;
-        return Ok(false);
-    };
-    let Some(protected_user_message_id) =
-        raw_origin_id(original_origins.get(plan.protected_user_index()))
-    else {
-        tracing::warn!(
-            session_id,
-            "context: skipped compaction because no durable user anchor survived"
-        );
-        *messages = original_messages;
-        *origins = original_origins;
-        return Ok(false);
-    };
-    let spec = NewCompaction {
-        source_start_id: coverage.start_id,
-        source_end_id: coverage.end_id,
-        source_count: coverage.count,
-        protected_tail_start_id: Some(protected_tail_start_id),
-        protected_user_message_id: Some(protected_user_message_id),
-        algorithm: plan.algorithm().to_string(),
-        algorithm_version: plan.algorithm_version(),
-        provider: provider_name.to_string(),
-        model: model_name.to_string(),
-        previous_compaction_id: coverage.previous_compaction_id,
-        pruned_tool_results: plan.pruned_tool_results(),
-    };
-    let attempt = match db.begin_compaction(session_id, spec) {
-        Ok(BeginCompaction::Started(attempt)) => attempt,
-        Ok(BeginCompaction::Busy) => {
-            tracing::debug!(session_id, "context: another compaction is active");
-            *messages = original_messages;
-            *origins = original_origins;
-            return Ok(false);
+    'replan: loop {
+        if !compressor.should_compress(Some(system), &current_messages) {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Ok(changed);
         }
-        Ok(BeginCompaction::AlreadyCovered(projection)) => {
-            tracing::debug!(
-                session_id,
-                "context: adopting concurrently completed durable compaction"
-            );
-            let adopted =
-                adopt_compaction_projection(projection, &original_messages, &original_origins);
-            *messages = adopted.messages;
-            *origins = adopted.origins;
-            return Ok(true);
-        }
-        Ok(BeginCompaction::StalePlan(projection)) => {
-            tracing::debug!(
-                session_id,
-                "context: compaction plan became stale; adopting winner projection"
-            );
-            let adopted =
-                adopt_compaction_projection(projection, &original_messages, &original_origins);
-            *messages = adopted.messages;
-            *origins = adopted.origins;
-            return Ok(true);
-        }
-        Err(error) if error.is_integrity_failure() => {
-            *messages = original_messages;
-            *origins = original_origins;
-            return Err(AgentError::MemoryIntegrity(format!(
-                "refusing compaction for session {session_id}: {error}"
+        if replans >= retry.max_replans {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Compression(format!(
+                "context remained above the configured compression trigger after {} bounded replans",
+                retry.max_replans
             )));
         }
-        Err(error) => {
-            tracing::warn!(session_id, %error, "context: failed to start durable compaction");
-            *messages = original_messages;
-            *origins = original_origins;
-            return Ok(false);
+        if current_messages.len() != current_origins.len() {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Internal(
+                "conversation origin tracking diverged during compression".to_string(),
+            ));
         }
-    };
 
-    let execution = compressor.execute_compaction(plan).await;
-    let Some(projection) = execution.projection else {
-        let failure = execution.failure.unwrap_or("summary_generation_failed");
-        if let Err(error) = attempt.fail(failure) {
-            tracing::warn!(session_id, %error, "context: failed to close compaction attempt");
+        let mut projection_messages: Vec<Message> = current_messages
+            .iter()
+            .zip(&current_origins)
+            .map(|(message, origin)| durable_projection_message(origin, message))
+            .collect();
+        for message in &mut projection_messages {
+            redact_message(message, redactor);
         }
-        *messages = original_messages;
-        *origins = original_origins;
-        return Ok(false);
-    };
-    let mut summary_text = super::evidence::strip_markers(&projection.summary_text);
-    if let Some(redactor) = redactor {
-        summary_text = redactor.redact(&summary_text);
-    }
-    let summary_text = summary_text.trim().to_string();
-    match attempt.complete(&summary_text) {
-        Ok(summary) => {
-            let mut compacted = Vec::with_capacity(original_messages.len() - source_count + 1);
-            compacted.push(Message::assistant_text(summary.summary.clone()));
-            compacted.extend(original_messages[source_count..].iter().cloned());
-            let mut compacted_origins =
-                Vec::with_capacity(original_origins.len() - source_count + 1);
-            compacted_origins.push(MessageOrigin::Summary(Box::new(summary)));
-            compacted_origins.extend(original_origins[source_count..].iter().cloned());
-            *messages = compacted;
-            *origins = compacted_origins;
-            Ok(true)
+
+        let Some(plan) = compressor.prepare_compaction(Some(system), projection_messages) else {
+            current_messages = compressor
+                .compress(Some(system), std::mem::take(&mut current_messages))
+                .await;
+            current_origins = vec![MessageOrigin::Ephemeral; current_messages.len()];
+            changed = true;
+            replans += 1;
+            continue;
+        };
+        let source_count = plan.source_message_count();
+        if source_count > current_messages.len() {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Internal(
+                "compressor returned an invalid source boundary".to_string(),
+            ));
         }
-        Err(error) if error.is_integrity_failure() => {
-            *messages = original_messages;
-            *origins = original_origins;
-            Err(AgentError::MemoryIntegrity(format!(
-                "failed to commit compaction for session {session_id}: {error}"
-            )))
+
+        let Some((db, session_id)) = recorder else {
+            let execution = compressor.execute_compaction(plan).await;
+            if execution.projection.is_none() {
+                *messages = current_messages;
+                *origins = current_origins;
+                return Err(AgentError::Compression(format!(
+                    "summary generation failed: {}",
+                    execution.failure.unwrap_or("unknown_failure")
+                )));
+            }
+            current_messages = execution.messages;
+            current_origins = vec![MessageOrigin::Ephemeral; current_messages.len()];
+            changed = true;
+            replans += 1;
+            continue;
+        };
+        let Some(coverage) = coverage_for_prefix(&current_origins, source_count) else {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Compression(
+                "over-threshold context has no durably reconstructable source range".to_string(),
+            ));
+        };
+        let Some(protected_tail_start_id) = raw_origin_id(current_origins.get(source_count)) else {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Compression(
+                "over-threshold context has no durable protected tail".to_string(),
+            ));
+        };
+        let Some(protected_user_message_id) =
+            raw_origin_id(current_origins.get(plan.protected_user_index()))
+        else {
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Compression(
+                "over-threshold context has no durable real-user anchor".to_string(),
+            ));
+        };
+        let spec = NewCompaction {
+            source_start_id: coverage.start_id,
+            source_end_id: coverage.end_id,
+            source_count: coverage.count,
+            protected_tail_start_id: Some(protected_tail_start_id),
+            protected_user_message_id: Some(protected_user_message_id),
+            algorithm: plan.algorithm().to_string(),
+            algorithm_version: plan.algorithm_version(),
+            provider: provider_name.to_string(),
+            model: model_name.to_string(),
+            previous_compaction_id: coverage.previous_compaction_id,
+            pruned_tool_results: plan.pruned_tool_results(),
+        };
+
+        let busy_started = tokio::time::Instant::now();
+        let attempt = loop {
+            match db.begin_compaction(session_id, spec.clone()) {
+                Ok(BeginCompaction::Started(attempt)) => break attempt,
+                Ok(BeginCompaction::Busy) => {
+                    if busy_started.elapsed() >= retry.busy_timeout {
+                        *messages = current_messages;
+                        *origins = current_origins;
+                        return Err(AgentError::Compression(format!(
+                            "timed out after {:?} waiting for active compaction of session {session_id}",
+                            retry.busy_timeout
+                        )));
+                    }
+                    tokio::time::sleep(retry.busy_poll_interval).await;
+                }
+                Ok(BeginCompaction::AlreadyCovered(projection)) => {
+                    tracing::debug!(
+                        session_id,
+                        "context: adopting concurrently completed durable compaction"
+                    );
+                    let adopted = adopt_compaction_projection(
+                        projection,
+                        &current_messages,
+                        &current_origins,
+                    );
+                    current_messages = adopted.messages;
+                    current_origins = adopted.origins;
+                    changed = true;
+                    replans += 1;
+                    continue 'replan;
+                }
+                Ok(BeginCompaction::StalePlan(projection)) => {
+                    tracing::debug!(
+                        session_id,
+                        "context: compaction plan became stale; adopting winner projection"
+                    );
+                    let adopted = adopt_compaction_projection(
+                        projection,
+                        &current_messages,
+                        &current_origins,
+                    );
+                    current_messages = adopted.messages;
+                    current_origins = adopted.origins;
+                    changed = true;
+                    replans += 1;
+                    continue 'replan;
+                }
+                Err(error) if error.is_integrity_failure() => {
+                    *messages = current_messages;
+                    *origins = current_origins;
+                    return Err(AgentError::MemoryIntegrity(format!(
+                        "refusing compaction for session {session_id}: {error}"
+                    )));
+                }
+                Err(error) => {
+                    *messages = current_messages;
+                    *origins = current_origins;
+                    return Err(AgentError::Compression(format!(
+                        "could not start durable compaction for session {session_id}: {error}"
+                    )));
+                }
+            }
+        };
+
+        let execution = compressor.execute_compaction(plan).await;
+        let Some(projection) = execution.projection else {
+            let failure = execution.failure.unwrap_or("summary_generation_failed");
+            if let Err(error) = attempt.fail(failure) {
+                tracing::warn!(session_id, %error, "context: failed to close compaction attempt");
+            }
+            *messages = current_messages;
+            *origins = current_origins;
+            return Err(AgentError::Compression(format!(
+                "summary generation failed for session {session_id}: {failure}"
+            )));
+        };
+        let mut summary_text = super::evidence::strip_markers(&projection.summary_text);
+        if let Some(redactor) = redactor {
+            summary_text = redactor.redact(&summary_text);
         }
-        Err(error) => {
-            tracing::warn!(session_id, %error, "context: failed to persist compaction summary");
-            *messages = original_messages;
-            *origins = original_origins;
-            Ok(false)
+        let summary_text = summary_text.trim().to_string();
+        match attempt.complete(&summary_text) {
+            Ok(summary) => {
+                let mut compacted = Vec::with_capacity(current_messages.len() - source_count + 1);
+                compacted.push(Message::assistant_text(summary.summary.clone()));
+                compacted.extend(current_messages[source_count..].iter().cloned());
+                let mut compacted_origins =
+                    Vec::with_capacity(current_origins.len() - source_count + 1);
+                compacted_origins.push(MessageOrigin::Summary(Box::new(summary)));
+                compacted_origins.extend(current_origins[source_count..].iter().cloned());
+                current_messages = compacted;
+                current_origins = compacted_origins;
+                changed = true;
+                replans += 1;
+            }
+            Err(error) if error.is_integrity_failure() => {
+                *messages = current_messages;
+                *origins = current_origins;
+                return Err(AgentError::MemoryIntegrity(format!(
+                    "failed to commit compaction for session {session_id}: {error}"
+                )));
+            }
+            Err(error) => {
+                *messages = current_messages;
+                *origins = current_origins;
+                return Err(AgentError::Compression(format!(
+                    "failed to persist compaction for session {session_id}: {error}"
+                )));
+            }
         }
     }
 }

@@ -112,11 +112,13 @@ compaction, and reacquiring that lock closes a crash-left `started` attempt
 before retry. Plans prepared before the lock carry their observed predecessor;
 if another worker wins first, `AlreadyCovered` or `StalePlan` returns that
 winner's verified summary and tail for adoption instead of treating the race
-as corruption or restoring stale context. Oversized old tool results are
-deterministically stubbed before an LLM summary. Validation requires the
-protected tail to begin at the first uncompacted replayable row, rejects
-tool-pair splits, and rechecks that a verbatim real-user anchor and both
-protected row identities are unchanged.
+as corruption or restoring stale context. The runtime rechecks the complete
+compression predicate after every adoption and uses a bounded wait/replan loop;
+failure is explicit rather than sending known-over-threshold input. Oversized
+old tool results are deterministically stubbed before an LLM summary.
+Validation requires the protected tail to begin at the first uncompacted
+replayable row, rejects tool-pair splits, and rechecks that a verbatim real-user
+anchor and both protected row identities are unchanged.
 Repair reroots a valid descendant around a damaged predecessor and records the
 removed lineage; it drops the dependent chain only when no safe root remains.
 

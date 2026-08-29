@@ -64,7 +64,11 @@ concurrent worker completes first, begin returns nonfatal `AlreadyCovered` or
 `StalePlan` together with the winner's verified summary and current raw tail.
 The runtime adopts that projection, preserving any matching live tail messages,
 rather than restoring the older oversized vector or reporting memory
-corruption.
+corruption. It then recomputes the full compression predicate and persists a
+successor when a shorter winner still leaves too much context. Busy waiting,
+winner adoption, and replanning are bounded; timeout, provider failure, or an
+uncompressible result returns an explicit non-integrity compression error, so
+known-over-threshold input is never sent as a fallback.
 
 `cos agent replay <session-id>` continues to export the original message rows
 and now includes the compaction lifecycle metadata and raw-row recovery range.

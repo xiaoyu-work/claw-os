@@ -15,7 +15,8 @@ through model turns, tools, hooks, progress, and final records.
 - Track raw row provenance through each turn so a prepared compaction can be
   committed before its summary becomes model-visible.
 - Adopt a concurrent compaction winner's verified summary/tail when a
-  pre-lock plan becomes stale or already covered.
+  pre-lock plan becomes stale or already covered, then recheck and boundedly
+  replan until the request is compliant or fails explicitly.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
 - Build every provider tool schema and dispatch lookup from the same
