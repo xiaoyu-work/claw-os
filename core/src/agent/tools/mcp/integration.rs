@@ -4,7 +4,8 @@
 //! protocol-compliant MCP client. This module ties them to the agent
 //! lifecycle:
 //!
-//! * spawn each configured server as a child process,
+//! * spawn each configured server locally for direct runtimes, or attach it
+//!   through the task-owned extension host for `claw-agentd`,
 //! * run `initialize` + `tools/list`,
 //! * register every advertised tool as an [`McpRemoteTool`] in the
 //!   agent's [`ToolRegistry`] under a deterministic prefix
@@ -32,6 +33,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
@@ -49,7 +51,8 @@ use crate::agent::tools::{Tool, ToolResult};
 /// The lifetime of this struct is the agent's config lifetime — it is
 /// read once at startup. Per-call data (handles, clients) lives on
 /// [`McpServerHandle`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServerSpec {
     /// Stable, snake_case identifier. Becomes the prefix in registered
     /// tool names: `mcp_<name>_<remote_tool_name>`. Must be unique
@@ -93,11 +96,14 @@ pub struct McpServerHandle {
     /// Shared with every `McpRemoteTool` registered for this server;
     /// kept here so even if the registry is dropped first, the
     /// client (and thus the reader task) lives until handle drop.
-    client: Arc<McpClient>,
+    client: Option<Arc<McpClient>>,
     child: Option<Child>,
     /// For diagnostics; not used past construction.
     name: String,
     tool_count: usize,
+    descriptors: Vec<ToolDescriptor>,
+    timeout: Duration,
+    hosted: bool,
     _proc_session: Option<crate::bridge::McpProcSession>,
 }
 
@@ -110,6 +116,14 @@ impl McpServerHandle {
         self.tool_count
     }
 
+    pub(crate) fn descriptors(&self) -> &[ToolDescriptor] {
+        &self.descriptors
+    }
+
+    pub(crate) fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
     /// Borrow a clone of the underlying MCP client. Callers that want
     /// to issue arbitrary `tools/call` invocations against this server
     /// (e.g. the app-session bridge) hold this `Arc` instead of going
@@ -118,16 +132,32 @@ impl McpServerHandle {
     /// safe even after the handle is dropped — though the next call
     /// will fail once the child is killed.
     pub fn client(&self) -> Arc<McpClient> {
-        self.client.clone()
+        self.client
+            .as_ref()
+            .expect("a hosted MCP handle has no in-process client")
+            .clone()
     }
 }
 
 impl Drop for McpServerHandle {
     fn drop(&mut self) {
+        if self.hosted {
+            if let Some(client) = crate::extension_host::client::current() {
+                let name = self.name.clone();
+                if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+                    runtime.spawn(async move {
+                        let _ = client.detach_mcp(name).await;
+                    });
+                }
+            }
+            return;
+        }
         // Releasing this Arc lets the McpClient::Drop fire (if no
         // tool still holds a clone), which signals the reader task
         // to exit. Then we best-effort kill + reap the child.
-        let _ = Arc::strong_count(&self.client);
+        if let Some(client) = self.client.as_ref() {
+            let _ = Arc::strong_count(client);
+        }
         if let Some(mut child) = self.child.take() {
             let _ = child.start_kill();
             // Reap in a detached task so a zombie doesn't linger.
@@ -156,9 +186,14 @@ pub struct McpRemoteTool {
     schema: Value,
     /// Untransformed remote tool name to send back over the wire.
     remote_name: String,
-    client: Arc<McpClient>,
+    backend: McpToolBackend,
     timeout: Duration,
     exposure: ToolExposure,
+}
+
+enum McpToolBackend {
+    Local(Arc<McpClient>),
+    Hosted { server: String },
 }
 
 impl McpRemoteTool {
@@ -198,7 +233,40 @@ impl McpRemoteTool {
             description,
             schema,
             remote_name: descriptor.name,
-            client,
+            backend: McpToolBackend::Local(client),
+            timeout,
+            exposure: ToolExposure::always()
+                .requiring_transport(transport)
+                .requiring_extension(format!("mcp:{prefix}")),
+        }
+    }
+
+    fn new_hosted(
+        prefix: &str,
+        descriptor: ToolDescriptor,
+        timeout: Duration,
+        transport: ToolTransport,
+    ) -> Self {
+        let name = format!("mcp_{prefix}_{}", descriptor.name);
+        let description = descriptor.description.unwrap_or_else(|| {
+            format!(
+                "Remote MCP tool `{}` from server `{prefix}`.",
+                descriptor.name
+            )
+        });
+        let schema = if descriptor.input_schema.is_object() {
+            descriptor.input_schema
+        } else {
+            json!({"type": "object", "properties": {}, "additionalProperties": true})
+        };
+        Self {
+            name,
+            description,
+            schema,
+            remote_name: descriptor.name,
+            backend: McpToolBackend::Hosted {
+                server: prefix.to_string(),
+            },
             timeout,
             exposure: ToolExposure::always()
                 .requiring_transport(transport)
@@ -234,23 +302,37 @@ impl Tool for McpRemoteTool {
             Value::Object(ref m) if m.is_empty() => None,
             other => Some(other),
         };
-        let call = self.client.call_tool(self.remote_name.clone(), arguments);
-        let res = match timeout(self.timeout, call).await {
-            Ok(r) => r,
-            Err(_) => {
-                return ToolResult::err(format!(
-                    "MCP `{}` timed out after {}s",
-                    self.name,
-                    self.timeout.as_secs()
-                ));
+        let res = match &self.backend {
+            McpToolBackend::Local(client) => {
+                let call = client.call_tool(self.remote_name.clone(), arguments);
+                match timeout(self.timeout, call).await {
+                    Ok(result) => result.map_err(render_client_err),
+                    Err(_) => Err(format!(
+                        "MCP `{}` timed out after {}s",
+                        self.name,
+                        self.timeout.as_secs()
+                    )),
+                }
+            }
+            McpToolBackend::Hosted { server } => {
+                let Some(client) = crate::extension_host::client::current() else {
+                    return ToolResult::err("the task extension host is unavailable");
+                };
+                client
+                    .call_mcp(
+                        server.clone(),
+                        self.remote_name.clone(),
+                        arguments,
+                        self.timeout,
+                    )
+                    .await
             }
         };
         match res {
             Ok(call_result) => render_call_result(&self.name, call_result),
-            Err(e) => ToolResult::err(format!(
-                "MCP `{}` failed: {}",
-                self.name,
-                render_client_err(e)
+            Err(error) => ToolResult::err(crate::agent::safety::untrusted::wrap_untrusted(
+                crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+                &format!("MCP `{}` failed: {error}", self.name),
             )),
         }
     }
@@ -326,6 +408,49 @@ pub async fn attach_server(
     spec: &McpServerSpec,
     registry: &mut ToolRegistry,
 ) -> Result<McpServerHandle, String> {
+    if let Some(host) = crate::extension_host::client::current() {
+        let descriptors = host.attach_mcp(spec.clone()).await?;
+        let timeout = spec.timeout_duration();
+        let transport = if spec.url.is_some() {
+            ToolTransport::McpHttp
+        } else {
+            ToolTransport::McpStdio
+        };
+        for descriptor in descriptors.iter().cloned() {
+            registry.register(Arc::new(McpRemoteTool::new_hosted(
+                &spec.name, descriptor, timeout, transport,
+            )));
+        }
+        return Ok(McpServerHandle {
+            client: None,
+            child: None,
+            name: spec.name.clone(),
+            tool_count: descriptors.len(),
+            descriptors,
+            timeout,
+            hosted: true,
+            _proc_session: None,
+        });
+    }
+    if crate::paths::is_routed_job() {
+        return Err(
+            "the task extension host is unavailable; refusing to start MCP code in claw-agentd"
+                .to_string(),
+        );
+    }
+    attach_server_local(spec, registry).await
+}
+
+pub(crate) async fn attach_server_local(
+    spec: &McpServerSpec,
+    registry: &mut ToolRegistry,
+) -> Result<McpServerHandle, String> {
+    if crate::paths::is_routed_job() {
+        return Err(
+            "MCP execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
     // Remote (HTTP/SSE) servers take a separate, child-less path.
     if spec.url.is_some() {
         return attach_http_server(spec, registry).await;
@@ -350,7 +475,9 @@ pub async fn attach_server(
         command.env(k, v);
     }
     for (k, v) in &spec.env {
-        command.env(k, v);
+        if !reserved_environment_key(k) {
+            command.env(k, v);
+        }
     }
     if let Some(session) = proc_session.as_ref() {
         command
@@ -491,7 +618,8 @@ pub async fn attach_server(
     };
 
     let mut registered = 0usize;
-    for descriptor in tools.tools {
+    let descriptors = tools.tools;
+    for descriptor in descriptors.iter().cloned() {
         let tool = McpRemoteTool::new_with_transport(
             &spec.name,
             descriptor,
@@ -504,10 +632,13 @@ pub async fn attach_server(
     }
 
     Ok(McpServerHandle {
-        client,
+        client: Some(client),
         child: Some(child),
         name: spec.name.clone(),
         tool_count: registered,
+        descriptors,
+        timeout: timeout_dur,
+        hosted: false,
         _proc_session: proc_session,
     })
 }
@@ -531,7 +662,12 @@ pub async fn attach_http_server(
     let bearer = spec
         .bearer_env
         .as_deref()
-        .and_then(|var| std::env::var(var).ok())
+        .and_then(|var| {
+            spec.env
+                .get(var)
+                .cloned()
+                .or_else(|| std::env::var(var).ok())
+        })
         .filter(|t| !t.is_empty());
 
     let transport = super::transport::HttpTransport::new(url, bearer)
@@ -572,7 +708,8 @@ pub async fn attach_http_server(
     };
 
     let mut registered = 0usize;
-    for descriptor in tools.tools {
+    let descriptors = tools.tools;
+    for descriptor in descriptors.iter().cloned() {
         let tool = McpRemoteTool::new_with_transport(
             &spec.name,
             descriptor,
@@ -585,10 +722,13 @@ pub async fn attach_http_server(
     }
 
     Ok(McpServerHandle {
-        client,
+        client: Some(client),
         child: None,
         name: spec.name.clone(),
         tool_count: registered,
+        descriptors,
+        timeout: timeout_dur,
+        hosted: false,
         _proc_session: None,
     })
 }
@@ -623,6 +763,7 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
         "COS_SDK_PYTHON_DIR",
         "COS_SNAPSHOT",
         "COS_PERMS_MODE",
+        crate::extension_host::protocol::BROKER_SOCKET_ENV,
     ];
     for key in SAFE_COS {
         if let Ok(value) = std::env::var(key) {
@@ -630,6 +771,22 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
         }
     }
     out
+}
+
+fn reserved_environment_key(key: &str) -> bool {
+    matches!(
+        key,
+        "COS_SESSION"
+            | "COS_APP_ID"
+            | "COS_PROC_DATA_DIR"
+            | "COS_DATA_DIR"
+            | "COS_HOME"
+            | "HOME"
+            | "USER"
+            | "LOGNAME"
+            | "PATH"
+            | crate::extension_host::protocol::BROKER_SOCKET_ENV
+    )
 }
 
 /// Kill the child and spawn a background reap so zombies don't

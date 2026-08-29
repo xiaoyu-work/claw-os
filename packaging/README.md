@@ -25,12 +25,13 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
+| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, `claw-extension-host`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
 | `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
-`cos-browser` and all command-style apps. `claw-os-base` adds only behavior
+`cos-browser`, the per-task App/MCP extension host, and all command-style apps.
+`claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the
 visible managed home, unmounts OverlayFS, and materializes that merged view in

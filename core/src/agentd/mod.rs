@@ -1,9 +1,10 @@
 //! `agentd` — the out-of-process agent runtime.
 //!
-//! Everything the model can steer — provider HTTP clients, streaming
-//! parsers, prompt assembly, MCP attachment, App execution and tool
-//! orchestration — runs in a short-lived `claw-agentd` process owned by
-//! the task's submitter, never inside the root `clawd` broker.
+//! Provider HTTP clients, streaming parsers, prompt assembly and tool
+//! orchestration run in a short-lived `claw-agentd` process owned by the
+//! task's submitter. Dynamic App and MCP code runs in the separate,
+//! task-owned [`crate::extension_host`] process; neither executes inside
+//! root `clawd`.
 //!
 //! ## Processes
 //!
@@ -19,6 +20,9 @@
 //!   `PR_SET_NO_NEW_PRIVS`, applies a `0077` umask, replaces the
 //!   environment with an allowlist and closes every inherited
 //!   descriptor except the job channel.
+//! * **`claw-extension-host`** is also spawned by [`supervisor`] as the
+//!   task owner. It owns dynamic processes and exposes only a worker-bound
+//!   control socket plus a broker-owned, route-filtered proxy.
 //!
 //! ## Authority
 //!
@@ -28,6 +32,8 @@
 //! It is signed with a secret that never leaves the broker process, so
 //! a grant cannot be minted by a worker, replayed against a different
 //! worker, or presented after its lease expires.
+//! The signed claims also pin the extension host pid/start-time, control and
+//! proxy paths, and a random task lease nonce.
 //!
 //! The channel itself is a private `socketpair(2)` created before the
 //! fork and handed to the child as fd 3. It carries the job lifecycle

@@ -213,7 +213,7 @@ pub fn spawn_worker(identity: &WorkerIdentity, _task_id: &str) -> Result<Spawned
 /// Refuse to exec a worker image any non-root account could have
 /// replaced. Mirrors the App-runner check so both privileged launch
 /// paths agree on what "trusted image" means.
-fn validate_root_owned_executable(path: &Path) -> Result<(), String> {
+pub(crate) fn validate_root_owned_executable(path: &Path) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
 
     let metadata = std::fs::symlink_metadata(path)
@@ -252,7 +252,7 @@ fn validate_root_owned_executable(path: &Path) -> Result<(), String> {
 
 /// Allocation-free error for a post-fork failure that has no `errno` of
 /// its own. The parent surfaces it as an ordinary spawn failure.
-fn raw_error(errno: libc::c_int) -> std::io::Error {
+pub(crate) fn raw_error(errno: libc::c_int) -> std::io::Error {
     std::io::Error::from_raw_os_error(errno)
 }
 
@@ -280,7 +280,14 @@ fn place_channel_fd(channel_fd: RawFd) -> std::io::Result<()> {
 /// `pre_exec` to the parent over a descriptor in this range, and that
 /// descriptor has to stay usable until `execve` replaces the image.
 fn close_inherited_descriptors() {
-    let first = protocol::CHANNEL_FD + 1;
+    mark_inherited_descriptors_cloexec(protocol::CHANNEL_FD + 1);
+}
+
+/// Mark every inherited descriptor at or above `first` close-on-exec.
+///
+/// The extension host has no broker descriptor at all and calls this with
+/// `3`; the agent worker preserves fd 3 and calls it with `4`.
+pub(crate) fn mark_inherited_descriptors_cloexec(first: RawFd) {
     #[cfg(target_os = "linux")]
     {
         const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
@@ -308,7 +315,7 @@ fn close_inherited_descriptors() {
     }
 }
 
-fn drop_to_owner(uid: u32, gid: u32) -> std::io::Result<()> {
+pub(crate) fn drop_to_owner(uid: u32, gid: u32) -> std::io::Result<()> {
     if unsafe { libc::geteuid() } != 0 {
         // Unprivileged supervisor (dev tree / tests): there is nothing
         // to drop, and `setgroups` would fail with EPERM. The identity
@@ -330,7 +337,11 @@ fn drop_to_owner(uid: u32, gid: u32) -> std::io::Result<()> {
     Ok(())
 }
 
-fn verify_dropped_identity(uid: u32, gid: u32, enforce_groups: bool) -> std::io::Result<()> {
+pub(crate) fn verify_dropped_identity(
+    uid: u32,
+    gid: u32,
+    enforce_groups: bool,
+) -> std::io::Result<()> {
     let mut ruid: libc::uid_t = 0;
     let mut euid: libc::uid_t = 0;
     let mut suid: libc::uid_t = 0;
@@ -366,7 +377,7 @@ fn verify_dropped_identity(uid: u32, gid: u32, enforce_groups: bool) -> std::io:
     Ok(())
 }
 
-fn harden_child(expected_parent: libc::pid_t) -> std::io::Result<()> {
+pub(crate) fn harden_child(expected_parent: libc::pid_t) -> std::io::Result<()> {
     #[cfg(target_os = "linux")]
     {
         if unsafe { libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL, 0, 0, 0) } != 0 {

@@ -3,7 +3,8 @@
 ## Purpose
 
 `core/` builds the `cos` CLI/library, the `clawd` system broker, the
-unprivileged `claw-agentd` agent worker, and small privileged helper binaries.
+unprivileged `claw-agentd` agent worker, the task-owned
+`claw-extension-host`, and small privileged helper binaries.
 It owns system authority, capability enforcement, agent orchestration,
 persistence, and structured primitive dispatch.
 
@@ -25,6 +26,7 @@ persistence, and structured primitive dispatch.
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
+| `src/extension_host/` | Isolated App/MCP process host, task-bound control channel, route-filtered broker proxy, cleanup |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |

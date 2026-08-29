@@ -1,6 +1,6 @@
 #!/bin/bash
 # packaging/deb/tests/test-agentd-packaging.sh -- the unprivileged agent
-# worker must be installed and configured wherever clawd is.
+# worker and extension host must be installed wherever clawd is.
 #
 # clawd no longer runs the model/tool loop in its own process: it spawns
 # /usr/local/bin/claw-agentd per task. An install that ships the broker
@@ -36,16 +36,32 @@ assert_contains "$CARGO_TOML" 'path = "src/bin/claw-agentd.rs"' \
     "the agent worker binary must have an entry point"
 [ -f "$PROJECT_DIR/core/src/bin/claw-agentd.rs" ] ||
     fail "core/src/bin/claw-agentd.rs is missing"
+assert_contains "$CARGO_TOML" 'name = "claw-extension-host"' \
+    "the extension host must be a first-class cargo binary"
+assert_contains "$CARGO_TOML" 'path = "src/bin/claw-extension-host.rs"' \
+    "the extension host binary must have an entry point"
+[ -f "$PROJECT_DIR/core/src/bin/claw-extension-host.rs" ] ||
+    fail "core/src/bin/claw-extension-host.rs is missing"
 
 assert_contains "$BUILD_DEBS" 'ensure_bin claw-agentd cos' \
     "claw-os-agent must build the agent worker"
 assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-agentd' \
     "claw-os-agent must install the agent worker beside clawd"
+assert_contains "$BUILD_DEBS" 'ensure_bin claw-extension-host cos' \
+    "claw-os-agent must build the extension host"
+assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-extension-host' \
+    "claw-os-agent must install the extension host beside claw-agentd"
 
 # The staged worker path and the path the unit hands clawd have to agree,
 # or the daemon looks for a binary the package never installed.
 assert_contains "$UNIT" 'COS_AGENTD_BIN=/usr/local/bin/claw-agentd' \
     "clawd.service must point at the installed agent worker"
+assert_contains "$UNIT" 'COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-host' \
+    "clawd.service must point at the installed extension host"
+assert_contains "$UNIT" 'CLAWD_EXTENSION_HOST_NAMESPACES=on' \
+    "clawd.service must enable available extension-host namespaces"
+grep -Eq '^Delegate=yes$' "$UNIT" ||
+    fail "clawd.service must delegate a cgroup subtree for extension cleanup"
 assert_contains "$UNIT" 'CLAWD_AGENTD=on' \
     "clawd.service must state whether agent supervision is enabled"
 
@@ -61,4 +77,4 @@ grep -Eq '^Environment=CLAWD_SOCKET_MODE=0660$' "$UNIT" ||
 grep -Eq '^Group=sudo$' "$UNIT" ||
     fail "clawd.service must keep its socket group"
 
-printf 'ok - agent worker packaging contract\n'
+printf 'ok - agent isolation packaging contract\n'

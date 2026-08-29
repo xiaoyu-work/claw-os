@@ -82,15 +82,21 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     audit::install_runtime_hook();
     context::refresh_builtin_sources(&state);
     spawn_authority_sweep();
+    let admission = Admission::new(Limits::default());
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     // Agent work runs in unprivileged `claw-agentd` processes. The
     // supervisor handle is deliberately *not* part of the daemon's
     // fatal path: a worker exiting — normally or not — must never take
     // the broker down, and supervision stopping still leaves every
     // non-agent primitive served.
-    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown);
+    let _agentd = crate::agentd::supervisor::spawn_supervisor(
+        agentd_shutdown,
+        crate::agentd::supervisor::BrokerContext {
+            state: state.clone(),
+            admission: admission.clone(),
+        },
+    );
     spawn_heartbeat();
-    let admission = Admission::new(Limits::default());
     let serve = async move {
         loop {
             let (stream, _addr) = listener
@@ -411,6 +417,56 @@ async fn dispatch(
     match result {
         Ok(value) => Response::ok(id, value),
         Err(error) => route.errors.response(id, error),
+    }
+}
+
+/// Dispatch a request whose process identity was verified by another
+/// broker-owned Unix listener.
+///
+/// The extension-host proxy uses this after applying its stricter route and
+/// task/session checks. Typed decoding, admission, duplicate detection,
+/// capability resolution, final provider enforcement, deadlines, and audit
+/// remain identical to the primary broker socket.
+pub(crate) async fn dispatch_verified_request(
+    request: crate::clawd::wire::Request,
+    client: &ClientIdentity,
+    state: &DaemonState,
+    admission: &Arc<Admission>,
+) -> Response {
+    let started = Instant::now();
+    let body = match serde_json::to_vec(&request) {
+        Ok(body) => body,
+        Err(_) => return Response::fault(request.id, Fault::InvalidEnvelope),
+    };
+    let bytes = body.len();
+    match admit(&body, client, admission).await {
+        Ok(admitted) => {
+            let facts = audit_policy::request_facts_for_route(
+                admitted.route.name,
+                admitted.route.audit_fields,
+                &admitted.params,
+            );
+            let response = dispatch(
+                admitted.route,
+                admitted.id,
+                admitted.params,
+                admitted.decision.as_ref(),
+                state,
+                client,
+            )
+            .await;
+            let outcome = response.audit_facts();
+            let elapsed = started.elapsed();
+            if let Err(error) = audit::record_request(&facts, &outcome, elapsed, client) {
+                tracing::error!(%error, "failed to write proxied clawd audit record");
+            }
+            system_journal::record_clawd_request(&facts, &outcome, elapsed, client);
+            response
+        }
+        Err(refusal) => {
+            record_protocol_failure(refusal.fault, bytes, refusal.command, started, client);
+            Response::fault(refusal.id, refusal.fault)
+        }
     }
 }
 

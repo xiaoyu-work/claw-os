@@ -9,6 +9,8 @@ transports, discovery, and tool-registry integration.
 
 - Implement the validated JSON-RPC/MCP protocol subset.
 - Attach configured or discovered stdio/remote servers.
+- Route attachment and calls through `claw-extension-host` for supervised
+  tasks; direct CLI/web processes retain the local client path.
 - Prefix and register remote tools in the guarded registry.
 - Expose only the external client's session-projected local tools and repeat
   the same projection check on `tools/call`.

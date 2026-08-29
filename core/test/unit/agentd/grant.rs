@@ -20,6 +20,7 @@ fn claims(worker_pid: u32) -> GrantClaims {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
+        extension: None,
         owner_gid: 1000,
         worker_pid,
         worker_start_time_ticks: Some(99),
@@ -47,9 +48,32 @@ fn expectation(route: &str) -> GrantExpectation {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
+        extension: None,
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
         route: route.to_string(),
+    }
+}
+
+fn extension(
+    host_pid: u32,
+    task: &str,
+    session: &str,
+) -> crate::extension_host::protocol::ExtensionBinding {
+    crate::extension_host::protocol::ExtensionBinding {
+        protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        task_id: task.to_string(),
+        session_id: Some(session.to_string()),
+        owner_uid: 1000,
+        owner_gid: 1000,
+        worker_pid: 77,
+        worker_start_time_ticks: Some(99),
+        host_pid,
+        host_start_time_ticks: Some(123),
+        lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        expires_at_ms: 61_000,
+        control_socket: "/run/cos/extensions/control.sock".to_string(),
+        broker_socket: "/run/cos/extensions/broker.sock".to_string(),
     }
 }
 
@@ -76,6 +100,30 @@ fn a_worker_cannot_mint_or_edit_its_own_grant() {
     tampered.claims.owner_uid = 0;
     assert_eq!(
         broker.verify(&tampered, &expectation("hello"), 2_000),
+        Err(GrantError::Signature)
+    );
+}
+
+#[test]
+fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
+    let signer = GrantSigner::from_secret([7u8; 32]);
+    let mut claims = claims(77);
+    claims.extension = Some(extension(88, "task-a", "session-a"));
+    let grant = signer.issue(claims);
+    let mut expected = expectation("hello");
+    expected.extension = Some(extension(88, "task-a", "session-a"));
+    assert_eq!(signer.verify(&grant, &expected, 2_000), Ok(()));
+
+    expected.extension = Some(extension(89, "task-a", "session-a"));
+    assert_eq!(
+        signer.verify(&grant, &expected, 2_000),
+        Err(GrantError::Extension)
+    );
+
+    let mut replayed = grant.clone();
+    replayed.claims.extension = Some(extension(88, "task-a", "session-b"));
+    assert_eq!(
+        signer.verify(&replayed, &expectation("hello"), 2_000),
         Err(GrantError::Signature)
     );
 }

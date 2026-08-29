@@ -278,6 +278,41 @@ pub(crate) fn registry_sessions() -> Vec<SessionInfo> {
         .unwrap_or_default()
 }
 
+/// Resolve the nearest live registered session containing `pid` in one
+/// owner's root-maintained registry.
+///
+/// The extension broker uses this before dispatching a proxied request so a
+/// child cannot name its host session (or a sibling extension session) and
+/// borrow that session's broader authority.
+pub(crate) fn nearest_session_for_owner(uid: u32, mut pid: u32) -> Option<SessionInfo> {
+    let path = owner_registry_path(uid);
+    let data = crate::filelock::read_locked(&path).ok()??;
+    let registry: Registry = serde_json::from_str(&data).ok()?;
+    for _ in 0..64 {
+        if let Some(session) = registry.sessions.iter().find(|session| {
+            !session.pending_bind
+                && session.pid == pid
+                && session.pid != 0
+                && session
+                    .start_time_ticks
+                    .is_some_and(|expected| read_start_time_ticks(session.pid) == Some(expected))
+        }) {
+            return Some(session.clone());
+        }
+        if pid <= 1 {
+            return None;
+        }
+        pid = std::fs::read_to_string(format!("/proc/{pid}/status"))
+            .ok()?
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("PPid:")
+                    .and_then(|value| value.trim().parse::<u32>().ok())
+            })?;
+    }
+    None
+}
+
 /// True only after the current process has been bound to the expected
 /// session identity. Used by the launcher shim to keep third-party code
 /// from running during the pid-binding window.
@@ -320,12 +355,19 @@ where
     F: FnOnce(Registry) -> Registry,
 {
     let path = registry_path();
-    let owner_uid = crate::paths::current_owner_uid_override();
+    let owner_uid = if std::env::var_os("COS_PROC_DATA_DIR").is_some() {
+        None
+    } else {
+        crate::paths::current_owner_uid_override()
+    };
     prepare_registry_path(&path, owner_uid)?;
     update_registry_path(&path, owner_uid, transform)
 }
 
 fn owner_registry_path(uid: u32) -> PathBuf {
+    if let Some(path) = std::env::var_os("COS_PROC_DATA_DIR") {
+        return PathBuf::from(path).join("proc").join("registry.json");
+    }
     PathBuf::from("/run/cos/caps")
         .join(uid.to_string())
         .join("proc")
@@ -333,6 +375,13 @@ fn owner_registry_path(uid: u32) -> PathBuf {
 }
 
 fn prepare_registry_path(path: &std::path::Path, owner_uid: Option<u32>) -> Result<(), String> {
+    if std::env::var_os("COS_PROC_DATA_DIR").is_some() {
+        let parent = path
+            .parent()
+            .ok_or_else(|| "registry path has no parent".to_string())?;
+        return crate::storage::ensure_private_dir(parent)
+            .map_err(|error| format!("create overridden proc registry dir: {error}"));
+    }
     if let Some(uid) = owner_uid {
         let root = path
             .parent()
@@ -384,7 +433,10 @@ where
 {
     let path = owner_registry_path(uid);
     prepare_registry_path(&path, Some(uid))?;
-    update_registry_path(&path, Some(uid), transform)
+    let owner = std::env::var_os("COS_PROC_DATA_DIR")
+        .is_none()
+        .then_some(uid);
+    update_registry_path(&path, owner, transform)
 }
 
 /// Register a freshly-built [`SessionInfo`] into the on-disk registry.
@@ -433,6 +485,26 @@ pub fn deregister_session_for_owner(session_id: &str, uid: u32) {
             .retain(|session| session.session_id != session_id);
         registry
     });
+}
+
+/// Remove every App/MCP session directly owned by one extension host.
+///
+/// Returns the removed ids so the broker can revoke the matching capability
+/// grants even when the host crashed before its RAII teardown ran.
+pub(crate) fn deregister_child_sessions_for_owner(parent: &str, uid: u32) -> Vec<String> {
+    let mut removed = Vec::new();
+    let _ = update_owner_registry(uid, |mut registry| {
+        registry.sessions.retain(|session| {
+            let matches = session.parent.as_deref() == Some(parent)
+                && matches!(session.group.as_deref(), Some("app" | "mcp"));
+            if matches {
+                removed.push(session.session_id.clone());
+            }
+            !matches
+        });
+        registry
+    });
+    removed
 }
 
 /// Remove a session only when it is still bound to the calling process

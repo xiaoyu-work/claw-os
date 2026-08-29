@@ -225,6 +225,28 @@ directly.
 The return value (a dict, list, or scalar) is JSON-dumped to stdout.
 Return `None` to print nothing.
 
+### Agent-launched isolation
+
+An App invoked from a daemon-backed Agent task does not run in root `clawd` or
+inside the `claw-agentd` model/tool process. `clawd` starts one
+`claw-extension-host` as the task owner, and the worker sends App lifecycle and
+call requests to that host over a versioned task-bound control socket.
+
+The host starts with no supplementary groups, `NoNewPrivs`, a `0077` umask,
+sanitized environment and descriptors, finite resource limits, and its own
+session/process group. App children receive a separate private broker proxy
+path, never `/run/cos/clawd.sock`. The proxy accepts only routes for the
+child's nearest registered App/MCP session, then re-enters the normal
+capability authority and final provider checks. Session registration,
+per-call transient scopes, approvals, and teardown therefore retain the same
+manifest-derived policy as direct launches.
+
+Do not depend on inherited file descriptors, arbitrary parent environment
+variables, the broker socket pathname, or daemonized children. Calls and
+frames are bounded; cancellation, timeout, host failure, and task completion
+terminate the hosted process tree. App stdout/stderr and returned values are
+treated as untrusted Agent input.
+
 ## 4. The dev loop — no rebuild, no restart
 
 Every one-shot `cos app <id> <op>` invocation launches the app entry point
@@ -486,6 +508,7 @@ Set explicitly only when overriding defaults
 | `COS_APP_ID` | The id of the calling app. **Auto-set by the bridge** from `app.json`; do not override. | (auto) |
 | `COS_BIN` | Path to the `cos` binary the SDK shells back to. | `cos` (from `$PATH`) |
 | `COS_SESSION` | Session id for grouped multi-call audit. | unset |
+| `COS_EXTENSION_BROKER_SOCKET` | Private task-scoped broker proxy for a hosted App/MCP child. **Auto-set by the host; do not override.** | unset |
 
 ## 10. Ship it
 

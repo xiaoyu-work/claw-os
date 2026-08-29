@@ -17,13 +17,14 @@ Recommends: chromium | chromium-browser | google-chrome-stable,
 Suggests: systemd-coredump
 Description: reusable Claw OS system agent for Debian and Ubuntu
  Installs the complete headless Claw OS agent stack: `cos`, `clawd`,
- `claw-agentd`, browser and semantic runtimes, capability and approval
- enforcement, audit/session persistence, skills, SDKs, and bundled
- headless apps.
+ `claw-agentd`, `claw-extension-host`, browser and semantic runtimes,
+ capability and approval enforcement, audit/session persistence, skills,
+ SDKs, and bundled headless apps.
  .
  The package also installs and enables the privileged `clawd` system
  service. Agent work itself runs in unprivileged, per-task
- `claw-agentd` processes that `clawd` supervises. Browser and user
- indexing services are installed but remain opt-in or condition-gated.
+ `claw-agentd` and task-owned `claw-extension-host` processes that `clawd`
+ supervises. Browser and user indexing services are installed but remain
+ opt-in or condition-gated.
  It does not alter the host's home layout, boot identity, desktop
  environment, PAM policy, or firmware policy.

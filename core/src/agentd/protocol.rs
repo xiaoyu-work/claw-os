@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -225,6 +225,10 @@ pub struct Assignment {
     /// recently present. Never persisted in the task/session record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<crate::session::SessionPresence>,
+    /// Broker-spawned task-owned extension host. Its complete identity and
+    /// channel paths are also signed into the worker grant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<crate::extension_host::protocol::ExtensionBinding>,
 }
 
 fn unattended_consent() -> ConsentContext {
@@ -417,6 +421,18 @@ pub enum RuntimeAuditRecord {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         error: Option<TextDigest>,
     },
+    ExtensionLifecycle {
+        session_id: String,
+        kind: crate::extension_host::protocol::ExtensionKind,
+        action: crate::extension_host::protocol::LifecycleAction,
+        extension_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        manifest_digest: Option<String>,
+        success: bool,
+        latency_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<TextDigest>,
+    },
 }
 
 impl RuntimeAuditRecord {
@@ -424,7 +440,8 @@ impl RuntimeAuditRecord {
         match self {
             RuntimeAuditRecord::ToolStarted { session_id, .. }
             | RuntimeAuditRecord::ToolFinished { session_id, .. }
-            | RuntimeAuditRecord::TurnFinished { session_id, .. } => session_id.as_str(),
+            | RuntimeAuditRecord::TurnFinished { session_id, .. }
+            | RuntimeAuditRecord::ExtensionLifecycle { session_id, .. } => session_id.as_str(),
         }
     }
 }

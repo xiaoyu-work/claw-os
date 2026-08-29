@@ -13,8 +13,9 @@ and agent tasks.
 - Own task ownership/lease, snapshot authenticated client provenance, keep
   attended presence in short-lived process-bound leases, and expose task
   lifecycle RPC.
-- Supervise unprivileged `claw-agentd` workers; never run the model/tool loop
-  in this process (see `core/src/agentd/MODULE.md`).
+- Supervise unprivileged `claw-agentd` workers and task-owned
+  `claw-extension-host` processes; never run the model/tool loop or dynamic
+  extension code in this process.
 - Install audit hooks around broker-visible work, including runtime audit
   forwarded by a worker.
 
@@ -22,7 +23,7 @@ and agent tasks.
 
 | Path | Role |
 | --- | --- |
-| `server.rs` | Socket lifecycle and request admission order, agentd supervision start |
+| `server.rs` | Socket lifecycle, request admission, shared internal dispatch, agentd supervision start |
 | `transport/` | Frame reader/writer, per-message peer credentials, admission ceilings |
 | `wire/` | Versioned envelope, bounded field types, one typed request body per route |
 | `routes.rs` | The route registry: wire name, typed decode, access class, budget, audit fields, authorization descriptor, handler |
@@ -30,6 +31,7 @@ and agent tasks.
 | `agent_client.rs` | Client RPC for agent task submit/result/cancel/status |
 | `tasks.rs` | Task queue and lifecycle |
 | `app_sessions.rs` | App/native/MCP session authority: derives identity and capabilities, plans approvals, issues launch grants |
+| `../extension_host/broker.rs` | Per-task private proxy: verifies SCM credentials, host/child ancestry, route class and nearest child session before normal dispatch |
 | `scheduler.rs` | Proactive-scheduler authority: validates `cos cron` / `cos triggers` requests and derives what a job may carry |
 | `system_caps.rs` | System capability derivation |
 | `session_scope.rs` | Trusted-session override and its owner-policy clamp |
@@ -240,6 +242,16 @@ authority refuses a second claim on a live session index, not because a boolean
 was flipped. Nothing about the handle appears in any durable record.
 Caller-supplied capabilities may only narrow the ceiling.
 
+For daemon-backed tasks, the launcher is the exact
+`claw-extension-host` process registered by the supervisor. Its private broker
+socket is separate from `/run/cos/clawd.sock` and bound to the task owner,
+worker pid/start-time, host pid/start-time, session, nonce, and live lease.
+Only the host may use App/MCP lifecycle and `permission.status`; only a hosted
+descendant may use `Session`/`PeerSession` provider routes, and the request's
+session must be that process's nearest registered App/MCP row. The request then
+re-enters `server.rs` admission, capability authority, provider checks,
+deadlines, and audit unchanged.
+
 `system_caps.rs` owns the same rule for the system Agent. `BASELINE` records one
 explicit decision per catalog verb, so a verb the catalog gains without a
 decision is denied; catalog risk is one input, not the rule. The default set is
@@ -326,6 +338,7 @@ bounded by the same home-scoped ceiling its executor applies.
 cargo test -p cos clawd:: -- --test-threads=1
 cargo test -p cos clawd::authority -- --test-threads=1
 cargo test -p cos --test clawd_broker_socket -- --test-threads=1
+cargo test -p cos --test extension_host_boundary -- --test-threads=1
 ```
 
 For a service change, include malformed input, exact scope, broker error, and

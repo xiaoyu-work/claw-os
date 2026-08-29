@@ -210,6 +210,37 @@ fn register_spawn_test_parent(caps: crate::caps::CapSet) -> String {
     session_id
 }
 
+#[test]
+#[cfg(target_os = "linux")]
+fn extension_teardown_removes_only_its_app_and_mcp_children() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let parent = register_spawn_test_parent(crate::caps::CapSet::new());
+    let base = session_info_by_id(&parent).expect("parent row");
+
+    for (id, group, owner) in [
+        ("app-child", "app", parent.as_str()),
+        ("mcp-child", "mcp", parent.as_str()),
+        ("other-child", "app", "another-host"),
+    ] {
+        let mut row = base.clone();
+        row.session_id = id.to_string();
+        row.group = Some(group.to_string());
+        row.parent = Some(owner.to_string());
+        register_session(row).unwrap();
+    }
+
+    let uid = unsafe { libc::geteuid() } as u32;
+    let mut removed = deregister_child_sessions_for_owner(&parent, uid);
+    removed.sort();
+    assert_eq!(removed, vec!["app-child", "mcp-child"]);
+    assert!(session_info_by_id("app-child").is_none());
+    assert!(session_info_by_id("mcp-child").is_none());
+    assert!(session_info_by_id("other-child").is_some());
+    assert!(session_info_by_id(&parent).is_some());
+}
+
 #[cfg(target_os = "linux")]
 struct StaticSpawnHelpers {
     _dir: tempfile::TempDir,

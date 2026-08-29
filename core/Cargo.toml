@@ -21,6 +21,10 @@ name = "claw-agentd"
 path = "src/bin/claw-agentd.rs"
 
 [[bin]]
+name = "claw-extension-host"
+path = "src/bin/claw-extension-host.rs"
+
+[[bin]]
 name = "claw-approval-helper"
 path = "src/bin/claw-approval-helper.rs"
 

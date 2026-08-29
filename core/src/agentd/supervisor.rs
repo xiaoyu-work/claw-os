@@ -23,6 +23,8 @@ use tokio::sync::Semaphore;
 
 use crate::agent::service::{FinishOutcome, Job, Store};
 use crate::caps::ConsentContext;
+use crate::clawd::state::DaemonState;
+use crate::clawd::transport::limits::{Admission, Limits};
 
 use super::grant::{GrantClaims, GrantExpectation, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use super::protocol::{
@@ -101,7 +103,16 @@ fn env_u64(key: &str) -> Option<u64> {
 /// Start supervision on the daemon's runtime. The returned handle is
 /// deliberately not joined into `clawd`'s fatal path: supervision
 /// stopping must never take the broker down with it.
-pub fn spawn_supervisor(shutdown: Arc<AtomicBool>) -> tokio::task::JoinHandle<()> {
+#[derive(Clone)]
+pub struct BrokerContext {
+    pub state: DaemonState,
+    pub admission: Arc<Admission>,
+}
+
+pub fn spawn_supervisor(
+    shutdown: Arc<AtomicBool>,
+    broker: BrokerContext,
+) -> tokio::task::JoinHandle<()> {
     let config = SupervisorConfig::from_env();
     tokio::spawn(async move {
         if !config.enabled {
@@ -111,7 +122,7 @@ pub fn spawn_supervisor(shutdown: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
             );
             return;
         }
-        if let Err(error) = run(config, shutdown).await {
+        if let Err(error) = run_with_broker(config, shutdown, broker).await {
             tracing::error!(
                 error = %error,
                 "agentd supervision stopped; clawd continues serving non-agent primitives"
@@ -121,8 +132,20 @@ pub fn spawn_supervisor(shutdown: Arc<AtomicBool>) -> tokio::task::JoinHandle<()
 }
 
 pub async fn run(config: SupervisorConfig, shutdown: Arc<AtomicBool>) -> Result<(), String> {
+    let broker = BrokerContext {
+        state: DaemonState::try_new()?,
+        admission: Admission::new(Limits::default()),
+    };
+    run_with_broker(config, shutdown, broker).await
+}
+
+async fn run_with_broker(
+    config: SupervisorConfig,
+    shutdown: Arc<AtomicBool>,
+    broker: BrokerContext,
+) -> Result<(), String> {
     let store = Store::open_default().map_err(|error| error.to_string())?;
-    run_with_store(config, shutdown, store).await
+    run_with_store_and_broker(config, shutdown, store, broker).await
 }
 
 /// Supervision loop against an explicit queue. `run` uses the daemon's
@@ -133,6 +156,19 @@ pub async fn run_with_store(
     config: SupervisorConfig,
     shutdown: Arc<AtomicBool>,
     store: Store,
+) -> Result<(), String> {
+    let broker = BrokerContext {
+        state: DaemonState::try_new()?,
+        admission: Admission::new(Limits::default()),
+    };
+    run_with_store_and_broker(config, shutdown, store, broker).await
+}
+
+pub async fn run_with_store_and_broker(
+    config: SupervisorConfig,
+    shutdown: Arc<AtomicBool>,
+    store: Store,
+    broker: BrokerContext,
 ) -> Result<(), String> {
     let signer = Arc::new(GrantSigner::generate()?);
     let permits = Arc::new(Semaphore::new(config.max_workers));
@@ -188,6 +224,7 @@ pub async fn run_with_store(
         let config = config.clone();
         let throttle = throttle.clone();
         let shutdown = shutdown.clone();
+        let broker = broker.clone();
         tokio::spawn(async move {
             let _permit = permit;
             let job_id = job.id.clone();
@@ -200,6 +237,7 @@ pub async fn run_with_store(
                 throttle,
                 shutdown,
                 broker_pid,
+                broker,
                 job,
                 presence,
             )
@@ -269,6 +307,7 @@ struct Lease {
     client: crate::session::SessionClient,
     presence: Option<crate::session::SessionPresence>,
     capability_generation: String,
+    extension: Option<crate::extension_host::protocol::ExtensionBinding>,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     deadline: Instant,
@@ -295,6 +334,7 @@ async fn supervise(
     throttle: Arc<Mutex<SpawnThrottle>>,
     shutdown: Arc<AtomicBool>,
     broker_pid: u32,
+    broker: BrokerContext,
     job: Job,
     presence: Option<crate::session::SessionPresence>,
 ) -> Result<(), String> {
@@ -393,6 +433,37 @@ async fn supervise(
         tracing::warn!(task = %job.id, error = %error, "failed to bind agent worker to task");
     }
 
+    let mut extension = match start_extension_host(
+        &identity,
+        &job,
+        session.as_ref(),
+        pid,
+        start_time_ticks,
+        config.lease,
+        broker,
+    )
+    .await
+    {
+        Ok(extension) => extension,
+        Err(error) => {
+            reap(&mut child, pid).await;
+            release_or_fail(
+                &store,
+                &job,
+                &format!("failed to start extension host: {error}"),
+            );
+            return Ok(());
+        }
+    };
+    crate::clawd::audit::record_extension_host_event(
+        &job.id,
+        job.session_id.as_deref(),
+        owner_uid,
+        extension.host.pid,
+        extension.host.start_time_ticks,
+        "attach",
+    );
+
     let lease = Lease {
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
@@ -406,6 +477,7 @@ async fn supervise(
             .unwrap_or_else(|| {
                 crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
             }),
+        extension: Some(extension.host.binding.clone()),
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
         deadline: Instant::now() + config.lease,
@@ -416,11 +488,42 @@ async fn supervise(
     let approval_identity = lease.approval_identity();
 
     let outcome = pump(
-        &store, &signer, &config, &shutdown, broker_pid, &job, session, lease, channel, &mut child,
+        &store,
+        &signer,
+        &config,
+        &shutdown,
+        broker_pid,
+        &job,
+        session,
+        lease,
+        channel,
+        &mut child,
+        &mut extension.host.child,
+        extension.lease.clone(),
     )
     .await;
 
+    extension.lease.close();
     reap(&mut child, pid).await;
+    reap_extension_host(&mut extension.host).await;
+    crate::clawd::audit::record_extension_host_event(
+        &job.id,
+        job.session_id.as_deref(),
+        owner_uid,
+        extension.host.pid,
+        extension.host.start_time_ticks,
+        "detach",
+    );
+    extension.broker_task.abort();
+    if let Some(session_id) = extension.host_session_id.as_deref() {
+        for child_session in crate::proc::deregister_child_sessions_for_owner(session_id, owner_uid)
+        {
+            crate::clawd::authority::revoke_session_for_owner(&child_session, owner_uid);
+        }
+        crate::proc::deregister_session_for_owner(session_id, owner_uid);
+        crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
+    }
+    extension.host.paths.cleanup();
 
     // The worker's lease is over, so every grant its session accrued
     // goes with it — including any reusable approval the user made
@@ -471,6 +574,122 @@ enum TaskOutcome {
     Retry(String),
 }
 
+struct ExtensionRuntime {
+    host: crate::extension_host::spawn::SpawnedExtensionHost,
+    lease: Arc<crate::extension_host::broker::ExtensionLease>,
+    broker_task: tokio::task::JoinHandle<()>,
+    host_session_id: Option<String>,
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn start_extension_host(
+    identity: &spawn::WorkerIdentity,
+    job: &Job,
+    session: Option<&crate::proc::SessionInfo>,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_duration: Duration,
+    broker: BrokerContext,
+) -> Result<ExtensionRuntime, String> {
+    let paths = crate::extension_host::spawn::HostPaths::create(identity)?;
+    let listener = match crate::extension_host::broker::bind_listener(
+        &paths.broker_socket,
+        identity.uid,
+        identity.gid,
+    ) {
+        Ok(listener) => listener,
+        Err(error) => {
+            paths.cleanup();
+            return Err(error);
+        }
+    };
+    let host_session_id = session.map(|_| format!("extension-{}", uuid::Uuid::new_v4().simple()));
+    let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
+    let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
+    let cleanup_paths = paths.clone();
+    let mut host = match crate::extension_host::spawn::spawn_host(
+        identity,
+        &job.id,
+        job.session_id.as_deref(),
+        host_session_id.as_deref(),
+        worker_pid,
+        worker_start_time_ticks,
+        &lease_nonce,
+        expires_at_ms,
+        paths,
+    ) {
+        Ok(host) => host,
+        Err(error) => {
+            cleanup_paths.cleanup();
+            return Err(error);
+        }
+    };
+    drain_extension_output(&mut host.child, &job.id);
+
+    if let (Some(host_session_id), Some(parent)) = (host_session_id.as_ref(), session) {
+        let info = crate::proc::SessionInfo {
+            session_id: host_session_id.clone(),
+            pid: host.pid,
+            command: vec!["claw-extension-host".to_string(), job.id.clone()],
+            started_at: chrono::Utc::now().to_rfc3339(),
+            stdout_path: String::new(),
+            stderr_path: String::new(),
+            group: Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
+            parent: job.session_id.clone(),
+            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            exit_code: None,
+            ended_at: None,
+            tier: parent.tier,
+            scope: parent.scope.clone(),
+            priority: parent.priority.clone(),
+            caps: parent.caps.clone(),
+            transient_caps: None,
+            role: parent.role.clone(),
+            app_id: None,
+            pending_bind: false,
+            start_time_ticks: host.start_time_ticks,
+            client: crate::session::SessionClient::new(
+                crate::session::SessionSource::BrokerTask,
+                false,
+                true,
+            ),
+        };
+        if let Err(error) = crate::proc::register_session_for_owner(info, identity.uid) {
+            unsafe {
+                crate::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
+            }
+            let _ = host.child.wait().await;
+            host.paths.cleanup();
+            return Err(format!("register extension-host session: {error}"));
+        }
+    }
+
+    let lease = Arc::new(crate::extension_host::broker::ExtensionLease::new(
+        job.id.clone(),
+        job.session_id.clone(),
+        host_session_id.clone(),
+        identity.uid,
+        identity.gid,
+        worker_pid,
+        worker_start_time_ticks,
+        host.pid,
+        host.start_time_ticks,
+        expires_at_ms,
+    ));
+    let broker_task = tokio::spawn(crate::extension_host::broker::serve(
+        listener,
+        lease.clone(),
+        broker.state,
+        broker.admission,
+    ));
+    Ok(ExtensionRuntime {
+        host,
+        lease,
+        broker_task,
+        host_session_id,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn pump(
     store: &Store,
@@ -483,6 +702,8 @@ async fn pump(
     mut lease: Lease,
     channel: tokio::net::UnixStream,
     child: &mut tokio::process::Child,
+    extension_child: &mut tokio::process::Child,
+    extension_lease: Arc<crate::extension_host::broker::ExtensionLease>,
 ) -> TaskOutcome {
     // Authority on this channel comes from the grant, not from the
     // socket: `socketpair` is created before the fork, so `SO_PEERCRED`
@@ -509,6 +730,7 @@ async fn pump(
         consent_context: lease.consent_context,
         session,
         presence: lease.presence,
+        extension: lease.extension.clone(),
     };
     if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
         return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
@@ -577,6 +799,7 @@ async fn pump(
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
                             lease.approval_expires_at = approval_deadline(config.lease);
+                            extension_lease.renew(config.lease);
                         }
                         WorkerFrame::Result { outcome, .. } => {
                             return TaskOutcome::Reported(outcome);
@@ -604,6 +827,28 @@ async fn pump(
                 return if cancel_sent {
                     TaskOutcome::Cancelled
                 } else {
+                    // A hosted call may have crossed an external side-effect
+                    // boundary before the host died. Retrying the whole task
+                    // could repeat it, so host failure is terminal.
+                    TaskOutcome::Failed(detail)
+                };
+            },
+            status = extension_child.wait() => {
+                let detail = match status {
+                    Ok(status) => format!("extension host exited early ({status})"),
+                    Err(error) => format!("extension host could not be reaped: {error}"),
+                };
+                crate::clawd::audit::record_extension_host_event(
+                    &lease.task_id,
+                    lease.session_id.as_deref(),
+                    lease.owner_uid,
+                    lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
+                    lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
+                    "crash",
+                );
+                return if cancel_sent {
+                    TaskOutcome::Cancelled
+                } else {
                     TaskOutcome::Retry(detail)
                 };
             },
@@ -614,6 +859,14 @@ async fn pump(
                 {
                     cancel_sent = true;
                     cancelled_at = Some(Instant::now());
+                    crate::clawd::audit::record_extension_host_event(
+                        &lease.task_id,
+                        lease.session_id.as_deref(),
+                        lease.owner_uid,
+                        lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
+                        lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
+                        "cancel",
+                    );
                     let _ = send(
                         &mut writer,
                         &BrokerFrame::Cancel { task_id: job.id.clone() },
@@ -628,6 +881,12 @@ async fn pump(
                     let _ = child.start_kill();
                     unsafe {
                         spawn::terminate_worker_group(lease.worker_pid, libc::SIGKILL);
+                        if let Some(extension) = lease.extension.as_ref() {
+                            crate::extension_host::spawn::terminate_host_tree(
+                                extension.host_pid,
+                                None,
+                            );
+                        }
                     }
                 }
                 if !hello_seen && last_progress.elapsed() > config.heartbeat_grace {
@@ -639,6 +898,20 @@ async fn pump(
                     let _ = child.start_kill();
                     unsafe {
                         spawn::terminate_worker_group(lease.worker_pid, libc::SIGKILL);
+                        if let Some(extension) = lease.extension.as_ref() {
+                            crate::extension_host::spawn::terminate_host_tree(
+                                extension.host_pid,
+                                None,
+                            );
+                        }
+                        crate::clawd::audit::record_extension_host_event(
+                            &lease.task_id,
+                            lease.session_id.as_deref(),
+                            lease.owner_uid,
+                            lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
+                            lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
+                            "timeout",
+                        );
                     }
                     return TaskOutcome::Retry(
                         "agent worker lease expired without a heartbeat".to_string(),
@@ -661,6 +934,7 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         client: lease.client,
         presence: lease.presence,
         capability_generation: lease.capability_generation.clone(),
+        extension: lease.extension.clone(),
         owner_gid: 0,
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
@@ -705,6 +979,7 @@ fn accept(
                 client: lease.client,
                 presence: lease.presence,
                 capability_generation: lease.capability_generation.clone(),
+                extension: lease.extension.clone(),
                 worker_pid: lease.worker_pid,
                 worker_start_time_ticks: lease.worker_start_time_ticks,
                 route: route.to_string(),
@@ -1079,6 +1354,40 @@ async fn reap(child: &mut tokio::process::Child, pid: u32) {
     }
 }
 
+async fn reap_extension_host(host: &mut crate::extension_host::spawn::SpawnedExtensionHost) {
+    match host.child.try_wait() {
+        Ok(Some(status)) => {
+            if let Some(cgroup) = host.cgroup.as_ref() {
+                cgroup.kill_all();
+            }
+            tracing::debug!(host_pid = host.pid, %status, "extension host reaped");
+        }
+        Ok(None) => {
+            unsafe {
+                crate::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
+            }
+            let _ = host.child.start_kill();
+            match tokio::time::timeout(SHUTDOWN_GRACE, host.child.wait()).await {
+                Ok(Ok(status)) => {
+                    tracing::debug!(host_pid = host.pid, %status, "extension host reaped");
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(host_pid = host.pid, %error, "failed to reap extension host");
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        host_pid = host.pid,
+                        "extension host did not exit before deadline"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            tracing::warn!(host_pid = host.pid, %error, "failed to inspect extension host");
+        }
+    }
+}
+
 fn drain_worker_output(child: &mut tokio::process::Child, task_id: &str) {
     if let Some(stdout) = child.stdout.take() {
         let task_id = task_id.to_string();
@@ -1098,6 +1407,39 @@ fn drain_worker_output(child: &mut tokio::process::Child, task_id: &str) {
             }
         });
     }
+}
+
+fn drain_extension_output(child: &mut tokio::process::Child, task_id: &str) {
+    if let Some(stdout) = child.stdout.take() {
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::debug!(
+                    task = %task_id,
+                    "extension host: {}",
+                    bounded_log_line(&line)
+                );
+            }
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let task_id = task_id.to_string();
+        tokio::spawn(async move {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                tracing::warn!(
+                    task = %task_id,
+                    "extension host: {}",
+                    bounded_log_line(&line)
+                );
+            }
+        });
+    }
+}
+
+fn bounded_log_line(line: &str) -> String {
+    line.chars().take(4096).collect()
 }
 
 fn finish_error(store: &Store, job: Job, message: &str) {

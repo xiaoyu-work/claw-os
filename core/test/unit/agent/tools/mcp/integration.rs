@@ -149,6 +149,18 @@ fn mcp_remote_tool_coerces_non_object_schema() {
     assert_eq!(schema["additionalProperties"], true);
 }
 
+#[tokio::test]
+async fn routed_worker_never_falls_back_to_local_mcp_execution() {
+    let spec = make_spec("isolated");
+    let mut registry = ToolRegistry::new();
+    let result = crate::paths::with_routed_job(attach_server(&spec, &mut registry)).await;
+    let error = match result {
+        Ok(_) => panic!("a worker without its host must fail closed"),
+        Err(error) => error,
+    };
+    assert!(error.contains("extension host is unavailable"), "{error}");
+}
+
 /// End-to-end: a fake "MCP server" running in the same task pair
 /// answers `tools/list` with one descriptor and `tools/call` with
 /// a text payload. Verifies attach_server-equivalent flow against

@@ -185,6 +185,8 @@ claw-os/
 ├── core/              Rust binary (cos)
 │   └── src/
 │       ├── main.rs        Entry point
+│       ├── agentd/        Unprivileged model/tool worker supervision
+│       ├── extension_host/ Task-owned dynamic App/MCP process boundary
 │       ├── router.rs      Command dispatch
 │       ├── sandbox.rs     Namespace + cgroup isolation
 │       ├── proc.rs        Process session manager

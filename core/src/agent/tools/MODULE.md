@@ -8,6 +8,8 @@ which tool calls are exposed and executed.
 ## Responsibilities
 
 - Register built-in, `cos` proxy, progressive app, memory, browser, and MCP tools.
+- Use host-backed proxy tools in supervised tasks so dynamic App/MCP code
+  never executes in the worker process.
 - Cache immutable name/description/schema descriptors separately from
   per-request visibility decisions.
 - Project descriptors through trusted session owner, source, attendance,
@@ -49,6 +51,8 @@ dispatch; only immutable descriptors may be cached. Tools consume stable
 service/capability definitions and still perform exact argument-derived checks.
 Model output, client fields, process environment, and external tool results are
 untrusted; authority comes only from authenticated session/runtime facts.
+Hosted results are wrapped as untrusted model data before they enter the
+trajectory.
 
 `auto_deny_tools` may block any tool early, but
 `dangerous_tools`/`auto_approve_tools` never grant capability authority. Only

@@ -14,6 +14,8 @@ surfaces.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Attach built-in, app, and MCP tools to one guarded registry.
+- Delegate dynamic App and MCP execution to the task-owned extension host when
+  running inside `claw-agentd`.
 - Expose CLI, task-queue, and authenticated local web surfaces. The queue's
   execution side runs in `claw-agentd`, never in the `clawd` broker — see
   [`../agentd/MODULE.md`](../agentd/MODULE.md).

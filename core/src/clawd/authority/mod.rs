@@ -552,6 +552,13 @@ pub fn revoke_session(session_id: &str) {
     );
 }
 
+/// Revoke the process-bound grant currently indexed by `session_id` while
+/// retaining an unindexed launch parent used to derive its replacement.
+pub(crate) fn revoke_indexed_session(session_id: &str) {
+    let retired = authority().revoke_indexed_session(session_id);
+    audit::record_revoked("indexed-session", Some(session_id), retired);
+}
+
 /// Revoke every grant bound to a session on behalf of a known owner.
 ///
 /// Same as [`revoke_session`], but for callers outside the owner's path

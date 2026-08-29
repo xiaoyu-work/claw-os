@@ -27,6 +27,7 @@ use cos::agentd::spawn::{self, SpawnedWorker, WorkerIdentity};
 use tokio::io::{AsyncWriteExt, BufReader};
 
 const WORKER_BIN: &str = env!("CARGO_BIN_EXE_claw-agentd");
+const EXTENSION_HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 /// Marker placed in the *parent's* environment. The worker rebuilds its
 /// environment from an allowlist, so this must never appear in the
 /// child.
@@ -46,6 +47,8 @@ impl Drop for Harness {
             libc::close(self.leaked_fd);
         }
         std::env::remove_var(LEAK_MARKER);
+        std::env::remove_var("COS_EXTENSION_HOST_BIN");
+        std::env::remove_var("COS_RUNTIME_DIR");
     }
 }
 
@@ -61,7 +64,9 @@ fn harness() -> Option<Harness> {
     let home = tempfile::tempdir().ok()?;
     let data = tempfile::tempdir().ok()?;
     std::env::set_var("COS_AGENTD_BIN", WORKER_BIN);
+    std::env::set_var("COS_EXTENSION_HOST_BIN", EXTENSION_HOST_BIN);
     std::env::set_var("COS_DATA_DIR", data.path());
+    std::env::set_var("COS_RUNTIME_DIR", data.path().join("run"));
     std::env::set_var(LEAK_MARKER, "broker-only-value");
 
     // A descriptor the broker holds without `O_CLOEXEC`, standing in
@@ -106,6 +111,7 @@ fn assignment(
         consent_context: cos::caps::ConsentContext::Attended,
         session: None,
         presence: None,
+        extension: None,
     }
 }
 
@@ -129,6 +135,7 @@ fn grant_for(
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),
+        extension: None,
         owner_gid: owner.gid,
         worker_pid,
         worker_start_time_ticks: start_time_ticks,
@@ -574,6 +581,7 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),
+        extension: None,
         owner_gid: harness.identity.gid,
         worker_pid: worker.pid,
         worker_start_time_ticks: worker.start_time_ticks,

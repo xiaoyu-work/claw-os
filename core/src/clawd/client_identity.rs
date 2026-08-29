@@ -54,6 +54,19 @@ impl ClientIdentity {
         }
     }
 
+    /// Identity already verified from SCM credentials by a private broker
+    /// listener. This is not exposed outside the crate so request fields can
+    /// never manufacture a client principal.
+    pub(crate) fn from_verified_parts(pid: u32, uid: u32, gid: u32, start_time_ticks: u64) -> Self {
+        Self {
+            pid: Some(pid),
+            uid: Some(uid),
+            gid: Some(gid),
+            start_time_ticks: Some(start_time_ticks),
+            attended_local: false,
+        }
+    }
+
     /// Resolve this peer's `$HOME` directory from the passwd database
     /// via `getpwuid_r`. Returns `None` when the uid is unknown, when
     /// passwd lookup fails, or on non-Linux platforms (clawd is Linux-

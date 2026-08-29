@@ -163,7 +163,48 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
     if let Err(err) = append_jsonl(&audit) {
         tracing::error!(error = %err, event, "failed to write clawd task audit record");
     }
+
     super::system_journal::record_task_event(event, job);
+}
+
+#[derive(Debug, Serialize)]
+struct ExtensionHostSupervisorAudit {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session_id: Option<String>,
+    owner_uid: u32,
+    host_pid: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    host_start_time_ticks: Option<u64>,
+    action: &'static str,
+}
+
+pub fn record_extension_host_event(
+    task_id: &str,
+    session_id: Option<&str>,
+    owner_uid: u32,
+    host_pid: u32,
+    host_start_time_ticks: Option<u64>,
+    action: &'static str,
+) {
+    let record = ExtensionHostSupervisorAudit {
+        ts: Utc::now(),
+        event: "clawd.agent.extension.host",
+        job_id: audit_policy::safe_identity(task_id),
+        session_id: session_id.map(audit_policy::safe_identity),
+        owner_uid,
+        host_pid,
+        host_start_time_ticks,
+        action,
+    };
+    if let Err(error) = append_jsonl(&record) {
+        tracing::error!(%error, "failed to write extension-host audit record");
+    }
+    if let Some(session_id) = session_id {
+        record_extension_mutation(session_id, "host", action, "task-host", None, true);
+    }
 }
 
 pub fn install_runtime_hook() {
@@ -263,6 +304,41 @@ pub fn record_worker_runtime(
             stop_reason: audit_policy::safe_identity(stop_reason),
             error: error.clone(),
         }),
+        Record::ExtensionLifecycle {
+            session_id,
+            kind,
+            action,
+            extension_id,
+            manifest_digest,
+            success,
+            latency_ms,
+            error,
+        } => {
+            let record = WorkerExtensionAudit {
+                ts: Utc::now(),
+                event: "clawd.agent.extension.lifecycle",
+                job_id: &job_id,
+                owner_uid,
+                session_id: audit_policy::safe_identity(session_id),
+                kind: kind.as_str(),
+                action: action.as_str(),
+                extension_id: audit_policy::safe_identity(extension_id),
+                manifest_digest: manifest_digest.as_deref().map(audit_policy::safe_reference),
+                success: *success,
+                latency_ms: *latency_ms,
+                error: error.clone(),
+            };
+            let result = append_jsonl(&record);
+            record_extension_mutation(
+                session_id,
+                kind.as_str(),
+                action.as_str(),
+                extension_id,
+                manifest_digest.as_deref(),
+                *success,
+            );
+            result
+        }
     };
     if let Err(err) = result {
         tracing::error!(error = %err, "failed to write agentd worker audit record");
@@ -421,6 +497,61 @@ struct WorkerTurnAudit<'a> {
     stop_reason: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<TextDigest>,
+}
+
+#[derive(Debug, Serialize)]
+struct WorkerExtensionAudit<'a> {
+    ts: chrono::DateTime<Utc>,
+    event: &'static str,
+    job_id: &'a str,
+    owner_uid: u32,
+    session_id: String,
+    kind: &'static str,
+    action: &'static str,
+    extension_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    manifest_digest: Option<String>,
+    success: bool,
+    latency_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<TextDigest>,
+}
+
+fn record_extension_mutation(
+    raw_session_id: &str,
+    kind: &str,
+    action: &str,
+    extension_id: &str,
+    manifest_digest: Option<&str>,
+    success: bool,
+) {
+    let Ok(session_id) = raw_session_id.parse::<SessionId>() else {
+        return;
+    };
+    if !session::session_dir(&session_id).exists() {
+        return;
+    }
+    let record = MutationRecord::new(Mutation::Opaque {
+        verb: format!("agent.extension.{action}"),
+        forward: json!({
+            "kind": kind,
+            "extension": audit_policy::safe_identity(extension_id),
+            "manifest_digest": manifest_digest.map(audit_policy::safe_reference),
+            "success": success,
+        }),
+        inverse: json!({
+            "unsupported": true,
+            "reason": "extension lifecycle record"
+        }),
+    })
+    .with_runtime("clawd");
+    if let Err(error) = session::record_mutation(&session_id, record) {
+        tracing::warn!(
+            %error,
+            session_id = %session_id.as_str(),
+            "failed to record extension lifecycle in session state"
+        );
+    }
 }
 
 #[derive(Debug)]

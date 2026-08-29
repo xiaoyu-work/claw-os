@@ -113,6 +113,13 @@ fn run() -> Result<(), String> {
         .build()
         .map_err(|error| format!("tokio runtime: {error}"))?;
 
+    let _extension_host = match assignment.extension.clone() {
+        Some(binding) => Some(runtime.block_on(
+            crate::extension_host::client::install_for_worker(binding, io.state.tx.clone()),
+        )?),
+        None => None,
+    };
+
     let cancelled = io.state.cancelled.clone();
     let tx = io.state.tx.clone();
     let outcome = runtime.block_on(execute(assignment, tx.clone(), cancelled.clone()));
@@ -530,6 +537,18 @@ where
         });
     if assignment.grant.claims.capability_generation != capability_generation {
         return Err("agentd grant does not cover the assigned capability generation".to_string());
+    }
+    if assignment.grant.claims.extension != assignment.extension {
+        return Err("agentd grant does not cover the assigned extension host".to_string());
+    }
+    if let Some(extension) = assignment.extension.as_ref() {
+        extension.validate_fresh_worker(identity.pid, identity.start_time_ticks)?;
+        if extension.task_id != assignment.job.id
+            || extension.session_id != assignment.job.session_id
+            || extension.owner_uid != assignment.job.owner_uid
+        {
+            return Err("extension host is bound to different task metadata".to_string());
+        }
     }
     if !assignment
         .grant

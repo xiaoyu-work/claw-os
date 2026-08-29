@@ -1323,6 +1323,7 @@ const SAFE_APP_ENV_KEYS: &[&str] = &[
     "COS_SDK_PYTHON_DIR",
     "COS_SNAPSHOT",
     "COS_PERMS_MODE",
+    crate::extension_host::protocol::BROKER_SOCKET_ENV,
 ];
 
 const PANEL_APPLET_ENV_KEYS: &[&str] = &[
@@ -1565,6 +1566,12 @@ pub fn run_python_app_with_stdin(
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
+    if crate::paths::is_routed_job() {
+        return Err(
+            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
 
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
@@ -1748,6 +1755,12 @@ pub fn run_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    if crate::paths::is_routed_job() {
+        return Err(
+            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
     // Load the manifest if present so we can pick a runtime. Apps
     // that ship without app.json default to the Python runtime — this
     // lets ad-hoc `main.py` apps in development still run.

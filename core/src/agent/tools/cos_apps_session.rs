@@ -13,9 +13,9 @@
 //! registers one [`AppSessionTool`] per [`SessionTool`] in the
 //! manifest. The MCP server itself is *not* started at this point —
 //! the lookup is lazy. The first call to any of an app's tools
-//! triggers `bring_up_app`, which spawns the server, runs the MCP
-//! handshake, and stores the live `McpServerHandle` in a process-wide
-//! [`SessionManager`].
+//! triggers `bring_up_app` in a direct runtime, or a host control call in a
+//! supervised task. The spawned server, MCP handshake, and live handle are
+//! owned by the task's `claw-extension-host`, never by `claw-agentd`.
 //!
 //! Subsequent calls reuse the same client. Explicit
 //! [`CosAppSessionOpen`] / [`CosAppSessionClose`] meta-tools let the
@@ -571,6 +571,12 @@ async fn begin_active_session_call(
 /// whole probe-then-spawn-then-insert sequence so exactly one child
 /// is created per app per process.
 async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
+    if crate::paths::is_routed_job() {
+        return Err(
+            "App session execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
     let key = session_key(app_id)?;
     let lock = app_open_lock(&key);
     let _open_guard = lock.lock().await;
@@ -673,6 +679,7 @@ fn safe_session_env_allowlist() -> Vec<(String, String)> {
         "TMPDIR",
         "TEMP",
         "TMP",
+        crate::extension_host::protocol::BROKER_SOCKET_ENV,
     ];
     let mut out = Vec::with_capacity(ALWAYS.len());
     for k in ALWAYS {
@@ -933,6 +940,52 @@ impl Tool for AppSessionTool {
             return ToolResult::err(message);
         }
 
+        if let Some(host) = crate::extension_host::client::current() {
+            return match host
+                .call_app(
+                    self.app_id.clone(),
+                    self.manifest_tool_name.clone(),
+                    Value::Object(args_map.into_iter().collect()),
+                    self.timeout,
+                )
+                .await
+            {
+                Ok(result) => {
+                    let (content, is_error) = render_call_result(result);
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        verb_csv(&caps).as_str(),
+                        "allowed",
+                        None,
+                        is_error.then_some(content.as_str()),
+                        started.elapsed(),
+                    );
+                    if is_error {
+                        ToolResult::err(content)
+                    } else {
+                        ToolResult::ok(content)
+                    }
+                }
+                Err(error) => {
+                    let message = crate::agent::safety::untrusted::wrap_untrusted(
+                        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+                        &error,
+                    );
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        verb_csv(&caps).as_str(),
+                        "allowed",
+                        None,
+                        Some(&message),
+                        started.elapsed(),
+                    );
+                    ToolResult::err(message)
+                }
+            };
+        }
+
         for cap in &caps {
             if let Err(denial) = crate::caps::require(cap.verb, cap.scope.clone()) {
                 let msg = denial.to_string();
@@ -1094,7 +1147,13 @@ fn render_call_result(res: crate::agent::tools::mcp::protocol::CallToolResult) -
     } else {
         chunks.join("\n\n")
     };
-    (body, res.is_error.unwrap_or(false))
+    (
+        crate::agent::safety::untrusted::wrap_untrusted(
+            crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+            &body,
+        ),
+        res.is_error.unwrap_or(false),
+    )
 }
 
 fn emit_audit(
@@ -1179,8 +1238,12 @@ impl Tool for CosAppSessionOpen {
         ) {
             return ToolResult::err(denial.to_string());
         }
-        match open_session(&app_id).await {
-            Ok((_client, count)) => {
+        let opened = match crate::extension_host::client::current() {
+            Some(host) => host.open_app(app_id.clone()).await,
+            None => open_session(&app_id).await.map(|(_, count)| count),
+        };
+        match opened {
+            Ok(count) => {
                 // Surface what's now callable so the model knows which
                 // names to use without a follow-up discovery call.
                 let tool_names = manifest_tool_names(&app_id).unwrap_or_default();
@@ -1191,7 +1254,10 @@ impl Tool for CosAppSessionOpen {
                 });
                 ToolResult::ok(body.to_string())
             }
-            Err(e) => ToolResult::err(format!("open `{app_id}`: {e}")),
+            Err(e) => ToolResult::err(crate::agent::safety::untrusted::wrap_untrusted(
+                crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+                &format!("open `{app_id}`: {e}"),
+            )),
         }
     }
 }
@@ -1245,9 +1311,95 @@ impl Tool for CosAppSessionClose {
         ) {
             return ToolResult::err(denial.to_string());
         }
-        let closed = close_session(&app_id).await;
+        let closed = match crate::extension_host::client::current() {
+            Some(host) => match host.close_app(app_id.clone()).await {
+                Ok(closed) => closed,
+                Err(error) => {
+                    return ToolResult::err(crate::agent::safety::untrusted::wrap_untrusted(
+                        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+                        &error,
+                    ))
+                }
+            },
+            None => close_session(&app_id).await,
+        };
         ToolResult::ok(json!({"app": app_id, "closed": closed}).to_string())
     }
+}
+
+/// Host-side entry point. The worker-facing tool never calls this in-process;
+/// `claw-extension-host` owns the dynamic server and invokes it here.
+pub(crate) async fn host_open_session(app_id: &str) -> Result<usize, String> {
+    open_session(app_id).await.map(|(_, count)| count)
+}
+
+/// Host-side call path. Arguments are revalidated against the installed
+/// manifest, then the broker-backed transient grant is installed immediately
+/// around the untrusted MCP request.
+pub(crate) async fn host_call_session(
+    app_id: &str,
+    tool_name: &str,
+    input: Value,
+    call_timeout: Duration,
+) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+    let app_dir = crate::apps::find(&apps_root(), app_id)
+        .map(|app| app.dir)
+        .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
+    let manifest_path = app_dir.join("app.json");
+    let manifest_text = std::fs::read_to_string(&manifest_path)
+        .map_err(|error| format!("read manifest for `{app_id}`: {error}"))?;
+    let manifest = Manifest::from_json(&manifest_text)
+        .map_err(|error| format!("parse manifest for `{app_id}`: {error}"))?;
+    let supplied = json_to_arg_map(&input);
+    let paths = crate::bridge::launcher_path_context()?;
+    let effective = manifest
+        .resolve_session_tool_call(tool_name, &supplied, &paths)
+        .map_err(|error| format!("argument resolution failed: {error}"))?;
+    let args = effective.values;
+    let caps = effective.needs.into_iter().flatten().collect::<Vec<_>>();
+    let client = get_or_open(app_id).await?;
+    let mut active = begin_active_session_call(app_id, tool_name, &args, &caps).await?;
+    let arguments = (!args.is_empty()).then(|| Value::Object(args.into_iter().collect()));
+    match timeout(
+        call_timeout.min(DEFAULT_TIMEOUT),
+        client.call_tool(tool_name, arguments),
+    )
+    .await
+    {
+        Ok(Ok(result)) => {
+            active.mark_completed();
+            Ok(result)
+        }
+        Ok(Err(error)) => {
+            if matches!(error, ClientError::Server { .. }) {
+                active.mark_completed();
+            } else {
+                drop(active);
+                close_session(app_id).await;
+            }
+            Err(format!("app `{app_id}` tool `{tool_name}` failed: {error}"))
+        }
+        Err(_) => {
+            drop(active);
+            close_session(app_id).await;
+            Err(format!(
+                "app `{app_id}` tool `{tool_name}` timed out after {}s",
+                call_timeout.min(DEFAULT_TIMEOUT).as_secs()
+            ))
+        }
+    }
+}
+
+pub(crate) async fn host_close_session(app_id: &str) -> bool {
+    close_session(app_id).await
+}
+
+pub(crate) async fn host_close_all_sessions() {
+    let sessions = {
+        let mut table = manager().lock().await;
+        std::mem::take(&mut *table)
+    };
+    drop(sessions);
 }
 
 fn manifest_tool_names(app_id: &str) -> Result<Vec<String>, String> {
