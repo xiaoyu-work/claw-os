@@ -54,8 +54,9 @@ use {
     lifecycle::{compute_original_ttl, execute_refresh},
     master_key::{
         generate_and_persist_root_key_at, generate_root_key_at_barrier,
-        inject_root_key_random_failure, inject_root_key_write_failure, legacy_obfuscation_key,
-        load_persistent_root_key_at,
+        generate_root_key_loser_paused_in_directory_sync,
+        generate_root_key_winner_paused_after_link, inject_root_key_random_failure,
+        inject_root_key_write_failure, legacy_obfuscation_key, load_persistent_root_key_at,
     },
     oauth::build_curl_post,
     store::{namespace_dir, refresh_sentinel_path, with_refresh_lock, write_credential_atomic},

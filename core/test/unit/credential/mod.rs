@@ -789,6 +789,7 @@ fn concurrent_root_key_publishers_only_observe_a_complete_winner() {
             generate_root_key_at_barrier(&path, &barrier).unwrap()
         }));
     }
+
     let first = threads.remove(0).join().unwrap();
     let second = threads.remove(0).join().unwrap();
 
@@ -800,6 +801,68 @@ fn concurrent_root_key_publishers_only_observe_a_complete_winner() {
         .filter(|entry| entry.path() != key_path)
         .collect::<Vec<_>>();
     assert!(leftovers.is_empty(), "temporary files remained");
+
+    fs::remove_file(key_path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn race_loser_completes_directory_fsync_before_returning() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-durability-race-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+    let winner_linked = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release_winner = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let loser_sync_entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release_loser_sync = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let winner = {
+        let path = key_path.clone();
+        let linked = winner_linked.clone();
+        let release = release_winner.clone();
+        std::thread::spawn(move || {
+            generate_root_key_winner_paused_after_link(&path, &linked, &release).unwrap()
+        })
+    };
+    winner_linked.wait();
+    assert!(
+        !winner.is_finished(),
+        "winner must be paused before its directory fsync"
+    );
+
+    let loser = {
+        let path = key_path.clone();
+        let entered = loser_sync_entered.clone();
+        let release = release_loser_sync.clone();
+        std::thread::spawn(move || {
+            generate_root_key_loser_paused_in_directory_sync(&path, &entered, &release).unwrap()
+        })
+    };
+    loser_sync_entered.wait();
+    assert!(
+        !loser.is_finished(),
+        "loser returned before its directory durability barrier"
+    );
+    assert!(
+        !winner.is_finished(),
+        "winner unexpectedly completed its own directory fsync"
+    );
+
+    release_loser_sync.wait();
+    let loser_key = loser.join().unwrap();
+    assert!(
+        !winner.is_finished(),
+        "loser must make the final link durable independently"
+    );
+
+    release_winner.wait();
+    let winner_key = winner.join().unwrap();
+    assert_eq!(loser_key, winner_key);
+    assert_eq!(fs::read(&key_path).unwrap(), winner_key);
 
     fs::remove_file(key_path).unwrap();
     fs::remove_dir(dir).unwrap();

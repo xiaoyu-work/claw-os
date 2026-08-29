@@ -32,8 +32,9 @@ material internals.
 - Root keys and credential temporary files are created as `0600`. A root key
   is fully written and fsynced on a unique same-directory inode, then
   atomically published without replacement by hard link; race losers can only
-  read the complete winner. Temporary files are cleaned on every return path
-  and the parent directory is fsynced after publication.
+  read the complete winner. Both the publisher and a race loser fsync the
+  parent directory before returning a key, so observing the final link is also
+  a durability barrier. Temporary files are cleaned on every return path.
 - Refresh locks are distinct from write locks. Revoke takes them in
   refresh-then-write order.
 - Scheduled reads reject symlinks, non-regular files, wrong ownership, home

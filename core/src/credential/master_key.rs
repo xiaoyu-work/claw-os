@@ -174,6 +174,8 @@ pub(super) fn generate_and_persist_root_key_at(path: &Path) -> CredentialResult<
             file.sync_all()
         },
         || {},
+        || {},
+        sync_root_key_directory,
     )
 }
 
@@ -190,6 +192,8 @@ fn generate_and_persist_root_key_at_with(
             file.sync_all()
         },
         || {},
+        || {},
+        sync_root_key_directory,
     )
 }
 
@@ -198,6 +202,8 @@ fn generate_and_persist_root_key_at_with_hooks(
     random: impl FnOnce(&mut [u8]) -> Result<(), std::io::Error>,
     write_and_sync: impl FnOnce(&mut fs::File, &[u8]) -> Result<(), std::io::Error>,
     before_publish: impl FnOnce(),
+    after_publish: impl FnOnce(),
+    sync_parent: impl FnOnce(&Path) -> Result<(), std::io::Error>,
 ) -> CredentialResult<[u8; 32]> {
     let parent = path.parent().ok_or_else(|| {
         CredentialError::invalid(
@@ -237,28 +243,37 @@ fn generate_and_persist_root_key_at_with_hooks(
     let publish_result = fs::hard_link(&temp_path, path);
     match publish_result {
         Ok(()) => {
+            after_publish();
             remove_root_key_temp(&temp_path)?;
-            fs::File::open(parent)
-                .and_then(|directory| directory.sync_all())
-                .map_err(|error| {
-                    CredentialError::io_at(
-                        "root_key.persist",
-                        "failed to fsync root key directory",
-                        parent,
-                        error,
-                    )
-                })?;
+            sync_parent(parent).map_err(|error| {
+                CredentialError::io_at(
+                    "root_key.persist",
+                    "failed to fsync root key directory",
+                    parent,
+                    error,
+                )
+            })?;
             Ok(key)
         }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             remove_root_key_temp(&temp_path)?;
-            load_persistent_root_key_at(path)?.ok_or_else(|| {
+            let published = load_persistent_root_key_at(path)?.ok_or_else(|| {
                 CredentialError::unavailable(
                     "root_key.persist",
                     "credential root key exists but disappeared before it could be read",
                 )
-            })
+            })?;
+            sync_parent(parent).map_err(|error| {
+                CredentialError::io_at(
+                    "root_key.persist",
+                    "failed to fsync root key directory after observing published key",
+                    parent,
+                    error,
+                )
+            })?;
+            Ok(published)
         }
+
         Err(error) => {
             let failure = CredentialError::io_at(
                 "root_key.persist",
@@ -270,6 +285,10 @@ fn generate_and_persist_root_key_at_with_hooks(
             Err(failure)
         }
     }
+}
+
+fn sync_root_key_directory(parent: &Path) -> Result<(), std::io::Error> {
+    fs::File::open(parent)?.sync_all()
 }
 
 fn create_root_key_temp(parent: &Path, path: &Path) -> CredentialResult<(PathBuf, fs::File)> {
@@ -352,6 +371,8 @@ pub(super) fn inject_root_key_write_failure(path: &Path) -> CredentialError {
             Err(std::io::Error::other("injected root key write failure"))
         },
         || {},
+        || {},
+        sync_root_key_directory,
     )
     .expect_err("injected root key writer must fail")
 }
@@ -371,6 +392,55 @@ pub(super) fn generate_root_key_at_barrier(
         },
         || {
             barrier.wait();
+        },
+        || {},
+        sync_root_key_directory,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn generate_root_key_winner_paused_after_link(
+    path: &Path,
+    linked: &std::sync::Barrier,
+    release: &std::sync::Barrier,
+) -> CredentialResult<[u8; 32]> {
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        os_random_bytes,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(key)?;
+            file.sync_all()
+        },
+        || {},
+        || {
+            linked.wait();
+            release.wait();
+        },
+        sync_root_key_directory,
+    )
+}
+
+#[cfg(test)]
+pub(super) fn generate_root_key_loser_paused_in_directory_sync(
+    path: &Path,
+    entered_sync: &std::sync::Barrier,
+    release_sync: &std::sync::Barrier,
+) -> CredentialResult<[u8; 32]> {
+    generate_and_persist_root_key_at_with_hooks(
+        path,
+        os_random_bytes,
+        |file, key| {
+            use std::io::Write;
+            file.write_all(key)?;
+            file.sync_all()
+        },
+        || {},
+        || panic!("loser unexpectedly published the root key"),
+        |parent| {
+            entered_sync.wait();
+            release_sync.wait();
+            sync_root_key_directory(parent)
         },
     )
 }
