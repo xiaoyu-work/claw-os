@@ -12,6 +12,9 @@ transports, discovery, and tool-registry integration.
 - Prefix and register remote tools in the guarded registry.
 - Expose local tools to external MCP clients.
 - Bound frames, handshakes, requests, and optional-server failures.
+- Keep inbound tool execution to 4 active calls plus 8 queued calls by
+  default. Trusted composition may lower or raise those bounds only within
+  the compiled maxima of 16 active and 32 queued calls.
 
 ## Key Files
 
@@ -46,6 +49,15 @@ Remote tool descriptors/results remain untrusted and pass through the normal
 registry, capability, and prompt-injection boundaries.
 Equivalent first-party MCP failures use the generated codes owned by
 `claw-os-sdk/wire/v1/contract.json`.
+
+The inbound core server reserves JSON-RPC code `-32000` for overload after a
+`tools/call` has passed envelope, parameter, registry, and guardrail checks.
+Its stable data is `{"kind":"server_overloaded","retryable":true,
+"hint":"retry the request with exponential backoff"}`. Notifications never
+enter the tool queue and never receive overload responses;
+`notifications/cancelled` instead drops matching queued work or aborts the
+matching active handler. Closing the transport aborts all active work and
+drops the queue rather than waiting on tools during shutdown.
 
 A stdio server is third-party code and is launched through the shared
 hostile-worker sandbox in [`crate::worker`](../../../worker/MODULE.md),
