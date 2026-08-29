@@ -36,6 +36,9 @@ pub const CHANNEL_FD: i32 = 3;
 /// Set in the worker environment so the child can assert it received a
 /// channel rather than guessing at fd 3.
 pub const CHANNEL_FD_ENV: &str = "COS_AGENTD_CHANNEL_FD";
+/// Bootstrap-only task hint retained for compatibility with older launchers.
+/// A current worker does not consume it and removes it before running tools.
+pub const TASK_HINT_ENV: &str = "COS_AGENTD_TASK";
 
 /// Hard cap on a single frame. Streaming deltas and final answers are
 /// far below this; anything larger is treated as a protocol fault and

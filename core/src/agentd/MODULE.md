@@ -55,6 +55,14 @@ broker process, so a grant cannot be minted, edited, replayed against another
 worker, or used past its lease. Executable path, TTY, `NoNewPrivs`, socket
 group and prompt text confer nothing.
 
+After the worker adopts fd 3 it immediately sets `FD_CLOEXEC` and removes the
+channel/task bootstrap hints from its live environment. `proc spawn` applies a
+second boundary in its child: every descriptor above stderr is marked
+close-on-exec, and only the sealed executable snapshot is explicitly retained.
+The pinned cwd descriptor closes at exec. A model-started descendant therefore
+cannot inherit, read, or write the private worker channel or impersonate task
+frames.
+
 `SO_PEERCRED` is deliberately *not* used on this channel: the socket pair is
 created before the fork, so the kernel stamps it with the broker's own uid and
 pid. Checking it would prove nothing about the worker.

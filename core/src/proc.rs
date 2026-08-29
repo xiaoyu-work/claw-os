@@ -1643,6 +1643,50 @@ fn run_pre_spawn_test_hook() {
 fn run_pre_spawn_test_hook() {}
 
 #[cfg(target_os = "linux")]
+fn spawn_fd_limit() -> i32 {
+    let mut limit: libc::rlimit = unsafe { std::mem::zeroed() };
+    if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) } != 0 {
+        return 4096;
+    }
+    let current = if limit.rlim_cur == libc::RLIM_INFINITY {
+        1_048_576
+    } else {
+        limit.rlim_cur.min(1_048_576)
+    };
+    i32::try_from(current).unwrap_or(1_048_576).max(3)
+}
+
+#[cfg(target_os = "linux")]
+fn mark_spawn_fds_cloexec(limit: i32) -> std::io::Result<()> {
+    const CLOSE_RANGE_CLOEXEC: libc::c_uint = 4;
+    if unsafe {
+        libc::syscall(
+            libc::SYS_close_range,
+            3 as libc::c_uint,
+            libc::c_uint::MAX,
+            CLOSE_RANGE_CLOEXEC,
+        )
+    } == 0
+    {
+        return Ok(());
+    }
+
+    let mut fd = 3;
+    while fd < limit {
+        let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+        if flags >= 0 {
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+        } else if std::io::Error::last_os_error().raw_os_error() != Some(libc::EBADF) {
+            return Err(std::io::Error::last_os_error());
+        }
+        fd += 1;
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
     let canonical = candidate.canonicalize().ok()?;
     let metadata = canonical.metadata().ok()?;
@@ -2176,6 +2220,12 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     // Inject session ID so child process can be identified by policy module
     cmd.env("COS_SESSION", &sid)
         .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
+    for (key, _) in std::env::vars_os() {
+        let rendered = key.to_string_lossy();
+        if rendered.starts_with("COS_AGENTD_") || rendered.starts_with("CLAWD_AGENTD_") {
+            cmd.env_remove(key);
+        }
+    }
 
     #[cfg(target_os = "linux")]
     unsafe {
@@ -2189,10 +2239,12 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
             _ => 0,
         });
         let euid = libc::geteuid() as u32;
+        let fd_limit = spawn_fd_limit();
         cmd.pre_exec(move || {
             if libc::setsid() < 0 {
                 return Err(std::io::Error::last_os_error());
             }
+            mark_spawn_fds_cloexec(fd_limit)?;
             if let Some((uid, gid)) = identity {
                 if euid == 0
                     && (libc::setgroups(0, std::ptr::null()) != 0

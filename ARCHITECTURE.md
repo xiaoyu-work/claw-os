@@ -269,6 +269,13 @@ admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
 
+The adopted fd 3 is marked close-on-exec before the runtime starts, and its
+bootstrap environment hints are removed. Process spawn independently marks
+every descriptor above stderr close-on-exec and clears agentd/clawd supervision
+hints from the child environment, preserving only the sealed executable memfd.
+Agent-started descendants therefore cannot forge worker frames or collide with
+the worker's approval traffic.
+
 Consent remains inside the capability boundary.
 `core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
 of the root-owned approvals store: after validated arguments produce an exact

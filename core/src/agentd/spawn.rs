@@ -133,7 +133,7 @@ pub fn broker_is_root() -> bool {
 /// Fork and exec the worker with the broker end of a private channel
 /// retained here. Returns before the assignment is written, so the
 /// caller can bind the grant to the pid the kernel actually allocated.
-pub fn spawn_worker(identity: &WorkerIdentity, task_id: &str) -> Result<SpawnedWorker, String> {
+pub fn spawn_worker(identity: &WorkerIdentity, _task_id: &str) -> Result<SpawnedWorker, String> {
     let binary = worker_binary_path();
     if !binary.exists() {
         return Err(format!(
@@ -164,7 +164,6 @@ pub fn spawn_worker(identity: &WorkerIdentity, task_id: &str) -> Result<SpawnedW
     command.env("PATH", WORKER_PATH);
     command.env("SHELL", "/bin/sh");
     command.env(protocol::CHANNEL_FD_ENV, protocol::CHANNEL_FD.to_string());
-    command.env("COS_AGENTD_TASK", task_id);
     for key in INHERITED_ENV_KEYS {
         if let Some(value) = std::env::var_os(key) {
             command.env(key, value);

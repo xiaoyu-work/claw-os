@@ -163,6 +163,7 @@ struct StaticSpawnHelpers {
     _dir: tempfile::TempDir,
     trusted: std::path::PathBuf,
     attacker: std::path::PathBuf,
+    descendant_probe: std::path::PathBuf,
 }
 
 #[cfg(target_os = "linux")]
@@ -225,10 +226,25 @@ fn main() {
 }
 "#,
         );
+        let descendant_probe = compile_static_spawn_helper(
+            dir.path(),
+            "descendant-probe",
+            r#"
+fn main() {
+    let path = std::env::args_os().nth(1).expect("output path");
+    let fd3 = std::fs::read_link("/proc/self/fd/3").is_ok();
+    let fd50 = std::fs::read_link("/proc/self/fd/50").is_ok();
+    let channel = std::env::var_os("COS_AGENTD_CHANNEL_FD").is_some();
+    let task = std::env::var_os("COS_AGENTD_TASK").is_some();
+    std::fs::write(path, format!("{fd3}:{fd50}:{channel}:{task}")).expect("write output");
+}
+"#,
+        );
         StaticSpawnHelpers {
             _dir: dir,
             trusted,
             attacker,
+            descendant_probe,
         }
     })
 }
@@ -239,6 +255,43 @@ fn install_static_spawn_helper(source: &std::path::Path, destination: &std::path
 
     std::fs::copy(source, destination).unwrap();
     std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
+struct InheritedFdGuard {
+    fd: i32,
+    saved: Option<i32>,
+}
+
+#[cfg(target_os = "linux")]
+impl InheritedFdGuard {
+    fn install(fd: i32, source: &std::fs::File) -> Self {
+        use std::os::fd::AsRawFd;
+
+        let saved = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 100) };
+        let saved = (saved >= 0).then_some(saved);
+        let duplicate = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 100) };
+        assert!(duplicate >= 0);
+        assert!(unsafe { libc::dup2(duplicate, fd) } >= 0);
+        unsafe {
+            libc::close(duplicate);
+        }
+        assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFD, 0) }, 0);
+        Self { fd, saved }
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl Drop for InheritedFdGuard {
+    fn drop(&mut self) {
+        unsafe {
+            libc::close(self.fd);
+            if let Some(saved) = self.saved {
+                libc::dup2(saved, self.fd);
+                libc::close(saved);
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -376,6 +429,48 @@ fn shell_eval_is_rejected_before_approval() {
     assert!(error.contains("cos_sandbox"), "{error}");
     assert!(crate::approvals::list_pending().is_empty());
     assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn proc_descendant_cannot_inherit_agentd_channel_or_task_hints() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    let _channel_hint =
+        crate::test_env::TestEnvVarGuard::set(crate::agentd::protocol::CHANNEL_FD_ENV, "3");
+    let _task_hint = crate::test_env::TestEnvVarGuard::set(
+        crate::agentd::protocol::TASK_HINT_ENV,
+        "task-secret",
+    );
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let leaked = std::fs::File::open("/dev/null").unwrap();
+    let _fd3 = InheritedFdGuard::install(3, &leaked);
+    let _fd50 = InheritedFdGuard::install(50, &leaked);
+    let executable = temp.path().join("descendant-probe");
+    let marker = temp.path().join("descendant-probe-result");
+    install_static_spawn_helper(&static_spawn_helpers().descendant_probe, &executable);
+    let args = vec![
+        "--session".to_string(),
+        "descendant-probe-child".to_string(),
+        "--workdir".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+        marker.to_string_lossy().into_owned(),
+    ];
+
+    crate::approvals::LocalApprovalInvocation::new("web:descendant-probe:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            approve_spawn_permissions(&args);
+            cmd_spawn(&args).expect("the native probe may execute");
+            assert_eq!(wait_for_spawn_result(&marker), "false:false:false:false");
+        });
 }
 
 #[cfg(target_os = "linux")]

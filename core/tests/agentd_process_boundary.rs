@@ -163,6 +163,15 @@ fn open_descriptor_targets(pid: u32) -> Vec<PathBuf> {
     targets
 }
 
+fn descriptor_flags(pid: u32, fd: i32) -> Option<u32> {
+    let info = std::fs::read_to_string(format!("/proc/{pid}/fdinfo/{fd}")).ok()?;
+    let encoded = info
+        .lines()
+        .find_map(|line| line.strip_prefix("flags:"))?
+        .trim();
+    u32::from_str_radix(encoded, 8).ok()
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     let Some(harness) = harness() else {
@@ -236,6 +245,12 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         !descriptors.contains(&harness.leaked_path),
         "the worker inherited a broker-held descriptor: {descriptors:?}"
     );
+    assert_ne!(
+        descriptor_flags(pid, protocol::CHANNEL_FD).expect("inspect worker channel flags")
+            & libc::O_CLOEXEC as u32,
+        0,
+        "the adopted worker channel must close across descendant exec"
+    );
 
     let environ = std::fs::read(format!("/proc/{pid}/environ")).expect("read environ");
     let environ = String::from_utf8_lossy(&environ);
@@ -243,10 +258,10 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         !environ.contains(LEAK_MARKER),
         "the worker inherited the broker's environment"
     );
-    assert!(
-        environ.contains(&format!("{}=3", protocol::CHANNEL_FD_ENV)),
-        "the worker was not told which descriptor carries its job channel"
-    );
+    // `/proc/<pid>/environ` exposes the exec-time environment block and may
+    // retain a key after libc removes it. The worker unit test checks the live
+    // environment; the descendant exec test checks that it is not propagated.
+    assert!(!environ.contains(protocol::TASK_HINT_ENV));
 
     // The task still round-trips a result even with no provider
     // configured, which is what proves the queue's outcome now arrives

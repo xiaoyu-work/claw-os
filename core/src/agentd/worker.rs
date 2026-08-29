@@ -154,11 +154,27 @@ fn adopt_channel() -> Result<std::os::unix::net::UnixStream, String> {
     if unsafe { libc::fcntl(protocol::CHANNEL_FD, libc::F_GETFD) } < 0 {
         return Err("agentd job channel is not open".to_string());
     }
+    harden_adopted_channel(protocol::CHANNEL_FD)?;
     let stream = unsafe { std::os::unix::net::UnixStream::from_raw_fd(protocol::CHANNEL_FD) };
     stream
         .set_nonblocking(true)
         .map_err(|error| format!("configure agentd channel: {error}"))?;
     Ok(stream)
+}
+
+fn harden_adopted_channel(fd: i32) -> Result<(), String> {
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
+        return Err(format!(
+            "mark agentd job channel close-on-exec: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    // These values are bootstrap hints, not descendant authority. Remove
+    // them before the runtime can launch any tool or child process.
+    std::env::remove_var(protocol::CHANNEL_FD_ENV);
+    std::env::remove_var(protocol::TASK_HINT_ENV);
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
