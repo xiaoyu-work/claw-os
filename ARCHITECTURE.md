@@ -103,15 +103,16 @@ Long `MemoryDb` conversations use durable compaction projections rather than
 rewriting their authoritative transcript. Each per-session attempt records a
 monotonic `started` then `completed`/`failed` lifecycle, the exact raw row IDs
 and inclusive range plus SHA-256 digest, algorithm version, protected
-tail/user boundary, provider/model identity, frozen-prompt hash/version, and
-recovery metadata.
+tail/user IDs and row-identity digests, provider/model identity, frozen-prompt
+hash/version, and recovery metadata.
 Completed summary text is content-addressed. Continuations verify and load the
 latest valid summary plus every uncompacted row; raw rows remain searchable and
 exportable. A per-session advisory lock prevents duplicate concurrent
 compaction, and reacquiring that lock closes a crash-left `started` attempt
 before retry. Oversized old tool results are deterministically stubbed before
-an LLM summary, while tool pairs and a real user anchor remain in the protected
-tail.
+an LLM summary. Validation requires the protected tail to begin at the first
+uncompacted replayable row, rejects tool-pair splits, and rechecks that a
+verbatim real-user anchor and both protected row identities are unchanged.
 
 Curated `MEMORY.md` facts are an append-only history, not a live inventory.
 Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented

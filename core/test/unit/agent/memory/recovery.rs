@@ -145,6 +145,36 @@ fn invalid_compaction_projection_is_repaired_without_losing_raw_messages() {
 }
 
 #[test]
+fn protected_row_mutation_is_detected_and_repaired_by_shared_validation() {
+    let (_directory, path) = database_path();
+    let db = MemoryDb::open(&path).expect("open memory db");
+    db.record_message("session", "user", "first raw").unwrap();
+    db.record_message("session", "assistant", "second raw")
+        .unwrap();
+    let protected = db
+        .record_message("session", "user", "protected user")
+        .unwrap();
+    complete_test_compaction(&db, "session");
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE messages SET content = 'changed protected user' WHERE id = ?",
+            params![protected],
+        )
+        .unwrap();
+    }
+    drop(db);
+
+    let health = diagnose(&path).expect("diagnose");
+    assert_eq!(health.compactions.status, "fail");
+    repair(&path, RepairOptions::default()).expect("repair projection");
+    let repaired = MemoryDb::open(&path).expect("reopen");
+    assert!(repaired.compactions_for_session("session").unwrap().is_empty());
+    drop(repaired);
+    assert_eq!(diagnose(&path).unwrap().compactions.status, "ok");
+}
+
+#[test]
 fn quarantine_recovery_preserves_valid_compaction_and_raw_sources() {
     let (_directory, path) = database_path();
     let db = MemoryDb::open(&path).expect("open memory db");

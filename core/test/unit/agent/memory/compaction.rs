@@ -37,10 +37,9 @@ fn completed_compaction_projects_summary_and_uncompacted_tail() {
     db.freeze_system_prompt("session", "frozen prompt", 1)
         .unwrap();
 
-    let attempt = match db
-        .begin_compaction("session", spec(&ids[..3], ids[4]))
-        .unwrap()
-    {
+    let mut first_spec = spec(&ids[..3], ids[3]);
+    first_spec.protected_user_message_id = Some(ids[4]);
+    let attempt = match db.begin_compaction("session", first_spec).unwrap() {
         BeginCompaction::Started(attempt) => attempt,
         other => panic!("expected started attempt, got {other:?}"),
     };
@@ -52,7 +51,7 @@ fn completed_compaction_projects_summary_and_uncompacted_tail() {
     assert_eq!(completed.record.source_end_id, ids[2]);
     assert_eq!(completed.record.source_count, 3);
     assert_eq!(completed.record.source_ids, ids[..3]);
-    assert_eq!(completed.record.protected_tail_start_id, Some(ids[4]));
+    assert_eq!(completed.record.protected_tail_start_id, Some(ids[3]));
     assert_eq!(completed.record.protected_user_message_id, Some(ids[4]));
     assert!(completed.record.prompt_hash.is_some());
     assert!(completed.record.recovery_metadata.raw_rows_searchable);
@@ -358,7 +357,7 @@ fn malformed_recovery_metadata_is_rejected_without_hiding_raw_tail() {
 #[test]
 fn protected_anchor_must_be_a_real_user_row() {
     let db = db();
-    let ids = seed_rows(&db, "session", 3);
+    let ids = seed_rows(&db, "session", 2);
     let tool_result = db
         .record_message("session", "user", "[tool_result] output")
         .unwrap();
@@ -368,6 +367,131 @@ fn protected_anchor_must_be_a_real_user_row() {
     assert!(error
         .to_string()
         .contains("protected user anchor is not a real user message"));
+}
+
+#[test]
+fn persisted_compaction_requires_both_protected_ids() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 4);
+
+    let mut missing_tail = spec(&ids[..2], ids[2]);
+    missing_tail.protected_tail_start_id = None;
+    assert!(db
+        .begin_compaction("session", missing_tail)
+        .unwrap_err()
+        .to_string()
+        .contains("requires a protected tail boundary"));
+
+    let mut missing_user = spec(&ids[..2], ids[2]);
+    missing_user.protected_user_message_id = None;
+    assert!(db
+        .begin_compaction("session", missing_user)
+        .unwrap_err()
+        .to_string()
+        .contains("requires a protected real-user anchor"));
+}
+
+#[test]
+fn protected_rows_must_be_ordered_owned_and_start_the_tail() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 5);
+    let foreign = db.record_message("other", "user", "foreign").unwrap();
+
+    let mut skipped_tail = spec(&ids[..2], ids[3]);
+    skipped_tail.protected_user_message_id = Some(ids[4]);
+    assert!(db
+        .begin_compaction("session", skipped_tail)
+        .unwrap_err()
+        .to_string()
+        .contains("first replayable row"));
+
+    let mut foreign_tail = spec(&ids[..2], ids[2]);
+    foreign_tail.protected_tail_start_id = Some(foreign);
+    foreign_tail.protected_user_message_id = Some(foreign);
+    assert!(db
+        .begin_compaction("session", foreign_tail)
+        .unwrap_err()
+        .to_string()
+        .contains("protected tail boundary is missing"));
+
+    let mut reversed = spec(&ids[..2], ids[2]);
+    reversed.protected_user_message_id = Some(ids[1]);
+    assert!(db
+        .begin_compaction("session", reversed)
+        .unwrap_err()
+        .to_string()
+        .contains("precedes the protected tail boundary"));
+}
+
+#[test]
+fn compaction_boundary_cannot_split_a_persisted_tool_pair() {
+    let db = db();
+    let first = db.record_message("session", "user", "inspect").unwrap();
+    let call = db
+        .record_message("session", "assistant", "[tool_use:lookup] {}")
+        .unwrap();
+    let result = db
+        .record_message("session", "user", "[tool_result] output")
+        .unwrap();
+    let anchor = db.record_message("session", "user", "continue").unwrap();
+    let mut split = spec(&[first, call], result);
+    split.protected_user_message_id = Some(anchor);
+
+    let error = db.begin_compaction("session", split).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("splits or strands a tool call/result pair"));
+}
+
+#[test]
+fn completed_projection_rejects_changed_or_missing_protected_identity() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 5);
+    let mut initial = spec(&ids[..3], ids[3]);
+    initial.protected_user_message_id = Some(ids[4]);
+    let attempt = match db.begin_compaction("session", initial).unwrap() {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected attempt, got {other:?}"),
+    };
+    attempt.complete("[CONTEXT SUMMARY]\n\nsummary").unwrap();
+
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE messages SET content = 'changed tail identity' WHERE id = ?",
+            params![ids[3]],
+        )
+        .unwrap();
+    }
+    let (summary, rejected) = db.latest_valid_compaction("session").unwrap();
+    assert!(summary.is_none());
+    assert_eq!(rejected, 1);
+
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("DELETE FROM session_compactions", []).unwrap();
+        conn.execute("DELETE FROM compaction_summaries", []).unwrap();
+        conn.execute(
+            "UPDATE messages SET content = 'message 3' WHERE id = ?",
+            params![ids[3]],
+        )
+        .unwrap();
+    }
+    let mut retry = spec(&ids[..3], ids[3]);
+    retry.protected_user_message_id = Some(ids[4]);
+    let attempt = match db.begin_compaction("session", retry).unwrap() {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected attempt, got {other:?}"),
+    };
+    attempt.complete("[CONTEXT SUMMARY]\n\nsummary").unwrap();
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute("DELETE FROM messages WHERE id = ?", params![ids[4]])
+            .unwrap();
+    }
+    let (summary, rejected) = db.latest_valid_compaction("session").unwrap();
+    assert!(summary.is_none());
+    assert_eq!(rejected, 1);
 }
 
 #[test]

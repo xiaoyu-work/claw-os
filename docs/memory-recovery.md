@@ -43,10 +43,13 @@ Runtime classification is explicit:
 Conversation compaction never rewrites or deletes authoritative `messages`
 rows. A completed projection records its session and generation, exact
 source row IDs and inclusive range, source-content digest, algorithm/version,
-protected tail and real-user anchor, provider/model, the frozen prompt
-hash/version used at the time, and metadata that points recovery tooling back
-to the searchable raw rows. Summary text is stored by SHA-256 and verified
-before it can be replayed.
+protected tail and real-user anchor IDs plus their row-identity digests,
+provider/model, the frozen prompt hash/version used at the time, and metadata
+that points recovery tooling back to the searchable raw rows. Summary text is
+stored by SHA-256 and verified before it can be replayed. Validation also
+requires the tail ID to be the first replayable row after the source, keeps the
+user anchor at or after that boundary, and rejects a boundary that strands a
+tool call or starts with its result.
 
 Continuation loading selects the newest valid completed projection and appends
 all raw rows after its source boundary. Invalid newer projections are ignored

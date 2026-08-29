@@ -607,6 +607,16 @@ async fn streaming_continuation_honors_configured_compression() {
         compactions[0].state,
         crate::agent::memory::compaction::CompactionState::Completed
     );
+    assert!(compactions[0].protected_tail_start_id.is_some());
+    assert!(compactions[0].protected_user_message_id.is_some());
+    assert!(!compactions[0]
+        .recovery_metadata
+        .protected_tail_identity_digest
+        .is_empty());
+    assert!(!compactions[0]
+        .recovery_metadata
+        .protected_user_identity_digest
+        .is_empty());
     let request = mock.last_request().expect("main provider request");
     assert!(request.messages.iter().any(|message| {
         message.content.iter().any(|block| matches!(

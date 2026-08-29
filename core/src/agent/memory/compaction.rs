@@ -120,6 +120,10 @@ pub struct CompactionRecoveryMetadata {
     pub source_ids: Vec<i64>,
     pub protected_tail_start_id: Option<i64>,
     pub protected_user_message_id: Option<i64>,
+    #[serde(default)]
+    pub protected_tail_identity_digest: String,
+    #[serde(default)]
+    pub protected_user_identity_digest: String,
     pub previous_compaction_id: Option<i64>,
     pub pruned_tool_results: usize,
     pub raw_rows_searchable: bool,
@@ -384,7 +388,7 @@ impl MemoryDb {
                 "compaction source range does not match durable message rows".to_string(),
             ));
         }
-        validate_protected_rows(
+        let protected = validate_protected_rows(
             &tx,
             session_id,
             spec.source_end_id,
@@ -423,6 +427,8 @@ impl MemoryDb {
             source_ids: source_ids.clone(),
             protected_tail_start_id: spec.protected_tail_start_id,
             protected_user_message_id: spec.protected_user_message_id,
+            protected_tail_identity_digest: message_identity_digest(&protected.tail),
+            protected_user_identity_digest: message_identity_digest(&protected.user),
             previous_compaction_id: spec.previous_compaction_id,
             pruned_tool_results: spec.pruned_tool_results,
             raw_rows_searchable: true,
@@ -647,6 +653,8 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactionRecord> 
         source_ids: source_ids.clone(),
         protected_tail_start_id,
         protected_user_message_id,
+        protected_tail_identity_digest: String::new(),
+        protected_user_identity_digest: String::new(),
         previous_compaction_id,
         pruned_tool_results: 0,
         raw_rows_searchable: false,
@@ -778,6 +786,22 @@ fn validate_completed(
             "compaction source rows failed digest verification".to_string(),
         ));
     }
+    let protected = validate_protected_rows(
+        conn,
+        &record.session_id,
+        record.source_end_id,
+        record.protected_tail_start_id,
+        record.protected_user_message_id,
+    )?;
+    if recovery.protected_tail_identity_digest.is_empty()
+        || recovery.protected_user_identity_digest.is_empty()
+        || recovery.protected_tail_identity_digest != message_identity_digest(&protected.tail)
+        || recovery.protected_user_identity_digest != message_identity_digest(&protected.user)
+    {
+        return Err(MemoryError::Integrity(
+            "protected compaction rows changed after the summary was created".to_string(),
+        ));
+    }
     if let Some(prompt_hash) = record.prompt_hash.as_deref() {
         if record.prompt_version.is_none_or(|version| version == 0) {
             return Err(MemoryError::Integrity(
@@ -807,64 +831,117 @@ fn validate_completed(
     Ok(())
 }
 
+struct ProtectedRows {
+    tail: MessageRow,
+    user: MessageRow,
+}
+
 fn validate_protected_rows(
     conn: &Connection,
     session_id: &str,
     source_end_id: i64,
     protected_tail_start_id: Option<i64>,
     protected_user_message_id: Option<i64>,
-) -> Result<(), MemoryError> {
-    if let Some(id) = protected_tail_start_id {
-        if id <= source_end_id || !message_belongs_to_session(conn, session_id, id)? {
-            return Err(MemoryError::Integrity(
-                "protected tail boundary is not a later session message".to_string(),
-            ));
-        }
+) -> Result<ProtectedRows, MemoryError> {
+    let protected_tail_start_id = protected_tail_start_id.ok_or_else(|| {
+        MemoryError::Integrity("compaction requires a protected tail boundary".to_string())
+    })?;
+    let protected_user_message_id = protected_user_message_id.ok_or_else(|| {
+        MemoryError::Integrity("compaction requires a protected real-user anchor".to_string())
+    })?;
+    if protected_tail_start_id <= source_end_id {
+        return Err(MemoryError::Integrity(
+            "protected tail boundary is not later than the source range".to_string(),
+        ));
     }
-    if let Some(id) = protected_user_message_id {
-        if id <= source_end_id {
-            return Err(MemoryError::Integrity(
-                "protected user anchor is inside the compacted source range".to_string(),
-            ));
-        }
-        let row: Option<(String, String)> = conn
-            .query_row(
-                "SELECT role, content FROM messages WHERE id = ? AND session_id = ?",
-                params![id, session_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let Some((role, content)) = row else {
-            return Err(MemoryError::Integrity(
-                "protected user anchor is missing".to_string(),
-            ));
-        };
-        let trimmed = content.trim_start();
-        if role != "user"
-            || trimmed.starts_with("[tool_result")
-            || trimmed.starts_with("[tool result")
-        {
-            return Err(MemoryError::Integrity(
-                "protected user anchor is not a real user message".to_string(),
-            ));
-        }
+    if protected_user_message_id < protected_tail_start_id {
+        return Err(MemoryError::Integrity(
+            "protected user anchor precedes the protected tail boundary".to_string(),
+        ));
     }
-    Ok(())
+    let tail = message_row_by_id(conn, session_id, protected_tail_start_id)?
+        .ok_or_else(|| MemoryError::Integrity("protected tail boundary is missing".to_string()))?;
+    let user = message_row_by_id(conn, session_id, protected_user_message_id)?
+        .ok_or_else(|| MemoryError::Integrity("protected user anchor is missing".to_string()))?;
+    let expected_tail = next_replayable_after(conn, session_id, source_end_id)?
+        .ok_or_else(|| MemoryError::Integrity("compaction source has no protected tail".into()))?;
+    if expected_tail.id != protected_tail_start_id {
+        return Err(MemoryError::Integrity(format!(
+            "protected tail boundary must be the first replayable row after source {}",
+            source_end_id
+        )));
+    }
+    if !is_real_user_row(&user) {
+        return Err(MemoryError::Integrity(
+            "protected user anchor is not a real user message".to_string(),
+        ));
+    }
+    let source_end = message_row_by_id(conn, session_id, source_end_id)?
+        .ok_or_else(|| MemoryError::Integrity("compaction source end is missing".to_string()))?;
+    if row_has_tool_use(&source_end) || row_has_tool_result(&tail) {
+        return Err(MemoryError::Integrity(
+            "compaction boundary splits or strands a tool call/result pair".to_string(),
+        ));
+    }
+    Ok(ProtectedRows { tail, user })
 }
 
-fn message_belongs_to_session(
+fn next_replayable_after(
     conn: &Connection,
     session_id: &str,
     id: i64,
-) -> Result<bool, MemoryError> {
-    Ok(conn.query_row(
-        "SELECT EXISTS(
-             SELECT 1 FROM messages
-             WHERE id = ? AND session_id = ? AND role <> ?
-         )",
+) -> Result<Option<MessageRow>, MemoryError> {
+    conn.query_row(
+        "SELECT id, session_id, role, content, ts_ms
+         FROM messages
+         WHERE session_id = ? AND role <> ? AND id > ?
+         ORDER BY id
+         LIMIT 1",
+        params![session_id, INJECTED_ROLE, id],
+        super::sqlite_fts::row_to_message,
+    )
+    .optional()
+    .map_err(MemoryError::from)
+}
+
+fn message_row_by_id(
+    conn: &Connection,
+    session_id: &str,
+    id: i64,
+) -> Result<Option<MessageRow>, MemoryError> {
+    conn.query_row(
+        "SELECT id, session_id, role, content, ts_ms
+         FROM messages
+         WHERE id = ? AND session_id = ? AND role <> ?",
         params![id, session_id, INJECTED_ROLE],
-        |row| row.get::<_, i64>(0),
-    )? != 0)
+        super::sqlite_fts::row_to_message,
+    )
+    .optional()
+    .map_err(MemoryError::from)
+}
+
+fn is_real_user_row(row: &MessageRow) -> bool {
+    row.role == "user" && !row_has_tool_result(row) && !row.content.trim().is_empty()
+}
+
+fn row_has_tool_use(row: &MessageRow) -> bool {
+    row.role == "assistant"
+        && row
+            .content
+            .lines()
+            .any(|line| line.trim_start().starts_with("[tool_use:"))
+}
+
+fn row_has_tool_result(row: &MessageRow) -> bool {
+    matches!(row.role.as_str(), "user" | "tool")
+        && row.content.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("[tool_result]") || line.starts_with("[tool_result:error]")
+        })
+}
+
+fn message_identity_digest(row: &MessageRow) -> String {
+    digest_rows(std::slice::from_ref(row))
 }
 
 fn source_rows_for_range(
@@ -1208,6 +1285,27 @@ pub(super) fn recover_projection(
             skipped += 1;
             continue;
         }
+        let protected = match validate_protected_rows(
+            &tx,
+            &record.session_id,
+            record.source_end_id,
+            record.protected_tail_start_id,
+            record.protected_user_message_id,
+        ) {
+            Ok(protected) => protected,
+            Err(_) => {
+                skipped += 1;
+                continue;
+            }
+        };
+        if record.recovery_metadata.protected_tail_identity_digest
+            != message_identity_digest(&protected.tail)
+            || record.recovery_metadata.protected_user_identity_digest
+                != message_identity_digest(&protected.user)
+        {
+            skipped += 1;
+            continue;
+        }
         if let Some(prompt_hash) = record.prompt_hash.clone() {
             let prompt: Option<String> = source
                 .query_row(
@@ -1231,18 +1329,6 @@ pub(super) fn recover_projection(
         {
             record.previous_compaction_id = None;
             record.recovery_metadata.previous_compaction_id = None;
-        }
-        if record.protected_tail_start_id.is_some_and(|id| {
-            !message_belongs_to_session(&tx, &record.session_id, id).unwrap_or(false)
-        }) {
-            record.protected_tail_start_id = None;
-            record.recovery_metadata.protected_tail_start_id = None;
-        }
-        if record.protected_user_message_id.is_some_and(|id| {
-            !message_belongs_to_session(&tx, &record.session_id, id).unwrap_or(false)
-        }) {
-            record.protected_user_message_id = None;
-            record.recovery_metadata.protected_user_message_id = None;
         }
         tx.execute(
             "INSERT OR IGNORE INTO compaction_summaries(hash, summary) VALUES (?, ?)",
