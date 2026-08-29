@@ -74,6 +74,11 @@ writes `cgroup.kill`, waits for recursive `populated 0` plus an empty
 `cgroup.procs`, and removes the cgroup. Any failure is terminal and audited as
 `cleanup-failed`.
 
+The supervisor retries only failures proven to precede delivery of the worker
+assignment. After delivery, an extension call may already have produced an
+external side effect, so unexpected host/worker exit, EOF, or timeout is a
+terminal task error rather than a queue replay.
+
 ## Tests
 
 ```bash

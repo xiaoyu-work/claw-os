@@ -437,6 +437,55 @@ fn install_daemonizing_host(harness: &Harness, exit_host: bool) -> PathBuf {
     path
 }
 
+fn install_crashing_control_host(harness: &Harness, marker: &std::path::Path) -> PathBuf {
+    let path = harness.runtime_dir.join("crashing-control-host.py");
+    let marker = serde_json::to_string(&marker.to_string_lossy()).expect("encode marker path");
+    let script = format!(
+        "{}{}{}",
+        concat!(
+            "#!/usr/bin/python3\n",
+            "import os\n",
+            "import socket\n",
+            "\n",
+            "def receive_exact(connection, size):\n",
+            "    value = b''\n",
+            "    while len(value) < size:\n",
+            "        chunk = connection.recv(size - len(value))\n",
+            "        if not chunk:\n",
+            "            os._exit(21)\n",
+            "        value += chunk\n",
+            "    return value\n",
+            "\n",
+            "control = os.environ['COS_EXTENSION_CONTROL_SOCKET']\n",
+            "try:\n",
+            "    os.unlink(control)\n",
+            "except FileNotFoundError:\n",
+            "    pass\n",
+            "listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n",
+            "listener.bind(control)\n",
+            "os.chmod(control, 0o600)\n",
+            "listener.listen(1)\n",
+            "connection, _ = listener.accept()\n",
+            "header = receive_exact(connection, 10)\n",
+            "length = int.from_bytes(header[6:10], 'big')\n",
+            "receive_exact(connection, length)\n",
+            "with open("
+        ),
+        marker,
+        concat!(
+            ", 'ab') as output:\n",
+            "    output.write(b'executed\\n')\n",
+            "    output.flush()\n",
+            "    os.fsync(output.fileno())\n",
+            "os._exit(23)\n",
+        )
+    );
+    std::fs::write(&path, script).expect("write crashing control host");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod crashing control host");
+    path
+}
+
 async fn wait_for_pid(path: &std::path::Path) -> u32 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -1201,6 +1250,94 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
     assert!(
         extension_cgroups(&harness.cgroup_root).is_empty(),
         "task completion left an extension cgroup behind"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
+    use cos::agent::service::{JobStatus, Store};
+    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let owner_home = tempfile::tempdir().expect("owner home");
+    let raw_home =
+        std::ffi::CString::new(owner_home.path().as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe {
+            libc::chown(
+                raw_home.as_ptr(),
+                harness.identity.uid,
+                harness.identity.gid,
+            )
+        },
+        0,
+        "chown owner home"
+    );
+    let marker = owner_home.path().join("host-side-effect.log");
+    let malicious = install_crashing_control_host(&harness, &marker);
+    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    let queue = tempfile::tempdir().expect("queue");
+    let store = Store::with_root(queue.path().to_path_buf()).expect("store");
+    let job = store
+        .submit(
+            "host crash side-effect probe".to_string(),
+            None,
+            Some(1),
+            Some(harness.identity.uid),
+            Some(owner_home.path().to_string_lossy().into_owned()),
+        )
+        .expect("submit");
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let config = SupervisorConfig {
+        poll: Duration::from_millis(25),
+        max_workers: 1,
+        lease: Duration::from_secs(120),
+        heartbeat_grace: Duration::from_secs(30),
+        ..SupervisorConfig::default()
+    };
+    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let finished = loop {
+        if let Some((_, current)) = store.locate(&job.id).expect("locate") {
+            if matches!(current.status, JobStatus::Error | JobStatus::Cancelled) {
+                break current;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "host crash did not resolve the task"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    shutdown.store(true, Ordering::SeqCst);
+    let _ = tokio::time::timeout(Duration::from_secs(10), supervisor).await;
+
+    assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(finished.recovery_count, 0);
+    assert!(
+        finished
+            .error
+            .unwrap_or_default()
+            .contains("extension host exited early"),
+        "unexpected terminal error"
+    );
+    assert!(
+        store.claim_one().expect("requeue probe").is_none(),
+        "post-assignment host crash re-entered the queue"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&marker).expect("side-effect marker"),
+        "executed\n",
+        "the hosted side effect ran more than once"
+    );
+    assert!(
+        extension_cgroups(&harness.cgroup_root).is_empty(),
+        "terminal host crash left containment behind"
     );
 }
 

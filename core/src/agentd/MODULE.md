@@ -194,6 +194,13 @@ writes `cgroup.kill`, requires recursive `populated 0` and an empty
 fallback. Unavailable containment or unverifiable cleanup is a terminal task
 error; `clawd` continues serving non-agent primitives.
 
+Retry is limited to failures before a complete assignment reaches the worker,
+such as worker/host launch failure or a broken assignment channel. Once the
+assignment is delivered, execution may have crossed an external side-effect
+boundary. Worker EOF, handshake/lease timeout, or unexpected worker/extension
+host exit is therefore terminal; the queue never replays the whole task
+without durable idempotency evidence.
+
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
 report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
 cannot outlive the daemon that leased it, so every task left in `running/` at

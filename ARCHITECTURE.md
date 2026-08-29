@@ -367,6 +367,10 @@ only from that exact worker identity. Its broker proxy uses per-message
 scheduler, permission-decision, admin, and sibling-session routes are absent.
 Accepted provider calls re-enter the normal typed route registry, global
 admission limits, capability authority, final provider checks, and audit path.
+The supervisor's retry boundary is delivery of the complete worker assignment:
+launch or assignment-delivery failures may retry, but every worker/host
+EOF, crash, or timeout after delivery is terminal because an external hosted
+side effect may already have occurred.
 
 Consent remains inside the capability boundary.
 `core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead

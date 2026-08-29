@@ -69,6 +69,13 @@ successful cgroup removal. It does not infer descendants from post-exit
 host-first exit, or clearing `PDEATHSIG`; cleanup failure is terminal, logged,
 and audited rather than reported as a clean task completion.
 
+The retry boundary is the complete worker assignment frame. Launch failures or
+an assignment write that cannot deliver a full frame are pre-execution and may
+use the queue's bounded retry budget. After delivery, the worker can begin
+execution and a hosted action may already have committed an external side
+effect. Any subsequent worker/host EOF, crash, handshake or lease timeout is
+terminal; Claw OS does not replay the task without durable idempotency proof.
+
 ## Lifecycle
 
 Control frames are versioned, size-bounded, one request per connection, and

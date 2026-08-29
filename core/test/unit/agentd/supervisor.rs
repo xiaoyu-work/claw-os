@@ -219,7 +219,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
 }
 
 #[test]
-fn a_worker_that_dies_without_a_result_returns_its_task_to_the_queue() {
+fn a_pre_assignment_failure_can_return_its_task_to_the_queue() {
     let root = tempfile::tempdir().expect("tempdir");
     let store = Store::with_root(root.path().to_path_buf()).expect("store");
     let job = store
@@ -228,15 +228,68 @@ fn a_worker_that_dies_without_a_result_returns_its_task_to_the_queue() {
     let claimed = store.claim_one().expect("claim").expect("a pending job");
     assert_eq!(claimed.id, job.id);
 
+    finish_task_outcome(
+        &store,
+        &claimed,
+        TaskOutcome::Retry("assignment channel failed before delivery".to_string()),
+    );
     let released = store
-        .release_for_retry(&job.id, "agent worker exited early")
-        .expect("release")
-        .expect("job");
+        .locate(&job.id)
+        .expect("locate")
+        .expect("released job")
+        .1;
     assert_eq!(released.status, JobStatus::Pending);
     assert_eq!(released.recovery_count, 1);
     assert!(released.worker_pid.is_none());
     // Retryable, so the queue can hand it to a fresh worker.
     assert!(store.claim_one().expect("reclaim").is_some());
+}
+
+#[test]
+fn host_crash_after_a_side_effect_is_terminal_and_never_requeued() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let marker_root = tempfile::tempdir().expect("marker tempdir");
+    let marker = marker_root.path().join("side-effect.log");
+    let store = Store::with_root(root.path().to_path_buf()).expect("store");
+    let job = store
+        .submit(
+            "mutating extension call".to_string(),
+            None,
+            None,
+            Some(1000),
+            None,
+        )
+        .expect("submit");
+    let claimed = store.claim_one().expect("claim").expect("a pending job");
+
+    std::fs::write(&marker, b"executed\n").expect("record simulated hosted side effect");
+    let outcome =
+        post_assignment_interruption("extension host exited after hosted call".to_string(), false);
+    finish_task_outcome(&store, &claimed, outcome);
+
+    let finished = store
+        .locate(&job.id)
+        .expect("locate")
+        .expect("terminal job")
+        .1;
+    assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(finished.recovery_count, 0);
+    assert!(
+        finished
+            .error
+            .unwrap_or_default()
+            .contains("extension host exited"),
+        "host failure must be persisted"
+    );
+    assert!(
+        store.claim_one().expect("requeue probe").is_none(),
+        "a post-assignment host crash must not re-enter the queue"
+    );
+    assert_eq!(
+        std::fs::read_to_string(marker).expect("side-effect marker"),
+        "executed\n",
+        "terminal handling must not execute the hosted action twice"
+    );
 }
 
 #[test]

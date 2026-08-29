@@ -633,6 +633,11 @@ async fn supervise(
     }
 
     let outcome = apply_containment_cleanup(outcome, containment_cleanup);
+    finish_task_outcome(&store, &job, outcome);
+    Ok(())
+}
+
+fn finish_task_outcome(store: &Store, job: &Job, outcome: TaskOutcome) {
     match outcome {
         TaskOutcome::Reported(outcome) => {
             let finish: FinishOutcome = (*outcome).into();
@@ -650,9 +655,8 @@ async fn supervise(
                 tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
             }
         }
-        TaskOutcome::Retry(reason) => release_or_fail(&store, &job, &reason),
+        TaskOutcome::Retry(reason) => release_or_fail(store, job, &reason),
     }
-    Ok(())
 }
 
 enum TaskOutcome {
@@ -668,6 +672,17 @@ fn apply_containment_cleanup(outcome: TaskOutcome, cleanup: Result<(), String>) 
         Err(error) => TaskOutcome::Failed(format!(
             "extension containment cleanup failed; descendants may remain: {error}"
         )),
+    }
+}
+
+fn post_assignment_interruption(detail: String, cancel_sent: bool) -> TaskOutcome {
+    if cancel_sent {
+        TaskOutcome::Cancelled
+    } else {
+        // Once a complete assignment reached the worker, the protocol permits
+        // execution to begin. No later crash/EOF/timeout can prove that an
+        // external side effect did not happen, so replaying the task is unsafe.
+        TaskOutcome::Failed(detail)
     }
 }
 
@@ -839,7 +854,7 @@ async fn pump(
         presence: lease.presence,
         extension: lease.extension.clone(),
     };
-    if let Err(error) = send(&mut writer, &BrokerFrame::Assign(Box::new(assignment))).await {
+    if let Err(error) = send_assignment(&mut writer, assignment).await {
         return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
     }
 
@@ -914,13 +929,10 @@ async fn pump(
                     }
                 }
                 Ok(None) => {
-                    return if cancel_sent {
-                        TaskOutcome::Cancelled
-                    } else {
-                        TaskOutcome::Retry(
-                            "agent worker closed its channel without reporting a result".to_string(),
-                        )
-                    };
+                    return post_assignment_interruption(
+                        "agent worker closed its channel without reporting a result".to_string(),
+                        cancel_sent,
+                    );
                 }
                 Err(error) => {
                     return TaskOutcome::Failed(format!("agent worker protocol fault: {error}"));
@@ -931,14 +943,7 @@ async fn pump(
                     Ok(status) => format!("agent worker exited early ({status})"),
                     Err(error) => format!("agent worker could not be reaped: {error}"),
                 };
-                return if cancel_sent {
-                    TaskOutcome::Cancelled
-                } else {
-                    // A hosted call may have crossed an external side-effect
-                    // boundary before the host died. Retrying the whole task
-                    // could repeat it, so host failure is terminal.
-                    TaskOutcome::Failed(detail)
-                };
+                return post_assignment_interruption(detail, cancel_sent);
             },
             status = extension_child.wait() => {
                 let detail = match status {
@@ -954,11 +959,7 @@ async fn pump(
                     "crash",
                     false,
                 );
-                return if cancel_sent {
-                    TaskOutcome::Cancelled
-                } else {
-                    TaskOutcome::Retry(detail)
-                };
+                return post_assignment_interruption(detail, cancel_sent);
             },
             _ = ticker.tick() => {
                 if !cancel_sent
@@ -998,7 +999,7 @@ async fn pump(
                     }
                 }
                 if !hello_seen && last_progress.elapsed() > config.heartbeat_grace {
-                    return TaskOutcome::Retry(
+                    return TaskOutcome::Failed(
                         "agent worker never completed the protocol handshake".to_string(),
                     );
                 }
@@ -1021,7 +1022,7 @@ async fn pump(
                             "failed to terminate timed-out extension containment: {error}"
                         ));
                     }
-                    return TaskOutcome::Retry(
+                    return TaskOutcome::Failed(
                         "agent worker lease expired without a heartbeat".to_string(),
                     );
                 }
@@ -1437,6 +1438,19 @@ async fn send(
         .flush()
         .await
         .map_err(|error| format!("flush agentd frame: {error}"))
+}
+
+async fn send_assignment(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    assignment: Assignment,
+) -> Result<(), String> {
+    let encoded = protocol::encode(&BrokerFrame::Assign(Box::new(assignment)))?;
+    // UnixStream is unbuffered. Once write_all succeeds, the complete framed
+    // assignment is deliverable and every later failure is terminal.
+    writer
+        .write_all(encoded.as_bytes())
+        .await
+        .map_err(|error| format!("write agentd assignment: {error}"))
 }
 
 async fn reap(child: &mut tokio::process::Child, pid: u32) {
