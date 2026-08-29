@@ -203,6 +203,7 @@ fn register_spawn_test_parent(caps: crate::caps::CapSet) -> String {
         app_id: None,
         pending_bind: false,
         start_time_ticks: read_start_time_ticks(std::process::id()),
+        client: crate::session::SessionClient::default(),
     })
     .unwrap();
     std::env::set_var("COS_SESSION", &session_id);

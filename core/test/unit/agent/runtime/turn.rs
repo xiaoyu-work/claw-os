@@ -166,9 +166,13 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
         .unwrap();
     let invocation =
         crate::approvals::LocalApprovalInvocation::new("test:mixed-proxy:turn:1").unwrap();
+    let exposure = ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
     runtime.block_on(invocation.scope(async {
         let read = dispatch_tool(
             &registry,
+            &exposure,
             &ToolCall {
                 id: "read".to_string(),
                 name: "cos_mixed".to_string(),
@@ -181,6 +185,7 @@ fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
 
         let write = dispatch_tool(
             &registry,
+            &exposure,
             &ToolCall {
                 id: "write".to_string(),
                 name: "cos_mixed".to_string(),
