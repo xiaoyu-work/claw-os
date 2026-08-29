@@ -248,109 +248,109 @@ fn repeated_registries_release_owned_dynamic_descriptors() {
                 description
             );
         }
-
-        #[test]
-        fn progressive_surface_replaces_deferred_schema_with_fixed_bridge() {
-            let mut registry = builtin_only_registry();
-            registry.register(Arc::new(DeferredTestTool));
-
-            let tools = registry.as_llm_tools_progressive();
-            let names = tools
-                .iter()
-                .map(|tool| tool.name.as_str())
-                .collect::<std::collections::BTreeSet<_>>();
-            assert!(!names.contains("mcp_test_lookup"));
-            assert!(names.contains(crate::agent::tools::progressive::TOOL_SEARCH));
-            assert!(names.contains(crate::agent::tools::progressive::TOOL_DESCRIBE));
-            assert!(names.contains(crate::agent::tools::progressive::TOOL_CALL));
-        }
-
-        #[test]
-        fn progressive_catalog_and_call_are_scoped_to_registered_deferred_tools() {
-            let mut registry = builtin_only_registry();
-            registry.register(Arc::new(DeferredTestTool));
-
-            let search = registry
-                .execute_progressive_catalog(
-                    crate::agent::tools::progressive::TOOL_SEARCH,
-                    &serde_json::json!({"queries": ["test lookup"]}),
-                )
-                .unwrap();
-            assert!(!search.is_error);
-            assert!(search.content.contains("mcp_test_lookup"));
-
-            let resolved = registry
-                .resolve_progressive_call(&ToolCall {
-                    id: "call-1".into(),
-                    name: crate::agent::tools::progressive::TOOL_CALL.into(),
-                    input: serde_json::json!({
-                        "name": "mcp_test_lookup",
-                        "arguments": {"query": "value"},
-                    }),
-                })
-                .unwrap();
-            assert_eq!(resolved.name, "mcp_test_lookup");
-            assert_eq!(resolved.input["query"], "value");
-            assert!(registry.is_progressive_parallel_safe(&resolved));
-        }
-
-        #[test]
-        fn progressive_call_rejects_missing_required_arguments() {
-            let mut registry = builtin_only_registry();
-            registry.register(Arc::new(DeferredTestTool));
-            let error = registry
-                .resolve_progressive_call(&ToolCall {
-                    id: "call-1".into(),
-                    name: crate::agent::tools::progressive::TOOL_CALL.into(),
-                    input: serde_json::json!({
-                        "name": "mcp_test_lookup",
-                        "arguments": {},
-                    }),
-                })
-                .unwrap_err();
-            assert!(error.contains("query"));
-        }
-
-        #[test]
-        fn rejected_progressive_call_preserves_underlying_identity() {
-            let mut registry = builtin_only_registry();
-            registry.register(Arc::new(DeferredTestTool));
-            let (resolved, error) = registry.resolve_progressive_invocation(&ToolCall {
-                id: "call-1".into(),
-                name: crate::agent::tools::progressive::TOOL_CALL.into(),
-                input: serde_json::json!({
-                    "name": "mcp_test_lookup",
-                    "arguments": {},
-                }),
-            });
-            assert_eq!(resolved.name, "mcp_test_lookup");
-            assert!(error.unwrap().contains("query"));
-        }
-
-        #[test]
-        fn progressive_catalog_cannot_surface_guardrail_denied_tools() {
-            let mut registry = builtin_only_registry();
-            registry.register(Arc::new(DeferredTestTool));
-            registry.set_guardrails(
-                crate::agent::tools::guardrails::Guardrails::permissive().with_deny(["mcp_test_lookup"]),
-            );
-
-            let tools = registry.as_llm_tools_progressive();
-            assert!(!tools
-                .iter()
-                .any(|tool| tool.name == crate::agent::tools::progressive::TOOL_SEARCH));
-            let error = registry
-                .resolve_progressive_call(&ToolCall {
-                    id: "call-1".into(),
-                    name: crate::agent::tools::progressive::TOOL_CALL.into(),
-                    input: serde_json::json!({
-                        "name": "mcp_test_lookup",
-                        "arguments": {"query": "value"},
-                    }),
-                })
-                .unwrap_err();
-            assert!(error.contains("denied"));
-        }
         assert_eq!(drops.load(Ordering::SeqCst), build + 1);
     }
+}
+
+#[test]
+fn progressive_surface_replaces_deferred_schema_with_fixed_bridge() {
+    let mut registry = builtin_only_registry();
+    registry.register(Arc::new(DeferredTestTool));
+
+    let tools = registry.as_llm_tools_progressive();
+    let names = tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(!names.contains("mcp_test_lookup"));
+    assert!(names.contains(crate::agent::tools::progressive::TOOL_SEARCH));
+    assert!(names.contains(crate::agent::tools::progressive::TOOL_DESCRIBE));
+    assert!(names.contains(crate::agent::tools::progressive::TOOL_CALL));
+}
+
+#[test]
+fn progressive_catalog_and_call_are_scoped_to_registered_deferred_tools() {
+    let mut registry = builtin_only_registry();
+    registry.register(Arc::new(DeferredTestTool));
+
+    let search = registry
+        .execute_progressive_catalog(
+            crate::agent::tools::progressive::TOOL_SEARCH,
+            &serde_json::json!({"queries": ["test lookup"]}),
+        )
+        .unwrap();
+    assert!(!search.is_error);
+    assert!(search.content.contains("mcp_test_lookup"));
+
+    let resolved = registry
+        .resolve_progressive_call(&ToolCall {
+            id: "call-1".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_lookup",
+                "arguments": {"query": "value"},
+            }),
+        })
+        .unwrap();
+    assert_eq!(resolved.name, "mcp_test_lookup");
+    assert_eq!(resolved.input["query"], "value");
+    assert!(registry.is_progressive_parallel_safe(&resolved));
+}
+
+#[test]
+fn progressive_call_rejects_missing_required_arguments() {
+    let mut registry = builtin_only_registry();
+    registry.register(Arc::new(DeferredTestTool));
+    let error = registry
+        .resolve_progressive_call(&ToolCall {
+            id: "call-1".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_lookup",
+                "arguments": {},
+            }),
+        })
+        .unwrap_err();
+    assert!(error.contains("query"));
+}
+
+#[test]
+fn rejected_progressive_call_preserves_underlying_identity() {
+    let mut registry = builtin_only_registry();
+    registry.register(Arc::new(DeferredTestTool));
+    let (resolved, error) = registry.resolve_progressive_invocation(&ToolCall {
+        id: "call-1".into(),
+        name: crate::agent::tools::progressive::TOOL_CALL.into(),
+        input: serde_json::json!({
+            "name": "mcp_test_lookup",
+            "arguments": {},
+        }),
+    });
+    assert_eq!(resolved.name, "mcp_test_lookup");
+    assert!(error.unwrap().contains("query"));
+}
+
+#[test]
+fn progressive_catalog_cannot_surface_guardrail_denied_tools() {
+    let mut registry = builtin_only_registry();
+    registry.register(Arc::new(DeferredTestTool));
+    registry.set_guardrails(
+        crate::agent::tools::guardrails::Guardrails::permissive().with_deny(["mcp_test_lookup"]),
+    );
+
+    let tools = registry.as_llm_tools_progressive();
+    assert!(!tools
+        .iter()
+        .any(|tool| tool.name == crate::agent::tools::progressive::TOOL_SEARCH));
+    let error = registry
+        .resolve_progressive_call(&ToolCall {
+            id: "call-1".into(),
+            name: crate::agent::tools::progressive::TOOL_CALL.into(),
+            input: serde_json::json!({
+                "name": "mcp_test_lookup",
+                "arguments": {"query": "value"},
+            }),
+        })
+        .unwrap_err();
+    assert!(error.contains("denied"));
 }
