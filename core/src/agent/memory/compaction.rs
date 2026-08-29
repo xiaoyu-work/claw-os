@@ -8,7 +8,7 @@
 //! after that lock is reacquired is an interrupted attempt and is closed as
 //! `failed` before retry.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs::{File, OpenOptions};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -125,6 +125,8 @@ pub struct CompactionRecoveryMetadata {
     #[serde(default)]
     pub protected_user_identity_digest: String,
     pub previous_compaction_id: Option<i64>,
+    #[serde(default)]
+    pub rerooted_from_compaction_ids: Vec<i64>,
     pub pruned_tool_results: usize,
     pub raw_rows_searchable: bool,
 }
@@ -335,12 +337,7 @@ impl MemoryDb {
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
         close_interrupted_locked(&tx, session_id)?;
 
-        let earliest_replayable: Option<i64> = tx.query_row(
-            "SELECT MIN(id) FROM messages WHERE session_id = ? AND role <> ?",
-            params![session_id, INJECTED_ROLE],
-            |row| row.get(0),
-        )?;
-        let earliest_replayable = earliest_replayable.ok_or_else(|| {
+        let earliest_replayable = earliest_replayable_id(&tx, session_id)?.ok_or_else(|| {
             MemoryError::Integrity(
                 "cannot compact a session without replayable message rows".to_string(),
             )
@@ -430,6 +427,7 @@ impl MemoryDb {
             protected_tail_identity_digest: message_identity_digest(&protected.tail),
             protected_user_identity_digest: message_identity_digest(&protected.user),
             previous_compaction_id: spec.previous_compaction_id,
+            rerooted_from_compaction_ids: Vec::new(),
             pruned_tool_results: spec.pruned_tool_results,
             raw_rows_searchable: true,
         };
@@ -656,6 +654,7 @@ fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactionRecord> 
         protected_tail_identity_digest: String::new(),
         protected_user_identity_digest: String::new(),
         previous_compaction_id,
+        rerooted_from_compaction_ids: Vec::new(),
         pruned_tool_results: 0,
         raw_rows_searchable: false,
     });
@@ -735,7 +734,44 @@ fn latest_valid_locked(
     Ok((None, rejected))
 }
 
+fn compaction_with_summary_by_id(
+    conn: &Connection,
+    id: i64,
+) -> Result<Option<(CompactionRecord, Option<String>)>, MemoryError> {
+    conn.query_row(
+        "SELECT c.id, c.session_id, c.generation, c.state, c.started_ts_ms,
+                c.finished_ts_ms, c.source_start_id, c.source_end_id,
+                c.source_count, c.source_ids_json, c.source_digest, c.algorithm,
+                c.algorithm_version, c.protected_tail_start_id,
+                c.protected_user_message_id, c.summary_hash, c.prompt_hash,
+                c.prompt_version, c.provider, c.model,
+                c.previous_compaction_id, c.recovery_metadata, c.failure_kind,
+                s.summary
+         FROM session_compactions AS c
+         LEFT JOIN compaction_summaries AS s ON s.hash = c.summary_hash
+         WHERE c.id = ?",
+        params![id],
+        |row| Ok((row_to_record(row)?, row.get::<_, Option<String>>(23)?)),
+    )
+    .optional()
+    .map_err(MemoryError::from)
+}
+
 fn validate_completed(
+    conn: &Connection,
+    record: &CompactionRecord,
+    summary: &str,
+) -> Result<(), MemoryError> {
+    validate_completed_intrinsic(conn, record, summary)?;
+    if record.recovery_metadata.previous_compaction_id != record.previous_compaction_id {
+        return Err(MemoryError::Integrity(
+            "compaction predecessor metadata does not match its foreign key".to_string(),
+        ));
+    }
+    validate_lineage(conn, record)
+}
+
+fn validate_completed_intrinsic(
     conn: &Connection,
     record: &CompactionRecord,
     summary: &str,
@@ -754,7 +790,6 @@ fn validate_completed(
         || recovery.source_ids != record.source_ids
         || recovery.protected_tail_start_id != record.protected_tail_start_id
         || recovery.protected_user_message_id != record.protected_user_message_id
-        || recovery.previous_compaction_id != record.previous_compaction_id
         || !recovery.raw_rows_searchable
     {
         return Err(MemoryError::Integrity(
@@ -831,6 +866,48 @@ fn validate_completed(
     Ok(())
 }
 
+fn validate_lineage(conn: &Connection, record: &CompactionRecord) -> Result<(), MemoryError> {
+    let earliest = earliest_replayable_id(conn, &record.session_id)?.ok_or_else(|| {
+        MemoryError::Integrity("compaction session has no replayable rows".to_string())
+    })?;
+    let mut child = record.clone();
+    let mut visited = HashSet::new();
+    visited.insert(child.id);
+    while let Some(previous_id) = child.previous_compaction_id {
+        if !visited.insert(previous_id) {
+            return Err(MemoryError::Integrity(
+                "compaction predecessor chain contains a cycle".to_string(),
+            ));
+        }
+        let (previous, summary) =
+            compaction_with_summary_by_id(conn, previous_id)?.ok_or_else(|| {
+                MemoryError::Integrity("compaction predecessor is missing".to_string())
+            })?;
+        let summary = summary.ok_or_else(|| {
+            MemoryError::Integrity("compaction predecessor summary is missing".to_string())
+        })?;
+        validate_completed_intrinsic(conn, &previous, &summary)?;
+        if previous.recovery_metadata.previous_compaction_id
+            != previous.previous_compaction_id
+            || previous.session_id != child.session_id
+            || previous.generation >= child.generation
+            || previous.source_start_id != child.source_start_id
+            || previous.source_end_id >= child.source_end_id
+        {
+            return Err(MemoryError::Integrity(
+                "compaction predecessor chain is inconsistent".to_string(),
+            ));
+        }
+        child = previous;
+    }
+    if child.source_start_id != earliest {
+        return Err(MemoryError::Integrity(format!(
+            "root compaction must start at earliest replayable row {earliest}"
+        )));
+    }
+    Ok(())
+}
+
 struct ProtectedRows {
     tail: MessageRow,
     user: MessageRow,
@@ -901,6 +978,18 @@ fn next_replayable_after(
         super::sqlite_fts::row_to_message,
     )
     .optional()
+    .map_err(MemoryError::from)
+}
+
+fn earliest_replayable_id(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Option<i64>, MemoryError> {
+    conn.query_row(
+        "SELECT MIN(id) FROM messages WHERE session_id = ? AND role <> ?",
+        params![session_id, INJECTED_ROLE],
+        |row| row.get(0),
+    )
     .map_err(MemoryError::from)
 }
 
@@ -1133,48 +1222,134 @@ pub(super) fn repair_projection(conn: &Connection) -> Result<(), MemoryError> {
          WHERE state = 'started'",
         params![current_ts_ms()],
     )?;
-    let mut invalid = Vec::new();
-    {
-        let mut statement = conn.prepare(
-            "SELECT id, session_id, generation, state, started_ts_ms,
-                    finished_ts_ms, source_start_id, source_end_id, source_count,
-                    source_ids_json, source_digest, algorithm, algorithm_version,
-                    protected_tail_start_id, protected_user_message_id,
-                    summary_hash, prompt_hash, prompt_version, provider, model,
-                    previous_compaction_id, recovery_metadata, failure_kind
-             FROM session_compactions",
-        )?;
-        let records = statement
-            .query_map([], row_to_record)?
-            .collect::<Result<Vec<_>, _>>()?;
-        for record in records {
-            if !record.recovery_metadata_valid || record.state == CompactionState::Invalid {
-                invalid.push(record.id);
-                continue;
-            }
-            if record.state != CompactionState::Completed {
-                continue;
-            }
-            let summary = record.summary_hash.as_deref().and_then(|hash| {
-                conn.query_row(
-                    "SELECT summary FROM compaction_summaries WHERE hash = ?",
-                    params![hash],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .ok()
-                .flatten()
-            });
-            if summary
-                .as_deref()
-                .is_none_or(|summary| validate_completed(conn, &record, summary).is_err())
-            {
-                invalid.push(record.id);
+    let records = compactions_with_summaries(conn)?;
+    let mut records_by_id: HashMap<i64, CompactionRecord> = records
+        .iter()
+        .map(|(record, _)| (record.id, record.clone()))
+        .collect();
+    let mut intrinsic_valid = HashSet::new();
+    let mut invalid = HashSet::new();
+    for (record, summary) in &records {
+        if !record.recovery_metadata_valid || record.state == CompactionState::Invalid {
+            invalid.insert(record.id);
+            continue;
+        }
+        if record.state == CompactionState::Completed {
+            if summary.as_deref().is_some_and(|summary| {
+                validate_completed_intrinsic(conn, record, summary).is_ok()
+            }) {
+                intrinsic_valid.insert(record.id);
+            } else {
+                invalid.insert(record.id);
             }
         }
     }
+
+    let mut completed: Vec<CompactionRecord> = records
+        .iter()
+        .map(|(record, _)| record)
+        .filter(|record| record.state == CompactionState::Completed)
+        .cloned()
+        .collect();
+    completed.sort_by_key(|record| (record.session_id.clone(), record.generation, record.id));
+    let mut survivors = HashSet::new();
+    for mut record in completed {
+        if !intrinsic_valid.contains(&record.id) {
+            continue;
+        }
+        let (new_previous, traversed) =
+            resolve_repair_predecessor(&record, &records_by_id, &survivors);
+        let lineage_ok = match new_previous {
+            Some(previous_id) => records_by_id.get(&previous_id).is_some_and(|previous| {
+                previous.session_id == record.session_id
+                    && previous.source_start_id == record.source_start_id
+                    && previous.source_end_id < record.source_end_id
+                    && previous.generation < record.generation
+            }),
+            None => earliest_replayable_id(conn, &record.session_id)?
+                == Some(record.source_start_id),
+        };
+        if !lineage_ok {
+            invalid.insert(record.id);
+            continue;
+        }
+
+        if record.previous_compaction_id != new_previous
+            || record.recovery_metadata.previous_compaction_id != new_previous
+        {
+            for id in traversed {
+                if Some(id) != new_previous
+                    && !record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .contains(&id)
+                {
+                    record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .push(id);
+                }
+            }
+            if let Some(id) = record.previous_compaction_id {
+                if Some(id) != new_previous
+                    && !record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .contains(&id)
+                {
+                    record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .push(id);
+                }
+            }
+            if let Some(id) = record.recovery_metadata.previous_compaction_id {
+                if Some(id) != new_previous
+                    && !record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .contains(&id)
+                {
+                    record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .push(id);
+                }
+            }
+            record.previous_compaction_id = new_previous;
+            record.recovery_metadata.previous_compaction_id = new_previous;
+            let recovery_metadata = serde_json::to_string(&record.recovery_metadata)
+                .map_err(|error| MemoryError::Integrity(error.to_string()))?;
+            conn.execute(
+                "UPDATE session_compactions
+                 SET previous_compaction_id = ?, recovery_metadata = ?
+                 WHERE id = ?",
+                params![new_previous, recovery_metadata, record.id],
+            )?;
+            records_by_id.insert(record.id, record.clone());
+        }
+        survivors.insert(record.id);
+    }
+
     for id in invalid {
-        conn.execute("DELETE FROM session_compactions WHERE id = ?", params![id])?;
+        conn.execute(
+            "DELETE FROM session_compactions WHERE id = ?",
+            params![id],
+        )?;
+    }
+
+    let mut broken_after_reroot = HashSet::new();
+    for (record, summary) in compactions_with_summaries(conn)? {
+        if record.state == CompactionState::Completed
+            && summary
+                .as_deref()
+                .is_none_or(|summary| validate_completed(conn, &record, summary).is_err())
+        {
+            broken_after_reroot.insert(record.id);
+        }
+    }
+    if !broken_after_reroot.is_empty() {
+        delete_dependent_chains(conn, &mut broken_after_reroot)?;
     }
     conn.execute(
         "DELETE FROM session_compactions
@@ -1191,6 +1366,94 @@ pub(super) fn repair_projection(conn: &Connection) -> Result<(), MemoryError> {
          )",
         [],
     )?;
+    Ok(())
+}
+
+fn compactions_with_summaries(
+    conn: &Connection,
+) -> Result<Vec<(CompactionRecord, Option<String>)>, MemoryError> {
+    let mut statement = conn.prepare(
+        "SELECT c.id, c.session_id, c.generation, c.state, c.started_ts_ms,
+                c.finished_ts_ms, c.source_start_id, c.source_end_id,
+                c.source_count, c.source_ids_json, c.source_digest, c.algorithm,
+                c.algorithm_version, c.protected_tail_start_id,
+                c.protected_user_message_id, c.summary_hash, c.prompt_hash,
+                c.prompt_version, c.provider, c.model,
+                c.previous_compaction_id, c.recovery_metadata, c.failure_kind,
+                s.summary
+         FROM session_compactions AS c
+         LEFT JOIN compaction_summaries AS s ON s.hash = c.summary_hash
+         ORDER BY c.session_id, c.generation, c.id",
+    )?;
+    let records = statement
+        .query_map([], |row| {
+            Ok((row_to_record(row)?, row.get::<_, Option<String>>(23)?))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(records)
+}
+
+fn historical_predecessor(record: &CompactionRecord) -> Option<i64> {
+    record
+        .previous_compaction_id
+        .or(record.recovery_metadata.previous_compaction_id)
+}
+
+fn resolve_repair_predecessor(
+    record: &CompactionRecord,
+    records: &HashMap<i64, CompactionRecord>,
+    survivors: &HashSet<i64>,
+) -> (Option<i64>, Vec<i64>) {
+    let mut cursor = historical_predecessor(record);
+    let mut visited = HashSet::new();
+    let mut traversed = Vec::new();
+    while let Some(id) = cursor {
+        if !visited.insert(id) || id == record.id {
+            return (None, traversed);
+        }
+        traversed.push(id);
+        let Some(candidate) = records.get(&id) else {
+            return (None, traversed);
+        };
+        if candidate.session_id != record.session_id
+            || candidate.generation >= record.generation
+            || candidate.source_start_id != record.source_start_id
+            || candidate.source_end_id >= record.source_end_id
+        {
+            return (None, traversed);
+        }
+        if survivors.contains(&id) {
+            return (Some(id), traversed);
+        }
+        cursor = historical_predecessor(candidate);
+    }
+    (None, traversed)
+}
+
+fn delete_dependent_chains(
+    conn: &Connection,
+    delete_ids: &mut HashSet<i64>,
+) -> Result<(), MemoryError> {
+    loop {
+        let mut changed = false;
+        for (record, _) in compactions_with_summaries(conn)? {
+            let predecessor = historical_predecessor(&record);
+            if predecessor.is_some_and(|id| delete_ids.contains(&id))
+                && delete_ids.insert(record.id)
+            {
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    for id in delete_ids.iter() {
+        conn.execute(
+            "DELETE FROM session_compactions WHERE id = ?",
+            params![id],
+        )?;
+    }
     Ok(())
 }
 
@@ -1251,6 +1514,10 @@ pub(super) fn recover_projection(
     let records = statement
         .query_map([], row_to_record)?
         .collect::<Result<Vec<_>, _>>()?;
+    let records_by_id: HashMap<i64, CompactionRecord> = records
+        .iter()
+        .map(|record| (record.id, record.clone()))
+        .collect();
     for mut record in records {
         if !sessions.contains(&record.session_id) {
             skipped += 1;
@@ -1271,7 +1538,7 @@ pub(super) fn recover_projection(
             skipped += 1;
             continue;
         };
-        if validate_completed(source, &record, &summary).is_err() {
+        if validate_completed_intrinsic(source, &record, &summary).is_err() {
             skipped += 1;
             continue;
         }
@@ -1323,12 +1590,40 @@ pub(super) fn recover_projection(
                 params![prompt_hash, prompt],
             )?;
         }
-        if record
-            .previous_compaction_id
-            .is_some_and(|id| !recovered_ids.contains(&id))
+        let (new_previous, traversed) =
+            resolve_repair_predecessor(&record, &records_by_id, &recovered_ids);
+        let lineage_ok = match new_previous {
+            Some(previous_id) => records_by_id.get(&previous_id).is_some_and(|previous| {
+                previous.session_id == record.session_id
+                    && previous.source_start_id == record.source_start_id
+                    && previous.source_end_id < record.source_end_id
+                    && previous.generation < record.generation
+            }),
+            None => earliest_replayable_id(&tx, &record.session_id)?
+                == Some(record.source_start_id),
+        };
+        if !lineage_ok {
+            skipped += 1;
+            continue;
+        }
+        if record.previous_compaction_id != new_previous
+            || record.recovery_metadata.previous_compaction_id != new_previous
         {
-            record.previous_compaction_id = None;
-            record.recovery_metadata.previous_compaction_id = None;
+            for id in traversed {
+                if Some(id) != new_previous
+                    && !record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .contains(&id)
+                {
+                    record
+                        .recovery_metadata
+                        .rerooted_from_compaction_ids
+                        .push(id);
+                }
+            }
+            record.previous_compaction_id = new_previous;
+            record.recovery_metadata.previous_compaction_id = new_previous;
         }
         tx.execute(
             "INSERT OR IGNORE INTO compaction_summaries(hash, summary) VALUES (?, ?)",

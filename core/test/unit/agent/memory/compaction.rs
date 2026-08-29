@@ -30,6 +30,26 @@ fn spec(ids: &[i64], protected: i64) -> NewCompaction {
     }
 }
 
+fn complete_chain(db: &MemoryDb, ids: &[i64]) -> Vec<CompactionSummary> {
+    let mut completed = Vec::new();
+    for end in [2_usize, 4, 6] {
+        let mut next = spec(&ids[..end], ids[end]);
+        next.previous_compaction_id = completed.last().map(|summary: &CompactionSummary| {
+            summary.record.id
+        });
+        let attempt = match db.begin_compaction("session", next).unwrap() {
+            BeginCompaction::Started(attempt) => attempt,
+            other => panic!("expected chain attempt, got {other:?}"),
+        };
+        completed.push(
+            attempt
+                .complete(&format!("[CONTEXT SUMMARY]\n\ngeneration {end}"))
+                .unwrap(),
+        );
+    }
+    completed
+}
+
 #[test]
 fn completed_compaction_projects_summary_and_uncompacted_tail() {
     let db = db();
@@ -492,6 +512,107 @@ fn completed_projection_rejects_changed_or_missing_protected_identity() {
     let (summary, rejected) = db.latest_valid_compaction("session").unwrap();
     assert!(summary.is_none());
     assert_eq!(rejected, 1);
+}
+
+#[test]
+fn repair_reroots_valid_latest_projection_around_invalid_middle() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 8);
+    let chain = complete_chain(&db, &ids);
+    let root_id = chain[0].record.id;
+    let middle_id = chain[1].record.id;
+    let latest_id = chain[2].record.id;
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "UPDATE compaction_summaries SET summary = 'tampered middle'
+             WHERE hash = ?",
+            params![chain[1].record.summary_hash.as_deref().unwrap()],
+        )
+        .unwrap();
+        repair_projection(&conn).unwrap();
+    }
+
+    let records = db.compactions_for_session("session").unwrap();
+    assert_eq!(
+        records.iter().map(|record| record.id).collect::<Vec<_>>(),
+        vec![root_id, latest_id]
+    );
+    let latest = records.last().unwrap();
+    assert_eq!(latest.previous_compaction_id, Some(root_id));
+    assert_eq!(
+        latest.recovery_metadata.previous_compaction_id,
+        Some(root_id)
+    );
+    assert!(latest
+        .recovery_metadata
+        .rerooted_from_compaction_ids
+        .contains(&middle_id));
+    assert_eq!(
+        db.latest_valid_compaction("session")
+            .unwrap()
+            .0
+            .unwrap()
+            .record
+            .id,
+        latest_id
+    );
+    assert_eq!(inspect_projection(&db.lock_conn().unwrap()).unwrap().invalid_records, 0);
+}
+
+#[test]
+fn repair_heals_prior_set_null_without_deleting_valid_successor() {
+    let db = db();
+    let ids = seed_rows(&db, "session", 8);
+    let chain = complete_chain(&db, &ids);
+    let root_id = chain[0].record.id;
+    let successor_id = chain[1].record.id;
+    {
+        let conn = db.lock_conn().unwrap();
+        conn.execute(
+            "DELETE FROM session_compactions WHERE id = ?",
+            params![root_id],
+        )
+        .unwrap();
+    }
+    let broken = db
+        .compactions_for_session("session")
+        .unwrap()
+        .into_iter()
+        .find(|record| record.id == successor_id)
+        .unwrap();
+    assert_eq!(broken.previous_compaction_id, None);
+    assert_eq!(
+        broken.recovery_metadata.previous_compaction_id,
+        Some(root_id)
+    );
+    assert!(db.latest_valid_compaction("session").unwrap().0.is_none());
+
+    {
+        let conn = db.lock_conn().unwrap();
+        repair_projection(&conn).unwrap();
+    }
+    let healed = db
+        .compactions_for_session("session")
+        .unwrap()
+        .into_iter()
+        .find(|record| record.id == successor_id)
+        .expect("valid successor should survive repair");
+    assert_eq!(healed.previous_compaction_id, None);
+    assert_eq!(healed.recovery_metadata.previous_compaction_id, None);
+    assert!(healed
+        .recovery_metadata
+        .rerooted_from_compaction_ids
+        .contains(&root_id));
+    assert_eq!(
+        db.latest_valid_compaction("session")
+            .unwrap()
+            .0
+            .unwrap()
+            .record
+            .id,
+        chain[2].record.id
+    );
 }
 
 #[test]

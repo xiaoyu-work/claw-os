@@ -90,8 +90,11 @@ cos agent sessions repair --rebuild-fts --yes
 
 In-place repair checkpoints the WAL, restores schema objects and FTS triggers,
 rebuilds FTS from `messages`, closes interrupted compactions, removes invalid
-compaction summaries, and removes only orphaned title or prompt projection rows
-after checking authoritative references in the same transaction.
+compaction summaries, and reroots independently valid descendants to the
+nearest surviving predecessor (recording removed predecessor IDs in recovery
+metadata). If no safe reroot exists, the dependent chain is removed in the
+same transaction. It then removes only orphaned title or prompt projection rows
+after checking authoritative references.
 
 If health reports `requires_quarantine`, preserve the damaged database and
 initialize a replacement with:
@@ -115,15 +118,17 @@ Standalone salvage scans `messages NOT INDEXED` and commits those authoritative
 rows before rebuilding indexes and FTS. Titles, prompt references, and valid
 content-addressed compaction projections are then copied in separate
 transactions. A compaction is recovered only when its raw source range/digest,
-summary hash, and referenced prompt blob all verify. Corruption in an optional
-projection can therefore omit that projection with an explicit warning, but
-cannot roll back readable conversation messages. A failure while scanning or
-committing readable messages aborts recovery instead of installing an empty
-replacement. Operational failures while copying, opening, configuring, or
-inspecting the standalone source likewise fail the repair and leave quarantine
-intact. An empty replacement is allowed only when SQLite conclusively rejects
-that standalone main database or its authoritative `messages` schema is absent
-or incompatible.
+summary hash, protected rows, and referenced prompt blob all verify. Valid
+descendants are rerooted around skipped predecessors using the same lineage
+rules as in-place repair. Corruption in an optional projection can therefore
+omit that projection with an explicit warning, but cannot roll back readable
+conversation messages. A failure while scanning or committing readable
+messages aborts recovery instead of installing an empty replacement.
+Operational failures while copying, opening, configuring, or inspecting the
+standalone source likewise fail the repair and leave quarantine intact. An
+empty replacement is allowed only when SQLite conclusively rejects that
+standalone main database or its authoritative `messages` schema is absent or
+incompatible.
 
 Every mutating attempt writes metadata-only `started` and
 `completed`/`failed` records to `memory.db.repair.jsonl`. The log contains

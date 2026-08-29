@@ -113,6 +113,8 @@ before retry. Oversized old tool results are deterministically stubbed before
 an LLM summary. Validation requires the protected tail to begin at the first
 uncompacted replayable row, rejects tool-pair splits, and rechecks that a
 verbatim real-user anchor and both protected row identities are unchanged.
+Repair reroots a valid descendant around a damaged predecessor and records the
+removed lineage; it drops the dependent chain only when no safe root remains.
 
 Curated `MEMORY.md` facts are an append-only history, not a live inventory.
 Before persistence, `core/src/agent/memory/ontology.rs` canonicalizes documented
