@@ -952,6 +952,7 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
     }
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 struct SpawnFileIdentity {
     device: u64,
@@ -961,6 +962,7 @@ struct SpawnFileIdentity {
     owner_gid: u32,
 }
 
+#[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Serialize)]
 struct SpawnResourceBinding {
     path: String,
@@ -1163,6 +1165,317 @@ struct PinnedSpawnExecutable {
 }
 
 #[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum ElfByteOrder {
+    Little,
+    Big,
+}
+
+#[cfg(target_os = "linux")]
+impl ElfByteOrder {
+    fn u16(self, bytes: &[u8]) -> u16 {
+        let bytes: [u8; 2] = bytes.try_into().expect("validated ELF u16 slice");
+        match self {
+            Self::Little => u16::from_le_bytes(bytes),
+            Self::Big => u16::from_be_bytes(bytes),
+        }
+    }
+
+    fn u32(self, bytes: &[u8]) -> u32 {
+        let bytes: [u8; 4] = bytes.try_into().expect("validated ELF u32 slice");
+        match self {
+            Self::Little => u32::from_le_bytes(bytes),
+            Self::Big => u32::from_be_bytes(bytes),
+        }
+    }
+
+    fn u64(self, bytes: &[u8]) -> u64 {
+        let bytes: [u8; 8] = bytes.try_into().expect("validated ELF u64 slice");
+        match self {
+            Self::Little => u64::from_le_bytes(bytes),
+            Self::Big => u64::from_be_bytes(bytes),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn native_elf_machine() -> Option<u16> {
+    #[cfg(target_arch = "x86")]
+    {
+        return Some(3);
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        return Some(62);
+    }
+    #[cfg(target_arch = "arm")]
+    {
+        return Some(40);
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        return Some(183);
+    }
+    #[cfg(target_arch = "powerpc64")]
+    {
+        return Some(21);
+    }
+    #[cfg(target_arch = "s390x")]
+    {
+        return Some(22);
+    }
+    #[cfg(target_arch = "riscv64")]
+    {
+        return Some(243);
+    }
+    #[allow(unreachable_code)]
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn interpreter_refusal(path: &Path, detail: &str) -> String {
+    format!(
+        "proc spawn refuses interpreter-driven executable {} ({detail}); use cos_sandbox",
+        path.display()
+    )
+}
+
+#[cfg(target_os = "linux")]
+fn validate_static_native_elf(
+    snapshot: &mut fs::File,
+    size: u64,
+    path: &Path,
+) -> Result<(), String> {
+    use std::io::{Read, Seek};
+
+    const ELF_HEADER_MAX: usize = 64;
+    const PT_DYNAMIC: u32 = 2;
+    const PT_INTERP: u32 = 3;
+    const PT_LOAD: u32 = 1;
+    const PT_GNU_STACK: u32 = 0x6474_e551;
+    const PF_X: u32 = 1;
+
+    let mut header = [0u8; ELF_HEADER_MAX];
+    let header_len = usize::try_from(size.min(ELF_HEADER_MAX as u64)).unwrap_or(0);
+    snapshot
+        .read_exact(&mut header[..header_len])
+        .map_err(|error| format!("read executable header {}: {error}", path.display()))?;
+    if header.starts_with(b"#!") {
+        return Err(interpreter_refusal(path, "shebang script"));
+    }
+    if header_len < 20 || &header[..4] != b"\x7fELF" {
+        return Err(interpreter_refusal(path, "not a native ELF binary"));
+    }
+    let class = header[4];
+    let order = match header[5] {
+        1 => ElfByteOrder::Little,
+        2 => ElfByteOrder::Big,
+        _ => return Err(interpreter_refusal(path, "unknown ELF byte order")),
+    };
+    if header[6] != 1 {
+        return Err(interpreter_refusal(path, "unsupported ELF version"));
+    }
+    let expected_header = match class {
+        1 => 52,
+        2 => 64,
+        _ => return Err(interpreter_refusal(path, "unsupported ELF class")),
+    };
+    if header_len < expected_header {
+        return Err(interpreter_refusal(path, "truncated ELF header"));
+    }
+    if order.u16(&header[16..18]) != 2 {
+        return Err(interpreter_refusal(
+            path,
+            "ELF is not a fixed-address native executable",
+        ));
+    }
+    let machine = order.u16(&header[18..20]);
+    if native_elf_machine() != Some(machine) {
+        return Err(interpreter_refusal(
+            path,
+            "ELF architecture does not match this host",
+        ));
+    }
+
+    let (program_offset, entry_size, entry_count, minimum_entry_size, flags_offset) = if class == 1
+    {
+        (
+            u64::from(order.u32(&header[28..32])),
+            u64::from(order.u16(&header[42..44])),
+            u64::from(order.u16(&header[44..46])),
+            32u64,
+            24usize,
+        )
+    } else {
+        (
+            order.u64(&header[32..40]),
+            u64::from(order.u16(&header[54..56])),
+            u64::from(order.u16(&header[56..58])),
+            56u64,
+            4usize,
+        )
+    };
+    if entry_count == 0 || entry_count > 1024 || entry_size < minimum_entry_size || entry_size > 256
+    {
+        return Err(interpreter_refusal(
+            path,
+            "invalid ELF program-header table",
+        ));
+    }
+    let table_size = entry_size
+        .checked_mul(entry_count)
+        .ok_or_else(|| interpreter_refusal(path, "oversized ELF program-header table"))?;
+    if program_offset
+        .checked_add(table_size)
+        .is_none_or(|end| end > size)
+    {
+        return Err(interpreter_refusal(
+            path,
+            "ELF program headers escape the executable",
+        ));
+    }
+
+    let mut entry = vec![0u8; entry_size as usize];
+    let mut executable_load = false;
+    for index in 0..entry_count {
+        snapshot
+            .seek(std::io::SeekFrom::Start(
+                program_offset + index * entry_size,
+            ))
+            .map_err(|error| format!("seek executable program header: {error}"))?;
+        snapshot
+            .read_exact(&mut entry)
+            .map_err(|error| format!("read executable program header: {error}"))?;
+        let kind = order.u32(&entry[..4]);
+        let flags = order.u32(&entry[flags_offset..flags_offset + 4]);
+        if kind == PT_INTERP {
+            return Err(interpreter_refusal(
+                path,
+                "ELF requires a mutable program interpreter",
+            ));
+        }
+        if kind == PT_DYNAMIC {
+            return Err(interpreter_refusal(
+                path,
+                "ELF may load mutable shared libraries",
+            ));
+        }
+        if kind == PT_GNU_STACK && flags & PF_X != 0 {
+            return Err(interpreter_refusal(
+                path,
+                "ELF requests an executable stack",
+            ));
+        }
+        executable_load |= kind == PT_LOAD && flags & PF_X != 0;
+    }
+    if !executable_load {
+        return Err(interpreter_refusal(
+            path,
+            "ELF has no executable load segment",
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn validate_native_invocation(
+    executable: &Path,
+    args: &[String],
+    workdir: &Path,
+) -> Result<(), String> {
+    let name = executable
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let known_runtime = matches!(
+        name.as_str(),
+        "sh" | "bash"
+            | "dash"
+            | "ash"
+            | "zsh"
+            | "ksh"
+            | "fish"
+            | "busybox"
+            | "env"
+            | "perl"
+            | "ruby"
+            | "node"
+            | "nodejs"
+            | "deno"
+            | "bun"
+            | "php"
+            | "lua"
+            | "luajit"
+            | "java"
+            | "jjs"
+            | "qjs"
+            | "wasmtime"
+            | "wasmer"
+    ) || name.starts_with("python")
+        || name.starts_with("pypy");
+    if known_runtime {
+        return Err(interpreter_refusal(executable, "shell or language runtime"));
+    }
+
+    const CODE_EXTENSIONS: &[&str] = &[
+        "sh", "bash", "zsh", "py", "pyc", "pyo", "js", "mjs", "cjs", "ts", "rb", "pl", "pm", "php",
+        "lua", "jar", "class", "wasm",
+    ];
+    for arg in args {
+        if matches!(
+            arg.as_str(),
+            "-c" | "-e" | "-m" | "-jar" | "--eval" | "--exec" | "--module"
+        ) {
+            return Err(interpreter_refusal(
+                executable,
+                "argument requests interpreter evaluation",
+            ));
+        }
+        let candidate = arg
+            .strip_prefix('@')
+            .unwrap_or(arg)
+            .rsplit_once('=')
+            .map_or(arg.as_str(), |(_, value)| value);
+        let path = Path::new(candidate);
+        if path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|extension| {
+                CODE_EXTENSIONS
+                    .iter()
+                    .any(|known| extension.eq_ignore_ascii_case(known))
+            })
+        {
+            return Err(interpreter_refusal(
+                executable,
+                "argument names a script or runtime module",
+            ));
+        }
+        let resolved = if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            workdir.join(path)
+        };
+        if resolved.exists() {
+            let metadata = fs::symlink_metadata(&resolved).map_err(|error| {
+                format!(
+                    "inspect possible process code input {}: {error}",
+                    resolved.display()
+                )
+            })?;
+            if metadata.file_type().is_symlink() || metadata.is_file() {
+                return Err(interpreter_refusal(
+                    executable,
+                    "existing file arguments are not pinned",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 impl PinnedSpawnExecutable {
     const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -1254,6 +1567,10 @@ impl PinnedSpawnExecutable {
         if SpawnFileVersion::from_metadata(&after) != version || copied != version.size {
             return Err("process executable changed while its snapshot was created".to_string());
         }
+        snapshot
+            .seek(std::io::SeekFrom::Start(0))
+            .map_err(|error| format!("rewind pinned executable for validation: {error}"))?;
+        validate_static_native_elf(&mut snapshot, version.size, &path)?;
         let effective_uid = unsafe { libc::geteuid() as u32 };
         if effective_uid == 0
             && (execution.uid != 0 || execution.gid != unsafe { libc::getegid() as u32 })
@@ -1300,18 +1617,18 @@ impl PinnedSpawnExecutable {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(target_os = "linux", test))]
 static PRE_SPAWN_TEST_HOOK: std::sync::Mutex<Option<Box<dyn FnOnce() + Send>>> =
     std::sync::Mutex::new(None);
 
-#[cfg(test)]
+#[cfg(all(target_os = "linux", test))]
 fn set_pre_spawn_test_hook(hook: impl FnOnce() + Send + 'static) {
     *PRE_SPAWN_TEST_HOOK
         .lock()
         .unwrap_or_else(|error| error.into_inner()) = Some(Box::new(hook));
 }
 
-#[cfg(test)]
+#[cfg(all(target_os = "linux", test))]
 fn run_pre_spawn_test_hook() {
     let hook = PRE_SPAWN_TEST_HOOK
         .lock()
@@ -1322,9 +1639,10 @@ fn run_pre_spawn_test_hook() {
     }
 }
 
-#[cfg(not(test))]
+#[cfg(all(target_os = "linux", not(test)))]
 fn run_pre_spawn_test_hook() {}
 
+#[cfg(target_os = "linux")]
 fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
     let canonical = candidate.canonicalize().ok()?;
     let metadata = canonical.metadata().ok()?;
@@ -1341,6 +1659,7 @@ fn canonical_executable(candidate: &Path) -> Option<PathBuf> {
     Some(canonical)
 }
 
+#[cfg(target_os = "linux")]
 fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<PathBuf, String> {
     if program.is_empty() || program.contains('\0') {
         return Err("process executable is invalid".to_string());
@@ -1389,6 +1708,7 @@ fn resolve_spawn_executable(program: &str, execution_workdir: &Path) -> Result<P
     ))
 }
 
+#[cfg(target_os = "linux")]
 #[allow(clippy::too_many_arguments)]
 fn spawn_operation_digest(
     executable: &SpawnResourceBinding,
@@ -1422,6 +1742,15 @@ fn spawn_operation_digest(
     Ok(crate::crypto::sha256_hex(&canonical))
 }
 
+#[cfg(not(target_os = "linux"))]
+fn cmd_spawn(_args: &[String]) -> Result<Value, String> {
+    Err(
+        "proc spawn is unavailable on this platform because descriptor-pinned execution is not implemented; use cos_sandbox"
+            .to_string(),
+    )
+}
+
+#[cfg(target_os = "linux")]
 fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let parent_info = current_session_info_for_caps()
         .ok_or_else(|| "proc spawn requires a registered parent session".to_string())?;
@@ -1728,6 +2057,12 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
     let executable = resolve_spawn_executable(&command_args[0], &execution_workdir)?;
     #[cfg(target_os = "linux")]
     let pinned_executable = PinnedSpawnExecutable::open(&executable, &execution_identity)?;
+    #[cfg(target_os = "linux")]
+    validate_native_invocation(
+        &pinned_executable.path,
+        &command_args[1..],
+        &pinned_workdir.path,
+    )?;
     #[cfg(target_os = "linux")]
     let executable_binding = pinned_executable.binding();
     #[cfg(not(target_os = "linux"))]

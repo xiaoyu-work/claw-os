@@ -159,6 +159,89 @@ fn register_spawn_test_parent(caps: crate::caps::CapSet) -> String {
 }
 
 #[cfg(target_os = "linux")]
+struct StaticSpawnHelpers {
+    _dir: tempfile::TempDir,
+    trusted: std::path::PathBuf,
+    attacker: std::path::PathBuf,
+}
+
+#[cfg(target_os = "linux")]
+fn compile_static_spawn_helper(
+    dir: &std::path::Path,
+    name: &str,
+    source: &str,
+) -> std::path::PathBuf {
+    let source_path = dir.join(format!("{name}.rs"));
+    let binary_path = dir.join(name);
+    std::fs::write(&source_path, source).unwrap();
+    let output =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg("-C")
+            .arg("target-feature=+crt-static")
+            .arg("-C")
+            .arg("relocation-model=static")
+            .arg("-C")
+            .arg("link-arg=-no-pie")
+            .arg("-C")
+            .arg("strip=symbols")
+            .arg(&source_path)
+            .arg("-o")
+            .arg(&binary_path)
+            .output()
+            .unwrap();
+    assert!(
+        output.status.success(),
+        "compile static spawn helper: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let _ = std::fs::remove_file(source_path);
+    binary_path
+}
+
+#[cfg(target_os = "linux")]
+fn static_spawn_helpers() -> &'static StaticSpawnHelpers {
+    static HELPERS: std::sync::OnceLock<StaticSpawnHelpers> = std::sync::OnceLock::new();
+    HELPERS.get_or_init(|| {
+        let dir = tempfile::tempdir().unwrap();
+        let trusted = compile_static_spawn_helper(
+            dir.path(),
+            "trusted-native",
+            r#"
+fn main() {
+    let mut args = std::env::args_os().skip(1);
+    let path = args.next().expect("output path");
+    let value = args.next().unwrap_or_else(|| "trusted".into());
+    std::fs::write(path, value.to_string_lossy().into_owned()).expect("write output");
+}
+"#,
+        );
+        let attacker = compile_static_spawn_helper(
+            dir.path(),
+            "attacker-native",
+            r#"
+fn main() {
+    let path = std::env::args_os().nth(1).expect("output path");
+    std::fs::write(path, "attacker").expect("write output");
+}
+"#,
+        );
+        StaticSpawnHelpers {
+            _dir: dir,
+            trusted,
+            attacker,
+        }
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn install_static_spawn_helper(source: &std::path::Path, destination: &std::path::Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    std::fs::copy(source, destination).unwrap();
+    std::fs::set_permissions(destination, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[cfg(target_os = "linux")]
 fn write_spawn_script(path: &std::path::Path, result: &str) {
     use std::os::unix::fs::PermissionsExt;
 
@@ -221,6 +304,82 @@ fn wait_for_spawn_result(path: &std::path::Path) -> String {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn shebang_script_is_rejected_before_approval() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let script = temp.path().join("direct-script");
+    let marker = temp.path().join("direct-script-result");
+    write_spawn_script(&script, "attacker");
+
+    let error = cmd_spawn(&[
+        "--".to_string(),
+        script.to_string_lossy().into_owned(),
+        marker.to_string_lossy().into_owned(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("shebang script"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn python_script_argument_is_rejected_before_approval() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let script = temp.path().join("payload.py");
+    std::fs::write(&script, "raise SystemExit(0)\n").unwrap();
+
+    let error = cmd_spawn(&[
+        "--".to_string(),
+        "python3".to_string(),
+        script.to_string_lossy().into_owned(),
+    ])
+    .unwrap_err();
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn shell_eval_is_rejected_before_approval() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let marker = temp.path().join("shell-eval-result");
+
+    let error = cmd_spawn(&[
+        "--".to_string(),
+        "/bin/sh".to_string(),
+        "-c".to_string(),
+        format!("touch {}", marker.display()),
+    ])
+    .unwrap_err();
+    assert!(error.contains("cos_sandbox"), "{error}");
+    assert!(crate::approvals::list_pending().is_empty());
+    assert!(!marker.exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
     let _lock = crate::test_env::lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -232,13 +391,17 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
     let parent = register_spawn_test_parent(crate::caps::CapSet::new());
     let invocation =
         crate::approvals::LocalApprovalInvocation::new("web:proc-security:turn:1").unwrap();
+    let executable = temp.path().join("approved-native");
+    let marker = temp.path().join("approved-native-result");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
 
     invocation.sync_scope(|| {
         let harmless = vec![
             "--session".to_string(),
             "safe-child".to_string(),
             "--".to_string(),
-            "/bin/echo".to_string(),
+            executable.to_string_lossy().into_owned(),
+            marker.to_string_lossy().into_owned(),
             "hello".to_string(),
         ];
         cmd_spawn(&harmless).expect_err("proc.spawn must require approval");
@@ -270,9 +433,12 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
         assert_eq!(
             exec_request.scope,
             Scope::path(
-                resolve_spawn_executable("/bin/echo", &std::env::current_dir().unwrap())
-                    .unwrap()
-                    .to_string_lossy()
+                resolve_spawn_executable(
+                    &executable.to_string_lossy(),
+                    &std::env::current_dir().unwrap()
+                )
+                .unwrap()
+                .to_string_lossy()
             )
             .canonicalized()
         );
@@ -303,7 +469,8 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
             "--session".to_string(),
             "safe-child".to_string(),
             "--".to_string(),
-            "/bin/echo".to_string(),
+            executable.to_string_lossy().into_owned(),
+            marker.to_string_lossy().into_owned(),
             "different".to_string(),
         ];
         cmd_spawn(&changed_args).expect_err("changed argv must need a fresh approval");
@@ -312,20 +479,24 @@ fn proc_spawn_approval_binds_canonical_executable_and_all_arguments() {
                 && request.operation_digest.as_deref() != Some(harmless_digest.as_str())
         }));
 
-        let marker = temp.path().join("shell-substitution");
+        let shell_marker = temp.path().join("shell-substitution");
         let shell = vec![
             "--session".to_string(),
             "safe-child".to_string(),
             "--".to_string(),
             "/bin/sh".to_string(),
             "-c".to_string(),
-            format!("touch {}", marker.display()),
+            format!("touch {}", shell_marker.display()),
         ];
         cmd_spawn(&shell).expect_err("shell substitution must need a fresh approval");
-        assert!(!marker.exists(), "the substituted shell must never execute");
+        assert!(
+            !shell_marker.exists(),
+            "the substituted shell must never execute"
+        );
 
         let result = cmd_spawn(&harmless).expect("the exact approved invocation may execute");
         assert_eq!(result["parent"], parent);
+        assert_eq!(wait_for_spawn_result(&marker), "hello");
     });
 }
 
@@ -343,8 +514,8 @@ fn executable_replacement_while_approval_is_pending_invalidates_the_decision() {
     let executable = temp.path().join("approved-script");
     let replacement = temp.path().join("replacement-script");
     let marker = temp.path().join("approval-race-result");
-    write_spawn_script(&executable, "trusted");
-    write_spawn_script(&replacement, "attacker");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    install_static_spawn_helper(&static_spawn_helpers().attacker, &replacement);
     let args = vec![
         "--session".to_string(),
         "approval-race-child".to_string(),
@@ -353,6 +524,7 @@ fn executable_replacement_while_approval_is_pending_invalidates_the_decision() {
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:approval-race:turn:1")
@@ -410,7 +582,7 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
     register_spawn_test_parent(crate::caps::CapSet::new());
     let executable = temp.path().join("rewritten-during-approval");
     let marker = temp.path().join("rewrite-approval-result");
-    write_spawn_script(&executable, "trusted");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
     let original_inode = std::fs::metadata(&executable).unwrap().ino();
     let args = vec![
         "--session".to_string(),
@@ -420,6 +592,7 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:rewrite-approval:turn:1")
@@ -444,7 +617,7 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
                 .find(|request| request.verb == Verb::FS_EXEC.as_str())
                 .unwrap();
             let approved_digest = exec_request.operation_digest.clone().unwrap();
-            write_spawn_script(&executable, "attacker");
+            std::fs::copy(&static_spawn_helpers().attacker, &executable).unwrap();
             assert_eq!(
                 std::fs::metadata(&executable).unwrap().ino(),
                 original_inode,
@@ -469,6 +642,69 @@ fn executable_rewrite_while_approval_is_pending_changes_the_content_binding() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn shebang_swap_while_approval_is_pending_cannot_reuse_native_consent() {
+    let _lock = crate::test_env::lock_env();
+    let temp = tempfile::tempdir().unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
+    let _caps = crate::test_env::TestEnvVarGuard::set("COS_CAPS_DATA_DIR", temp.path());
+    let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
+    let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+    register_spawn_test_parent(crate::caps::CapSet::new());
+    let executable = temp.path().join("native-before-swap");
+    let script = temp.path().join("script-after-swap");
+    let marker = temp.path().join("shebang-swap-result");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    write_spawn_script(&script, "attacker");
+    let args = vec![
+        "--session".to_string(),
+        "shebang-swap-child".to_string(),
+        "--workdir".to_string(),
+        temp.path().to_string_lossy().into_owned(),
+        "--".to_string(),
+        executable.to_string_lossy().into_owned(),
+        marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
+    ];
+
+    crate::approvals::LocalApprovalInvocation::new("web:shebang-approval:turn:1")
+        .unwrap()
+        .sync_scope(|| {
+            cmd_spawn(&args).expect_err("proc.spawn must require approval");
+            let spawn_request = crate::approvals::list_pending()
+                .into_iter()
+                .find(|request| request.verb == Verb::PROC_SPAWN.as_str())
+                .unwrap();
+            crate::approvals::approve(
+                &spawn_request.id,
+                crate::approvals::GrantDuration::Session,
+                None,
+                None,
+            )
+            .unwrap();
+            cmd_spawn(&args).expect_err("fs.exec must require approval");
+            let exec_request = crate::approvals::list_pending()
+                .into_iter()
+                .find(|request| request.verb == Verb::FS_EXEC.as_str())
+                .unwrap();
+            std::fs::rename(script, &executable).unwrap();
+            crate::approvals::approve(
+                &exec_request.id,
+                crate::approvals::GrantDuration::Session,
+                None,
+                None,
+            )
+            .unwrap();
+
+            let error = cmd_spawn(&args).unwrap_err();
+            assert!(error.contains("shebang script"), "{error}");
+            assert!(error.contains("cos_sandbox"), "{error}");
+            assert!(!marker.exists());
+        });
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn same_path_inode_swap_after_authorization_executes_the_pinned_snapshot() {
     let _lock = crate::test_env::lock_env();
     let temp = tempfile::tempdir().unwrap();
@@ -481,8 +717,8 @@ fn same_path_inode_swap_after_authorization_executes_the_pinned_snapshot() {
     let executable = temp.path().join("inode-swap-script");
     let replacement = temp.path().join("inode-swap-replacement");
     let marker = temp.path().join("inode-swap-result");
-    write_spawn_script(&executable, "trusted");
-    write_spawn_script(&replacement, "attacker");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    install_static_spawn_helper(&static_spawn_helpers().attacker, &replacement);
     let args = vec![
         "--session".to_string(),
         "inode-swap-child".to_string(),
@@ -491,6 +727,7 @@ fn same_path_inode_swap_after_authorization_executes_the_pinned_snapshot() {
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:inode-swap:turn:1")
@@ -503,9 +740,10 @@ fn same_path_inode_swap_after_authorization_executes_the_pinned_snapshot() {
             });
             cmd_spawn(&args).expect("the approved pinned snapshot may execute");
             assert_eq!(wait_for_spawn_result(&marker), "trusted");
-            assert!(std::fs::read_to_string(&executable)
-                .unwrap()
-                .contains("attacker"));
+            assert_eq!(
+                std::fs::read(&executable).unwrap(),
+                std::fs::read(&static_spawn_helpers().attacker).unwrap()
+            );
         });
 }
 
@@ -525,8 +763,8 @@ fn symlink_swap_after_authorization_executes_the_pinned_snapshot() {
     let executable = temp.path().join("symlink-swap-script");
     let attacker = temp.path().join("symlink-swap-attacker");
     let marker = temp.path().join("symlink-swap-result");
-    write_spawn_script(&executable, "trusted");
-    write_spawn_script(&attacker, "attacker");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
+    install_static_spawn_helper(&static_spawn_helpers().attacker, &attacker);
     let args = vec![
         "--session".to_string(),
         "symlink-swap-child".to_string(),
@@ -535,6 +773,7 @@ fn symlink_swap_after_authorization_executes_the_pinned_snapshot() {
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:symlink-swap:turn:1")
@@ -568,7 +807,7 @@ fn in_place_rewrite_after_authorization_cannot_change_executed_bytes() {
     register_spawn_test_parent(crate::caps::CapSet::new());
     let executable = temp.path().join("rewrite-script");
     let marker = temp.path().join("rewrite-result");
-    write_spawn_script(&executable, "trusted");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
     let args = vec![
         "--session".to_string(),
         "rewrite-child".to_string(),
@@ -577,6 +816,7 @@ fn in_place_rewrite_after_authorization_cannot_change_executed_bytes() {
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
         marker.to_string_lossy().into_owned(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:rewrite:turn:1")
@@ -584,20 +824,21 @@ fn in_place_rewrite_after_authorization_cannot_change_executed_bytes() {
         .sync_scope(|| {
             approve_spawn_permissions(&args);
             let executable_for_hook = executable.clone();
-            set_pre_spawn_test_hook(move || write_spawn_script(&executable_for_hook, "attacker"));
+            set_pre_spawn_test_hook(move || {
+                std::fs::copy(&static_spawn_helpers().attacker, executable_for_hook).unwrap();
+            });
             cmd_spawn(&args).expect("the sealed snapshot may execute");
             assert_eq!(wait_for_spawn_result(&marker), "trusted");
-            assert!(std::fs::read_to_string(&executable)
-                .unwrap()
-                .contains("attacker"));
+            assert_eq!(
+                std::fs::read(&executable).unwrap(),
+                std::fs::read(&static_spawn_helpers().attacker).unwrap()
+            );
         });
 }
 
 #[cfg(target_os = "linux")]
 #[test]
 fn workdir_replacement_after_authorization_uses_the_pinned_directory() {
-    use std::os::unix::fs::PermissionsExt;
-
     let _lock = crate::test_env::lock_env();
     let temp = tempfile::tempdir().unwrap();
     let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", temp.path());
@@ -610,12 +851,7 @@ fn workdir_replacement_after_authorization_uses_the_pinned_directory() {
     let workdir = temp.path().join("workdir");
     let pinned_location = temp.path().join("workdir-pinned");
     std::fs::create_dir(&workdir).unwrap();
-    std::fs::write(
-        &executable,
-        "#!/bin/sh\nprintf '%s' 'trusted' > relative-result\n",
-    )
-    .unwrap();
-    std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o700)).unwrap();
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
     let args = vec![
         "--session".to_string(),
         "workdir-child".to_string(),
@@ -623,6 +859,8 @@ fn workdir_replacement_after_authorization_uses_the_pinned_directory() {
         workdir.to_string_lossy().into_owned(),
         "--".to_string(),
         executable.to_string_lossy().into_owned(),
+        "relative-result".to_string(),
+        "trusted".to_string(),
     ];
 
     crate::approvals::LocalApprovalInvocation::new("web:workdir-swap:turn:1")
@@ -657,8 +895,8 @@ fn proc_spawn_child_capabilities_cannot_exceed_the_parent() {
     let _proc = crate::test_env::TestEnvVarGuard::set("COS_PROC_DATA_DIR", temp.path());
     let _logs = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", temp.path());
     let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
-    let executable =
-        resolve_spawn_executable("/bin/echo", &std::env::current_dir().unwrap()).unwrap();
+    let executable = temp.path().join("child-caps-native");
+    install_static_spawn_helper(&static_spawn_helpers().trusted, &executable);
     let parent_caps = crate::caps::CapSet::from_caps([
         crate::caps::Cap::new(Verb::PROC_SPAWN, Scope::self_ref("children")),
         crate::caps::Cap::new(Verb::FS_EXEC, Scope::path(executable.to_string_lossy())),
@@ -673,7 +911,8 @@ fn proc_spawn_child_capabilities_cannot_exceed_the_parent() {
         "--scope-path".to_string(),
         temp.path().to_string_lossy().into_owned(),
         "--".to_string(),
-        "/bin/echo".to_string(),
+        executable.to_string_lossy().into_owned(),
+        temp.path().join("unused").to_string_lossy().into_owned(),
         "hello".to_string(),
     ];
     let error = cmd_spawn(&args).unwrap_err();
@@ -682,4 +921,12 @@ fn proc_spawn_child_capabilities_cannot_exceed_the_parent() {
         session_info_by_id("overprivileged-child").is_none(),
         "a rejected child must not enter the process registry"
     );
+}
+
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn proc_spawn_fails_closed_without_descriptor_pinned_execution() {
+    let error = cmd_spawn(&["example".to_string()]).unwrap_err();
+    assert!(error.contains("unavailable on this platform"), "{error}");
+    assert!(error.contains("cos_sandbox"), "{error}");
 }

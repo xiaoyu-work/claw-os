@@ -53,6 +53,14 @@ reopening the approved pathname. Changing `/usr/bin/printf` to `/bin/sh`,
 rewriting the same inode, swapping a symlink, replacing the cwd, or changing
 any argument cannot alter or redeem the approved invocation.
 
+`proc spawn` is intentionally narrower than a general command runner. It
+accepts only host-architecture, fixed-address ELF executables with an
+executable load segment and no `PT_INTERP`, `PT_DYNAMIC`, or executable stack.
+Shebang files, shells, language runtimes, script/module arguments, dynamically
+linked programs, and existing file arguments fail before an approval request
+is created and direct the caller to `cos_sandbox`. Non-Linux platforms also
+fail closed until they provide an equivalent handle-pinned execution path.
+
 Model output cannot approve a request. The worker channel has no decision
 route, and a request id is metadata rather than authority.
 

@@ -249,9 +249,10 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_proc",
-        description: "Manage long-running processes registered with cos: spawn, \
-                      query status/output, kill/signal, list, wait, renice, \
-                      stats, result.",
+        description: "Manage long-running processes registered with cos. Spawn accepts only \
+                      validated static native Linux executables; use cos_sandbox for shells, \
+                      scripts, language runtimes, or dynamically linked programs. Other commands \
+                      query status/output, kill/signal, list, wait, renice, stats, and result.",
         primitive: crate::proc::run,
         commands: &[
             "spawn", "status", "output", "kill", "list", "wait", "signal", "result", "stats",

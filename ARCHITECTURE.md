@@ -312,6 +312,11 @@ capability checks. The digest includes source file identity and content hash.
 The cwd is also held by descriptor and selected with `fchdir`; execution uses
 the snapshot's `/proc/self/fd` descriptor path, so pathname, inode, symlink,
 in-place content, and cwd replacement races cannot change what runs.
+The accepted image must be a static, fixed-address ELF for the host
+architecture with no interpreter, dynamic segment, or executable stack.
+Scripts, shells, language runtimes, dynamically linked executables, and file
+arguments are rejected before consent and routed to `cos_sandbox`. Non-Linux
+process spawn fails closed rather than using a weaker pathname-based fallback.
 `cos_sysinfo` additionally requires
 `secret.read:name:environment` before honoring `env --include-secrets`.
 
