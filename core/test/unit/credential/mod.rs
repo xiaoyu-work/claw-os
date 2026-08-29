@@ -720,11 +720,206 @@ fn malformed_persistent_root_key_is_not_silently_replaced() {
     fs::write(&key_path, b"too-short").unwrap();
 
     let error = load_persistent_root_key_at(&key_path).unwrap_err();
-    assert!(error.contains("invalid length"));
+    assert!(error.to_string().contains("invalid length"));
     assert_eq!(fs::read(&key_path).unwrap(), b"too-short");
 
     fs::remove_file(&key_path).unwrap();
     fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn random_failure_is_typed_and_preserves_its_source() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-random-failure-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    let error = inject_root_key_random_failure(&dir.join("credential-root.key"));
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert_eq!(error.operation(), "root_key.random");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<std::io::Error>())
+        .is_some());
+    assert!(!dir.join("credential-root.key").exists());
+
+    fs::remove_dir(&dir).unwrap();
+}
+
+#[test]
+fn root_key_write_failure_leaves_no_final_or_temporary_file() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-write-failure-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+
+    let error = inject_root_key_write_failure(&key_path);
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert!(!key_path.exists());
+    let leftovers = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "temporary files remained: {leftovers:?}"
+    );
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn concurrent_root_key_publishers_only_observe_a_complete_winner() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-race-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let mut threads = Vec::new();
+    for _ in 0..2 {
+        let path = key_path.clone();
+        let barrier = barrier.clone();
+        threads.push(std::thread::spawn(move || {
+            generate_root_key_at_barrier(&path, &barrier).unwrap()
+        }));
+    }
+
+    let first = threads.remove(0).join().unwrap();
+    let second = threads.remove(0).join().unwrap();
+
+    assert_eq!(first, second);
+    assert_eq!(fs::read(&key_path).unwrap(), first);
+    let leftovers = fs::read_dir(&dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.path() != key_path)
+        .collect::<Vec<_>>();
+    assert!(leftovers.is_empty(), "temporary files remained");
+
+    fs::remove_file(key_path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn race_loser_completes_directory_fsync_before_returning() {
+    let dir = std::env::temp_dir().join(format!(
+        "cos-cred-rootkey-durability-race-{}-{}",
+        std::process::id(),
+        COUNTER.fetch_add(1, Ordering::SeqCst)
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let key_path = dir.join("credential-root.key");
+    let winner_linked = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release_winner = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let loser_sync_entered = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let release_loser_sync = std::sync::Arc::new(std::sync::Barrier::new(2));
+
+    let winner = {
+        let path = key_path.clone();
+        let linked = winner_linked.clone();
+        let release = release_winner.clone();
+        std::thread::spawn(move || {
+            generate_root_key_winner_paused_after_link(&path, &linked, &release).unwrap()
+        })
+    };
+    winner_linked.wait();
+    assert!(
+        !winner.is_finished(),
+        "winner must be paused before its directory fsync"
+    );
+
+    let loser = {
+        let path = key_path.clone();
+        let entered = loser_sync_entered.clone();
+        let release = release_loser_sync.clone();
+        std::thread::spawn(move || {
+            generate_root_key_loser_paused_in_directory_sync(&path, &entered, &release).unwrap()
+        })
+    };
+    loser_sync_entered.wait();
+    assert!(
+        !loser.is_finished(),
+        "loser returned before its directory durability barrier"
+    );
+    assert!(
+        !winner.is_finished(),
+        "winner unexpectedly completed its own directory fsync"
+    );
+
+    release_loser_sync.wait();
+    let loser_key = loser.join().unwrap();
+    assert!(
+        !winner.is_finished(),
+        "loser must make the final link durable independently"
+    );
+
+    release_winner.wait();
+    let winner_key = winner.join().unwrap();
+    assert_eq!(loser_key, winner_key);
+    assert_eq!(fs::read(&key_path).unwrap(), winner_key);
+
+    fs::remove_file(key_path).unwrap();
+    fs::remove_dir(dir).unwrap();
+}
+
+#[test]
+fn typed_load_preserves_corrupt_record_category_and_serde_source() {
+    perms_init();
+    setup();
+    let name = unique_name("typed-corrupt");
+    let path = namespace_dir("default").join(format!("{name}.json"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, "{not valid credential json").unwrap();
+
+    let error = try_load_typed(&name, "default").unwrap_err();
+
+    assert_eq!(error.kind(), CredentialErrorKind::Corrupt);
+    assert_eq!(error.operation(), "credential.load");
+    assert!(std::error::Error::source(&error)
+        .and_then(|source| source.downcast_ref::<serde_json::Error>())
+        .is_some());
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn typed_command_classifies_invalid_input_and_not_found() {
+    perms_init();
+    setup();
+
+    let invalid = run_typed("store", &["bad/name".into(), "value".into()]).unwrap_err();
+    assert_eq!(invalid.kind(), CredentialErrorKind::InvalidInput);
+
+    let missing = run_typed("load", &[unique_name("typed-missing")]).unwrap_err();
+    assert_eq!(missing.kind(), CredentialErrorKind::NotFound);
+}
+
+#[test]
+fn credential_error_debug_and_external_display_redact_token_like_values() {
+    const SECRET: &str = "sk-this-is-a-long-secret-token-value";
+    let error = CredentialError::external(
+        "credential.test",
+        format!("provider rejected token {SECRET}"),
+    );
+
+    assert!(!error.to_string().contains(SECRET));
+    assert!(!format!("{error:?}").contains(SECRET));
+    assert!(error.to_string().contains("***"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn keyring_failure_is_typed_and_preserves_its_source() {
+    let error = inject_keyring_failure();
+
+    assert_eq!(error.kind(), CredentialErrorKind::Unavailable);
+    assert_eq!(error.operation(), "keyring.read");
+    assert!(std::error::Error::source(&error).is_some());
 }
 
 #[test]
@@ -861,7 +1056,7 @@ fn test_concurrent_refresh_serialized() {
                 // would surface as concurrent observed > 1.
                 std::thread::sleep(std::time::Duration::from_millis(30));
                 in_flight.fetch_sub(1, Ordering::SeqCst);
-                Ok::<(), String>(())
+                Ok::<(), CredentialError>(())
             })
             .unwrap();
         }));

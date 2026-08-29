@@ -524,6 +524,7 @@ fn llm_error_kind(e: &llm::LlmError) -> &'static str {
         llm::LlmError::RateLimited { .. } => "rate_limited",
         llm::LlmError::Auth => "auth",
         llm::LlmError::CredentialStore { .. } => "credential_store",
+        llm::LlmError::Infrastructure(_) => "infrastructure",
         llm::LlmError::Parse(_) => "parse",
         llm::LlmError::Stream(_) => "stream",
         llm::LlmError::Internal(_) => "internal",

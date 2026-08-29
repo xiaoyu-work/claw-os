@@ -202,6 +202,8 @@ pub enum CopilotAuthError {
     UnexpectedBody(String),
     NotAuthorized(String),
     UnsupportedModel(String),
+    StateUnavailable { resource: &'static str },
+    Infrastructure(crate::agent::llm::ProviderInfrastructureError),
 }
 
 impl std::fmt::Display for CopilotAuthError {
@@ -214,11 +216,28 @@ impl std::fmt::Display for CopilotAuthError {
             CopilotAuthError::UnexpectedBody(s) => write!(f, "unexpected response body: {s}"),
             CopilotAuthError::NotAuthorized(s) => write!(f, "{s}"),
             CopilotAuthError::UnsupportedModel(s) => write!(f, "{s}"),
+            CopilotAuthError::StateUnavailable { resource } => {
+                write!(f, "Copilot {resource} state is unavailable")
+            }
+            CopilotAuthError::Infrastructure(error) => error.fmt(f),
         }
     }
 }
 
-impl std::error::Error for CopilotAuthError {}
+impl std::error::Error for CopilotAuthError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Infrastructure(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<crate::agent::llm::ProviderInfrastructureError> for CopilotAuthError {
+    fn from(error: crate::agent::llm::ProviderInfrastructureError) -> Self {
+        Self::Infrastructure(error)
+    }
+}
 
 impl From<reqwest::Error> for CopilotAuthError {
     fn from(e: reqwest::Error) -> Self {
@@ -279,7 +298,7 @@ pub enum PollOutcome {
 /// user along with `verification_uri` and polls
 /// [`poll_device_flow`] every `interval` seconds.
 pub async fn start_device_flow() -> Result<DeviceCode, CopilotAuthError> {
-    start_device_flow_with_transport(legacy_http_transport()).await
+    start_device_flow_with_transport(legacy_http_transport()?).await
 }
 
 pub async fn start_device_flow_with_transport(
@@ -319,7 +338,7 @@ struct TokenPollResponse {
 /// Single poll against the GitHub access-token endpoint. Returns
 /// immediately — the caller loops with its own scheduler.
 pub async fn poll_device_flow(device_code: &str) -> Result<PollOutcome, CopilotAuthError> {
-    poll_device_flow_with_transport(device_code, legacy_http_transport()).await
+    poll_device_flow_with_transport(device_code, legacy_http_transport()?).await
 }
 
 pub async fn poll_device_flow_with_transport(
@@ -394,7 +413,7 @@ pub async fn exchange_for_copilot_token(
 ) -> Result<CopilotToken, CopilotAuthError> {
     exchange_for_copilot_token_with_transport(
         github_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -443,12 +462,10 @@ pub(crate) async fn exchange_for_copilot_token_with_transport(
 /// chat requests started up against an empty / expired cache and all
 /// raced into `exchange_for_copilot_token`, blowing the upstream
 /// rate-limit and risking N tokens issued for the same user.
-pub async fn ensure_copilot_token(
-    github_token: &str,
-) -> Result<CopilotToken, CopilotAuthError> {
+pub async fn ensure_copilot_token(github_token: &str) -> Result<CopilotToken, CopilotAuthError> {
     ensure_copilot_token_with_transport(
         github_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -462,7 +479,7 @@ pub(crate) async fn ensure_copilot_token_with_transport(
     let fingerprint = token_fingerprint(github_token);
 
     // Fast path: cache already has a usable token.
-    if let Some(cached) = lookup_cached(fingerprint) {
+    if let Some(cached) = lookup_cached(fingerprint)? {
         if !needs_refresh(&cached) {
             return Ok(cached);
         }
@@ -471,17 +488,17 @@ pub(crate) async fn ensure_copilot_token_with_transport(
     // Slow path: serialise the exchange per token. Only the first
     // caller hits the network; the rest awaits this lock and then
     // re-checks the cache.
-    let lock = exchange_lock_for(fingerprint);
+    let lock = exchange_lock_for(fingerprint)?;
     let _guard = lock.lock().await;
 
-    if let Some(cached) = lookup_cached(fingerprint) {
+    if let Some(cached) = lookup_cached(fingerprint)? {
         if !needs_refresh(&cached) {
             return Ok(cached);
         }
     }
     let fresh =
         exchange_for_copilot_token_with_transport(github_token, transport, endpoints).await?;
-    store_cached(fingerprint, fresh.clone());
+    store_cached(fingerprint, fresh.clone())?;
     Ok(fresh)
 }
 
@@ -497,7 +514,7 @@ pub async fn refresh_rejected_copilot_token(
     refresh_rejected_copilot_token_with_transport(
         github_token,
         rejected_token,
-        legacy_http_transport(),
+        legacy_http_transport()?,
         &CopilotAuthEndpoints::default(),
     )
     .await
@@ -525,18 +542,26 @@ where
     Fut: Future<Output = Result<CopilotToken, CopilotAuthError>>,
 {
     let github_fingerprint = token_fingerprint(github_token);
-    let exchange_lock = exchange_lock_for(github_fingerprint);
+    let exchange_lock = exchange_lock_for(github_fingerprint)?;
     let _exchange_guard = exchange_lock.lock().await;
 
     let rejected_fingerprint = token_fingerprint(&rejected_token.bearer);
-    let catalog_lock = model_catalog_lock_for(rejected_fingerprint);
+    let catalog_lock = model_catalog_lock_for(rejected_fingerprint)?;
     let _catalog_guard = catalog_lock.lock().await;
-    if let Ok(mut catalogs) = model_catalog_cache().lock() {
-        catalogs.remove(&rejected_fingerprint);
-    }
+    model_catalog_cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "model catalog cache",
+        })?
+        .remove(&rejected_fingerprint);
     drop(_catalog_guard);
 
-    if let Ok(mut tokens) = cache().lock() {
+    {
+        let mut tokens = cache()
+            .lock()
+            .map_err(|_| CopilotAuthError::StateUnavailable {
+                resource: "token cache",
+            })?;
         if let Some(current) = tokens.get(&github_fingerprint) {
             if current.bearer != rejected_token.bearer {
                 return Ok(current.clone());
@@ -546,17 +571,27 @@ where
     }
 
     let fresh = exchange(github_token.to_string()).await?;
-    store_cached(github_fingerprint, fresh.clone());
+    store_cached(github_fingerprint, fresh.clone())?;
     Ok(fresh)
 }
 
 /// Drop any cached Copilot token for the given GitHub token. Called by
 /// the sign-out path so a re-signed user gets a clean cache.
 pub fn forget_cached(github_token: &str) {
-    let fp = token_fingerprint(github_token);
-    if let Some(map) = cache().lock().ok().as_mut() {
-        map.remove(&fp);
+    if let Err(error) = try_forget_cached(github_token) {
+        tracing::error!(error = %error, "failed to clear Copilot token cache");
     }
+}
+
+pub fn try_forget_cached(github_token: &str) -> Result<(), CopilotAuthError> {
+    let fp = token_fingerprint(github_token);
+    cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "token cache",
+        })?
+        .remove(&fp);
+    Ok(())
 }
 
 /// Return the live model catalogue, cached for a short period per
@@ -566,7 +601,7 @@ pub fn forget_cached(github_token: &str) {
 pub async fn ensure_copilot_models(
     token: &CopilotToken,
 ) -> Result<Arc<Vec<CopilotModel>>, CopilotAuthError> {
-    ensure_copilot_models_with_transport(token, legacy_http_transport()).await
+    ensure_copilot_models_with_transport(token, legacy_http_transport()?).await
 }
 
 pub(crate) async fn ensure_copilot_models_with_transport(
@@ -574,18 +609,18 @@ pub(crate) async fn ensure_copilot_models_with_transport(
     transport: &HttpTransport,
 ) -> Result<Arc<Vec<CopilotModel>>, CopilotAuthError> {
     let fingerprint = token_fingerprint(&token.bearer);
-    if let Some(models) = lookup_model_catalog(fingerprint) {
+    if let Some(models) = lookup_model_catalog(fingerprint)? {
         return Ok(models);
     }
 
-    let lock = model_catalog_lock_for(fingerprint);
+    let lock = model_catalog_lock_for(fingerprint)?;
     let _guard = lock.lock().await;
-    if let Some(models) = lookup_model_catalog(fingerprint) {
+    if let Some(models) = lookup_model_catalog(fingerprint)? {
         return Ok(models);
     }
 
     let models = Arc::new(fetch_copilot_models(token, transport).await?);
-    store_model_catalog(fingerprint, models.clone());
+    store_model_catalog(fingerprint, models.clone())?;
     Ok(models)
 }
 
@@ -598,7 +633,7 @@ pub async fn wire_api_for_model(
     token: &CopilotToken,
     model_id: &str,
 ) -> Result<CopilotWireApi, CopilotAuthError> {
-    wire_api_for_model_with_transport(token, model_id, legacy_http_transport()).await
+    wire_api_for_model_with_transport(token, model_id, legacy_http_transport()?).await
 }
 
 pub(crate) async fn wire_api_for_model_with_transport(
@@ -650,12 +685,10 @@ async fn fetch_copilot_models(
         .send()
         .await?;
     let status = resp.status();
-    let bytes = crate::agent::llm::read_body_capped(
-        resp,
-        crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-    )
-    .await
-    .map_err(|e| CopilotAuthError::UnexpectedBody(e.to_string()))?;
+    let bytes =
+        crate::agent::llm::read_body_capped(resp, crate::agent::llm::MAX_NONSTREAM_BODY_BYTES)
+            .await
+            .map_err(|e| CopilotAuthError::UnexpectedBody(e.to_string()))?;
     if !status.is_success() {
         return Err(CopilotAuthError::Http {
             status: status.as_u16(),
@@ -706,25 +739,38 @@ struct CachedModelCatalog {
     models: Arc<Vec<CopilotModel>>,
 }
 
-fn lookup_model_catalog(fingerprint: u64) -> Option<Arc<Vec<CopilotModel>>> {
-    model_catalog_cache().lock().ok().and_then(|cache| {
-        cache.get(&fingerprint).and_then(|entry| {
-            (entry.fetched_at.elapsed() < MODEL_CATALOG_TTL).then(|| entry.models.clone())
-        })
-    })
+fn lookup_model_catalog(
+    fingerprint: u64,
+) -> Result<Option<Arc<Vec<CopilotModel>>>, CopilotAuthError> {
+    let cache = model_catalog_cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "model catalog cache",
+        })?;
+    Ok(cache.get(&fingerprint).and_then(|entry| {
+        (entry.fetched_at.elapsed() < MODEL_CATALOG_TTL).then(|| entry.models.clone())
+    }))
 }
 
-fn store_model_catalog(fingerprint: u64, models: Arc<Vec<CopilotModel>>) {
-    if let Ok(mut cache) = model_catalog_cache().lock() {
-        cache.retain(|_, entry| entry.fetched_at.elapsed() < Duration::from_secs(60 * 60));
-        cache.insert(
-            fingerprint,
-            CachedModelCatalog {
-                fetched_at: Instant::now(),
-                models,
-            },
-        );
-    }
+fn store_model_catalog(
+    fingerprint: u64,
+    models: Arc<Vec<CopilotModel>>,
+) -> Result<(), CopilotAuthError> {
+    let mut cache =
+        model_catalog_cache()
+            .lock()
+            .map_err(|_| CopilotAuthError::StateUnavailable {
+                resource: "model catalog cache",
+            })?;
+    cache.retain(|_, entry| entry.fetched_at.elapsed() < Duration::from_secs(60 * 60));
+    cache.insert(
+        fingerprint,
+        CachedModelCatalog {
+            fetched_at: Instant::now(),
+            models,
+        },
+    );
+    Ok(())
 }
 
 fn model_catalog_cache() -> &'static Mutex<HashMap<u64, CachedModelCatalog>> {
@@ -732,14 +778,18 @@ fn model_catalog_cache() -> &'static Mutex<HashMap<u64, CachedModelCatalog>> {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn model_catalog_lock_for(fingerprint: u64) -> Arc<AsyncMutex<()>> {
+fn model_catalog_lock_for(fingerprint: u64) -> Result<Arc<AsyncMutex<()>>, CopilotAuthError> {
     static LOCKS: OnceLock<Mutex<HashMap<u64, Arc<AsyncMutex<()>>>>> = OnceLock::new();
     let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut guard = locks.lock().unwrap_or_else(|e| e.into_inner());
-    guard
+    let mut guard = locks
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "model catalog lock registry",
+        })?;
+    Ok(guard
         .entry(fingerprint)
         .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-        .clone()
+        .clone())
 }
 
 fn needs_refresh(t: &CopilotToken) -> bool {
@@ -751,14 +801,24 @@ fn needs_refresh(t: &CopilotToken) -> bool {
     t.expires_at_unix <= now.saturating_add(margin)
 }
 
-fn lookup_cached(fingerprint: u64) -> Option<CopilotToken> {
-    cache().lock().ok().and_then(|m| m.get(&fingerprint).cloned())
+fn lookup_cached(fingerprint: u64) -> Result<Option<CopilotToken>, CopilotAuthError> {
+    Ok(cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "token cache",
+        })?
+        .get(&fingerprint)
+        .cloned())
 }
 
-fn store_cached(fingerprint: u64, token: CopilotToken) {
-    if let Ok(mut m) = cache().lock() {
-        m.insert(fingerprint, token);
-    }
+fn store_cached(fingerprint: u64, token: CopilotToken) -> Result<(), CopilotAuthError> {
+    cache()
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "token cache",
+        })?
+        .insert(fingerprint, token);
+    Ok(())
 }
 
 fn cache() -> &'static Mutex<HashMap<u64, CopilotToken>> {
@@ -770,13 +830,17 @@ fn cache() -> &'static Mutex<HashMap<u64, CopilotToken>> {
 /// exchanges against the same GitHub token. We keep one mutex per
 /// fingerprint forever — they're tiny and bounded by the number of
 /// distinct users signed in within this process.
-fn exchange_lock_for(fingerprint: u64) -> Arc<AsyncMutex<()>> {
+fn exchange_lock_for(fingerprint: u64) -> Result<Arc<AsyncMutex<()>>, CopilotAuthError> {
     static LOCKS: OnceLock<Mutex<HashMap<u64, Arc<AsyncMutex<()>>>>> = OnceLock::new();
     let locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new()));
-    let mut g = locks.lock().unwrap_or_else(|e| e.into_inner());
-    g.entry(fingerprint)
+    let mut g = locks
+        .lock()
+        .map_err(|_| CopilotAuthError::StateUnavailable {
+            resource: "token exchange lock registry",
+        })?;
+    Ok(g.entry(fingerprint)
         .or_insert_with(|| Arc::new(AsyncMutex::new(())))
-        .clone()
+        .clone())
 }
 
 /// Stable in-process fingerprint of a GitHub token. We deliberately
@@ -805,7 +869,10 @@ fn derive_base_url_from_token_with_fallback(
     for fragment in copilot_token.split(';') {
         let frag = fragment.trim();
         if let Some(rest) = frag.strip_prefix("proxy-ep=") {
-            let host = rest.trim().trim_start_matches("https://").trim_start_matches("http://");
+            let host = rest
+                .trim()
+                .trim_start_matches("https://")
+                .trim_start_matches("http://");
             if host.is_empty() {
                 break;
             }
@@ -823,9 +890,21 @@ fn derive_base_url_from_token_with_fallback(
 // HTTP client
 // ---------------------------------------------------------------------------
 
-fn legacy_http_transport() -> &'static HttpTransport {
-    static TRANSPORT: OnceLock<HttpTransport> = OnceLock::new();
-    TRANSPORT.get_or_init(HttpTransport::legacy_default)
+fn legacy_http_transport() -> Result<&'static HttpTransport, CopilotAuthError> {
+    static TRANSPORT: OnceLock<
+        std::result::Result<
+            HttpTransport,
+            Arc<crate::agent::llm::construction::HttpTransportInitializationError>,
+        >,
+    > = OnceLock::new();
+    match TRANSPORT.get_or_init(HttpTransport::try_build) {
+        Ok(transport) => Ok(transport),
+        Err(source) => Err(CopilotAuthError::Infrastructure(
+            crate::agent::llm::ProviderInfrastructureError::HttpTransport {
+                source: Arc::clone(source),
+            },
+        )),
+    }
 }
 
 // ---------------------------------------------------------------------------

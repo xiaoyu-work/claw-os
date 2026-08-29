@@ -10,25 +10,32 @@ struct FakeStore {
 }
 
 impl super::super::CredentialStore for FakeStore {
-    fn contains(&self, _id: &super::super::CredentialId) -> Result<bool, String> {
+    fn contains(&self, _id: &super::super::CredentialId) -> super::super::CredentialResult<bool> {
         self.contains_calls.fetch_add(1, Ordering::SeqCst);
         Ok(true)
     }
 
-    fn load(&self, _id: &super::super::CredentialId, enforce_tier: bool) -> Result<String, String> {
+    fn load(
+        &self,
+        _id: &super::super::CredentialId,
+        enforce_tier: bool,
+    ) -> super::super::CredentialResult<String> {
         self.load_calls.fetch_add(1, Ordering::SeqCst);
         self.last_enforce_tier.store(enforce_tier, Ordering::SeqCst);
         Ok("from-store-interface".to_string())
     }
 
-    fn minimum_tier(&self, _id: &super::super::CredentialId) -> Result<Option<u8>, String> {
+    fn minimum_tier(
+        &self,
+        _id: &super::super::CredentialId,
+    ) -> super::super::CredentialResult<Option<u8>> {
         Ok(Some(0))
     }
 
     fn store(
         &self,
         _request: super::super::StoreRequest<'_>,
-    ) -> Result<super::super::StoreResult, String> {
+    ) -> super::super::CredentialResult<super::super::StoreResult> {
         unreachable!("configuration lookup is read-only")
     }
 }

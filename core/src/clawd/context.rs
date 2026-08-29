@@ -7,15 +7,16 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::context_events;
 use super::client_identity::ClientIdentity;
+use super::context_events;
+use super::protocol::BrokerError;
 use super::state::DaemonState;
 use super::system_journal;
 
-pub fn snapshot(state: &DaemonState) -> Result<Value, String> {
-    refresh_builtin_sources(state);
+pub fn snapshot(state: &DaemonState) -> Result<Value, BrokerError> {
+    refresh_builtin_sources(state)?;
     let entries = state
-        .context_snapshot()
+        .context_snapshot()?
         .into_iter()
         .map(|entry| {
             json!({
@@ -33,10 +34,10 @@ pub fn snapshot(state: &DaemonState) -> Result<Value, String> {
     }))
 }
 
-pub fn sources(state: &DaemonState) -> Result<Value, String> {
-    refresh_builtin_sources(state);
+pub fn sources(state: &DaemonState) -> Result<Value, BrokerError> {
+    refresh_builtin_sources(state)?;
     let sources = state
-        .context_snapshot()
+        .context_snapshot()?
         .into_iter()
         .map(|entry| {
             json!({
@@ -56,14 +57,14 @@ pub fn sources(state: &DaemonState) -> Result<Value, String> {
 pub fn snapshot_for_client(
     state: &DaemonState,
     client: &ClientIdentity,
-) -> Result<Value, String> {
-    let uid = client.require_uid()?;
+) -> Result<Value, BrokerError> {
+    let uid = client.require_uid().map_err(BrokerError::execution)?;
     if uid == 0 {
         return snapshot(state);
     }
-    refresh_builtin_sources(state);
+    refresh_builtin_sources(state)?;
     let entries = state
-        .context_snapshot()
+        .context_snapshot()?
         .into_iter()
         .filter(|entry| user_visible_source(&entry.source))
         .map(|entry| {
@@ -81,14 +82,14 @@ pub fn snapshot_for_client(
 pub fn sources_for_client(
     state: &DaemonState,
     client: &ClientIdentity,
-) -> Result<Value, String> {
-    let uid = client.require_uid()?;
+) -> Result<Value, BrokerError> {
+    let uid = client.require_uid().map_err(BrokerError::execution)?;
     if uid == 0 {
         return sources(state);
     }
-    refresh_builtin_sources(state);
+    refresh_builtin_sources(state)?;
     let sources = state
-        .context_snapshot()
+        .context_snapshot()?
         .into_iter()
         .filter(|entry| user_visible_source(&entry.source))
         .map(|entry| {
@@ -115,12 +116,12 @@ fn user_visible_source(source: &str) -> bool {
     )
 }
 
-pub fn update(state: &DaemonState, params: Value) -> Result<Value, String> {
-    let source = required_string(&params, "source")?;
+pub fn update(state: &DaemonState, params: Value) -> Result<Value, BrokerError> {
+    let source = required_string(&params, "source").map_err(BrokerError::execution)?;
     let payload = params.get("payload").cloned().unwrap_or(Value::Null);
     let metadata = params.get("metadata").cloned().unwrap_or_else(|| json!({}));
 
-    state.update_context(source.clone(), payload, metadata);
+    state.update_context(source.clone(), payload, metadata)?;
 
     Ok(json!({
         "accepted": true,
@@ -128,26 +129,27 @@ pub fn update(state: &DaemonState, params: Value) -> Result<Value, String> {
     }))
 }
 
-pub fn refresh_builtin_sources(state: &DaemonState) {
-    collect_session_environment(state);
-    collect_system_overview(state);
-    collect_system_inventory(state);
-    collect_runtime_context(state);
-    collect_activity_terminals(state);
-    collect_activity_workspaces(state);
-    collect_activity_recent_files(state);
-    collect_system_services(state);
-    collect_system_package_activity(state);
-    collect_system_processes(state);
-    collect_system_mounts(state);
-    collect_system_users(state);
-    collect_system_packages(state);
-    collect_system_audit_sources(state);
-    collect_system_operations(state);
-    collect_activity_timeline(state);
+pub fn refresh_builtin_sources(state: &DaemonState) -> Result<(), BrokerError> {
+    collect_session_environment(state)?;
+    collect_system_overview(state)?;
+    collect_system_inventory(state)?;
+    collect_runtime_context(state)?;
+    collect_activity_terminals(state)?;
+    collect_activity_workspaces(state)?;
+    collect_activity_recent_files(state)?;
+    collect_system_services(state)?;
+    collect_system_package_activity(state)?;
+    collect_system_processes(state)?;
+    collect_system_mounts(state)?;
+    collect_system_users(state)?;
+    collect_system_packages(state)?;
+    collect_system_audit_sources(state)?;
+    collect_system_operations(state)?;
+    collect_activity_timeline(state)?;
+    Ok(())
 }
 
-fn collect_session_environment(state: &DaemonState) {
+fn collect_session_environment(state: &DaemonState) -> Result<(), BrokerError> {
     let keys = [
         "XDG_CURRENT_DESKTOP",
         "XDG_SESSION_TYPE",
@@ -175,10 +177,11 @@ fn collect_session_environment(state: &DaemonState) {
             "kind": "builtin",
             "collector": "session_environment",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_overview(state: &DaemonState) {
+fn collect_system_overview(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system".to_string(),
         json!({
@@ -197,10 +200,11 @@ fn collect_system_overview(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_inventory(state: &DaemonState) {
+fn collect_system_inventory(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system.inventory".to_string(),
         json!({
@@ -224,10 +228,11 @@ fn collect_system_inventory(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_processes(state: &DaemonState) {
+fn collect_system_processes(state: &DaemonState) -> Result<(), BrokerError> {
     let processes = linux_process_snapshot(512);
     let count = processes.len();
     state.update_context(
@@ -243,10 +248,11 @@ fn collect_system_processes(state: &DaemonState) {
             "capability": "proc.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_mounts(state: &DaemonState) {
+fn collect_system_mounts(state: &DaemonState) -> Result<(), BrokerError> {
     let mounts = linux_mounts_snapshot(256);
     let count = mounts.len();
     state.update_context(
@@ -262,10 +268,11 @@ fn collect_system_mounts(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_users(state: &DaemonState) {
+fn collect_system_users(state: &DaemonState) -> Result<(), BrokerError> {
     let users = passwd_snapshot(256);
     let count = users.len();
     state.update_context(
@@ -281,10 +288,11 @@ fn collect_system_users(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_packages(state: &DaemonState) {
+fn collect_system_packages(state: &DaemonState) -> Result<(), BrokerError> {
     let packages = dpkg_status_snapshot(500);
     state.update_context(
         "clawd.system.packages".to_string(),
@@ -295,10 +303,11 @@ fn collect_system_packages(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_audit_sources(state: &DaemonState) {
+fn collect_system_audit_sources(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system.audit".to_string(),
         json!({
@@ -313,10 +322,11 @@ fn collect_system_audit_sources(state: &DaemonState) {
             "capability": "sys.observe",
             "mode": "readonly",
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_operations(state: &DaemonState) {
+fn collect_system_operations(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system.operations".to_string(),
         system_journal::context_payload(50),
@@ -327,10 +337,11 @@ fn collect_system_operations(state: &DaemonState) {
             "mode": "readonly",
             "persistent": true,
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_activity_timeline(state: &DaemonState) {
+fn collect_activity_timeline(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.activity.timeline".to_string(),
         context_events::context_payload(50),
@@ -341,10 +352,11 @@ fn collect_activity_timeline(state: &DaemonState) {
             "mode": "readonly",
             "persistent": true,
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_runtime_context(state: &DaemonState) {
+fn collect_runtime_context(state: &DaemonState) -> Result<(), BrokerError> {
     let kernel_release = read_trimmed(PathBuf::from("/proc/sys/kernel/osrelease"));
     let kernel_version = read_trimmed(PathBuf::from("/proc/version"));
     state.update_context(
@@ -367,10 +379,11 @@ fn collect_runtime_context(state: &DaemonState) {
             "mode": "readonly",
             "providers": ["linux", "wsl"],
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_activity_terminals(state: &DaemonState) {
+fn collect_activity_terminals(state: &DaemonState) -> Result<(), BrokerError> {
     let terminals = terminal_process_snapshot(128);
     let count = terminals.len();
     state.update_context(
@@ -387,10 +400,11 @@ fn collect_activity_terminals(state: &DaemonState) {
             "mode": "readonly",
             "providers": ["linux_procfs"],
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_activity_workspaces(state: &DaemonState) {
+fn collect_activity_workspaces(state: &DaemonState) -> Result<(), BrokerError> {
     let workspaces = active_git_workspaces_snapshot(64);
     let count = workspaces.len();
     state.update_context(
@@ -407,10 +421,11 @@ fn collect_activity_workspaces(state: &DaemonState) {
             "mode": "readonly",
             "providers": ["linux_procfs", "git"],
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_activity_recent_files(state: &DaemonState) {
+fn collect_activity_recent_files(state: &DaemonState) -> Result<(), BrokerError> {
     let roots = recent_file_roots(32);
     let root_count = roots.len();
     let snapshot = recent_files_snapshot(roots, 100, 3, 4_000);
@@ -432,10 +447,11 @@ fn collect_activity_recent_files(state: &DaemonState) {
             "providers": ["linux_fs"],
             "max_depth": 3,
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_services(state: &DaemonState) {
+fn collect_system_services(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system.services".to_string(),
         system_services_snapshot(100),
@@ -446,10 +462,11 @@ fn collect_system_services(state: &DaemonState) {
             "mode": "readonly",
             "providers": ["systemd"],
         }),
-    );
+    )?;
+    Ok(())
 }
 
-fn collect_system_package_activity(state: &DaemonState) {
+fn collect_system_package_activity(state: &DaemonState) -> Result<(), BrokerError> {
     state.update_context(
         "clawd.system.package_activity".to_string(),
         apt_history_snapshot(40),
@@ -460,7 +477,8 @@ fn collect_system_package_activity(state: &DaemonState) {
             "mode": "readonly",
             "providers": ["apt"],
         }),
-    );
+    )?;
+    Ok(())
 }
 
 fn os_release_summary() -> Value {

@@ -609,7 +609,8 @@ pub fn resolved_key_source(cfg: &crate::config::AgentConfig) -> llm::Result<Opti
     )?;
     if let Some(pool) = resolved.pool {
         return Ok(pool
-            .stats()
+            .try_stats()
+            .map_err(llm::ProviderInfrastructureError::from)?
             .into_iter()
             .next()
             .map(|stats| KeySource::from_pool_source(stats.source)));
@@ -1240,7 +1241,10 @@ fn wizard_all(verify_after: bool) -> Result<Value, String> {
     let _ = writeln!(e);
 
     let modalities = [
-        ("text", "Conversational text model (required for `ask`/`chat`)"),
+        (
+            "text",
+            "Conversational text model (required for `ask`/`chat`)",
+        ),
         ("tts", "Text-to-speech"),
         ("stt", "Speech-to-text"),
         ("imagegen", "Image generation"),

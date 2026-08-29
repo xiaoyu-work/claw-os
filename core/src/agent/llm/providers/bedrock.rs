@@ -118,7 +118,32 @@ impl std::fmt::Debug for BedrockConfig {
 
 impl BedrockConfig {
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(
+                error = %error,
+                "legacy Bedrock constructor deferred provider infrastructure failure"
+            );
+            Self::unconfigured(model, agent)
+        })
+    }
+
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
         crate::agent::llm::registry::bedrock_config(model, agent, &ProcessCredentialSource)
+    }
+
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            region: agent
+                .aws_region
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| DEFAULT_REGION.to_string()),
+            base_url: agent.base_url.clone().filter(|value| !value.is_empty()),
+            model: model.to_string(),
+            credentials: None,
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+        }
     }
 
     /// Region-derived host for SigV4 signing AND the URL we POST to.
@@ -159,20 +184,43 @@ fn host_from_url(url: &str) -> Option<String> {
 
 pub struct BedrockProvider {
     cfg: BedrockConfig,
-    transport: HttpTransport,
+    transport: Option<HttpTransport>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl BedrockProvider {
     pub fn new(cfg: BedrockConfig) -> Self {
-        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
+        }
     }
 
     pub fn new_with_transport(cfg: BedrockConfig, transport: HttpTransport) -> Self {
-        Self { cfg, transport }
+        Self {
+            cfg,
+            transport: Some(transport),
+            initialization_error: None,
+        }
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::new(BedrockConfig::from_agent_config(model, agent))
+        match BedrockConfig::try_from_agent_config(model, agent) {
+            Ok(config) => Self::new(config),
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Bedrock provider initialization failed");
+                Self {
+                    cfg: BedrockConfig::unconfigured(model, agent),
+                    transport: None,
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     /// `/model/<url-encoded model id>/invoke` — exact path, before SigV4
@@ -186,6 +234,18 @@ impl BedrockProvider {
             "/model/{}/invoke-with-response-stream",
             url_encode_path_segment(&self.cfg.model)
         )
+    }
+
+    fn transport(&self) -> Result<&HttpTransport> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "bedrock.transport",
+                }
+                .into()
+            }),
+        }
     }
 
     fn stream_full_url(&self) -> String {
@@ -229,7 +289,9 @@ impl Provider for BedrockProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.credentials.is_some()
+        self.initialization_error.is_none()
+            && self.transport.is_some()
+            && self.cfg.credentials.is_some()
     }
 
     fn supports_prompt_cache(&self) -> bool {
@@ -240,6 +302,7 @@ impl Provider for BedrockProvider {
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -272,8 +335,7 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .transport
+        let mut http = transport
             .post(self.full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             // accept identifies us in CloudTrail logs
@@ -300,11 +362,9 @@ impl Provider for BedrockProvider {
             .or_else(|| resp.headers().get("X-Amzn-Errortype"))
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
-        let bytes = crate::agent::llm::read_body_capped(
-            resp,
-            crate::agent::llm::MAX_NONSTREAM_BODY_BYTES,
-        )
-        .await?;
+        let bytes =
+            crate::agent::llm::read_body_capped(resp, crate::agent::llm::MAX_NONSTREAM_BODY_BYTES)
+                .await?;
 
         if !status.is_success() {
             return Err(classify_bedrock_error(
@@ -326,6 +386,7 @@ impl Provider for BedrockProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        let transport = self.transport()?;
         let creds = self.cfg.credentials.as_ref().ok_or_else(|| {
             LlmError::NotConfigured(
                 "bedrock: missing AWS credentials (set AWS_ACCESS_KEY_ID + \
@@ -361,8 +422,7 @@ impl Provider for BedrockProvider {
         };
         let signed = sign(creds, &ctx, &host, &signable);
 
-        let mut http = self
-            .transport
+        let mut http = transport
             .post(self.stream_full_url(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .header(

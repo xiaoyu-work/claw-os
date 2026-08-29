@@ -9,6 +9,159 @@ use serde_json::Value;
 
 use crate::session::{self, LeaseGuard, SessionId, Status as SessionStatus};
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum StateErrorKind {
+    Unavailable,
+    Corrupt,
+    Conflict,
+    NotFound,
+    NotAuthorized,
+}
+
+pub struct StateError {
+    kind: StateErrorKind,
+    operation: &'static str,
+    message: String,
+    source: Option<Box<dyn std::error::Error + Send + Sync>>,
+}
+
+impl StateError {
+    pub fn kind(&self) -> StateErrorKind {
+        self.kind
+    }
+
+    pub fn operation(&self) -> &'static str {
+        self.operation
+    }
+
+    fn poisoned(resource: &'static str) -> Self {
+        Self::message(
+            StateErrorKind::Corrupt,
+            "state.lock",
+            format!("clawd {resource} state is unavailable because its lock was poisoned"),
+        )
+    }
+
+    fn corrupt(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::message(StateErrorKind::Corrupt, operation, message)
+    }
+
+    fn conflict(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::message(StateErrorKind::Conflict, operation, message)
+    }
+
+    fn not_found(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::message(StateErrorKind::NotFound, operation, message)
+    }
+
+    fn unauthorized(operation: &'static str, message: impl Into<String>) -> Self {
+        Self::message(StateErrorKind::NotAuthorized, operation, message)
+    }
+
+    fn io(operation: &'static str, context: impl Into<String>, source: std::io::Error) -> Self {
+        Self::with_source(StateErrorKind::Unavailable, operation, context, source)
+    }
+
+    fn with_source<E>(
+        kind: StateErrorKind,
+        operation: &'static str,
+        context: impl Into<String>,
+        source: E,
+    ) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        let context = context.into();
+        Self {
+            kind,
+            operation,
+            message: format!("{context}: {source}"),
+            source: Some(Box::new(source)),
+        }
+    }
+
+    fn session(
+        operation: &'static str,
+        context: impl Into<String>,
+        source: session::SessionError,
+    ) -> Self {
+        let kind = match &source {
+            session::SessionError::NotFound(_) => StateErrorKind::NotFound,
+            session::SessionError::Decode { .. }
+            | session::SessionError::Encode(_)
+            | session::SessionError::Corrupt { .. } => StateErrorKind::Corrupt,
+            session::SessionError::Io { .. } | session::SessionError::Lock(_) => {
+                StateErrorKind::Unavailable
+            }
+        };
+        Self::with_source(kind, operation, context, source)
+    }
+
+    fn acquire(
+        operation: &'static str,
+        context: impl Into<String>,
+        source: session::AcquireError,
+    ) -> Self {
+        let kind = match &source {
+            session::AcquireError::NotFound(_) => StateErrorKind::NotFound,
+            session::AcquireError::Held { .. } => StateErrorKind::Conflict,
+            session::AcquireError::Io(_) => StateErrorKind::Unavailable,
+        };
+        Self::with_source(kind, operation, context, source)
+    }
+
+    fn parsed_time(session_id: &SessionId, value: &str) -> StateResult<DateTime<Utc>> {
+        DateTime::parse_from_rfc3339(value)
+            .map(|value| value.with_timezone(&Utc))
+            .map_err(|source| {
+                StateError::with_source(
+                    StateErrorKind::Corrupt,
+                    "transaction.recover",
+                    format!(
+                        "clawd transaction recovery: session {session_id} has invalid created_at"
+                    ),
+                    source,
+                )
+            })
+    }
+
+    fn message(kind: StateErrorKind, operation: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            operation,
+            message: message.into(),
+            source: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for StateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("StateError")
+            .field("kind", &self.kind)
+            .field("operation", &self.operation)
+            .field("message", &self.message)
+            .field("has_source", &self.source.is_some())
+            .finish()
+    }
+}
+
+impl std::fmt::Display for StateError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for StateError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source
+            .as_deref()
+            .map(|source| source as &(dyn std::error::Error + 'static))
+    }
+}
+
+pub type StateResult<T> = Result<T, StateError>;
+
 #[derive(Clone)]
 pub struct DaemonState {
     inner: Arc<DaemonStateInner>,
@@ -46,11 +199,11 @@ pub struct TransactionSummary {
 }
 
 impl DaemonState {
-    pub fn new() -> Self {
-        Self::try_new().expect("failed to recover clawd transaction handles")
+    pub fn new() -> StateResult<Self> {
+        Self::try_new()
     }
 
-    pub fn try_new() -> Result<Self, String> {
+    pub fn try_new() -> StateResult<Self> {
         let transactions = recover_transactions()?;
         Ok(Self {
             inner: Arc::new(DaemonStateInner {
@@ -70,7 +223,12 @@ impl DaemonState {
         self.inner.started_instant.elapsed().as_millis()
     }
 
-    pub fn update_context(&self, source: String, payload: Value, metadata: Value) {
+    pub fn update_context(
+        &self,
+        source: String,
+        payload: Value,
+        metadata: Value,
+    ) -> StateResult<()> {
         let entry = ContextEntry {
             source: source.clone(),
             updated_at: Utc::now(),
@@ -80,50 +238,57 @@ impl DaemonState {
         self.inner
             .context
             .lock()
-            .expect("clawd context lock poisoned")
+            .map_err(|_| StateError::poisoned("context"))?
             .insert(source, entry);
+        Ok(())
     }
 
-    pub fn context_snapshot(&self) -> Vec<ContextEntry> {
-        self.inner
+    pub fn context_snapshot(&self) -> StateResult<Vec<ContextEntry>> {
+        Ok(self
+            .inner
             .context
             .lock()
-            .expect("clawd context lock poisoned")
+            .map_err(|_| StateError::poisoned("context"))?
             .values()
             .cloned()
-            .collect()
+            .collect())
     }
 
-    pub fn insert_transaction(&self, handle: TransactionHandle) -> Result<(), String> {
+    pub fn insert_transaction(&self, handle: TransactionHandle) -> StateResult<()> {
         let id = handle.session_id.as_str().to_string();
         let mut transactions = self
             .inner
             .transactions
             .lock()
-            .expect("clawd transaction lock poisoned");
+            .map_err(|_| StateError::poisoned("transaction"))?;
         if transactions.contains_key(&id) {
-            return Err(format!("transaction already active: {id}"));
+            return Err(StateError::conflict(
+                "transaction.insert",
+                format!("transaction already active: {id}"),
+            ));
         }
         transactions.insert(id, handle);
         Ok(())
     }
 
-    pub fn require_transaction_owner(
-        &self,
-        id: &str,
-        owner_uid: Option<u32>,
-    ) -> Result<(), String> {
+    pub fn require_transaction_owner(&self, id: &str, owner_uid: Option<u32>) -> StateResult<()> {
         let transactions = self
             .inner
             .transactions
             .lock()
-            .expect("clawd transaction lock poisoned");
-        let handle = transactions
-            .get(id)
-            .ok_or_else(|| format!("transaction is not active: {id}"))?;
+            .map_err(|_| StateError::poisoned("transaction"))?;
+        let handle = transactions.get(id).ok_or_else(|| {
+            StateError::not_found(
+                "transaction.require_owner",
+                format!("transaction is not active: {id}"),
+            )
+        })?;
         if let Some(uid) = owner_uid {
             if handle.owner_uid != uid {
-                return Err(format!("transaction is not owned by uid {uid}"));
+                return Err(StateError::unauthorized(
+                    "transaction.require_owner",
+                    format!("transaction is not owned by uid {uid}"),
+                ));
             }
         }
         Ok(())
@@ -133,18 +298,21 @@ impl DaemonState {
         &self,
         id: &str,
         owner_uid: Option<u32>,
-    ) -> Result<Option<TransactionHandle>, String> {
+    ) -> StateResult<Option<TransactionHandle>> {
         let mut transactions = self
             .inner
             .transactions
             .lock()
-            .expect("clawd transaction lock poisoned");
+            .map_err(|_| StateError::poisoned("transaction"))?;
         let Some(handle) = transactions.get(id) else {
             return Ok(None);
         };
         if let Some(uid) = owner_uid {
             if handle.owner_uid != uid {
-                return Err(format!("transaction is not owned by uid {uid}"));
+                return Err(StateError::unauthorized(
+                    "transaction.take",
+                    format!("transaction is not owned by uid {uid}"),
+                ));
             }
         }
         Ok(transactions.remove(id))
@@ -153,11 +321,12 @@ impl DaemonState {
     pub fn list_transactions_for_owner(
         &self,
         owner_uid: Option<u32>,
-    ) -> Vec<TransactionSummary> {
-        self.inner
+    ) -> StateResult<Vec<TransactionSummary>> {
+        Ok(self
+            .inner
             .transactions
             .lock()
-            .expect("clawd transaction lock poisoned")
+            .map_err(|_| StateError::poisoned("transaction"))?
             .values()
             .filter(|handle| match owner_uid {
                 None => true,
@@ -169,28 +338,45 @@ impl DaemonState {
                 started_at: handle.started_at,
                 owner_uid: handle.owner_uid,
             })
-            .collect()
+            .collect())
+    }
+
+    #[cfg(test)]
+    pub(super) fn poison_context_for_test(&self) {
+        let state = self.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _guard = state.inner.context.lock().unwrap();
+            panic!("poison context lock");
+        });
     }
 }
 
-fn recover_transactions() -> Result<BTreeMap<String, TransactionHandle>, String> {
+fn recover_transactions() -> StateResult<BTreeMap<String, TransactionHandle>> {
     let mut recovered = BTreeMap::new();
     let sessions = strict_session_list()?;
     for meta in sessions {
         if meta.status == SessionStatus::Running
             && meta.creator_runtime.as_deref() == Some("clawd-transaction-pending")
         {
-            let lease = session::try_acquire(&meta.id).map_err(|error| {
-                format!(
-                    "clawd transaction recovery: acquire incomplete session {}: {error}",
-                    meta.id
+            let lease = session::try_acquire(&meta.id).map_err(|source| {
+                StateError::acquire(
+                    "transaction.recover",
+                    format!(
+                        "clawd transaction recovery: acquire incomplete session {}",
+                        meta.id
+                    ),
+                    source,
                 )
             })?;
             drop(lease);
-            session::end(&meta.id, SessionStatus::Failed).map_err(|error| {
-                format!(
-                    "clawd transaction recovery: fail incomplete session {}: {error}",
-                    meta.id
+            session::end(&meta.id, SessionStatus::Failed).map_err(|source| {
+                StateError::session(
+                    "transaction.recover",
+                    format!(
+                        "clawd transaction recovery: fail incomplete session {}",
+                        meta.id
+                    ),
+                    source,
                 )
             })?;
             continue;
@@ -201,20 +387,22 @@ fn recover_transactions() -> Result<BTreeMap<String, TransactionHandle>, String>
             continue;
         }
         let Some(owner_uid) = meta.owner_uid else {
-            return Err(format!(
-                "clawd transaction recovery: session {} has no owner uid",
-                meta.id
+            return Err(StateError::corrupt(
+                "transaction.recover",
+                format!(
+                    "clawd transaction recovery: session {} has no owner uid",
+                    meta.id
+                ),
             ));
         };
-        let lease = session::try_acquire(&meta.id).map_err(|error| {
-            format!(
-                "clawd transaction recovery: acquire session {}: {error}",
-                meta.id
+        let lease = session::try_acquire(&meta.id).map_err(|source| {
+            StateError::acquire(
+                "transaction.recover",
+                format!("clawd transaction recovery: acquire session {}", meta.id),
+                source,
             )
         })?;
-        let started_at = DateTime::parse_from_rfc3339(&meta.created_at)
-            .map(|value| value.with_timezone(&Utc))
-            .unwrap_or_else(|_| Utc::now());
+        let started_at = StateError::parsed_time(&meta.id, &meta.created_at)?;
         let id = meta.id.as_str().to_string();
         recovered.insert(
             id,
@@ -230,54 +418,66 @@ fn recover_transactions() -> Result<BTreeMap<String, TransactionHandle>, String>
     Ok(recovered)
 }
 
-fn strict_session_list() -> Result<Vec<session::SessionMeta>, String> {
+fn strict_session_list() -> StateResult<Vec<session::SessionMeta>> {
     let root = session::sessions_root();
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(format!(
-                "clawd transaction recovery: read {}: {error}",
-                root.display()
-            ));
+        Err(source) => {
+            return Err(StateError::io(
+                "transaction.recover",
+                format!("clawd transaction recovery: read {}", root.display()),
+                source,
+            ))
         }
     };
     let mut sessions = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|error| {
-            format!(
-                "clawd transaction recovery: enumerate {}: {error}",
-                root.display()
+        let entry = entry.map_err(|source| {
+            StateError::io(
+                "transaction.recover",
+                format!("clawd transaction recovery: enumerate {}", root.display()),
+                source,
             )
         })?;
         let name = entry.file_name().to_string_lossy().into_owned();
         let Ok(id) = SessionId::from_str(&name) else {
             continue;
         };
-        let file_type = entry.file_type().map_err(|error| {
-            format!(
-                "clawd transaction recovery: inspect {}: {error}",
-                entry.path().display()
+        let file_type = entry.file_type().map_err(|source| {
+            StateError::io(
+                "transaction.recover",
+                format!(
+                    "clawd transaction recovery: inspect {}",
+                    entry.path().display()
+                ),
+                source,
             )
         })?;
         if !file_type.is_dir() {
-            return Err(format!(
-                "clawd transaction recovery: canonical session path is not a directory: {}",
-                entry.path().display()
+            return Err(StateError::corrupt(
+                "transaction.recover",
+                format!(
+                    "clawd transaction recovery: canonical session path is not a directory: {}",
+                    entry.path().display()
+                ),
             ));
         }
-        sessions.push(session::get_meta(&id).map_err(|error| {
-            format!(
-                "clawd transaction recovery: read session {} metadata: {error}",
-                id
+        sessions.push(session::get_meta(&id).map_err(|source| {
+            StateError::session(
+                "transaction.recover",
+                format!("clawd transaction recovery: read session {id} metadata"),
+                source,
             )
         })?);
     }
     Ok(sessions)
 }
 
-impl Default for DaemonState {
-    fn default() -> Self {
-        Self::new()
-    }
+#[cfg(test)]
+mod tests {
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/test/unit/clawd/state.rs"
+    ));
 }

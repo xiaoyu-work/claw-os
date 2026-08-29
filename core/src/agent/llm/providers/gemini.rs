@@ -95,42 +95,79 @@ impl std::fmt::Debug for GeminiConfig {
 }
 
 impl GeminiConfig {
-    pub fn try_from_agent_config(
-        model: &str,
-        agent: &AgentConfig,
-    ) -> Result<Self> {
+    pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
         crate::agent::llm::registry::gemini_config(model, agent, &ProcessCredentialSource)
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        Self::try_from_agent_config(model, agent).unwrap_or_else(|error| {
+            tracing::error!(error = %error, "legacy Gemini configuration failed");
+            Self::unconfigured(model, agent)
+        })
+    }
+
+    fn unconfigured(model: &str, agent: &AgentConfig) -> Self {
+        Self {
+            base_url: agent
+                .base_url
+                .clone()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| default_base_url().to_string())
+                .trim_end_matches('/')
+                .to_string(),
+            api_key: None,
+            model: model.to_string(),
+            extra_headers: agent.extra_headers.clone(),
+            request_timeout: Duration::from_secs(agent.request_timeout),
+            pool: None,
+        }
     }
 }
 
 pub struct GeminiProvider {
     cfg: GeminiConfig,
-    transport: HttpTransport,
+    transport: Option<HttpTransport>,
+    initialization_error: Option<Arc<crate::agent::llm::ProviderInitializationError>>,
 }
 
 impl GeminiProvider {
     pub fn new(cfg: GeminiConfig) -> Self {
-        Self::new_with_transport(cfg, HttpTransport::legacy_default())
+        let (transport, initialization_error) =
+            crate::agent::llm::legacy_provider_transport(PROVIDER_NAME);
+        Self {
+            cfg,
+            transport,
+            initialization_error,
+        }
     }
 
     pub fn new_with_transport(cfg: GeminiConfig, transport: HttpTransport) -> Self {
-        Self { cfg, transport }
+        Self {
+            cfg,
+            transport: Some(transport),
+            initialization_error: None,
+        }
     }
 
     pub fn try_from_agent_config(model: &str, agent: &AgentConfig) -> Result<Self> {
-        Ok(Self::new(GeminiConfig::try_from_agent_config(
-            model, agent,
-        )?))
+        let config = GeminiConfig::try_from_agent_config(model, agent)?;
+        Ok(Self::new_with_transport(config, HttpTransport::new()?))
     }
 
     pub fn from_agent_config(model: &str, agent: &AgentConfig) -> Self {
-        Self::try_from_agent_config(model, agent)
-            .expect("test credential configuration should resolve")
+        match Self::try_from_agent_config(model, agent) {
+            Ok(provider) => provider,
+            Err(error) => {
+                tracing::error!(error = %error, "legacy Gemini provider initialization failed");
+                Self {
+                    cfg: GeminiConfig::unconfigured(model, agent),
+                    transport: None,
+                    initialization_error: Some(Arc::new(
+                        crate::agent::llm::ProviderInitializationError::new(PROVIDER_NAME, error),
+                    )),
+                }
+            }
+        }
     }
 
     fn endpoint(&self) -> String {
@@ -138,6 +175,18 @@ impl GeminiProvider {
             "{}/{}/models/{}:generateContent",
             self.cfg.base_url, API_VERSION, self.cfg.model
         )
+    }
+
+    fn transport(&self) -> Result<&HttpTransport> {
+        match &self.initialization_error {
+            Some(error) => Err(crate::agent::llm::deferred_initialization_error(error)),
+            None => self.transport.as_ref().ok_or_else(|| {
+                crate::agent::llm::ProviderInfrastructureError::StatePoisoned {
+                    component: "gemini.transport",
+                }
+                .into()
+            }),
+        }
     }
 }
 
@@ -162,17 +211,18 @@ impl Provider for GeminiProvider {
     }
 
     fn is_configured(&self) -> bool {
-        self.cfg.api_key.is_some() || self.cfg.pool.as_ref().is_some_and(|p| !p.is_empty())
+        self.initialization_error.is_none()
+            && self.transport.is_some()
+            && (self.cfg.api_key.is_some()
+                || self.cfg.pool.as_ref().is_some_and(|pool| !pool.is_empty()))
     }
 
     async fn chat(&self, request: ChatRequest) -> Result<ChatResponse> {
+        let transport = self.transport()?;
         let body = wire::build_request_body(&request, false);
 
         let lease = if let Some(pool) = &self.cfg.pool {
-            match pool.acquire() {
-                Ok(l) => Some(l),
-                Err(e) => return Err(LlmError::NotConfigured(format!("pool: {e}"))),
-            }
+            Some(pool.acquire()?)
         } else {
             None
         };
@@ -181,8 +231,7 @@ impl Provider for GeminiProvider {
             None => self.cfg.api_key.as_deref(),
         };
 
-        let mut http = self
-            .transport
+        let mut http = transport
             .post(self.endpoint(), self.cfg.request_timeout)
             .header("Content-Type", "application/json")
             .json(&body);
@@ -201,10 +250,10 @@ impl Provider for GeminiProvider {
             Ok(r) => r,
             Err(e) => {
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::error_classifier::classify_network_error(),
-                    );
+                    )?;
                 }
                 return Err(LlmError::Transport(e));
             }
@@ -232,7 +281,7 @@ impl Provider for GeminiProvider {
                         }
                         _ => crate::agent::llm::error_classifier::classify_network_error(),
                     };
-                    pool.report_failure(l, cls);
+                    pool.try_report_failure(l, cls)?;
                 }
                 return Err(e);
             }
@@ -243,7 +292,7 @@ impl Provider for GeminiProvider {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
                 let body_str = std::str::from_utf8(&bytes).unwrap_or("");
                 let cls = crate::agent::llm::error_classifier::classify(status.as_u16(), body_str);
-                pool.report_failure(l, cls);
+                pool.try_report_failure(l, cls)?;
             }
             return Err(err);
         }
@@ -257,21 +306,19 @@ impl Provider for GeminiProvider {
                 // and surface as UpstreamMalformed so callers can
                 // distinguish from caller-side bugs.
                 if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                    pool.report_failure(
+                    pool.try_report_failure(
                         l,
                         crate::agent::llm::credential_pool::FailureClass::Transient,
-                    );
+                    )?;
                 }
-                return Err(LlmError::UpstreamMalformed(format!(
-                    "gemini response: {e}"
-                )));
+                return Err(LlmError::UpstreamMalformed(format!("gemini response: {e}")));
             }
         };
 
         let result = wire::response_to_chat(parsed, &self.cfg.model);
         if result.is_ok() {
             if let (Some(pool), Some(l)) = (&self.cfg.pool, &lease) {
-                pool.report_success(l);
+                pool.try_report_success(l)?;
             }
         }
         result
@@ -281,6 +328,7 @@ impl Provider for GeminiProvider {
         &self,
         request: ChatRequest,
     ) -> Result<BoxStream<'static, Result<StreamEvent>>> {
+        let _ = self.transport()?;
         // HIGH-4: real SSE delta streaming requires speaking
         // Gemini's `:streamGenerateContent?alt=sse` endpoint, which
         // differs enough from generateContent that wiring it is a

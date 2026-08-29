@@ -695,6 +695,10 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
   tools, reasoning state, usage, and errors.
 - Credential values never enter config files, logs, model prompts, or error
   messages.
+- Recoverable credential, provider-infrastructure, daemon-state, and command
+  failures retain typed operation/source context until the CLI or broker wire
+  boundary. The broker maps state corruption to the stable `unavailable` code;
+  compatibility string APIs render only after typed ownership has ended.
 - Broker protocol refusals carry only `&'static str` text and a stable class;
   refused frames and their ancillary data are never recorded, in any form.
 - Desktop broker consumers use the unprivileged `crates/clawd-client` library

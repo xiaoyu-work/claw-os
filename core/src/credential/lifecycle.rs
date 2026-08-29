@@ -3,30 +3,42 @@ use super::*;
 pub(super) fn load_credential(
     store: &FileCredentialStore,
     id: &CredentialId,
-) -> Result<LoadedCredential, String> {
+) -> CredentialResult<LoadedCredential> {
     if !store.contains(id)? {
-        return Err(format!("credential not found: {}", id.name()));
+        return Err(CredentialError::not_found(
+            "credential.load",
+            format!("credential not found: {}", id.name()),
+        ));
     }
-    let credential = store
-        .read_record(id)?
-        .ok_or_else(|| format!("credential not found: {}", id.name()))?;
+    let credential = store.read_record(id)?.ok_or_else(|| {
+        CredentialError::not_found(
+            "credential.load",
+            format!("credential not found: {}", id.name()),
+        )
+    })?;
     let current_tier = effective_session_tier();
     require_credential_access(&credential, id.namespace(), id.name(), current_tier)?;
 
     if is_expired(&credential.expires_at) {
         let Some(refresh_cmd) = credential.refresh_cmd.as_ref() else {
-            return Err(serde_json::to_string(&json!({
-                "error": format!("credential '{}' has expired", id.name()),
-                "expired": true,
-                "expires_at": credential.expires_at,
-            }))
-            .unwrap_or_else(|_| format!("credential '{}' has expired", id.name())));
+            return Err(CredentialError::external(
+                "credential.load",
+                serde_json::to_string(&json!({
+                    "error": format!("credential '{}' has expired", id.name()),
+                    "expired": true,
+                    "expires_at": credential.expires_at,
+                }))
+                .unwrap_or_else(|_| format!("credential '{}' has expired", id.name())),
+            ));
         };
 
         return store.with_refresh(id, || {
-            let fresh = store
-                .read_record(id)?
-                .ok_or_else(|| format!("credential '{}' disappeared during refresh", id.name()))?;
+            let fresh = store.read_record(id)?.ok_or_else(|| {
+                CredentialError::not_found(
+                    "credential.refresh",
+                    format!("credential '{}' disappeared during refresh", id.name()),
+                )
+            })?;
             require_credential_access(&fresh, id.namespace(), id.name(), current_tier)?;
             if !is_expired(&fresh.expires_at) {
                 return loaded(id, &fresh, Some(false));
@@ -44,35 +56,45 @@ pub(super) fn load_credential(
                         });
                     if direct_admin {
                         direct_oauth_refresh(store, provider, id.namespace()).map_err(|error| {
-                            format!(
-                                "credential '{}' expired and auto-refresh failed: {error}",
-                                id.name()
+                            CredentialError::external(
+                                "credential.refresh",
+                                format!(
+                                    "credential '{}' expired and auto-refresh failed: {error}",
+                                    id.name()
+                                ),
                             )
                         })?;
                     } else if crate::proc::current_session_id().is_some() {
                         request_brokered_oauth_refresh(id.name(), id.namespace()).map_err(
                             |error| {
-                                format!(
+                                CredentialError::external(
+                                    "credential.refresh",
+                                    format!(
                                     "credential '{}' expired and broker refresh failed: {error}",
                                     id.name()
+                                    ),
                                 )
                             },
                         )?;
                     } else {
                         direct_oauth_refresh(store, provider, id.namespace()).map_err(|error| {
-                            format!(
-                                "credential '{}' expired and auto-refresh failed: {error}",
-                                id.name()
+                            CredentialError::external(
+                                "credential.refresh",
+                                format!(
+                                    "credential '{}' expired and auto-refresh failed: {error}",
+                                    id.name()
+                                ),
                             )
                         })?;
                     }
                     None
                 }
                 None => Some(execute_refresh(&refresh_cmd).map_err(|error| {
-                    format!(
-                        "credential '{}' expired and auto-refresh failed: {error}",
+                    let message = format!(
+                        "credential '{}' expired and auto-refresh failed",
                         id.name()
-                    )
+                    );
+                    error.context("credential.refresh", message)
                 })?),
             };
 
@@ -87,9 +109,12 @@ pub(super) fn load_credential(
             }
 
             let new_value = command_output.ok_or_else(|| {
-                format!(
-                    "credential '{}' OAuth broker completed without updating the access token",
-                    id.name()
+                CredentialError::external(
+                    "credential.refresh",
+                    format!(
+                        "credential '{}' OAuth broker completed without updating the access token",
+                        id.name()
+                    ),
                 )
             })?;
             let ttl = compute_original_ttl(&fresh);
@@ -111,9 +136,9 @@ pub(super) fn load_credential(
                 expires_at,
                 refresh_cmd: fresh.refresh_cmd.clone(),
             };
-            store
-                .write_record(&updated)
-                .map_err(|error| format!("failed to write refreshed credential: {error}"))?;
+            store.write_record(&updated).map_err(|error| {
+                error.context("credential.refresh", "failed to write refreshed credential")
+            })?;
             loaded(id, &updated, Some(true)).map(|mut result| {
                 result.value = new_value.trim().to_string();
                 result
@@ -128,9 +153,15 @@ fn loaded(
     id: &CredentialId,
     credential: &StoredCredential,
     refreshed: Option<bool>,
-) -> Result<LoadedCredential, String> {
-    let value = String::from_utf8(decrypt_value(credential)?)
-        .map_err(|error| format!("credential is not valid UTF-8: {error}"))?;
+) -> CredentialResult<LoadedCredential> {
+    let value = String::from_utf8(decrypt_value(credential)?).map_err(|source| {
+        CredentialError::with_source(
+            CredentialErrorKind::Corrupt,
+            "credential.load",
+            "credential is not valid UTF-8",
+            source,
+        )
+    })?;
     Ok(LoadedCredential {
         name: id.name().to_string(),
         namespace: credential.namespace.clone(),
@@ -152,7 +183,7 @@ pub(super) fn load_bundle(
         let id = match CredentialId::parse(&manifest.namespace, name) {
             Ok(id) => id,
             Err(error) => {
-                errors.insert(name.clone(), error);
+                errors.insert(name.clone(), error.to_string());
                 continue;
             }
         };
@@ -189,13 +220,20 @@ pub(super) fn load_bundle(
             continue;
         }
         match decrypt_value(&credential).and_then(|bytes| {
-            String::from_utf8(bytes).map_err(|error| format!("not valid UTF-8: {error}"))
+            String::from_utf8(bytes).map_err(|source| {
+                CredentialError::with_source(
+                    CredentialErrorKind::Corrupt,
+                    "credential.load_bundle",
+                    "credential is not valid UTF-8",
+                    source,
+                )
+            })
         }) {
             Ok(value) => {
                 credentials.insert(name.clone(), value);
             }
             Err(error) => {
-                errors.insert(name.clone(), error);
+                errors.insert(name.clone(), error.to_string());
             }
         }
     }
@@ -210,16 +248,19 @@ pub(super) fn load_bundle(
 // ===========================================================================
 
 /// Execute a refresh command and capture its stdout as the new value.
-pub(super) fn execute_refresh(cmd: &str) -> Result<String, String> {
+pub(super) fn execute_refresh(cmd: &str) -> CredentialResult<String> {
     use std::process::{Command, Stdio};
 
     // OS safety: only allow cos commands as refresh commands.
     // This prevents arbitrary code execution from credential files.
     let trimmed = cmd.trim();
     if !trimmed.starts_with("cos ") && !trimmed.starts_with("cos\t") && trimmed != "cos" {
-        return Err(format!(
-            "refresh_cmd must be a cos command (starts with 'cos '). got: {}",
-            &trimmed[..trimmed.len().min(50)]
+        return Err(CredentialError::invalid(
+            "credential.refresh",
+            format!(
+                "refresh_cmd must be a cos command (starts with 'cos '). got: {}",
+                &trimmed[..trimmed.len().min(50)]
+            ),
         ));
     }
 
@@ -231,21 +272,40 @@ pub(super) fn execute_refresh(cmd: &str) -> Result<String, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
-        .map_err(|e| format!("failed to execute refresh command: {e}"))?;
+        .map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::External,
+                "credential.refresh",
+                "failed to execute refresh command",
+                source,
+            )
+        })?;
 
     if output.status.success() {
-        let value = String::from_utf8(output.stdout)
-            .map_err(|e| format!("refresh output not valid UTF-8: {e}"))?;
+        let value = String::from_utf8(output.stdout).map_err(|source| {
+            CredentialError::with_source(
+                CredentialErrorKind::Corrupt,
+                "credential.refresh",
+                "refresh output not valid UTF-8",
+                source,
+            )
+        })?;
         if value.trim().is_empty() {
-            return Err("refresh command produced empty output".into());
+            return Err(CredentialError::external(
+                "credential.refresh",
+                "refresh command produced empty output",
+            ));
         }
         Ok(value)
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(format!(
-            "refresh command failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            stderr.trim()
+        Err(CredentialError::external(
+            "credential.refresh",
+            format!(
+                "refresh command failed (exit {}): {}",
+                output.status.code().unwrap_or(-1),
+                stderr.trim()
+            ),
         ))
     }
 }

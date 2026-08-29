@@ -190,6 +190,28 @@ call. Root has a larger — but still finite — allowance, because `clawd`'s ow
 rollback and approval clients run as root and must not be starved by a user
 flooding the socket.
 
+## Error Boundaries
+
+- `state::StateError` owns transaction recovery, in-memory context/transaction
+  locks, ownership conflicts, and corrupted daemon state. Poisoned locks are
+  unavailable state and are never recovered with `PoisonError::into_inner`.
+  Session decode/corruption and invalid persisted timestamps remain `Corrupt`;
+  missing sessions, held leases, and I/O/lock failures retain their distinct
+  not-found, conflict, and unavailable categories with original sources.
+- `server::DaemonError` owns socket setup, daemon initialization, and state
+  recovery. Socket parent creation, stale removal, credential passing, bind,
+  chmod, and accept preserve their `io::Error` sources and operation names.
+  The binary reports runtime/server initialization failures instead of
+  panicking.
+- Context and transaction handlers preserve `StateError` until the route
+  boundary. `protocol::BrokerError` translates it once: corruption and
+  unavailable state use #39's stable `unavailable` wire code; authorization and
+  ordinary execution retain their existing codes and messages.
+- Leaf device handlers still return `String` behind `routes.rs`; the registry
+  converts those once to `BrokerError`. Their remaining `unwrap`/`expect` calls
+  consume option fields immediately after the same handler's action validator
+  accepted the required combination. They are local decoder invariants, not
+  I/O, initialization, or shared-state failure handling.
 
 ## Dependencies
 

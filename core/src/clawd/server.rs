@@ -28,7 +28,7 @@
 //! how many bytes had been read. Nothing the caller sent — not the
 //! frame, not the ancillary data, not a `serde` message — is recorded.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -56,13 +56,63 @@ pub struct ServerOptions {
     pub socket_mode: u32,
 }
 
-pub async fn run(options: ServerOptions) -> Result<(), String> {
+#[derive(Debug, thiserror::Error)]
+pub enum DaemonError {
+    #[error(transparent)]
+    State(#[from] super::state::StateError),
+
+    #[error("{operation} {}: {source}", path.display())]
+    Socket {
+        operation: &'static str,
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("another clawd instance is already listening on {}", path.display())]
+    AlreadyRunning { path: PathBuf },
+
+    #[error("{message}")]
+    Startup {
+        operation: &'static str,
+        message: String,
+        #[source]
+        source: Option<Box<dyn std::error::Error + Send + Sync>>,
+    },
+}
+
+impl DaemonError {
+    pub fn operation(&self) -> &'static str {
+        match self {
+            Self::State(error) => error.operation(),
+            Self::Socket { operation, .. } | Self::Startup { operation, .. } => operation,
+            Self::AlreadyRunning { .. } => "socket.prepare",
+        }
+    }
+
+    fn startup_source<E>(operation: &'static str, message: impl Into<String>, source: E) -> Self
+    where
+        E: std::error::Error + Send + Sync + 'static,
+    {
+        Self::Startup {
+            operation,
+            message: message.into(),
+            source: Some(Box::new(source)),
+        }
+    }
+}
+
+pub async fn run(options: ServerOptions) -> Result<(), DaemonError> {
     prepare_socket(&options.socket_path).await?;
-    let listener = UnixListener::bind(&options.socket_path)
-        .map_err(|err| format!("failed to bind {}: {err}", options.socket_path.display()))?;
+    let listener =
+        UnixListener::bind(&options.socket_path).map_err(|source| DaemonError::Socket {
+            operation: "socket.bind",
+            path: options.socket_path.clone(),
+            source,
+        })?;
     // Before the first `accept`, so no connection is ever served
     // without the kernel stamping credentials onto its messages.
-    enable_credential_passing(&listener)?;
+    enable_credential_passing(&listener, &options.socket_path)?;
     set_socket_permissions(&options.socket_path, options.socket_mode)?;
     let state = DaemonState::try_new()?;
     let _event_center = event_center::start();
@@ -84,7 +134,13 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     // before the first request is served, so a mutation a crash left
     // open is marked orphaned rather than silently replayed.
     recover_journal();
-    context::refresh_builtin_sources(&state);
+    context::refresh_builtin_sources(&state).map_err(|error| {
+        DaemonError::startup_source(
+            "context.initialize",
+            format!("failed to initialize daemon context: {error}"),
+            error,
+        )
+    })?;
     spawn_authority_sweep();
     let agentd_shutdown = Arc::new(AtomicBool::new(false));
     // Agent work runs in unprivileged `claw-agentd` processes. The
@@ -98,10 +154,15 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     let admission = Admission::new(Limits::default());
     let serve = async move {
         loop {
-            let (stream, _addr) = listener
-                .accept()
-                .await
-                .map_err(|err| format!("failed to accept clawd client: {err}"))?;
+            let (stream, _addr) =
+                listener
+                    .accept()
+                    .await
+                    .map_err(|source| DaemonError::Socket {
+                        operation: "socket.accept",
+                        path: options.socket_path.clone(),
+                        source,
+                    })?;
             let bucket = accounting_bucket(&stream);
             let Some(permit) = admission.accept_connection(bucket) else {
                 tracing::warn!(
@@ -118,7 +179,7 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
             });
         }
         #[allow(unreachable_code)]
-        Ok::<(), String>(())
+        Ok::<(), DaemonError>(())
     };
     serve.await
 }
@@ -645,51 +706,76 @@ async fn write_response(
     }
 }
 
-async fn prepare_socket(socket_path: &PathBuf) -> Result<(), String> {
+async fn prepare_socket(socket_path: &Path) -> Result<(), DaemonError> {
     if let Some(parent) = socket_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|err| format!("failed to create {}: {err}", parent.display()))?;
+            .map_err(|source| DaemonError::Socket {
+                operation: "socket.create_parent",
+                path: parent.to_path_buf(),
+                source,
+            })?;
     }
 
     match UnixStream::connect(socket_path).await {
-        Ok(_) => Err(format!(
-            "another clawd instance is already listening on {}",
-            socket_path.display()
-        )),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(_) => tokio::fs::remove_file(socket_path).await.map_err(|err| {
-            format!(
-                "failed to remove stale clawd socket {}: {err}",
-                socket_path.display()
-            )
+        Ok(_) => Err(DaemonError::AlreadyRunning {
+            path: socket_path.to_path_buf(),
         }),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(_) => tokio::fs::remove_file(socket_path)
+            .await
+            .map_err(|source| DaemonError::Socket {
+                operation: "socket.remove_stale",
+                path: socket_path.to_path_buf(),
+                source,
+            }),
     }
 }
 
 #[cfg(unix)]
-fn enable_credential_passing(listener: &UnixListener) -> Result<(), String> {
+fn enable_credential_passing(
+    listener: &UnixListener,
+    socket_path: &Path,
+) -> Result<(), DaemonError> {
     use std::os::unix::io::AsRawFd;
 
-    peer::enable_credential_passing(listener.as_raw_fd())
-        .map_err(|err| format!("failed to enable clawd peer credential passing: {err}"))
+    peer::enable_credential_passing(listener.as_raw_fd()).map_err(|source| DaemonError::Socket {
+        operation: "socket.enable_credentials",
+        path: socket_path.to_path_buf(),
+        source,
+    })
 }
 
 #[cfg(not(unix))]
-fn enable_credential_passing(_listener: &UnixListener) -> Result<(), String> {
-    Err("clawd requires Unix domain sockets".to_string())
+fn enable_credential_passing(
+    _listener: &UnixListener,
+    socket_path: &Path,
+) -> Result<(), DaemonError> {
+    Err(DaemonError::Socket {
+        operation: "socket.enable_credentials",
+        path: socket_path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "clawd requires Unix domain sockets",
+        ),
+    })
 }
 
 #[cfg(unix)]
-fn set_socket_permissions(socket_path: &PathBuf, mode: u32) -> Result<(), String> {
+fn set_socket_permissions(socket_path: &Path, mode: u32) -> Result<(), DaemonError> {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))
-        .map_err(|err| format!("failed to chmod {}: {err}", socket_path.display()))
+    std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode)).map_err(|source| {
+        DaemonError::Socket {
+            operation: "socket.set_permissions",
+            path: socket_path.to_path_buf(),
+            source,
+        }
+    })
 }
 
 #[cfg(not(unix))]
-fn set_socket_permissions(_socket_path: &PathBuf, _mode: u32) -> Result<(), String> {
+fn set_socket_permissions(_socket_path: &Path, _mode: u32) -> Result<(), DaemonError> {
     Ok(())
 }
 

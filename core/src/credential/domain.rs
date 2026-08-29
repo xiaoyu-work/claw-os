@@ -6,7 +6,7 @@ use super::*;
 pub(super) struct NamespaceId(String);
 
 impl NamespaceId {
-    pub(super) fn parse(value: &str) -> Result<Self, String> {
+    pub(super) fn parse(value: &str) -> CredentialResult<Self> {
         validate_component("namespace", value)?;
         Ok(Self(value.to_string()))
     }
@@ -24,7 +24,7 @@ pub(super) struct CredentialId {
 }
 
 impl CredentialId {
-    pub(super) fn parse(namespace: &str, name: &str) -> Result<Self, String> {
+    pub(super) fn parse(namespace: &str, name: &str) -> CredentialResult<Self> {
         let namespace = NamespaceId::parse(namespace)?;
         validate_component("credential name", name)?;
         Ok(Self {
@@ -42,14 +42,15 @@ impl CredentialId {
     }
 }
 
-fn validate_component(kind: &str, value: &str) -> Result<(), String> {
+fn validate_component(kind: &str, value: &str) -> CredentialResult<()> {
     if value.is_empty()
         || !value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     {
-        return Err(format!(
-            "{kind} must be alphanumeric (hyphens/underscores allowed)"
+        return Err(CredentialError::invalid(
+            "credential.validate",
+            format!("{kind} must be alphanumeric (hyphens/underscores allowed)"),
         ));
     }
     Ok(())
@@ -100,15 +101,15 @@ pub(super) struct LoadedBundle {
 /// Secret-store boundary consumed by OAuth. Implementations own persistence,
 /// encryption, locking, and key material; OAuth sees only typed operations.
 pub(super) trait CredentialStore {
-    fn contains(&self, id: &CredentialId) -> Result<bool, String>;
+    fn contains(&self, id: &CredentialId) -> CredentialResult<bool>;
     /// Load a value after the caller has handled capability authorization.
     ///
     /// `enforce_tier` controls record-tier enforcement only; it is not a
     /// substitute for `secret.read`. Broker-only callers may disable the tier
     /// check only after their process boundary has authorized the operation.
-    fn load(&self, id: &CredentialId, enforce_tier: bool) -> Result<String, String>;
-    fn minimum_tier(&self, id: &CredentialId) -> Result<Option<u8>, String>;
-    fn store(&self, request: StoreRequest<'_>) -> Result<StoreResult, String>;
+    fn load(&self, id: &CredentialId, enforce_tier: bool) -> CredentialResult<String>;
+    fn minimum_tier(&self, id: &CredentialId) -> CredentialResult<Option<u8>>;
+    fn store(&self, request: StoreRequest<'_>) -> CredentialResult<StoreResult>;
 }
 
 // ===========================================================================

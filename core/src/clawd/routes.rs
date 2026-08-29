@@ -41,7 +41,7 @@ use super::{
     containers, context, context_events, crash, credentials, desktop, display, event_center,
     firewall, hardware, journal as journal_ops, location, memory, network, notifications, packages,
     permissions, power, printer, scheduler, security, snapshots, storage, system_journal, systemd,
-    tasks, transactions, usb_guard, usage, users,
+    tasks, transactions, usage, usb_guard, users,
 };
 
 /// Who may reach a route at all.
@@ -611,7 +611,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Context),
         body: body::NoBody,
-        run: |c| context::snapshot_for_client(c.state, c.client).map_err(BrokerError::from),
+        run: |c| context::snapshot_for_client(c.state, c.client),
     }
     ContextSources {
         name: "context.sources",
@@ -620,7 +620,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Context),
         body: body::NoBody,
-        run: |c| context::sources_for_client(c.state, c.client).map_err(BrokerError::from),
+        run: |c| context::sources_for_client(c.state, c.client),
     }
     ContextUpdate {
         name: "context.update",
@@ -630,7 +630,7 @@ routes! {
         authority: peer(Audience::Context),
         body: body::ContextUpdate,
         audit: &[("source", FieldRule::Token)],
-        run: |c| context::update(c.state, c.params).map_err(BrokerError::from),
+        run: |c| context::update(c.state, c.params),
     }
 
     // -----------------------------------------------------------------
@@ -922,7 +922,7 @@ routes! {
         budget: Budget::mutation(),
         authority: peer(Audience::Transaction),
         body: body::TransactionBegin,
-        run: |c| transactions::begin(c.state, c.params, c.client).map_err(BrokerError::from),
+        run: |c| transactions::begin(c.state, c.params, c.client),
     }
     TransactionList {
         name: "transaction.list",
@@ -931,7 +931,7 @@ routes! {
         budget: Budget::query(),
         authority: peer(Audience::Transaction),
         body: body::NoBody,
-        run: |c| transactions::list(c.state, c.client).map_err(BrokerError::from),
+        run: |c| transactions::list(c.state, c.client),
     }
     TransactionCommit {
         name: "transaction.commit",
@@ -941,7 +941,7 @@ routes! {
         authority: peer(Audience::Transaction),
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
-        run: |c| transactions::commit(c.state, c.params, c.client).map_err(BrokerError::from),
+        run: |c| transactions::commit(c.state, c.params, c.client),
     }
     TransactionRollback {
         name: "transaction.rollback",
@@ -952,9 +952,7 @@ routes! {
         body: body::TransactionId,
         audit: &[("id", FieldRule::Token)],
         run: |c| {
-            transactions::rollback(c.state, c.params, c.client)
-                .await
-                .map_err(BrokerError::from)
+            transactions::rollback(c.state, c.params, c.client).await
         },
     }
 

@@ -4,13 +4,34 @@ use std::collections::HashMap;
 
 #[derive(Default)]
 struct FakeCredentialSource {
-    stored: HashMap<String, std::result::Result<Option<String>, String>>,
+    stored: HashMap<String, crate::credential::CredentialResult<Option<String>>>,
     environment: HashMap<String, String>,
 }
 
 impl CredentialSource for FakeCredentialSource {
     fn load_stored(&self, name: &str) -> std::result::Result<Option<String>, String> {
-        self.stored.get(name).cloned().unwrap_or(Ok(None))
+        match self.stored.get(name) {
+            Some(Ok(value)) => Ok(value.clone()),
+            Some(Err(error)) => Err(error.to_string()),
+            None => Ok(None),
+        }
+    }
+
+    fn load_environment(&self, name: &str) -> Option<String> {
+        self.environment.get(name).cloned()
+    }
+}
+
+impl TypedCredentialSource for FakeCredentialSource {
+    fn load_stored_typed(&self, name: &str) -> crate::credential::CredentialResult<Option<String>> {
+        match self.stored.get(name) {
+            Some(Ok(value)) => Ok(value.clone()),
+            Some(Err(error)) => Err(crate::credential::CredentialError::external(
+                error.operation(),
+                error.to_string(),
+            )),
+            None => Ok(None),
+        }
     }
 
     fn load_environment(&self, name: &str) -> Option<String> {
@@ -45,7 +66,13 @@ fn blank_stored_credential_falls_through_to_environment() {
 #[test]
 fn stored_credential_failure_remains_typed() {
     let source = FakeCredentialSource {
-        stored: HashMap::from([("broken".into(), Err("corrupt record".into()))]),
+        stored: HashMap::from([(
+            "broken".into(),
+            Err(crate::credential::CredentialError::external(
+                "test.credential",
+                "corrupt record",
+            )),
+        )]),
         environment: HashMap::from([("API_KEY".into(), "must-not-rescue".into())]),
     };
 
@@ -129,6 +156,50 @@ fn aws_resolution_uses_stored_then_configured_then_default_environment() {
         resolve_aws_value(Some("missing"), None, "DEFAULT", &source).as_deref(),
         Some("default-value")
     );
+}
+
+#[test]
+fn aws_stored_credential_failure_is_not_rescued_by_environment() {
+    let source = FakeCredentialSource {
+        stored: HashMap::from([(
+            "broken".into(),
+            Err(crate::credential::CredentialError::external(
+                "test.credential",
+                "corrupt record",
+            )),
+        )]),
+        environment: HashMap::from([("DEFAULT".into(), "must-not-rescue".into())]),
+    };
+
+    let error = try_resolve_aws_value(Some("broken"), None, "DEFAULT", &source).unwrap_err();
+    assert!(matches!(
+        &error,
+        LlmError::CredentialStore { credential, .. } if credential == "broken"
+    ));
+    assert!(!error.to_string().contains("must-not-rescue"));
+}
+
+#[test]
+fn legacy_transport_stores_initialization_failure_without_panicking() {
+    let (transport, error) =
+        crate::agent::llm::failed_legacy_provider_transport_for_test("test-provider");
+    assert!(transport.is_none());
+    let error = error.expect("deferred initialization error");
+    assert!(matches!(
+        crate::agent::llm::deferred_initialization_error(&error),
+        LlmError::Infrastructure(ProviderInfrastructureError::Initialization { .. })
+    ));
+
+    let mut source: &(dyn std::error::Error + 'static) = error.as_ref();
+    let mut found_reqwest = false;
+    while let Some(next) = source.source() {
+        if next.downcast_ref::<reqwest::Error>().is_some() {
+            found_reqwest = true;
+            break;
+        }
+        source = next;
+    }
+    assert!(found_reqwest);
 }
 
 #[test]

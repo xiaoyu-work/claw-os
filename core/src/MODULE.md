@@ -33,6 +33,15 @@ library API exported by `core/src/lib.rs`.
 | `apps.rs`, `bridge.rs` | App discovery (provenance-gated) and subprocess bridge |
 | `service.rs`, `../test/unit/service.rs` | Managed service lifecycle and regressions |
 
+## Command Errors
+
+`router::dispatch_typed` and `dispatch_with_stdin_typed` are the command
+ownership boundaries. Credential commands retain `CredentialError` as their
+source and classify invalid input, authorization, unavailable state, and
+execution separately. The historical `dispatch` functions remain
+source-compatible wrappers and render the same CLI strings/JSON once at the
+outer boundary.
+
 ## Dependencies
 
 Read [`../MODULE.md`](../MODULE.md) for the core boundary and

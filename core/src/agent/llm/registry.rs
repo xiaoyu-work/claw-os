@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use super::construction::{
-    resolve_api_credentials, resolve_aws_value, ApiCredentialConfig, CredentialSource,
-    ProviderBuildContext, ResolvedApiCredentials,
+    try_resolve_api_credentials, try_resolve_aws_value, ApiCredentialConfig, ProviderBuildContext,
+    ResolvedApiCredentials, TypedCredentialSource,
 };
 use super::providers;
 use super::{LlmError, Provider, Result};
@@ -69,7 +69,7 @@ pub fn build_with_context(
         ));
     }
     if providers::openai_compat::is_alias(name) {
-        let config = openai_config(name, model, agent_cfg, context.credentials())?;
+        let config = openai_config(name, model, agent_cfg, context.typed_credentials())?;
         return Ok(Arc::new(
             providers::openai_compat::OpenAICompatProvider::new_with_transport(
                 config,
@@ -78,7 +78,7 @@ pub fn build_with_context(
         ));
     }
     if providers::anthropic::is_alias(name) {
-        let config = anthropic_config(model, agent_cfg, context.credentials())?;
+        let config = anthropic_config(model, agent_cfg, context.typed_credentials())?;
         return Ok(Arc::new(
             providers::anthropic::AnthropicProvider::new_with_transport(
                 config,
@@ -87,21 +87,15 @@ pub fn build_with_context(
         ));
     }
     if providers::bedrock::is_alias(name) {
-        let config = bedrock_config(model, agent_cfg, context.credentials());
+        let config = bedrock_config(model, agent_cfg, context.typed_credentials())?;
         return Ok(Arc::new(
-            providers::bedrock::BedrockProvider::new_with_transport(
-                config,
-                context.transport(),
-            ),
+            providers::bedrock::BedrockProvider::new_with_transport(config, context.transport()),
         ));
     }
     if providers::gemini::is_alias(name) {
-        let config = gemini_config(model, agent_cfg, context.credentials())?;
+        let config = gemini_config(model, agent_cfg, context.typed_credentials())?;
         return Ok(Arc::new(
-            providers::gemini::GeminiProvider::new_with_transport(
-                config,
-                context.transport(),
-            ),
+            providers::gemini::GeminiProvider::new_with_transport(config, context.transport()),
         ));
     }
     match name {
@@ -133,7 +127,7 @@ pub(crate) fn openai_config(
     alias: &str,
     model: &str,
     agent: &AgentConfig,
-    source: &dyn CredentialSource,
+    source: &dyn TypedCredentialSource,
 ) -> Result<providers::openai_compat::OpenAICompatConfig> {
     let base_url = agent
         .base_url
@@ -142,12 +136,11 @@ pub(crate) fn openai_config(
         .unwrap_or_else(|| providers::openai_compat::default_base_url_for(alias).to_string())
         .trim_end_matches('/')
         .to_string();
-    let ResolvedApiCredentials { api_key, pool } =
-        resolve_api_credentials(
-            format!("provider:{alias}"),
-            ApiCredentialConfig::from_agent_config(agent),
-            source,
-        )?;
+    let ResolvedApiCredentials { api_key, pool } = try_resolve_api_credentials(
+        format!("provider:{alias}"),
+        ApiCredentialConfig::from_agent_config(agent),
+        source,
+    )?;
     Ok(providers::openai_compat::OpenAICompatConfig {
         alias: alias.to_string(),
         base_url,
@@ -162,7 +155,7 @@ pub(crate) fn openai_config(
 pub(crate) fn anthropic_config(
     model: &str,
     agent: &AgentConfig,
-    source: &dyn CredentialSource,
+    source: &dyn TypedCredentialSource,
 ) -> Result<providers::anthropic::AnthropicConfig> {
     let base_url = agent
         .base_url
@@ -171,12 +164,11 @@ pub(crate) fn anthropic_config(
         .unwrap_or_else(|| providers::anthropic::default_base_url().to_string())
         .trim_end_matches('/')
         .to_string();
-    let ResolvedApiCredentials { api_key, pool } =
-        resolve_api_credentials(
-            "provider:anthropic",
-            ApiCredentialConfig::from_agent_config(agent),
-            source,
-        )?;
+    let ResolvedApiCredentials { api_key, pool } = try_resolve_api_credentials(
+        "provider:anthropic",
+        ApiCredentialConfig::from_agent_config(agent),
+        source,
+    )?;
     Ok(providers::anthropic::AnthropicConfig {
         base_url,
         api_key,
@@ -190,7 +182,7 @@ pub(crate) fn anthropic_config(
 pub(crate) fn gemini_config(
     model: &str,
     agent: &AgentConfig,
-    source: &dyn CredentialSource,
+    source: &dyn TypedCredentialSource,
 ) -> Result<providers::gemini::GeminiConfig> {
     let base_url = agent
         .base_url
@@ -199,12 +191,11 @@ pub(crate) fn gemini_config(
         .unwrap_or_else(|| providers::gemini::default_base_url().to_string())
         .trim_end_matches('/')
         .to_string();
-    let ResolvedApiCredentials { api_key, pool } =
-        resolve_api_credentials(
-            "provider:gemini",
-            ApiCredentialConfig::from_agent_config(agent),
-            source,
-        )?;
+    let ResolvedApiCredentials { api_key, pool } = try_resolve_api_credentials(
+        "provider:gemini",
+        ApiCredentialConfig::from_agent_config(agent),
+        source,
+    )?;
     Ok(providers::gemini::GeminiConfig {
         base_url,
         api_key,
@@ -218,38 +209,39 @@ pub(crate) fn gemini_config(
 pub(crate) fn bedrock_config(
     model: &str,
     agent: &AgentConfig,
-    source: &dyn CredentialSource,
-) -> providers::bedrock::BedrockConfig {
+    source: &dyn TypedCredentialSource,
+) -> Result<providers::bedrock::BedrockConfig> {
     use providers::bedrock::{
         DEFAULT_ACCESS_KEY_ENV, DEFAULT_REGION, DEFAULT_SECRET_KEY_ENV, DEFAULT_SESSION_TOKEN_ENV,
     };
 
-    let credentials = resolve_aws_value(
+    let access_key = try_resolve_aws_value(
         agent.aws_access_key_credential.as_deref(),
         agent.aws_access_key_env.as_deref(),
         DEFAULT_ACCESS_KEY_ENV,
         source,
-    )
-    .zip(resolve_aws_value(
+    )?;
+    let secret_key = try_resolve_aws_value(
         agent.aws_secret_key_credential.as_deref(),
         agent.aws_secret_key_env.as_deref(),
         DEFAULT_SECRET_KEY_ENV,
         source,
-    ))
-    .map(|(access_key, secret_key)| {
+    )?;
+    let session_token = try_resolve_aws_value(
+        agent.aws_session_token_credential.as_deref(),
+        agent.aws_session_token_env.as_deref(),
+        DEFAULT_SESSION_TOKEN_ENV,
+        source,
+    )?;
+    let credentials = access_key.zip(secret_key).map(|(access_key, secret_key)| {
         let credentials = crate::agent::llm::sigv4::AwsCredentials::new(access_key, secret_key);
-        match resolve_aws_value(
-            agent.aws_session_token_credential.as_deref(),
-            agent.aws_session_token_env.as_deref(),
-            DEFAULT_SESSION_TOKEN_ENV,
-            source,
-        ) {
+        match session_token {
             Some(token) => credentials.with_session_token(token),
             None => credentials,
         }
     });
 
-    providers::bedrock::BedrockConfig {
+    Ok(providers::bedrock::BedrockConfig {
         region: agent
             .aws_region
             .clone()
@@ -260,7 +252,7 @@ pub(crate) fn bedrock_config(
         credentials,
         extra_headers: agent.extra_headers.clone(),
         request_timeout: request_timeout(agent),
-    }
+    })
 }
 
 fn request_timeout(agent: &AgentConfig) -> Duration {

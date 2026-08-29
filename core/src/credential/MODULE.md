@@ -19,6 +19,7 @@ material internals.
 | `lifecycle.rs` | Refresh-command execution policy and TTL preservation |
 | `oauth.rs`, `oauth_login.rs` | Google and Microsoft transports and token lifecycle through `CredentialStore`; request bodies stay on stdin and never enter process argv |
 | `cli.rs` | Stable command/flag parsing and JSON or fd presentation; it coordinates typed operations and never receives encryption keys |
+| `error.rs` | `CredentialError` categories plus operation/source context and secret-safe formatting |
 
 ## Persistent Compatibility
 
@@ -28,12 +29,34 @@ material internals.
   obtains a unique 12-byte nonce from the OS CSPRNG.
 - The master-key source order is Linux session keyring, SHA-256 of
   `/etc/machine-id`, then the 32-byte persistent random root key.
-- Root keys and credential temporary files are created as `0600`; writes use
-  write-lock, exclusive temporary creation, fsync, rename, and parent fsync.
+- Root keys and credential temporary files are created as `0600`. A root key
+  is fully written and fsynced on a unique same-directory inode, then
+  atomically published without replacement by hard link; race losers can only
+  read the complete winner. Both the publisher and a race loser fsync the
+  parent directory before returning a key, so observing the final link is also
+  a durability barrier. Temporary files are cleaned on every return path.
 - Refresh locks are distinct from write locks. Revoke takes them in
   refresh-then-write order.
 - Scheduled reads reject symlinks, non-regular files, wrong ownership, home
   escapes, and records larger than 1 MiB.
+- Randomness, keyring syscalls, root-key persistence, credential atomic writes,
+  lock acquisition, rename, file fsync, and parent-directory fsync return
+  `CredentialError` with an operation and source. The optional Linux keyring is
+  an explicit cache: a typed cache failure is logged before durable key sources
+  are tried.
+
+## Error Boundaries
+
+- `CredentialStore`, command handlers, `run_typed`, and `try_load_typed` are
+  typed ownership boundaries. Reads, parsing, crypto, randomness, persistence,
+  and locking remain `CredentialResult` end-to-end; provider composition
+  consumes `try_load_typed`.
+- `run` and `try_load` retain their historical `Result<_, String>` signatures
+  for Rust/CLI compatibility and stringify exactly once.
+- OAuth transport remains an explicit external adapter and maps its
+  network/protocol strings to `CredentialErrorKind::External` at command
+  dispatch. It does not own randomness, key material, files, locks, or keyring
+  state.
 
 ## Change Together
 

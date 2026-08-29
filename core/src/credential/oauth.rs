@@ -18,7 +18,7 @@ pub(super) fn cmd_oauth_refresh(
 ) -> Result<Value, String> {
     let (ns_opt, rest) = parse_namespace_flag(args);
     let namespace = ns_opt.unwrap_or_else(|| "default".into());
-    validate_credential_component("namespace", &namespace)?;
+    validate_credential_component("namespace", &namespace).map_err(|error| error.to_string())?;
 
     let provider = rest
         .first()
@@ -41,8 +41,9 @@ fn oauth_refresh_google(store: &dyn CredentialStore, namespace: &str) -> Result<
         optional_minimum_tier(store, "GOOGLE_ACCESS_TOKEN", namespace)?.unwrap_or(refresh_tier);
     require_secret(
         Verb::SECRET_WRITE,
-        credential_scope(namespace, "GOOGLE_ACCESS_TOKEN")?,
-    )?;
+        credential_scope(namespace, "GOOGLE_ACCESS_TOKEN").map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     refresh_google_tokens(
         store,
         namespace,
@@ -111,12 +112,15 @@ fn oauth_refresh_microsoft(store: &dyn CredentialStore, namespace: &str) -> Resu
         optional_minimum_tier(store, "MICROSOFT_ACCESS_TOKEN", namespace)?.unwrap_or(refresh_tier);
     require_secret(
         Verb::SECRET_WRITE,
-        credential_scope(namespace, "MICROSOFT_ACCESS_TOKEN")?,
-    )?;
+        credential_scope(namespace, "MICROSOFT_ACCESS_TOKEN").map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     require_secret(
         Verb::SECRET_WRITE,
-        credential_scope(namespace, "MICROSOFT_REFRESH_TOKEN")?,
-    )?;
+        credential_scope(namespace, "MICROSOFT_REFRESH_TOKEN")
+            .map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
     refresh_microsoft_tokens(
         store,
         namespace,
@@ -274,9 +278,13 @@ fn load_authorized_oauth_credential(
     name: &str,
     namespace: &str,
 ) -> Result<String, String> {
-    let id = CredentialId::parse(namespace, name)?;
-    require_secret(Verb::SECRET_READ, credential_scope(namespace, name)?)?;
-    store.load(&id, true)
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    require_secret(
+        Verb::SECRET_READ,
+        credential_scope(namespace, name).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    store.load(&id, true).map_err(|error| error.to_string())
 }
 
 /// Load refresh material inside clawd after the credential OAuth route has
@@ -286,8 +294,8 @@ fn load_broker_oauth_credential(
     name: &str,
     namespace: &str,
 ) -> Result<String, String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.load(&id, false)
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store.load(&id, false).map_err(|error| error.to_string())
 }
 
 fn minimum_tier(store: &dyn CredentialStore, name: &str, namespace: &str) -> Result<u8, String> {
@@ -300,8 +308,8 @@ fn optional_minimum_tier(
     name: &str,
     namespace: &str,
 ) -> Result<Option<u8>, String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.minimum_tier(&id)
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store.minimum_tier(&id).map_err(|error| error.to_string())
 }
 
 fn store_token(
@@ -313,14 +321,16 @@ fn store_token(
     ttl: Option<u64>,
     refresh_cmd: Option<String>,
 ) -> Result<(), String> {
-    let id = CredentialId::parse(namespace, name)?;
-    store.store(StoreRequest {
-        id: &id,
-        value,
-        min_tier,
-        ttl,
-        refresh_cmd,
-    })?;
+    let id = CredentialId::parse(namespace, name).map_err(|error| error.to_string())?;
+    store
+        .store(StoreRequest {
+            id: &id,
+            value,
+            min_tier,
+            ttl,
+            refresh_cmd,
+        })
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
