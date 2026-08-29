@@ -25,7 +25,8 @@ fn builds_configured_model_response() {
 async fn bounded_reader_never_allocates_past_limit() {
     let (mut writer, reader) = tokio::io::duplex(64);
     let write = tokio::spawn(async move {
-        writer.write_all(&[b'x'; 128]).await.unwrap();
+        let payload: &[u8] = &[b'x'; 128];
+        writer.write_all(payload).await.unwrap();
     });
     let captured = read_bounded(reader, 32).await.unwrap();
     write.await.unwrap();
