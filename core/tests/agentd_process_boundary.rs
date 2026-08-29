@@ -16,14 +16,16 @@
 #![cfg(all(unix, target_os = "linux"))]
 
 use std::io::Write;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
+use std::process::Stdio;
 use std::time::Duration;
 
 use cos::agentd::grant::{GrantClaims, GrantSigner, SignedGrant, GRANT_AUDIENCE, GRANT_VERSION};
 use cos::agentd::protocol::{
     self, Assignment, BrokerFrame, FrameReader, JobSpec, WorkerFrame, WorkerOutcome,
 };
-use cos::agentd::spawn::{self, SpawnedWorker, WorkerIdentity};
+use cos::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
 use tokio::io::{AsyncWriteExt, BufReader};
 
 const WORKER_BIN: &str = env!("CARGO_BIN_EXE_claw-agentd");
@@ -36,9 +38,13 @@ const LEAK_MARKER: &str = "COS_AGENTD_TEST_BROKER_SECRET";
 struct Harness {
     _home: tempfile::TempDir,
     _data: tempfile::TempDir,
+    runtime_dir: PathBuf,
+    primary_path: PathBuf,
+    _primary_listener: std::os::unix::net::UnixListener,
     leaked_path: PathBuf,
     leaked_fd: i32,
     identity: WorkerIdentity,
+    isolation: ExecutionIsolation,
 }
 
 impl Drop for Harness {
@@ -49,25 +55,132 @@ impl Drop for Harness {
         std::env::remove_var(LEAK_MARKER);
         std::env::remove_var("COS_EXTENSION_HOST_BIN");
         std::env::remove_var("COS_RUNTIME_DIR");
+        std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
+        let _ = std::fs::remove_dir_all(&self.runtime_dir);
     }
 }
 
 fn harness() -> Option<Harness> {
-    let uid = unsafe { libc::getuid() } as u32;
-    if uid == 0 {
-        // Running as root would exercise the privileged drop, but the
-        // harness cannot then supply a second account to drop *to*.
+    if unsafe { libc::geteuid() } != 0 {
+        eprintln!("skipping: secure worker spawn integration requires root");
         return None;
     }
-    let identity = spawn::resolve_identity(uid).ok()?;
+    let uid = std::env::var("SUDO_UID").ok()?.parse::<u32>().ok()?;
+    if uid == 0 {
+        return None;
+    }
+    let identity = match spawn::resolve_identity(uid) {
+        Ok(identity) => identity,
+        Err(error) => {
+            eprintln!("skipping: resolve task identity: {error}");
+            return None;
+        }
+    };
 
-    let home = tempfile::tempdir().ok()?;
-    let data = tempfile::tempdir().ok()?;
-    std::env::set_var("COS_AGENTD_BIN", WORKER_BIN);
-    std::env::set_var("COS_EXTENSION_HOST_BIN", EXTENSION_HOST_BIN);
+    let home = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("skipping: create home tempdir: {error}");
+            return None;
+        }
+    };
+    let data = match tempfile::tempdir() {
+        Ok(dir) => dir,
+        Err(error) => {
+            eprintln!("skipping: create data tempdir: {error}");
+            return None;
+        }
+    };
+    let runtime_dir = PathBuf::from(format!(
+        "/run/cat-{}",
+        uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(8)
+            .collect::<String>()
+    ));
+    if let Err(error) = std::fs::create_dir(&runtime_dir) {
+        eprintln!("skipping: create runtime dir: {error}");
+        return None;
+    }
+    if let Err(error) =
+        std::fs::set_permissions(&runtime_dir, std::fs::Permissions::from_mode(0o751))
+    {
+        eprintln!("skipping: chmod runtime dir: {error}");
+        return None;
+    }
+    let worker_bin = runtime_dir.join("claw-agentd");
+    let extension_bin = runtime_dir.join("claw-extension-host");
+    if let Err(error) = std::fs::copy(WORKER_BIN, &worker_bin) {
+        eprintln!("skipping: copy worker binary: {error}");
+        return None;
+    }
+    if let Err(error) = std::fs::copy(EXTENSION_HOST_BIN, &extension_bin) {
+        eprintln!("skipping: copy extension binary: {error}");
+        return None;
+    }
+    if let Err(error) =
+        std::fs::set_permissions(&worker_bin, std::fs::Permissions::from_mode(0o755))
+    {
+        eprintln!("skipping: chmod worker binary: {error}");
+        return None;
+    }
+    if let Err(error) =
+        std::fs::set_permissions(&extension_bin, std::fs::Permissions::from_mode(0o755))
+    {
+        eprintln!("skipping: chmod extension binary: {error}");
+        return None;
+    }
+
+    let primary_path = runtime_dir.join("clawd.sock");
+    let primary_listener = match std::os::unix::net::UnixListener::bind(&primary_path) {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("skipping: bind primary socket: {error}");
+            return None;
+        }
+    };
+    if let Err(error) =
+        std::fs::set_permissions(&primary_path, std::fs::Permissions::from_mode(0o660))
+    {
+        eprintln!("skipping: chmod primary socket: {error}");
+        return None;
+    }
+    let raw = match std::ffi::CString::new(primary_path.as_os_str().as_encoded_bytes()) {
+        Ok(raw) => raw,
+        Err(error) => {
+            eprintln!("skipping: encode primary socket path: {error}");
+            return None;
+        }
+    };
+    if unsafe { libc::chown(raw.as_ptr(), 0, identity.gid) } != 0 {
+        return None;
+    }
+
+    std::env::set_var("COS_AGENTD_BIN", &worker_bin);
+    std::env::set_var("COS_EXTENSION_HOST_BIN", &extension_bin);
     std::env::set_var("COS_DATA_DIR", data.path());
-    std::env::set_var("COS_RUNTIME_DIR", data.path().join("run"));
+    std::env::set_var("COS_RUNTIME_DIR", &runtime_dir);
+    std::env::set_var(spawn::ISOLATED_GROUP_ENV, "nogroup");
     std::env::set_var(LEAK_MARKER, "broker-only-value");
+    let execution_gid = match spawn::resolve_isolated_execution_gid() {
+        Ok(gid) => gid,
+        Err(error) => {
+            eprintln!("skipping: resolve isolated group: {error}");
+            return None;
+        }
+    };
+    if execution_gid == identity.gid {
+        return None;
+    }
+    let isolation = match ExecutionIsolation::capture(&primary_path, uid, execution_gid) {
+        Ok(isolation) => isolation,
+        Err(error) => {
+            eprintln!("skipping: capture broker socket boundary: {error}");
+            return None;
+        }
+    };
 
     // A descriptor the broker holds without `O_CLOEXEC`, standing in
     // for a queue lock or audit handle. The worker must not inherit it.
@@ -82,9 +195,13 @@ fn harness() -> Option<Harness> {
     Some(Harness {
         _home: home,
         _data: data,
+        runtime_dir,
+        primary_path,
+        _primary_listener: primary_listener,
         leaked_path,
         leaked_fd,
         identity,
+        isolation,
     })
 }
 
@@ -119,6 +236,7 @@ fn grant_for(
     signer: &GrantSigner,
     task_id: &str,
     owner: &WorkerIdentity,
+    execution_gid: u32,
     worker_pid: u32,
     start_time_ticks: Option<u64>,
 ) -> SignedGrant {
@@ -136,7 +254,7 @@ fn grant_for(
             &cos::caps::CapSet::new(),
         ),
         extension: None,
-        owner_gid: owner.gid,
+        owner_gid: execution_gid,
         worker_pid,
         worker_start_time_ticks: start_time_ticks,
         issued_at_ms,
@@ -185,6 +303,51 @@ fn descriptor_flags(pid: u32, fd: i32) -> Option<u32> {
     u32::from_str_radix(encoded, 8).ok()
 }
 
+fn status_ids(pid: u32, key: &str) -> Vec<u32> {
+    proc_field(pid, key)
+        .map(|line| {
+            line.split_whitespace()
+                .filter_map(|value| value.parse::<u32>().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn process_start(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(')')? + 1..]
+        .split_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
+    cos::proc::SessionInfo {
+        session_id: session_id.to_string(),
+        pid: std::process::id(),
+        command: vec!["acl-probe".to_string()],
+        started_at: chrono::Utc::now().to_rfc3339(),
+        stdout_path: String::new(),
+        stderr_path: String::new(),
+        group: Some("extension-host".to_string()),
+        parent: None,
+        workdir: None,
+        exit_code: None,
+        ended_at: None,
+        tier: None,
+        scope: None,
+        priority: None,
+        caps: Some(cos::caps::CapSet::new()),
+        transient_caps: None,
+        role: None,
+        app_id: None,
+        pending_bind: false,
+        start_time_ticks: process_start(std::process::id()),
+        client: cos::session::SessionClient::default(),
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     let Some(harness) = harness() else {
@@ -192,11 +355,13 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         return;
     };
     let signer = GrantSigner::generate().expect("signer");
-    let mut worker = spawn::spawn_worker(&harness.identity, "task-boundary").expect("spawn");
+    let mut worker =
+        spawn::spawn_worker(&harness.identity, &harness.isolation, "task-boundary").expect("spawn");
     let grant = grant_for(
         &signer,
         "task-boundary",
         &harness.identity,
+        harness.isolation.execution_gid(),
         worker.pid,
         worker.start_time_ticks,
     );
@@ -233,6 +398,17 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     assert_eq!(hello.pid, pid);
     assert_eq!(hello.uid, harness.identity.uid);
     assert_eq!(hello.euid, harness.identity.uid);
+    assert_eq!(hello.gid, harness.isolation.execution_gid());
+    assert_eq!(hello.egid, harness.isolation.execution_gid());
+    assert!(hello.supplementary_groups.is_empty());
+    let primary = std::fs::metadata(&harness.primary_path).expect("primary broker socket");
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(
+        primary.gid(),
+        harness.identity.gid,
+        "fixture must model an owner whose primary gid can reach clawd"
+    );
+    assert_ne!(hello.gid, primary.gid());
     assert_ne!(hello.uid, 0, "the agent runtime must never run as root");
     assert!(hello.no_new_privs, "the worker reported no NNP");
 
@@ -321,17 +497,187 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let paths = cos::extension_host::spawn::HostPaths::create(
+        &harness.identity,
+        harness.isolation.execution_gid(),
+    )
+    .expect("host paths");
+    let _private_listener = cos::extension_host::broker::bind_listener(
+        &paths.broker_socket,
+        harness.identity.uid,
+        harness.isolation.execution_gid(),
+    )
+    .expect("private broker listener");
+    let expires = cos::agentd::grant::now_ms() + 60_000;
+    let mut host = cos::extension_host::spawn::spawn_host(
+        &harness.identity,
+        &harness.isolation,
+        "gid-boundary",
+        None,
+        None,
+        std::process::id(),
+        {
+            let stat = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
+                .expect("test process stat");
+            stat[stat.rfind(')').unwrap() + 1..]
+                .split_whitespace()
+                .nth(19)
+                .and_then(|value| value.parse::<u64>().ok())
+        },
+        "0123456789abcdef0123456789abcdef",
+        expires,
+        paths,
+    )
+    .expect("spawn host");
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert!(host.child.try_wait().expect("host status").is_none());
+    assert_eq!(status_ids(host.pid, "Uid:"), vec![harness.identity.uid; 4]);
+    assert_eq!(
+        status_ids(host.pid, "Gid:"),
+        vec![harness.isolation.execution_gid(); 4]
+    );
+    assert!(
+        status_ids(host.pid, "Groups:").is_empty(),
+        "extension host retained supplementary groups"
+    );
+    let socket = std::fs::metadata(&harness.primary_path).expect("primary socket");
+    use std::os::unix::fs::MetadataExt;
+    assert_eq!(socket.gid(), harness.identity.gid);
+    assert_ne!(socket.gid(), harness.isolation.execution_gid());
+
+    unsafe {
+        cos::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
+    }
+    let _ = host.child.wait().await;
+    host.paths.cleanup();
+}
+
+#[test]
+fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    const PROBE_UID: u32 = 424_242;
+    let session_id = "acl-probe-session";
+    cos::proc::register_session_for_owner(acl_probe_session(session_id), PROBE_UID)
+        .expect("register routed ACL probe");
+    let registry = format!("/run/cos/caps/{PROBE_UID}/proc/registry.json");
+
+    for (uid, gid) in [
+        (PROBE_UID, harness.identity.gid),
+        (PROBE_UID, harness.isolation.execution_gid()),
+    ] {
+        let read = std::process::Command::new("setpriv")
+            .args([
+                format!("--reuid={uid}"),
+                format!("--regid={gid}"),
+                "--clear-groups".to_string(),
+                "cat".to_string(),
+                registry.clone(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run routed ACL reader");
+        assert!(
+            read.success(),
+            "uid {uid} gid {gid} could not read registry"
+        );
+
+        let write = std::process::Command::new("setpriv")
+            .args([
+                format!("--reuid={uid}"),
+                format!("--regid={gid}"),
+                "--clear-groups".to_string(),
+                "sh".to_string(),
+                "-c".to_string(),
+                format!("printf forbidden >> '{}'", registry),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run routed ACL writer");
+        assert!(
+            !write.success(),
+            "uid {uid} gid {gid} modified the routed registry"
+        );
+    }
+
+    for (uid, gid) in [
+        (harness.identity.uid, harness.isolation.execution_gid()),
+        (424_243, 424_243),
+    ] {
+        let denied = std::process::Command::new("setpriv")
+            .args([
+                format!("--reuid={uid}"),
+                format!("--regid={gid}"),
+                "--clear-groups".to_string(),
+                "cat".to_string(),
+                registry.clone(),
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("run unauthorized routed ACL reader");
+        assert!(
+            !denied.success(),
+            "unrelated uid {uid} gid {gid} read routed registry"
+        );
+    }
+    cos::proc::deregister_session_for_owner(session_id, PROBE_UID);
+    let _ = std::fs::remove_dir_all(format!("/run/cos/caps/{PROBE_UID}"));
+}
+
+#[test]
+fn broker_socket_replacement_after_capture_aborts_the_exec() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    std::fs::remove_file(&harness.primary_path).expect("unlink pinned socket path");
+    let _replacement =
+        std::os::unix::net::UnixListener::bind(&harness.primary_path).expect("replacement socket");
+    std::fs::set_permissions(
+        &harness.primary_path,
+        std::fs::Permissions::from_mode(0o660),
+    )
+    .expect("replacement mode");
+    let raw = std::ffi::CString::new(harness.primary_path.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe { libc::chown(raw.as_ptr(), 0, harness.identity.gid) },
+        0
+    );
+
+    let error = spawn::spawn_worker(&harness.identity, &harness.isolation, "socket-swapped")
+        .expect_err("socket replacement must abort before exec");
+    assert!(
+        error.contains("Stale file handle")
+            || error.contains("Operation not permitted")
+            || error.contains("os error 116"),
+        "{error}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_cancelled_task_is_reported_as_cancelled_by_the_worker() {
     let Some(harness) = harness() else {
         eprintln!("skipping: no usable unprivileged account for the worker harness");
         return;
     };
     let signer = GrantSigner::generate().expect("signer");
-    let mut worker = spawn::spawn_worker(&harness.identity, "task-cancel").expect("spawn");
+    let mut worker =
+        spawn::spawn_worker(&harness.identity, &harness.isolation, "task-cancel").expect("spawn");
     let grant = grant_for(
         &signer,
         "task-cancel",
         &harness.identity,
+        harness.isolation.execution_gid(),
         worker.pid,
         worker.start_time_ticks,
     );
@@ -402,6 +748,19 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
     };
     let queue = tempfile::tempdir().expect("tempdir");
     let owner_home = tempfile::tempdir().expect("tempdir");
+    let raw_home =
+        std::ffi::CString::new(owner_home.path().as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe {
+            libc::chown(
+                raw_home.as_ptr(),
+                harness.identity.uid,
+                harness.identity.gid,
+            )
+        },
+        0,
+        "chown owner home"
+    );
     let store = Store::with_root(queue.path().to_path_buf()).expect("store");
     let job = store
         .submit(
@@ -560,7 +919,8 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         return;
     };
     let signer = GrantSigner::generate().expect("signer");
-    let mut worker = spawn::spawn_worker(&harness.identity, "task-noapproval").expect("spawn");
+    let mut worker = spawn::spawn_worker(&harness.identity, &harness.isolation, "task-noapproval")
+        .expect("spawn");
     // Every route except permission mediation. Without it the worker
     // could run but would be unable to reach consent for any denied
     // capability, so it must refuse rather than start half-blind.
@@ -582,7 +942,7 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
             &cos::caps::CapSet::new(),
         ),
         extension: None,
-        owner_gid: harness.identity.gid,
+        owner_gid: harness.isolation.execution_gid(),
         worker_pid: worker.pid,
         worker_start_time_ticks: worker.start_time_ticks,
         issued_at_ms,
@@ -642,12 +1002,14 @@ async fn a_worker_refuses_a_grant_minted_for_another_process() {
         return;
     };
     let signer = GrantSigner::generate().expect("signer");
-    let mut worker = spawn::spawn_worker(&harness.identity, "task-stolen").expect("spawn");
+    let mut worker =
+        spawn::spawn_worker(&harness.identity, &harness.isolation, "task-stolen").expect("spawn");
     // Bound to a different pid: the worker must not run the job.
     let grant = grant_for(
         &signer,
         "task-stolen",
         &harness.identity,
+        harness.isolation.execution_gid(),
         worker.pid.wrapping_add(1),
         worker.start_time_ticks,
     );
@@ -680,11 +1042,13 @@ async fn a_protocol_version_mismatch_fails_closed() {
         return;
     };
     let signer = GrantSigner::generate().expect("signer");
-    let mut worker = spawn::spawn_worker(&harness.identity, "task-mixed").expect("spawn");
+    let mut worker =
+        spawn::spawn_worker(&harness.identity, &harness.isolation, "task-mixed").expect("spawn");
     let grant = grant_for(
         &signer,
         "task-mixed",
         &harness.identity,
+        harness.isolation.execution_gid(),
         worker.pid,
         worker.start_time_ticks,
     );

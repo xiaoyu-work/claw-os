@@ -89,13 +89,12 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     // fatal path: a worker exiting — normally or not — must never take
     // the broker down, and supervision stopping still leaves every
     // non-agent primitive served.
-    let _agentd = crate::agentd::supervisor::spawn_supervisor(
-        agentd_shutdown,
-        crate::agentd::supervisor::BrokerContext {
-            state: state.clone(),
-            admission: admission.clone(),
-        },
-    );
+    let broker_context = crate::agentd::supervisor::BrokerContext::new(
+        state.clone(),
+        admission.clone(),
+        options.socket_path.clone(),
+    )?;
+    let _agentd = crate::agentd::supervisor::spawn_supervisor(agentd_shutdown, broker_context);
     spawn_heartbeat();
     let serve = async move {
         loop {

@@ -29,7 +29,7 @@ release schedules:
 
 | Package | Contents |
 | --- | --- |
-| `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
+| `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, `claw-extension-host`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
 | `claw-os-base` | Claw OS recovery, managed agent home, and distribution boot/service policy |
 | `claw-os-desktop` | Desktop shell, graphical Agent UI, and graphical applications, when installed |
 
@@ -44,7 +44,10 @@ the running daemon is restarted automatically. `claw-os-base` separately
 restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed.
 
-`clawd` and `claw-agentd` ship in the same package and are replaced together.
+`clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
+are replaced together. Package configuration creates the dedicated
+`cos-extension` system group before restarting `clawd`; existing user
+memberships are not changed.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:
@@ -72,7 +75,8 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 Confirm both binaries and the running daemon after an upgrade:
 
 ```bash
-dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd)$'
+dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd|claw-extension-host)$'
+getent group cos-extension
 sudo systemctl status clawd
 cos agent service list --status pending
 ```

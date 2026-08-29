@@ -5,7 +5,7 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
-use crate::agentd::spawn::WorkerIdentity;
+use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
 
 use super::protocol::{self, ExtensionBinding};
 
@@ -19,6 +19,7 @@ pub const LEASE_NONCE_ENV: &str = "COS_EXTENSION_LEASE_NONCE";
 pub const LEASE_EXPIRES_ENV: &str = "COS_EXTENSION_LEASE_EXPIRES_MS";
 pub const CONTROL_SOCKET_ENV: &str = "COS_EXTENSION_CONTROL_SOCKET";
 pub const ENFORCE_GROUPS_ENV: &str = "COS_EXTENSION_ENFORCE_GROUPS";
+pub const EXECUTION_GID_ENV: &str = "COS_EXTENSION_EXECUTION_GID";
 
 const HOST_PATH: &str = "/usr/local/bin/claw-extension-host";
 const SAFE_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
@@ -49,7 +50,7 @@ pub struct HostPaths {
 }
 
 impl HostPaths {
-    pub fn create(identity: &WorkerIdentity) -> Result<Self, String> {
+    pub fn create(identity: &WorkerIdentity, execution_gid: u32) -> Result<Self, String> {
         let base = crate::paths::runtime_dir().join("extension-hosts");
         let owner_root = base.join(identity.uid.to_string());
         let dir = owner_root.join(uuid::Uuid::new_v4().simple().to_string());
@@ -69,7 +70,7 @@ impl HostPaths {
             for path in [&owner_root, &dir] {
                 let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
                     .map_err(|_| "extension-host runtime path contains NUL".to_string())?;
-                if unsafe { libc::chown(path.as_ptr(), identity.uid, identity.gid) } != 0 {
+                if unsafe { libc::chown(path.as_ptr(), identity.uid, execution_gid) } != 0 {
                     return Err(format!(
                         "chown extension-host runtime directory: {}",
                         std::io::Error::last_os_error()
@@ -119,6 +120,7 @@ pub fn host_binary_path() -> PathBuf {
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_host(
     identity: &WorkerIdentity,
+    isolation: &ExecutionIsolation,
     task_id: &str,
     task_session_id: Option<&str>,
     host_session_id: Option<&str>,
@@ -178,6 +180,7 @@ pub fn spawn_host(
     command.env(LEASE_EXPIRES_ENV, expires_at_ms.to_string());
     command.env(CONTROL_SOCKET_ENV, &paths.control_socket);
     command.env(ENFORCE_GROUPS_ENV, if enforce_groups { "1" } else { "0" });
+    command.env(EXECUTION_GID_ENV, isolation.execution_gid().to_string());
     command.env(protocol::BROKER_SOCKET_ENV, &paths.broker_socket);
     if let Some(task_session_id) = task_session_id {
         command.env(TASK_SESSION_ENV, task_session_id);
@@ -194,7 +197,8 @@ pub fn spawn_host(
 
     let expected_parent = unsafe { libc::getpid() };
     let uid = identity.uid;
-    let gid = identity.gid;
+    let gid = isolation.execution_gid();
+    let child_isolation = isolation.clone();
     let try_namespaces = std::env::var("CLAWD_EXTENSION_HOST_NAMESPACES")
         .map(|value| !matches!(value.trim(), "0" | "off" | "false" | "no"))
         .unwrap_or(true);
@@ -210,6 +214,7 @@ pub fn spawn_host(
             }
             crate::agentd::spawn::drop_to_owner(uid, gid)?;
             crate::agentd::spawn::verify_dropped_identity(uid, gid, enforce_groups)?;
+            child_isolation.verify_after_drop(uid)?;
             apply_resource_limits()?;
             crate::agentd::spawn::harden_child(expected_parent)?;
             if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
@@ -233,7 +238,7 @@ pub fn spawn_host(
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
         owner_uid: identity.uid,
-        owner_gid: identity.gid,
+        owner_gid: gid,
         worker_pid,
         worker_start_time_ticks,
         host_pid: pid,

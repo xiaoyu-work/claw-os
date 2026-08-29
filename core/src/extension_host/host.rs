@@ -23,8 +23,8 @@ use super::protocol::{
     MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
 };
 use super::spawn::{
-    CONTROL_SOCKET_ENV, ENFORCE_GROUPS_ENV, LEASE_EXPIRES_ENV, LEASE_NONCE_ENV, TASK_ENV,
-    TASK_SESSION_ENV, WORKER_PID_ENV, WORKER_START_ENV,
+    CONTROL_SOCKET_ENV, ENFORCE_GROUPS_ENV, EXECUTION_GID_ENV, LEASE_EXPIRES_ENV, LEASE_NONCE_ENV,
+    TASK_ENV, TASK_SESSION_ENV, WORKER_PID_ENV, WORKER_START_ENV,
 };
 
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -99,9 +99,12 @@ fn run() -> Result<(), String> {
     if owner_uid == 0 {
         return Err("extension host must not run as root".to_string());
     }
-    let owner_gid = unsafe { libc::getegid() } as u32;
+    let owner_gid = required_env(EXECUTION_GID_ENV)?
+        .parse::<u32>()
+        .map_err(|error| format!("invalid extension execution gid: {error}"))?;
     require_hardened_identity(
         owner_uid,
+        owner_gid,
         std::env::var(ENFORCE_GROUPS_ENV).as_deref() == Ok("1"),
     )?;
     for key in [
@@ -113,6 +116,7 @@ fn run() -> Result<(), String> {
         LEASE_EXPIRES_ENV,
         CONTROL_SOCKET_ENV,
         ENFORCE_GROUPS_ENV,
+        EXECUTION_GID_ENV,
     ] {
         std::env::remove_var(key);
     }
@@ -549,9 +553,12 @@ fn required_path(key: &str) -> Result<PathBuf, String> {
     required_env(key).map(PathBuf::from)
 }
 
-fn require_hardened_identity(uid: u32, enforce_groups: bool) -> Result<(), String> {
+fn require_hardened_identity(uid: u32, gid: u32, enforce_groups: bool) -> Result<(), String> {
     if unsafe { libc::getuid() } as u32 != uid || unsafe { libc::geteuid() } as u32 != uid {
         return Err("extension host uid drop did not take effect".to_string());
+    }
+    if unsafe { libc::getgid() } as u32 != gid || unsafe { libc::getegid() } as u32 != gid {
+        return Err("extension host isolated gid drop did not take effect".to_string());
     }
     #[cfg(target_os = "linux")]
     {

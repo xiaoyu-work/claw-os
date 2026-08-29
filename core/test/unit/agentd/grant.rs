@@ -8,6 +8,7 @@ fn claims(worker_pid: u32) -> GrantClaims {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,
@@ -21,7 +22,6 @@ fn claims(worker_pid: u32) -> GrantClaims {
         }),
         capability_generation: "caps-a".to_string(),
         extension: None,
-        owner_gid: 1000,
         worker_pid,
         worker_start_time_ticks: Some(99),
         issued_at_ms: 1_000,
@@ -36,6 +36,7 @@ fn expectation(route: &str) -> GrantExpectation {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,
@@ -147,6 +148,13 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
         Err(GrantError::Owner { .. })
     ));
 
+    let mut other_gid = expectation("hello");
+    other_gid.owner_gid = 2000;
+    assert!(matches!(
+        signer.verify(&grant, &other_gid, 2_000),
+        Err(GrantError::OwnerGid { .. })
+    ));
+
     let mut other_source = expectation("hello");
     other_source.client.source = crate::session::SessionSource::ExternalMcp;
     assert_eq!(
@@ -231,18 +239,25 @@ fn a_worker_refuses_a_grant_minted_for_another_process() {
     let signer = GrantSigner::from_secret([7u8; 32]);
     let grant = signer.issue(claims(77));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1000, 78, Some(99)),
+        grant.validate_for_self(2_000, 1000, 1000, 78, Some(99)),
         Err(GrantError::WorkerPid { .. })
     ));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1001, 77, Some(99)),
+        grant.validate_for_self(2_000, 1001, 1000, 77, Some(99)),
         Err(GrantError::Owner { .. })
     ));
+    assert!(matches!(
+        grant.validate_for_self(2_000, 1000, 2000, 77, Some(99)),
+        Err(GrantError::OwnerGid { .. })
+    ));
     assert_eq!(
-        grant.validate_for_self(2_000, 1000, 77, Some(100)),
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(100)),
         Err(GrantError::WorkerIdentity)
     );
-    assert_eq!(grant.validate_for_self(2_000, 1000, 77, Some(99)), Ok(()));
+    assert_eq!(
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(99)),
+        Ok(())
+    );
 }
 
 #[test]
@@ -256,7 +271,7 @@ fn a_grant_for_a_different_audience_is_not_accepted_here() {
         Err(GrantError::Audience { .. })
     ));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1000, 77, Some(99)),
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(99)),
         Err(GrantError::Audience { .. })
     ));
 }

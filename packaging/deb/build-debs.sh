@@ -277,6 +277,9 @@ install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffi
 install -m 755 "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/postrm" "$AGENT_STAGE/DEBIAN/postrm"
+install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
+install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
+    "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
 
 COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }

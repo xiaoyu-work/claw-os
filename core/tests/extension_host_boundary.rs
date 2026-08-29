@@ -217,9 +217,27 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let identity = cos::agentd::spawn::resolve_identity(uid).expect("identity");
     let worker_pid = std::process::id();
     let worker_start = process_start(worker_pid);
-    let paths = spawn::HostPaths::create(&identity).expect("paths");
+    let execution_gid = match cos::agentd::spawn::resolve_isolated_execution_gid() {
+        Ok(gid) => gid,
+        Err(error) => {
+            eprintln!("skipping: isolated execution group unavailable: {error}");
+            return;
+        }
+    };
+    let paths = spawn::HostPaths::create(&identity, execution_gid).expect("paths");
     let listener =
-        broker::bind_listener(&paths.broker_socket, identity.uid, identity.gid).expect("listener");
+        broker::bind_listener(&paths.broker_socket, identity.uid, execution_gid).expect("listener");
+    let isolation = match cos::agentd::spawn::ExecutionIsolation::capture(
+        &paths.broker_socket,
+        identity.uid,
+        execution_gid,
+    ) {
+        Ok(isolation) => isolation,
+        Err(error) => {
+            eprintln!("skipping: root broker socket fixture unavailable: {error}");
+            return;
+        }
+    };
     let task_id = "extension-host-integration";
     let task_session = "task-session";
     let host_session = "extension-session";
@@ -227,6 +245,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let expires = cos::agentd::grant::now_ms() + 120_000;
     let mut host = spawn::spawn_host(
         &identity,
+        &isolation,
         task_id,
         Some(task_session),
         Some(host_session),

@@ -38,7 +38,9 @@ The worker starts as root only long enough to `exec`. In one `pre_exec`
 closure, in this order: `umask(0077)`; `dup2` the job channel to fd 3 and mark
 every other descriptor close-on-exec; `setgroups(0, NULL)` **before** the uid
 drop (this is what removes `sudo`); `setresgid` then `setresuid`; re-read all
-ids and the supplementary group list from the kernel and abort if any is wrong;
+ids and the empty supplementary group list from the kernel and abort if any is
+wrong; the uid is the task owner while the primary gid is the package-created
+`cos-extension` group;
 `PR_SET_PDEATHSIG` with a `getppid` re-check; `setsid`, so the runtime leads its
 own session and process group; `PR_SET_NO_NEW_PRIVS`. The environment is
 rebuilt from an allowlist and carries no credential value.
@@ -48,12 +50,15 @@ formats, logs or takes a lock: failures are reported as bare `errno` values via
 `Error::from_raw_os_error`, which is all `std` writes to its exec-status pipe
 anyway.
 
-`/run/cos/clawd.sock` is unchanged (`0660 root:sudo`). Because the worker's
-supplementary groups are cleared it cannot open that socket at all, so it has
-no broker route: no admin, App-session, scheduler or permission-decision
-surface is reachable. Its only authority is the grant, bound to owner uid,
-worker pid plus kernel start time, task and session id, a lease deadline and
-the routes in `protocol::WORKER_ROUTES`. The signing key never leaves the
+`/run/cos/clawd.sock` is unchanged (`0660 root:sudo`). Before each fork the
+broker pins that actual socket inode plus its canonical ancestors, rejects a
+task uid or isolated gid that can replace the path, and requires an actual
+post-drop connection attempt to fail before `exec`. The worker therefore has
+no broker route even when its passwd primary group is `sudo`: no admin,
+App-session, scheduler or permission-decision surface is reachable. Its only
+authority is the grant, bound to owner uid, isolated gid, worker pid plus
+kernel start time, task and session id, a lease deadline and the routes in
+`protocol::WORKER_ROUTES`. The signing key never leaves the
 broker process, so a grant cannot be minted, edited, replayed against another
 worker, or used past its lease. Executable path, TTY, `NoNewPrivs`, socket
 group and prompt text confer nothing.
@@ -200,6 +205,7 @@ keeps working.
 | --- | --- |
 | `CLAWD_AGENTD` | `off` disables agent supervision (default on) |
 | `COS_AGENTD_BIN` | Worker executable (default: beside `clawd`, else `/usr/local/bin/claw-agentd`) |
+| `COS_EXTENSION_EXEC_GROUP` | Dedicated primary group for worker/host/App/MCP execution (packaged default `cos-extension`) |
 | `COS_EXTENSION_HOST_BIN` | Extension host executable (default: beside `clawd`, else `/usr/local/bin/claw-extension-host`) |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | `off` disables best-effort IPC/UTS namespaces; all other host isolation remains |
 | `CLAWD_AGENTD_MAX_WORKERS` | Concurrent workers, 1–64 (default 4) |

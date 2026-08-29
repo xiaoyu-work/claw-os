@@ -8,6 +8,7 @@ fn new_lease() -> Lease {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        execution_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,

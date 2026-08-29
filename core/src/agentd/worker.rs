@@ -231,7 +231,7 @@ impl LocalIdentity {
     ///
     /// Whether supplementary groups had to be cleared is the *broker's*
     /// policy, checked against the handshake report.
-    fn require_expected_identity(&self, owner_uid: u32) -> Result<(), String> {
+    fn require_expected_identity(&self, owner_uid: u32, execution_gid: u32) -> Result<(), String> {
         if owner_uid == 0 {
             return Err(super::spawn::ROOT_OWNER_REFUSAL.to_string());
         }
@@ -241,6 +241,15 @@ impl LocalIdentity {
                  privilege drop failed",
                 self.uid, self.euid
             ));
+        }
+        if self.gid != execution_gid || self.egid != execution_gid {
+            return Err(format!(
+                "agent worker runs as gid {} / egid {} but the isolated execution gid is {execution_gid}; privilege drop failed",
+                self.gid, self.egid
+            ));
+        }
+        if !self.groups.is_empty() {
+            return Err("agent worker retained supplementary groups".to_string());
         }
         if self.uid == 0 || self.euid == 0 || self.gid == 0 || self.egid == 0 {
             return Err(
@@ -506,6 +515,7 @@ where
         .validate_for_self(
             super::grant::now_ms(),
             identity.uid,
+            identity.gid,
             identity.pid,
             identity.start_time_ticks,
         )
@@ -566,7 +576,8 @@ where
             assignment.job.owner_uid, identity.uid
         ));
     }
-    identity.require_expected_identity(assignment.job.owner_uid)?;
+    identity
+        .require_expected_identity(assignment.job.owner_uid, assignment.grant.claims.owner_gid)?;
     Ok(assignment)
 }
 

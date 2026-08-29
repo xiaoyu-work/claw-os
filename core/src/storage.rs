@@ -179,7 +179,6 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
                 format!("cannot prepare routed caps storage as uid {euid}"),
             ));
         }
-        let gid = primary_gid(uid)?;
         let runtime_root = Path::new("/run/cos");
         reject_symlink(runtime_root)?;
         fs::create_dir_all(runtime_root)?;
@@ -190,13 +189,15 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
         fs::set_permissions(caps_root, fs::Permissions::from_mode(0o711))?;
         reject_symlink(path)?;
         fs::create_dir_all(path)?;
-        chown(path, 0, gid)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o750))?;
+        chown(path, 0, 0)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        set_routed_acl(path, uid, true)?;
         let proc_dir = path.join("proc");
         reject_symlink(&proc_dir)?;
         fs::create_dir_all(&proc_dir)?;
-        chown(&proc_dir, 0, gid)?;
-        fs::set_permissions(&proc_dir, fs::Permissions::from_mode(0o750))?;
+        chown(&proc_dir, 0, 0)?;
+        fs::set_permissions(&proc_dir, fs::Permissions::from_mode(0o700))?;
+        set_routed_acl(&proc_dir, uid, true)?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -206,7 +207,7 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
     }
 }
 
-pub fn set_group_readable_file(path: &Path, uid: u32) -> io::Result<()> {
+pub fn set_routed_registry_file(path: &Path, uid: u32) -> io::Result<()> {
     #[cfg(unix)]
     {
         let euid = unsafe { libc::geteuid() as u32 };
@@ -216,9 +217,9 @@ pub fn set_group_readable_file(path: &Path, uid: u32) -> io::Result<()> {
                 format!("cannot secure routed caps registry as uid {euid}"),
             ));
         }
-        let gid = primary_gid(uid)?;
-        chown(path, 0, gid)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+        chown(path, 0, 0)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        set_routed_acl(path, uid, false)
     }
     #[cfg(not(unix))]
     {
@@ -279,15 +280,7 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
     if !path.is_absolute()
         || matches!(
             path.to_str(),
-            Some(
-                "/"
-                    | "/tmp"
-                    | "/var"
-                    | "/var/tmp"
-                    | "/var/lib"
-                    | "/var/log"
-                    | "/run"
-            )
+            Some("/" | "/tmp" | "/var" | "/var/tmp" | "/var/lib" | "/var/log" | "/run")
         )
     {
         return Err(io::Error::new(
@@ -295,9 +288,9 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
             format!("unsafe daemon storage root {}", path.display()),
         ));
     }
-    let mut existing = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "daemon root has no parent")
-    })?;
+    let mut existing = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "daemon root has no parent"))?;
     while !existing.exists() {
         existing = existing.parent().ok_or_else(|| {
             io::Error::new(
@@ -330,7 +323,10 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
             if metadata.uid() != unsafe { libc::geteuid() as u32 } {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("daemon storage root is not owned by clawd: {}", path.display()),
+                    format!(
+                        "daemon storage root is not owned by clawd: {}",
+                        path.display()
+                    ),
                 ));
             }
         }
@@ -350,28 +346,82 @@ fn reject_symlink(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
-fn primary_gid(uid: u32) -> io::Result<u32> {
-    const BUF_SIZE: usize = 16 * 1024;
-    let mut buffer = vec![0 as libc::c_char; BUF_SIZE];
-    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::passwd = std::ptr::null_mut();
-    let rc = unsafe {
-        libc::getpwuid_r(
-            uid as libc::uid_t,
-            &mut pwd,
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if rc != 0 || result.is_null() {
+#[cfg(target_os = "linux")]
+fn set_routed_acl(path: &Path, uid: u32, directory: bool) -> io::Result<()> {
+    const ACL_XATTR_VERSION: u32 = 0x0002;
+    const ACL_USER_OBJ: u16 = 0x01;
+    const ACL_USER: u16 = 0x02;
+    const ACL_GROUP_OBJ: u16 = 0x04;
+    const ACL_MASK: u16 = 0x10;
+    const ACL_OTHER: u16 = 0x20;
+    const ACL_UNDEFINED_ID: u32 = u32::MAX;
+
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != 0
+        || metadata.is_dir() != directory
+    {
         return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("passwd entry not found for uid {uid}"),
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "routed capability path has unsafe identity: {}",
+                path.display()
+            ),
         ));
     }
-    Ok(pwd.pw_gid as u32)
+
+    let read = 0o4u16;
+    let write = 0o2u16;
+    let execute = 0o1u16;
+    let owner_perm = if directory {
+        read | write | execute
+    } else {
+        read | write
+    };
+    let reader_perm = if directory { read | execute } else { read };
+    let entries = [
+        (ACL_USER_OBJ, owner_perm, ACL_UNDEFINED_ID),
+        (ACL_USER, reader_perm, uid),
+        (ACL_GROUP_OBJ, 0, ACL_UNDEFINED_ID),
+        (ACL_MASK, reader_perm, ACL_UNDEFINED_ID),
+        (ACL_OTHER, 0, ACL_UNDEFINED_ID),
+    ];
+    let mut value = Vec::with_capacity(4 + entries.len() * 8);
+    value.extend_from_slice(&ACL_XATTR_VERSION.to_le_bytes());
+    for (tag, perm, id) in entries {
+        value.extend_from_slice(&tag.to_le_bytes());
+        value.extend_from_slice(&perm.to_le_bytes());
+        value.extend_from_slice(&id.to_le_bytes());
+    }
+
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let name = b"system.posix_acl_access\0";
+    let rc = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            name.as_ptr().cast::<libc::c_char>(),
+            value.as_ptr().cast::<libc::c_void>(),
+            value.len(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn set_routed_acl(_path: &Path, _uid: u32, _directory: bool) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "routed capability ACLs require Linux",
+    ))
 }
 
 #[cfg(unix)]
@@ -380,13 +430,7 @@ fn chown(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
 
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
-    let rc = unsafe {
-        libc::chown(
-            path.as_ptr(),
-            uid as libc::uid_t,
-            gid as libc::gid_t,
-        )
-    };
+    let rc = unsafe { libc::chown(path.as_ptr(), uid as libc::uid_t, gid as libc::gid_t) };
     if rc == 0 {
         Ok(())
     } else {

@@ -21,7 +21,7 @@ use sha2::Sha256;
 
 /// Wire format version. Bumped whenever the claim set changes shape so
 /// a mixed old/new install fails closed instead of mis-parsing.
-pub const GRANT_VERSION: u32 = 4;
+pub const GRANT_VERSION: u32 = 5;
 
 /// Intended recipient of the grant. A token issued for the worker
 /// channel is meaningless anywhere else because every verifier requires
@@ -43,6 +43,7 @@ pub enum GrantError {
     CapabilityGeneration,
     Extension,
     Owner { expected: u32, actual: u32 },
+    OwnerGid { expected: u32, actual: u32 },
     WorkerPid { expected: u32, actual: u32 },
     WorkerIdentity,
     Expired { now_ms: u64, expires_at_ms: u64 },
@@ -84,6 +85,10 @@ impl std::fmt::Display for GrantError {
                 f,
                 "agentd grant is bound to owner uid {actual}, not {expected}"
             ),
+            GrantError::OwnerGid { expected, actual } => write!(
+                f,
+                "agentd grant is bound to isolated gid {actual}, not {expected}"
+            ),
             GrantError::WorkerPid { expected, actual } => write!(
                 f,
                 "agentd grant is bound to worker pid {actual}, not {expected}"
@@ -118,13 +123,13 @@ pub struct GrantClaims {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub owner_uid: u32,
+    pub owner_gid: u32,
     pub client: crate::session::SessionClient,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<crate::extension_host::protocol::ExtensionBinding>,
-    pub owner_gid: u32,
     pub worker_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worker_start_time_ticks: Option<u64>,
@@ -158,6 +163,7 @@ impl GrantClaims {
             None => push_u64(&mut buf, 0),
         }
         push_u64(&mut buf, self.owner_uid as u64);
+        push_u64(&mut buf, self.owner_gid as u64);
         push_bytes(&mut buf, self.client.source.as_str().as_bytes());
         push_u64(&mut buf, u64::from(self.client.attended));
         push_u64(&mut buf, u64::from(self.client.local));
@@ -197,7 +203,6 @@ impl GrantClaims {
             }
             None => push_u64(&mut buf, 0),
         }
-        push_u64(&mut buf, self.owner_gid as u64);
         push_u64(&mut buf, self.worker_pid as u64);
         match self.worker_start_time_ticks {
             Some(ticks) => {
@@ -248,6 +253,7 @@ pub struct GrantExpectation {
     pub task_id: String,
     pub session_id: Option<String>,
     pub owner_uid: u32,
+    pub owner_gid: u32,
     pub client: crate::session::SessionClient,
     pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
@@ -343,6 +349,12 @@ impl GrantSigner {
                 actual: grant.claims.owner_uid,
             });
         }
+        if grant.claims.owner_gid != expect.owner_gid {
+            return Err(GrantError::OwnerGid {
+                expected: expect.owner_gid,
+                actual: grant.claims.owner_gid,
+            });
+        }
         if grant.claims.client != expect.client {
             return Err(GrantError::Client);
         }
@@ -387,6 +399,7 @@ impl SignedGrant {
         &self,
         now_ms: u64,
         uid: u32,
+        gid: u32,
         pid: u32,
         start_time_ticks: Option<u64>,
     ) -> Result<(), GrantError> {
@@ -406,6 +419,12 @@ impl SignedGrant {
             return Err(GrantError::Owner {
                 expected: uid,
                 actual: self.claims.owner_uid,
+            });
+        }
+        if self.claims.owner_gid != gid {
+            return Err(GrantError::OwnerGid {
+                expected: gid,
+                actual: self.claims.owner_gid,
             });
         }
         if self.claims.worker_pid != pid {

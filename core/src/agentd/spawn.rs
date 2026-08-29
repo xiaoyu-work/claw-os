@@ -14,11 +14,15 @@
 //!    and every other supplementary group; without it a worker would
 //!    inherit the broker's group membership and could open
 //!    `/run/cos/clawd.sock`.
-//! 4. `setresgid` then `setresuid` to the owner's account, real,
-//!    effective and saved ids together, so nothing can be restored.
+//! 4. `setresgid` to the dedicated extension execution group, then
+//!    `setresuid` to the owner's account, real/effective/saved ids
+//!    together, so broker-socket group membership cannot survive and
+//!    nothing can be restored.
 //! 5. Re-read every id and the supplementary group list from the kernel
-//!    and abort the `exec` if any of it is wrong. `Command::uid` alone
-//!    proves nothing; this is the check that does.
+//!    and abort the `exec` if any of it is wrong. The pinned broker
+//!    socket and its ancestors are re-identified, and an actual
+//!    connection must fail with `EACCES`/`EPERM`. `Command::uid` alone
+//!    proves nothing; these are the checks that do.
 //! 6. `PR_SET_PDEATHSIG` plus a `getppid` re-check so a worker cannot
 //!    outlive the supervisor that leased it, then
 //!    `PR_SET_NO_NEW_PRIVS` so no setuid binary can raise privilege
@@ -29,7 +33,9 @@
 //! owner's own credential store as the owner.
 
 use std::ffi::CString;
-use std::os::unix::io::{AsRawFd, RawFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -55,6 +61,347 @@ const INHERITED_ENV_KEYS: &[&str] = &[
 ];
 
 const WORKER_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+pub const ISOLATED_GROUP_ENV: &str = "COS_EXTENSION_EXEC_GROUP";
+pub const DEFAULT_ISOLATED_GROUP: &str = "cos-extension";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+    uid: u32,
+    gid: u32,
+    mode: u32,
+}
+
+impl FileIdentity {
+    fn from_metadata(metadata: &std::fs::Metadata) -> Self {
+        Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+            uid: metadata.uid(),
+            gid: metadata.gid(),
+            mode: metadata.mode(),
+        }
+    }
+
+    fn from_stat(stat: &libc::stat) -> Self {
+        Self {
+            device: stat.st_dev,
+            inode: stat.st_ino,
+            uid: stat.st_uid,
+            gid: stat.st_gid,
+            mode: stat.st_mode,
+        }
+    }
+
+    fn writable_by(self, uid: u32, gid: u32) -> bool {
+        let bits = if self.uid == uid {
+            (self.mode >> 6) & 0o7
+        } else if self.gid == gid {
+            (self.mode >> 3) & 0o7
+        } else {
+            self.mode & 0o7
+        };
+        bits & 0o2 != 0
+    }
+}
+
+#[derive(Debug)]
+struct SealedPath {
+    path: CString,
+    identity: FileIdentity,
+}
+
+/// Snapshot of the actual primary broker socket immediately before a task is
+/// forked.
+///
+/// The socket inode is pinned with `O_PATH`, and every canonical ancestor is
+/// recorded. The post-drop child verifies all identities before and after an
+/// actual denied `connect(2)`. Since none of the ancestors may be owned or
+/// writable by the task uid/gid, an untrusted process cannot swap the path
+/// after that probe.
+#[derive(Debug)]
+struct BrokerSocketSeal {
+    pinned_socket: OwnedFd,
+    socket: SealedPath,
+    ancestors: Vec<SealedPath>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExecutionIsolation {
+    execution_gid: u32,
+    broker_socket: std::sync::Arc<BrokerSocketSeal>,
+}
+
+impl ExecutionIsolation {
+    pub fn capture(socket_path: &Path, owner_uid: u32, execution_gid: u32) -> Result<Self, String> {
+        if !broker_is_root() {
+            return Err(
+                "secure agent isolation requires a root broker to set the dedicated execution gid"
+                    .to_string(),
+            );
+        }
+        if owner_uid == 0 || execution_gid == 0 {
+            return Err("agent isolation requires non-root task and group identities".to_string());
+        }
+
+        let parent = socket_path
+            .parent()
+            .ok_or_else(|| "primary broker socket path has no parent".to_string())?;
+        let name = socket_path
+            .file_name()
+            .ok_or_else(|| "primary broker socket path has no file name".to_string())?;
+        let canonical_parent = std::fs::canonicalize(parent)
+            .map_err(|error| format!("canonicalize primary broker socket parent: {error}"))?;
+        let canonical_socket = canonical_parent.join(name);
+        let socket = sealed_path(&canonical_socket)?;
+        let socket_metadata = std::fs::symlink_metadata(&canonical_socket)
+            .map_err(|error| format!("inspect primary broker socket: {error}"))?;
+        if !socket_metadata.file_type().is_socket() {
+            return Err(format!(
+                "primary broker path is not a Unix socket: {}",
+                canonical_socket.display()
+            ));
+        }
+        if socket.identity.uid == owner_uid || socket.identity.writable_by(owner_uid, execution_gid)
+        {
+            return Err(format!(
+                "task uid {owner_uid} with isolated gid {execution_gid} can modify the primary broker socket"
+            ));
+        }
+        if socket.path.as_bytes().len()
+            >= unsafe { std::mem::zeroed::<libc::sockaddr_un>().sun_path.len() }
+        {
+            return Err("primary broker socket path is too long for AF_UNIX".to_string());
+        }
+
+        let raw = unsafe {
+            libc::open(
+                socket.path.as_ptr(),
+                libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if raw < 0 {
+            return Err(format!(
+                "pin primary broker socket: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        let pinned_socket = unsafe { OwnedFd::from_raw_fd(raw) };
+        let pinned = fstat_identity(pinned_socket.as_raw_fd())
+            .map_err(|error| format!("identify pinned primary broker socket: {error}"))?;
+        if pinned != socket.identity {
+            return Err("primary broker socket changed while it was being pinned".to_string());
+        }
+
+        let mut ancestors = Vec::new();
+        let mut current = Some(canonical_parent.as_path());
+        while let Some(path) = current {
+            let sealed = sealed_path(path)?;
+            let metadata = std::fs::symlink_metadata(path)
+                .map_err(|error| format!("inspect broker socket ancestor: {error}"))?;
+            if !metadata.is_dir() {
+                return Err(format!(
+                    "primary broker socket ancestor is not a directory: {}",
+                    path.display()
+                ));
+            }
+            if sealed.identity.uid == owner_uid
+                || sealed.identity.writable_by(owner_uid, execution_gid)
+            {
+                return Err(format!(
+                    "task uid {owner_uid} can replace the primary broker socket through {}",
+                    path.display()
+                ));
+            }
+            ancestors.push(sealed);
+            current = path.parent();
+        }
+
+        Ok(Self {
+            execution_gid,
+            broker_socket: std::sync::Arc::new(BrokerSocketSeal {
+                pinned_socket,
+                socket,
+                ancestors,
+            }),
+        })
+    }
+
+    pub fn execution_gid(&self) -> u32 {
+        self.execution_gid
+    }
+
+    pub(crate) fn verify_after_drop(&self, uid: u32) -> std::io::Result<()> {
+        self.broker_socket
+            .verify_after_drop(uid, self.execution_gid)
+    }
+}
+
+impl BrokerSocketSeal {
+    fn verify_after_drop(&self, uid: u32, gid: u32) -> std::io::Result<()> {
+        if self.socket.identity.uid == uid || self.socket.identity.writable_by(uid, gid) {
+            return Err(raw_error(libc::EPERM));
+        }
+        verify_path_identity(&self.socket)?;
+        for ancestor in &self.ancestors {
+            if ancestor.identity.uid == uid || ancestor.identity.writable_by(uid, gid) {
+                return Err(raw_error(libc::EPERM));
+            }
+            verify_path_identity(ancestor)?;
+            verify_not_writable(ancestor)?;
+        }
+        if fstat_identity(self.pinned_socket.as_raw_fd())? != self.socket.identity {
+            return Err(raw_error(libc::ESTALE));
+        }
+
+        let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM | libc::SOCK_CLOEXEC, 0) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        let bytes = self.socket.path.as_bytes_with_nul();
+        unsafe {
+            std::ptr::copy_nonoverlapping(
+                bytes.as_ptr().cast::<libc::c_char>(),
+                address.sun_path.as_mut_ptr(),
+                bytes.len(),
+            );
+        }
+        let connected = unsafe {
+            libc::connect(
+                fd,
+                std::ptr::addr_of!(address).cast::<libc::sockaddr>(),
+                std::mem::size_of::<libc::sockaddr_un>() as libc::socklen_t,
+            )
+        };
+        let connect_error = if connected == 0 {
+            None
+        } else {
+            Some(std::io::Error::last_os_error())
+        };
+        unsafe {
+            libc::close(fd);
+        }
+        match connect_error.and_then(|error| error.raw_os_error()) {
+            Some(libc::EACCES | libc::EPERM) => {}
+            _ => return Err(raw_error(libc::EPERM)),
+        }
+
+        verify_path_identity(&self.socket)?;
+        for ancestor in &self.ancestors {
+            verify_path_identity(ancestor)?;
+            verify_not_writable(ancestor)?;
+        }
+        if fstat_identity(self.pinned_socket.as_raw_fd())? != self.socket.identity {
+            return Err(raw_error(libc::ESTALE));
+        }
+        Ok(())
+    }
+}
+
+fn verify_not_writable(path: &SealedPath) -> std::io::Result<()> {
+    if unsafe { libc::access(path.path.as_ptr(), libc::W_OK) } == 0 {
+        return Err(raw_error(libc::EPERM));
+    }
+    match std::io::Error::last_os_error().raw_os_error() {
+        Some(libc::EACCES | libc::EPERM) => Ok(()),
+        _ => Err(raw_error(libc::EPERM)),
+    }
+}
+
+fn sealed_path(path: &Path) -> Result<SealedPath, String> {
+    let path_c = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| format!("path contains NUL: {}", path.display()))?;
+    let metadata = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Err(format!("path must not be a symlink: {}", path.display()));
+    }
+    Ok(SealedPath {
+        path: path_c,
+        identity: FileIdentity::from_metadata(&metadata),
+    })
+}
+
+fn fstat_identity(fd: RawFd) -> std::io::Result<FileIdentity> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, std::ptr::addr_of_mut!(stat)) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(FileIdentity::from_stat(&stat))
+}
+
+fn verify_path_identity(path: &SealedPath) -> std::io::Result<()> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::lstat(path.path.as_ptr(), std::ptr::addr_of_mut!(stat)) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if FileIdentity::from_stat(&stat) != path.identity {
+        return Err(raw_error(libc::ESTALE));
+    }
+    Ok(())
+}
+
+pub fn resolve_isolated_execution_gid() -> Result<u32, String> {
+    let name =
+        std::env::var(ISOLATED_GROUP_ENV).unwrap_or_else(|_| DEFAULT_ISOLATED_GROUP.to_string());
+    if name.is_empty()
+        || name.len() > 64
+        || !name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!("invalid isolated execution group name `{name}`"));
+    }
+    let gid = group_gid(&name)?.ok_or_else(|| {
+        format!(
+            "isolated execution group `{name}` does not exist; reinstall the claw-os-agent package"
+        )
+    })?;
+    if gid == 0 {
+        return Err(format!(
+            "isolated execution group `{name}` resolves to root gid 0"
+        ));
+    }
+    Ok(gid)
+}
+
+fn group_gid(name: &str) -> Result<Option<u32>, String> {
+    use std::ffi::CStr;
+
+    let name = CString::new(name).map_err(|_| "group name contains NUL".to_string())?;
+    const BUF_SIZE: usize = 16 * 1024;
+    let mut buffer = vec![0 as libc::c_char; BUF_SIZE];
+    let mut group: libc::group = unsafe { std::mem::zeroed() };
+    let mut result: *mut libc::group = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getgrnam_r(
+            name.as_ptr(),
+            &mut group,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "group lookup failed: {}",
+            std::io::Error::from_raw_os_error(rc)
+        ));
+    }
+    if result.is_null() {
+        return Ok(None);
+    }
+    if group.gr_name.is_null() {
+        return Err("group lookup returned no name".to_string());
+    }
+    let _ = unsafe { CStr::from_ptr(group.gr_name) }
+        .to_str()
+        .map_err(|_| "group name is not UTF-8".to_string())?;
+    Ok(Some(group.gr_gid))
+}
 
 #[derive(Debug)]
 pub struct SpawnedWorker {
@@ -133,7 +480,11 @@ pub fn broker_is_root() -> bool {
 /// Fork and exec the worker with the broker end of a private channel
 /// retained here. Returns before the assignment is written, so the
 /// caller can bind the grant to the pid the kernel actually allocated.
-pub fn spawn_worker(identity: &WorkerIdentity, _task_id: &str) -> Result<SpawnedWorker, String> {
+pub fn spawn_worker(
+    identity: &WorkerIdentity,
+    isolation: &ExecutionIsolation,
+    _task_id: &str,
+) -> Result<SpawnedWorker, String> {
     let binary = worker_binary_path();
     if !binary.exists() {
         return Err(format!(
@@ -173,8 +524,9 @@ pub fn spawn_worker(identity: &WorkerIdentity, _task_id: &str) -> Result<Spawned
     let channel_fd = worker_end.as_raw_fd();
     let expected_parent = unsafe { libc::getpid() };
     let uid = identity.uid;
-    let gid = identity.gid;
+    let gid = isolation.execution_gid();
     let enforce_groups = broker_is_root();
+    let isolation = isolation.clone();
     unsafe {
         command.pre_exec(move || {
             libc::umask(0o077);
@@ -182,6 +534,7 @@ pub fn spawn_worker(identity: &WorkerIdentity, _task_id: &str) -> Result<Spawned
             close_inherited_descriptors();
             drop_to_owner(uid, gid)?;
             verify_dropped_identity(uid, gid, enforce_groups)?;
+            isolation.verify_after_drop(uid)?;
             harden_child(expected_parent)?;
             Ok(())
         });
@@ -360,18 +713,18 @@ pub(crate) fn verify_dropped_identity(
     if rgid != gid || egid != gid || sgid != gid {
         return Err(raw_error(libc::EPERM));
     }
-    // A stack buffer keeps this allocation-free. Any supplementary
-    // group other than the primary gid means `setgroups` was defeated.
+    // A stack buffer keeps this allocation-free. Production clears the
+    // list completely before the uid drop; retaining even the primary
+    // gid as a supplementary group would make group-based socket access
+    // ambiguous and is refused.
     if enforce_groups {
         let mut groups = [0 as libc::gid_t; 64];
         let count = unsafe { libc::getgroups(groups.len() as libc::c_int, groups.as_mut_ptr()) };
         if count < 0 {
             return Err(std::io::Error::last_os_error());
         }
-        for entry in groups.iter().take(count as usize) {
-            if *entry != gid {
-                return Err(raw_error(libc::EPERM));
-            }
+        if count != 0 {
+            return Err(raw_error(libc::EPERM));
         }
     }
     Ok(())

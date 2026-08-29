@@ -15,6 +15,11 @@ enable_if_previously_enabled() {
 
 case "$1" in
     configure)
+        if command -v systemd-sysusers >/dev/null 2>&1; then
+            systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
+        elif ! getent group cos-extension >/dev/null 2>&1; then
+            groupadd --system cos-extension
+        fi
         install -d -m 0700 /var/lib/cos /var/log/cos
         rmdir /var/log/aos 2>/dev/null || true
 

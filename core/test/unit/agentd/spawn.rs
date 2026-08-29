@@ -98,3 +98,37 @@ fn the_worker_environment_is_an_allowlist_that_excludes_broker_state() {
     assert!(!INHERITED_ENV_KEYS.contains(&"HOME"));
     assert!(!INHERITED_ENV_KEYS.contains(&"PATH"));
 }
+
+#[test]
+fn socket_permission_projection_uses_the_exact_uid_and_primary_gid() {
+    let socket = FileIdentity {
+        device: 1,
+        inode: 2,
+        uid: 0,
+        gid: 27,
+        mode: libc::S_IFSOCK | 0o660,
+    };
+    assert!(socket.writable_by(1000, 27));
+    assert!(!socket.writable_by(1000, 65534));
+
+    let owner_socket = FileIdentity {
+        uid: 1000,
+        ..socket
+    };
+    assert!(owner_socket.writable_by(1000, 65534));
+
+    let world_socket = FileIdentity {
+        mode: libc::S_IFSOCK | 0o662,
+        ..socket
+    };
+    assert!(world_socket.writable_by(1000, 65534));
+}
+
+#[test]
+fn configured_isolation_group_must_exist_and_be_non_root() {
+    let _lock = crate::test_env::lock_env();
+    let _group =
+        crate::test_env::TestEnvVarGuard::set(ISOLATED_GROUP_ENV, "cos-group-that-must-not-exist");
+    let error = resolve_isolated_execution_gid().expect_err("missing group must fail closed");
+    assert!(error.contains("does not exist"), "{error}");
+}

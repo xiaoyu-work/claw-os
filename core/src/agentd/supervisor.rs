@@ -107,6 +107,23 @@ fn env_u64(key: &str) -> Option<u64> {
 pub struct BrokerContext {
     pub state: DaemonState,
     pub admission: Arc<Admission>,
+    pub primary_socket: std::path::PathBuf,
+    pub isolated_execution_gid: u32,
+}
+
+impl BrokerContext {
+    pub fn new(
+        state: DaemonState,
+        admission: Arc<Admission>,
+        primary_socket: std::path::PathBuf,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            state,
+            admission,
+            primary_socket,
+            isolated_execution_gid: spawn::resolve_isolated_execution_gid()?,
+        })
+    }
 }
 
 pub fn spawn_supervisor(
@@ -132,10 +149,11 @@ pub fn spawn_supervisor(
 }
 
 pub async fn run(config: SupervisorConfig, shutdown: Arc<AtomicBool>) -> Result<(), String> {
-    let broker = BrokerContext {
-        state: DaemonState::try_new()?,
-        admission: Admission::new(Limits::default()),
-    };
+    let broker = BrokerContext::new(
+        DaemonState::try_new()?,
+        Admission::new(Limits::default()),
+        crate::paths::clawd_socket_path(),
+    )?;
     run_with_broker(config, shutdown, broker).await
 }
 
@@ -157,10 +175,11 @@ pub async fn run_with_store(
     shutdown: Arc<AtomicBool>,
     store: Store,
 ) -> Result<(), String> {
-    let broker = BrokerContext {
-        state: DaemonState::try_new()?,
-        admission: Admission::new(Limits::default()),
-    };
+    let broker = BrokerContext::new(
+        DaemonState::try_new()?,
+        Admission::new(Limits::default()),
+        crate::paths::clawd_socket_path(),
+    )?;
     run_with_store_and_broker(config, shutdown, store, broker).await
 }
 
@@ -304,6 +323,7 @@ struct Lease {
     task_id: String,
     session_id: Option<String>,
     owner_uid: u32,
+    execution_gid: u32,
     client: crate::session::SessionClient,
     presence: Option<crate::session::SessionPresence>,
     capability_generation: String,
@@ -361,6 +381,21 @@ async fn supervise(
             return Ok(());
         }
     };
+    let isolation = match spawn::ExecutionIsolation::capture(
+        &broker.primary_socket,
+        owner_uid,
+        broker.isolated_execution_gid,
+    ) {
+        Ok(isolation) => isolation,
+        Err(error) => {
+            finish_error(
+                &store,
+                job,
+                &format!("agent isolation boundary unavailable: {error}"),
+            );
+            return Ok(());
+        }
+    };
     if let Err(error) = crate::storage::ensure_owner_agent_state_dir(owner_uid, identity.gid) {
         finish_error(
             &store,
@@ -397,7 +432,7 @@ async fn supervise(
         session.client = effective_client;
     }
 
-    let spawned = match spawn::spawn_worker(&identity, &job.id) {
+    let spawned = match spawn::spawn_worker(&identity, &isolation, &job.id) {
         Ok(spawned) => {
             if let Ok(mut throttle) = throttle.lock() {
                 throttle.record_success();
@@ -435,6 +470,7 @@ async fn supervise(
 
     let mut extension = match start_extension_host(
         &identity,
+        &isolation,
         &job,
         session.as_ref(),
         pid,
@@ -468,6 +504,7 @@ async fn supervise(
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
         owner_uid,
+        execution_gid: isolation.execution_gid(),
         client: effective_client,
         presence,
         capability_generation: session
@@ -584,6 +621,7 @@ struct ExtensionRuntime {
 #[allow(clippy::too_many_arguments)]
 async fn start_extension_host(
     identity: &spawn::WorkerIdentity,
+    isolation: &spawn::ExecutionIsolation,
     job: &Job,
     session: Option<&crate::proc::SessionInfo>,
     worker_pid: u32,
@@ -591,11 +629,12 @@ async fn start_extension_host(
     lease_duration: Duration,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
-    let paths = crate::extension_host::spawn::HostPaths::create(identity)?;
+    let paths =
+        crate::extension_host::spawn::HostPaths::create(identity, isolation.execution_gid())?;
     let listener = match crate::extension_host::broker::bind_listener(
         &paths.broker_socket,
         identity.uid,
-        identity.gid,
+        isolation.execution_gid(),
     ) {
         Ok(listener) => listener,
         Err(error) => {
@@ -609,6 +648,7 @@ async fn start_extension_host(
     let cleanup_paths = paths.clone();
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
+        isolation,
         &job.id,
         job.session_id.as_deref(),
         host_session_id.as_deref(),
@@ -669,7 +709,7 @@ async fn start_extension_host(
         job.session_id.clone(),
         host_session_id.clone(),
         identity.uid,
-        identity.gid,
+        isolation.execution_gid(),
         worker_pid,
         worker_start_time_ticks,
         host.pid,
@@ -931,11 +971,11 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         task_id: lease.task_id.clone(),
         session_id: lease.session_id.clone(),
         owner_uid: lease.owner_uid,
+        owner_gid: lease.execution_gid,
         client: lease.client,
         presence: lease.presence,
         capability_generation: lease.capability_generation.clone(),
         extension: lease.extension.clone(),
-        owner_gid: 0,
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
         issued_at_ms,
@@ -976,6 +1016,7 @@ fn accept(
                 task_id: lease.task_id.clone(),
                 session_id: lease.session_id.clone(),
                 owner_uid: lease.owner_uid,
+                owner_gid: lease.execution_gid,
                 client: lease.client,
                 presence: lease.presence,
                 capability_generation: lease.capability_generation.clone(),
@@ -1263,18 +1304,19 @@ fn check_hello_with(
             hello.uid, hello.euid, lease.owner_uid
         ));
     }
+    if hello.gid != lease.execution_gid || hello.egid != lease.execution_gid {
+        return Err(format!(
+            "agent worker is running as gid {} / egid {}, expected isolated gid {}",
+            hello.gid, hello.egid, lease.execution_gid
+        ));
+    }
     if hello.uid == 0 || hello.euid == 0 {
         return Err("agent worker is still running as root".to_string());
     }
     // A root broker forces `setgroups(0, NULL)` before the uid drop, so
     // any surviving group means the drop was defeated. An unprivileged
     // dev/test supervisor cannot clear them in the first place.
-    if enforce_group_isolation
-        && hello
-            .supplementary_groups
-            .iter()
-            .any(|group| *group != hello.gid)
-    {
+    if enforce_group_isolation && !hello.supplementary_groups.is_empty() {
         return Err("agent worker retained supplementary groups".to_string());
     }
     if !hello.no_new_privs {

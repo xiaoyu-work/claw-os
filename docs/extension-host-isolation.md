@@ -7,9 +7,11 @@ privileged `clawd` and not in the `claw-agentd` model/tool worker.
 
 For each daemon-backed task:
 
-1. `clawd` claims the task and spawns `claw-agentd` as the task owner.
+1. `clawd` claims the task and spawns `claw-agentd` as the task uid with the
+   package-created `cos-extension` primary gid.
 2. `clawd` creates a private runtime directory and route-filtered broker
-   socket, then spawns `claw-extension-host` as the same owner.
+   socket, then spawns `claw-extension-host` with the same uid and dedicated
+   gid.
 3. `clawd` registers the exact host pid/start-time as a child of the task
    session and signs the host identity, worker identity, socket paths, nonce,
    protocol version, and lease deadline into the worker grant.
@@ -37,7 +39,11 @@ authority, provider-side checks, and audit.
 
 The host launch applies:
 
-- `setgroups(0, NULL)`, then irreversible gid/uid drop;
+- `setgroups(0, NULL)`, then irreversible uid drop to the task owner and gid
+  drop to `cos-extension`;
+- a pinned snapshot of the real primary broker socket inode, ownership, mode,
+  and canonical ancestors, plus an actual denied post-drop `connect(2)` before
+  either worker or host may exec;
 - kernel re-verification of real/effective/saved ids and groups;
 - `PR_SET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG`, `PR_SET_DUMPABLE=0`;
 - `setsid()` and a dedicated process group;
@@ -80,6 +86,7 @@ before entering model context.
 | Variable | Meaning |
 | --- | --- |
 | `COS_EXTENSION_HOST_BIN` | Host executable; defaults beside `clawd`, then `/usr/local/bin/claw-extension-host` |
+| `COS_EXTENSION_EXEC_GROUP` | Dedicated execution group; packaged default `cos-extension` |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | Set to `off` to disable best-effort IPC/UTS namespaces |
 
 The binary is shipped in `claw-os-agent` and configured by `clawd.service`.

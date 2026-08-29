@@ -15,6 +15,8 @@ PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 BUILD_DEBS="$PROJECT_DIR/packaging/deb/build-debs.sh"
 UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.service"
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
+SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
+POSTINST="$PROJECT_DIR/packaging/deb/claw-os-agent/postinst"
 
 fail() {
     printf 'not ok - %s\n' "$*" >&2
@@ -51,6 +53,12 @@ assert_contains "$BUILD_DEBS" 'ensure_bin claw-extension-host cos' \
     "claw-os-agent must build the extension host"
 assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-extension-host' \
     "claw-os-agent must install the extension host beside claw-agentd"
+assert_contains "$BUILD_DEBS" '/usr/lib/sysusers.d/claw-os-agent.conf' \
+    "claw-os-agent must install its dedicated extension group definition"
+assert_contains "$SYSUSERS" 'g cos-extension - -' \
+    "the extension host must have a dedicated system group"
+assert_contains "$POSTINST" 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf' \
+    "postinst must create the extension execution group before starting clawd"
 
 # The staged worker path and the path the unit hands clawd have to agree,
 # or the daemon looks for a binary the package never installed.
@@ -58,6 +66,8 @@ assert_contains "$UNIT" 'COS_AGENTD_BIN=/usr/local/bin/claw-agentd' \
     "clawd.service must point at the installed agent worker"
 assert_contains "$UNIT" 'COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-host' \
     "clawd.service must point at the installed extension host"
+assert_contains "$UNIT" 'COS_EXTENSION_EXEC_GROUP=cos-extension' \
+    "clawd.service must pin the dedicated extension execution group"
 assert_contains "$UNIT" 'CLAWD_EXTENSION_HOST_NAMESPACES=on' \
     "clawd.service must enable available extension-host namespaces"
 grep -Eq '^Delegate=yes$' "$UNIT" ||

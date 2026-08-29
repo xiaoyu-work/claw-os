@@ -29,6 +29,7 @@ Environment=CLAWD_SOCKET_MODE=0660
 Environment=CLAWD_AGENTD=on
 Environment=COS_AGENTD_BIN=/usr/local/bin/claw-agentd
 Environment=COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-host
+Environment=COS_EXTENSION_EXEC_GROUP=cos-extension
 Environment=CLAWD_EXTENSION_HOST_NAMESPACES=on
 Environment=CLAWD_AGENTD_MAX_WORKERS=4
 Environment=CLAWD_AGENTD_LEASE_SECS=900

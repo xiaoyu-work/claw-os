@@ -4,13 +4,15 @@
 
 `extension_host/` keeps dynamic App and MCP code outside both privileged
 `clawd` and the model/tool worker. `clawd` spawns one
-`claw-extension-host` process per task as the task owner; `claw-agentd`
+`claw-extension-host` process per task as the task uid with the dedicated
+`cos-extension` primary gid; `claw-agentd`
 uses a separate task-bound control socket to attach, call, cancel, and detach
 extensions.
 
 ## Responsibilities
 
-- Spawn the host with no supplementary groups, `NoNewPrivs`, `0077` umask,
+- Spawn the host with the task uid, dedicated non-broker gid, no supplementary
+  groups, `NoNewPrivs`, `0077` umask,
   descriptor and environment allowlists, its own session/process group, finite
   rlimits, and an optional cgroup/namespace layer.
 - Bind the worker control channel to owner, task, session, worker pid/start
@@ -43,7 +45,7 @@ extensions.
 clawd supervisor
   -> spawn claw-agentd
   -> bind private extension broker socket
-  -> spawn claw-extension-host as task owner
+  -> spawn claw-extension-host as task uid + cos-extension gid
   -> register exact host pid/start-time as an extension-host session
   -> sign host pid/start-time + socket paths + nonce into the worker grant
 

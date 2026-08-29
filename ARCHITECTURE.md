@@ -238,7 +238,7 @@ the `require` gate. It describes authority; the broker authority decides it.
 CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
-  -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
+  -> claw-agentd (task uid, dedicated cos-extension gid, no supplementary groups, NoNewPrivs)
   -> clawd also spawns claw-extension-host for dynamic App/MCP processes
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
@@ -310,8 +310,9 @@ See [`docs/memory-recovery.md`](docs/memory-recovery.md).
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
 that starts as root only long enough to `exec`: `core/src/agentd/spawn.rs`
-clears supplementary groups (including `sudo`) before dropping gid and uid to
-the task owner, re-reads every id from the kernel, sets `PR_SET_NO_NEW_PRIVS`,
+clears supplementary groups (including `sudo`) before dropping uid to the task
+owner and gid to the package-created `cos-extension` group, re-reads every id
+from the kernel, sets `PR_SET_NO_NEW_PRIVS`,
 gives the runtime its own session and process group, applies a `0077` umask,
 rebuilds the environment from an allowlist and closes every inherited
 descriptor except a private `socketpair(2)` on fd 3. A task owned by root is
@@ -319,11 +320,16 @@ refused at `task.submit` and again before a worker could be forked: there is no
 lesser account to drop to, so running one would put the model back in a root
 process.
 
-Because the worker leaves the `sudo` group, `/run/cos/clawd.sock` (`0660
-root:sudo`) is unreachable from it, and the only authority it holds is the
-grant in `core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key
-and bound to owner uid, worker pid plus kernel start time, task and session id,
-a lease deadline, and the route allowlist in `core/src/agentd/protocol.rs`. No
+Before every spawn, `clawd` pins the actual primary socket inode and every
+canonical ancestor, verifies that neither the task uid nor `cos-extension` gid
+can replace the path, then requires an actual post-drop `connect(2)` to fail
+with `EACCES`/`EPERM` before `exec`. The worker therefore cannot reach
+`/run/cos/clawd.sock` even when the task account's passwd primary group is the
+broker's socket group. Its only authority is the grant in
+`core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key and bound
+to owner uid, isolated gid, worker pid plus kernel start time, task and session
+id, a lease deadline, and the route allowlist in
+`core/src/agentd/protocol.rs`. No
 admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.

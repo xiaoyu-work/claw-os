@@ -419,7 +419,7 @@ where
             serde_json::to_string_pretty(&next).map_err(|e| format!("serialize: {e}"))
         },
         |tmp| match owner_uid {
-            Some(uid) => crate::storage::set_group_readable_file(tmp, uid),
+            Some(uid) => crate::storage::set_routed_registry_file(tmp, uid),
             None => crate::storage::set_private_file(tmp),
         },
     )
@@ -2491,11 +2491,7 @@ fn cmd_spawn(args: &[String]) -> Result<Value, String> {
 }
 
 fn spawned_child_client(_parent: &SessionInfo) -> crate::session::SessionClient {
-    crate::session::SessionClient::new(
-        crate::session::SessionSource::ChildProcess,
-        false,
-        true,
-    )
+    crate::session::SessionClient::new(crate::session::SessionSource::ChildProcess, false, true)
 }
 
 fn cmd_status(args: &[String]) -> Result<Value, String> {
