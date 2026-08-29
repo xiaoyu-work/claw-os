@@ -10,6 +10,7 @@ UMask=0077
 ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
 Restart=on-failure
 RestartSec=3
+KillMode=control-group
 Environment=COS_BIN=/usr/local/bin/cos
 Environment=COS_DATA_DIR=/var/lib/cos
 Environment=COS_RUNTIME_DIR=/run/cos
@@ -52,6 +53,8 @@ LogsDirectoryMode=0700
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 NoNewPrivileges=true
 PrivateTmp=true
+# Required for per-task cgroup-v2 CPU/memory/pids limits and cgroup.kill.
+# clawd fails agent tasks closed if the delegated subtree is unavailable.
 Delegate=yes
 
 [Install]

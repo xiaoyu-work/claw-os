@@ -346,10 +346,16 @@ For every claimed task, the supervisor creates a private runtime directory,
 binds a second broker socket there, and spawns `claw-extension-host` as the task
 owner. The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
 environment/descriptor allowlists, separate session/process group, finite
-rlimits, and non-dumpable process state. When the kernel permits it, IPC/UTS
-namespaces and a cgroup add isolation plus memory/pid/CPU bounds; cleanup also
-walks and kills the descendant tree so a child that called `setsid` cannot
-escape.
+rlimits, and non-dumpable process state. IPC/UTS namespaces remain an optional
+additional layer, but cgroup-v2 containment is mandatory. `clawd` establishes
+a delegated CPU/memory/pids subtree, creates and verifies a bounded task
+cgroup, and moves the host into it in the pre-exec closure before any dynamic
+code can run. Every descendant inherits that membership. Teardown requires a
+successful `cgroup.kill`, `populated 0`, an empty `cgroup.procs`, and removal
+of the task cgroup, so `setsid`, double-forking, host-first exit, or clearing
+`PDEATHSIG` cannot escape cleanup. Missing controllers, an unusable
+`cgroup.kill`, or unverifiable cleanup fails the task instead of falling back
+to `/proc` ancestry.
 
 The signed worker grant includes the extension protocol version, owner, task,
 durable session, worker pid/start-time, host pid/start-time, random lease nonce,

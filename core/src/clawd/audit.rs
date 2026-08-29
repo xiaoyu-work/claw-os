@@ -179,6 +179,7 @@ struct ExtensionHostSupervisorAudit {
     #[serde(skip_serializing_if = "Option::is_none")]
     host_start_time_ticks: Option<u64>,
     action: &'static str,
+    success: bool,
 }
 
 pub fn record_extension_host_event(
@@ -188,6 +189,7 @@ pub fn record_extension_host_event(
     host_pid: u32,
     host_start_time_ticks: Option<u64>,
     action: &'static str,
+    success: bool,
 ) {
     let record = ExtensionHostSupervisorAudit {
         ts: Utc::now(),
@@ -198,12 +200,13 @@ pub fn record_extension_host_event(
         host_pid,
         host_start_time_ticks,
         action,
+        success,
     };
     if let Err(error) = append_jsonl(&record) {
         tracing::error!(%error, "failed to write extension-host audit record");
     }
     if let Some(session_id) = session_id {
-        record_extension_mutation(session_id, "host", action, "task-host", None, true);
+        record_extension_mutation(session_id, "host", action, "task-host", None, success);
     }
 }
 

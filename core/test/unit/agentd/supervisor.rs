@@ -295,6 +295,21 @@ fn a_cancelled_task_stays_cancelled_when_its_worker_is_released() {
 }
 
 #[test]
+fn failed_containment_cleanup_overrides_a_reported_task_result() {
+    let outcome = apply_containment_cleanup(
+        TaskOutcome::Reported(Box::new(WorkerOutcome::Cancelled)),
+        Err("cgroup.kill failed".to_string()),
+    );
+    match outcome {
+        TaskOutcome::Failed(error) => {
+            assert!(error.contains("descendants may remain"), "{error}");
+            assert!(error.contains("cgroup.kill failed"), "{error}");
+        }
+        _ => panic!("cleanup failure must be terminal"),
+    }
+}
+
+#[test]
 fn supervision_can_be_disabled_without_disabling_the_broker() {
     let _lock = crate::test_env::lock_env();
     let previous = std::env::var_os("CLAWD_AGENTD");

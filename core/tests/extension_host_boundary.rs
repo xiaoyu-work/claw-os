@@ -238,6 +238,13 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             return;
         }
     };
+    let containment = match spawn::ContainmentRoot::establish() {
+        Ok(containment) => containment,
+        Err(error) => {
+            eprintln!("skipping: mandatory extension containment unavailable: {error}");
+            return;
+        }
+    };
     let task_id = "extension-host-integration";
     let task_session = "task-session";
     let host_session = "extension-session";
@@ -246,6 +253,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let mut host = spawn::spawn_host(
         &identity,
         &isolation,
+        &containment,
         task_id,
         Some(task_session),
         Some(host_session),
@@ -479,5 +487,6 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     lease.close();
     broker_task.abort();
     cos::proc::deregister_session(host_session);
+    host.cgroup.cleanup().await.expect("clean host containment");
     host.paths.cleanup();
 }

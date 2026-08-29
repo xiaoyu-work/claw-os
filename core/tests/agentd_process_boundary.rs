@@ -34,6 +34,8 @@ const EXTENSION_HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 /// environment from an allowlist, so this must never appear in the
 /// child.
 const LEAK_MARKER: &str = "COS_AGENTD_TEST_BROKER_SECRET";
+const CGROUP_PROBE_GATE: &str = "COS_TEST_CGROUP_PROBE_GATE";
+const CGROUP_PROBE_ROOT: &str = "COS_TEST_CGROUP_PROBE_ROOT";
 
 struct Harness {
     _home: tempfile::TempDir,
@@ -45,6 +47,8 @@ struct Harness {
     leaked_fd: i32,
     identity: WorkerIdentity,
     isolation: ExecutionIsolation,
+    cgroup_root: PathBuf,
+    containment: std::sync::Arc<cos::extension_host::spawn::ContainmentRoot>,
 }
 
 impl Drop for Harness {
@@ -56,7 +60,9 @@ impl Drop for Harness {
         std::env::remove_var("COS_EXTENSION_HOST_BIN");
         std::env::remove_var("COS_RUNTIME_DIR");
         std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
+        std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
+        let _ = std::fs::remove_dir(&self.cgroup_root);
     }
 }
 
@@ -181,6 +187,29 @@ fn harness() -> Option<Harness> {
             return None;
         }
     };
+    let cgroup_root = PathBuf::from(format!(
+        "/sys/fs/cgroup/cos-test-{}",
+        uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(12)
+            .collect::<String>()
+    ));
+    if let Err(error) = std::fs::create_dir(&cgroup_root) {
+        eprintln!("skipping: create delegated cgroup root: {error}");
+        return None;
+    }
+    std::env::set_var(cos::extension_host::spawn::CGROUP_ROOT_ENV, &cgroup_root);
+    let containment = match cos::extension_host::spawn::ContainmentRoot::establish() {
+        Ok(containment) => std::sync::Arc::new(containment),
+        Err(error) => {
+            eprintln!("skipping: establish extension containment: {error}");
+            std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+            let _ = std::fs::remove_dir(&cgroup_root);
+            return None;
+        }
+    };
 
     // A descriptor the broker holds without `O_CLOEXEC`, standing in
     // for a queue lock or audit handle. The worker must not inherit it.
@@ -202,6 +231,8 @@ fn harness() -> Option<Harness> {
         leaked_fd,
         identity,
         isolation,
+        cgroup_root,
+        containment,
     })
 }
 
@@ -322,6 +353,21 @@ fn process_start(pid: u32) -> Option<u64> {
         .ok()
 }
 
+fn extension_cgroups(root: &std::path::Path) -> Vec<PathBuf> {
+    std::fs::read_dir(root)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .is_some_and(|name| name.starts_with("cos-extension-"))
+        })
+        .map(|entry| entry.path())
+        .collect()
+}
+
 fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
     cos::proc::SessionInfo {
         session_id: session_id.to_string(),
@@ -346,6 +392,179 @@ fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
         start_time_ticks: process_start(std::process::id()),
         client: cos::session::SessionClient::default(),
     }
+}
+
+fn install_daemonizing_host(harness: &Harness, exit_host: bool) -> PathBuf {
+    let path = harness.runtime_dir.join("malicious-extension-host.py");
+    let host_tail = if exit_host {
+        "time.sleep(1)\nos._exit(23)\n"
+    } else {
+        "while True:\n    time.sleep(60)\n"
+    };
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}",
+            concat!(
+                "#!/usr/bin/python3\n",
+                "import ctypes\n",
+                "import os\n",
+                "import time\n",
+                "\n",
+                "intermediate = os.fork()\n",
+                "if intermediate == 0:\n",
+                "    os.setsid()\n",
+                "    escaped = os.fork()\n",
+                "    if escaped != 0:\n",
+                "        os._exit(0)\n",
+                "    ctypes.CDLL(None).prctl(1, 0, 0, 0, 0)\n",
+                "    marker = os.environ['COS_EXTENSION_CONTROL_SOCKET'] + '.escaped'\n",
+                "    with open(marker, 'w', encoding='utf-8') as output:\n",
+                "        output.write(str(os.getpid()))\n",
+                "        output.flush()\n",
+                "        os.fsync(output.fileno())\n",
+                "    while True:\n",
+                "        time.sleep(60)\n",
+                "\n",
+                "os.waitpid(intermediate, 0)\n",
+            ),
+            host_tail,
+        ),
+    )
+    .expect("write daemonizing host");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod daemonizing host");
+    path
+}
+
+async fn wait_for_pid(path: &std::path::Path) -> u32 {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(pid) = raw.trim().parse::<u32>() {
+                let _ = std::fs::remove_file(path);
+                return pid;
+            }
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "daemonizing host did not publish its descendant pid"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+#[test]
+fn automatic_containment_root_child_probe() {
+    let Some(gate) = std::env::var_os(CGROUP_PROBE_GATE).map(PathBuf::from) else {
+        return;
+    };
+    let expected = PathBuf::from(std::env::var_os(CGROUP_PROBE_ROOT).expect("probe root"));
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !gate.exists() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "parent never released cgroup probe"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        std::env::var_os(cos::extension_host::spawn::CGROUP_ROOT_ENV).is_none(),
+        "automatic probe must not use the configured-root path"
+    );
+    let containment =
+        cos::extension_host::spawn::ContainmentRoot::establish().expect("automatic containment");
+    assert_eq!(containment.path(), expected);
+    let membership = std::fs::read_to_string("/proc/self/cgroup").expect("membership");
+    assert!(
+        membership.lines().any(|line| line.ends_with("/cos-broker")),
+        "clawd probe did not move into its broker leaf: {membership}"
+    );
+}
+
+#[test]
+fn automatic_current_cgroup_setup_moves_broker_and_enables_controllers() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let probe_root = PathBuf::from(format!(
+        "/sys/fs/cgroup/cos-auto-test-{}",
+        uuid::Uuid::new_v4()
+            .simple()
+            .to_string()
+            .chars()
+            .take(12)
+            .collect::<String>()
+    ));
+    std::fs::create_dir(&probe_root).expect("create automatic cgroup probe");
+    let stale = probe_root.join("cos-extension-stale");
+    std::fs::create_dir(&stale).expect("create stale extension cgroup");
+    let mut stale_child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .expect("spawn stale extension descendant");
+    let stale_pid = stale_child.id();
+    std::fs::write(stale.join("cgroup.procs"), stale_pid.to_string())
+        .expect("move stale descendant into cgroup");
+    let gate = harness.runtime_dir.join("release-cgroup-probe");
+    let child = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .args([
+            "--exact",
+            "automatic_containment_root_child_probe",
+            "--nocapture",
+        ])
+        .env(CGROUP_PROBE_GATE, &gate)
+        .env(CGROUP_PROBE_ROOT, &probe_root)
+        .env_remove(cos::extension_host::spawn::CGROUP_ROOT_ENV)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn automatic cgroup probe");
+    let child_pid = child.id();
+    std::fs::write(probe_root.join("cgroup.procs"), child_pid.to_string())
+        .expect("move probe into delegated cgroup");
+    std::fs::write(&gate, b"go").expect("release cgroup probe");
+    let output = child.wait_with_output().expect("wait cgroup probe");
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let stale_cleaned = loop {
+        if stale_child
+            .try_wait()
+            .expect("stale child status")
+            .is_some()
+        {
+            break true;
+        }
+        if std::time::Instant::now() >= deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    if !stale_cleaned {
+        let _ = std::fs::write(probe_root.join("cgroup.kill"), b"1");
+    }
+    let _ = stale_child.wait();
+    let stale_removed_by_setup = !stale.exists();
+    let broker = probe_root.join("cos-broker");
+    let _ = std::fs::write(probe_root.join("cgroup.kill"), b"1");
+    let _ = std::fs::remove_dir(&stale);
+    let _ = std::fs::remove_dir(&broker);
+    let _ = std::fs::remove_dir(&probe_root);
+    assert!(
+        output.status.success(),
+        "automatic cgroup setup failed:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stale_cleaned && !cos::proc::is_pid_alive(stale_pid),
+        "automatic setup left a stale extension descendant alive"
+    );
+    assert!(
+        stale_removed_by_setup,
+        "automatic setup left a stale cgroup"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -517,6 +736,7 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
     let mut host = cos::extension_host::spawn::spawn_host(
         &harness.identity,
         &harness.isolation,
+        &harness.containment,
         "gid-boundary",
         None,
         None,
@@ -545,15 +765,169 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         status_ids(host.pid, "Groups:").is_empty(),
         "extension host retained supplementary groups"
     );
+    let descriptors = open_descriptor_targets(host.pid);
+    assert!(
+        !descriptors
+            .iter()
+            .any(|target| target.ends_with("cgroup.procs")),
+        "extension host inherited its cgroup attachment descriptor: {descriptors:?}"
+    );
+    let environ = std::fs::read(format!("/proc/{}/environ", host.pid)).expect("host environment");
+    let environ = String::from_utf8_lossy(&environ);
+    assert!(
+        !environ.contains(cos::extension_host::spawn::CGROUP_ROOT_ENV),
+        "extension host inherited broker cgroup configuration"
+    );
     let socket = std::fs::metadata(&harness.primary_path).expect("primary socket");
     use std::os::unix::fs::MetadataExt;
     assert_eq!(socket.gid(), harness.identity.gid);
     assert_ne!(socket.gid(), harness.isolation.execution_gid());
-
-    unsafe {
-        cos::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
+    let members = std::fs::read_to_string(host.cgroup.path().join("cgroup.procs"))
+        .expect("read host cgroup membership");
+    assert!(
+        members.lines().any(|member| member == host.pid.to_string()),
+        "host was not attached before spawn returned: {members}"
+    );
+    for (name, expected) in [
+        ("pids.max", "128"),
+        ("memory.max", "1073741824"),
+        ("memory.oom.group", "1"),
+        ("cpu.max", "100000 100000"),
+    ] {
+        let actual = std::fs::read_to_string(host.cgroup.path().join(name))
+            .unwrap_or_else(|error| panic!("read {name}: {error}"));
+        assert_eq!(actual.trim(), expected, "{name}");
     }
+
+    let cgroup_path = host.cgroup.path().to_path_buf();
+    host.cgroup.cleanup().await.expect("clean host cgroup");
     let _ = host.child.wait().await;
+    assert!(
+        !cgroup_path.exists(),
+        "task completion left its containment cgroup behind"
+    );
+    host.paths.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeathsig() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let malicious = install_daemonizing_host(&harness, true);
+    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    let paths = cos::extension_host::spawn::HostPaths::create(
+        &harness.identity,
+        harness.isolation.execution_gid(),
+    )
+    .expect("host paths");
+    let escaped_marker = PathBuf::from(format!(
+        "{}.escaped",
+        paths.control_socket.to_string_lossy()
+    ));
+    let expires = cos::agentd::grant::now_ms() + 60_000;
+    let mut host = cos::extension_host::spawn::spawn_host(
+        &harness.identity,
+        &harness.isolation,
+        &harness.containment,
+        "daemonized-descendant",
+        None,
+        None,
+        std::process::id(),
+        process_start(std::process::id()),
+        "0123456789abcdef0123456789abcdef",
+        expires,
+        paths,
+    )
+    .expect("spawn daemonizing host");
+    let escaped = wait_for_pid(&escaped_marker).await;
+    let status = tokio::time::timeout(Duration::from_secs(5), host.child.wait())
+        .await
+        .expect("malicious host did not exit first")
+        .expect("wait malicious host");
+    assert_eq!(status.code(), Some(23));
+    assert!(
+        cos::proc::is_pid_alive(escaped),
+        "daemonized descendant did not survive long enough to test host-first cleanup"
+    );
+    assert!(
+        !host.cgroup.is_empty().expect("inspect populated cgroup"),
+        "escaped descendant left the mandatory cgroup"
+    );
+
+    let cgroup_path = host.cgroup.path().to_path_buf();
+    host.cgroup
+        .cleanup()
+        .await
+        .expect("kill daemonized descendant cgroup");
+    for _ in 0..100 {
+        if !cos::proc::is_pid_alive(escaped) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !cos::proc::is_pid_alive(escaped),
+        "setsid/double-fork descendant survived cgroup.kill"
+    );
+    assert!(!cgroup_path.exists(), "empty cgroup was not removed");
+    host.paths.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let malicious = install_daemonizing_host(&harness, false);
+    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
+    let paths = cos::extension_host::spawn::HostPaths::create(
+        &harness.identity,
+        harness.isolation.execution_gid(),
+    )
+    .expect("host paths");
+    let escaped_marker = PathBuf::from(format!(
+        "{}.escaped",
+        paths.control_socket.to_string_lossy()
+    ));
+    let mut host = cos::extension_host::spawn::spawn_host(
+        &harness.identity,
+        &harness.isolation,
+        &harness.containment,
+        "cancel-daemonized-descendant",
+        None,
+        None,
+        std::process::id(),
+        process_start(std::process::id()),
+        "0123456789abcdef0123456789abcdef",
+        cos::agentd::grant::now_ms() + 60_000,
+        paths,
+    )
+    .expect("spawn cancellation probe");
+    let escaped = wait_for_pid(&escaped_marker).await;
+    assert!(host.child.try_wait().expect("host status").is_none());
+    assert!(cos::proc::is_pid_alive(escaped));
+
+    host.cgroup.kill_all().expect("cancel extension cgroup");
+    host.cgroup
+        .cleanup()
+        .await
+        .expect("verify cancelled cgroup is empty");
+    let _ = tokio::time::timeout(Duration::from_secs(5), host.child.wait())
+        .await
+        .expect("cancelled host did not exit");
+    for _ in 0..100 {
+        if !cos::proc::is_pid_alive(escaped) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(
+        !cos::proc::is_pid_alive(escaped),
+        "daemonized child survived active cancellation"
+    );
     host.paths.cleanup();
 }
 
@@ -823,6 +1197,68 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
     assert!(
         error.contains("provider"),
         "expected a provider failure from the worker, got: {error}"
+    );
+    assert!(
+        extension_cgroups(&harness.cgroup_root).is_empty(),
+        "task completion left an extension cgroup behind"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
+    use cos::agent::service::{JobStatus, Store};
+    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let invalid_root = harness.runtime_dir.join("not-a-cgroup");
+    std::fs::create_dir(&invalid_root).expect("create invalid cgroup root");
+    std::env::set_var(cos::extension_host::spawn::CGROUP_ROOT_ENV, &invalid_root);
+    let queue = tempfile::tempdir().expect("queue");
+    let store = Store::with_root(queue.path().to_path_buf()).expect("store");
+    let job = store
+        .submit(
+            "containment fail-closed probe".to_string(),
+            None,
+            Some(1),
+            Some(harness.identity.uid),
+            Some(harness.identity.home.to_string_lossy().into_owned()),
+        )
+        .expect("submit");
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let config = SupervisorConfig {
+        poll: Duration::from_millis(25),
+        max_workers: 1,
+        ..SupervisorConfig::default()
+    };
+    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let finished = loop {
+        if let Some((_, current)) = store.locate(&job.id).expect("locate") {
+            if current.status == JobStatus::Error {
+                break current;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "unavailable containment did not fail the task"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+    shutdown.store(true, Ordering::SeqCst);
+    let _ = tokio::time::timeout(Duration::from_secs(10), supervisor).await;
+
+    assert_eq!(finished.worker_pid, Some(std::process::id()));
+    assert!(
+        finished
+            .error
+            .unwrap_or_default()
+            .contains("containment boundary unavailable"),
+        "unexpected fail-closed error"
     );
 }
 

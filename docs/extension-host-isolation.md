@@ -52,11 +52,22 @@ The host launch applies:
 - close-on-exec for every inherited descriptor;
 - finite address-space, process, file-size, and descriptor limits;
 - best-effort IPC/UTS namespaces;
-- best-effort cgroup-v2 CPU, memory, and pid limits.
+- mandatory cgroup-v2 CPU, memory, OOM-group, and pid limits.
 
-If cgroup creation is unavailable, teardown repeatedly walks `/proc`, kills
-descendants before the host, and kills the host process group. The host is also
-a child subreaper, so daemonized descendants remain attributable.
+Before spawning a host, `clawd` establishes a delegated cgroup-v2 subtree with
+the CPU, memory, and pids controllers. The host writes its own pid through a
+pre-opened `cgroup.procs` descriptor in `pre_exec`, before dropping privilege
+or executing the host image, and the parent verifies the exact membership.
+Creation also proves that every limit was applied and that `cgroup.kill` works.
+If any step is unavailable or unwritable, the task fails before worker
+assignment; dynamic code is never started without containment.
+
+Teardown closes the private proxy and revokes child sessions first, then
+requires `cgroup.kill`, recursive `populated 0`, an empty `cgroup.procs`, and
+successful cgroup removal. It does not infer descendants from post-exit
+`/proc` ancestry. A child remains contained after `setsid`, double-forking,
+host-first exit, or clearing `PDEATHSIG`; cleanup failure is terminal, logged,
+and audited rather than reported as a clean task completion.
 
 ## Lifecycle
 
@@ -71,7 +82,8 @@ The lifecycle is deterministic:
 ```text
 attach -> ready -> call* -> detach
                  \-> cancel | timeout | crash
-task completion -> shutdown -> descendant cleanup -> session/grant revocation
+task completion -> shutdown -> proxy/session revocation
+                 -> cgroup.kill -> verified empty -> detach
 ```
 
 App/MCP identity, manifest/config digest, calls, outcomes, timeout/crash/cancel,
@@ -87,6 +99,7 @@ before entering model context.
 | --- | --- |
 | `COS_EXTENSION_HOST_BIN` | Host executable; defaults beside `clawd`, then `/usr/local/bin/claw-extension-host` |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated execution group; packaged default `cos-extension` |
+| `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally omitted so `clawd.service` prepares its own delegated subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | Set to `off` to disable best-effort IPC/UTS namespaces |
 
 The binary is shipped in `claw-os-agent` and configured by `clawd.service`.

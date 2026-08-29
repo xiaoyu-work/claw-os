@@ -14,7 +14,8 @@ extensions.
 - Spawn the host with the task uid, dedicated non-broker gid, no supplementary
   groups, `NoNewPrivs`, `0077` umask,
   descriptor and environment allowlists, its own session/process group, finite
-  rlimits, and an optional cgroup/namespace layer.
+  rlimits, mandatory verified cgroup-v2 containment, and optional IPC/UTS
+  namespaces.
 - Bind the worker control channel to owner, task, session, worker pid/start
   time, host pid/start time, nonce, protocol version, and lease deadline.
 - Expose a second broker-owned Unix socket only to the host process and its
@@ -33,7 +34,7 @@ extensions.
 | Path | Role |
 | --- | --- |
 | `protocol.rs` | Versioned worker-control contract and signed binding fields |
-| `spawn.rs` | Privilege drop, fd/env/resource isolation, optional cgroup/namespaces, descendant cleanup |
+| `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
 | `client.rs` | `claw-agentd` client used by App and MCP registry adapters |
 | `host.rs` | Host process, control admission, App/MCP lifecycle and cancellation |
 | `broker.rs` | Per-task broker proxy socket, SCM credential verification, route/session allowlists |
@@ -64,6 +65,14 @@ is the exact host or a descendant bound to the nearest App/MCP session.
 Lifecycle routes are host-only; provider routes are child-only; task,
 scheduler, permission-decision, admin, and App-session routes are never
 available to an extension child.
+
+The cgroup is created and its CPU, memory, process, OOM-group, membership, and
+`cgroup.kill` controls are verified before the host is returned to the
+supervisor. The host enters it in `pre_exec`, before privilege drop and
+`exec`. Cleanup never reconstructs ancestry from `/proc`: it revokes the proxy,
+writes `cgroup.kill`, waits for recursive `populated 0` plus an empty
+`cgroup.procs`, and removes the cgroup. Any failure is terminal and audited as
+`cleanup-failed`.
 
 ## Tests
 

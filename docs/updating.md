@@ -48,6 +48,11 @@ the system is not normally needed.
 are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
+The service delegates its cgroup-v2 subtree and uses
+`KillMode=control-group`. Agent tasks now fail closed unless the CPU, memory,
+and pids controllers plus a working `cgroup.kill` are available; ordinary
+non-agent `clawd` primitives remain available. On supported systemd hosts no
+manual migration is required.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:

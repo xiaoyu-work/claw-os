@@ -72,6 +72,8 @@ assert_contains "$UNIT" 'CLAWD_EXTENSION_HOST_NAMESPACES=on' \
     "clawd.service must enable available extension-host namespaces"
 grep -Eq '^Delegate=yes$' "$UNIT" ||
     fail "clawd.service must delegate a cgroup subtree for extension cleanup"
+grep -Eq '^KillMode=control-group$' "$UNIT" ||
+    fail "clawd.service must kill delegated extension cgroups on daemon stop"
 assert_contains "$UNIT" 'CLAWD_AGENTD=on' \
     "clawd.service must state whether agent supervision is enabled"
 

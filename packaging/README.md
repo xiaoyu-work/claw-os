@@ -33,7 +33,10 @@ packaging/
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
 It creates the system group `cos-extension`; supervised workers and hosted
 extensions keep the task uid but use that primary gid so account membership in
-the broker socket group never becomes broker access.
+the broker socket group never becomes broker access. `clawd.service` also
+delegates its cgroup-v2 subtree and pins `KillMode=control-group`; dynamic
+extension execution fails closed unless per-task CPU, memory, pids, and
+`cgroup.kill` containment can be verified.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the

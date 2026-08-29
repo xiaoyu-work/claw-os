@@ -15,7 +15,7 @@
 //! or not — as fatal.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -109,6 +109,8 @@ pub struct BrokerContext {
     pub admission: Arc<Admission>,
     pub primary_socket: std::path::PathBuf,
     pub isolated_execution_gid: u32,
+    extension_containment:
+        Arc<OnceLock<Result<Arc<crate::extension_host::spawn::ContainmentRoot>, Arc<str>>>>,
 }
 
 impl BrokerContext {
@@ -122,7 +124,30 @@ impl BrokerContext {
             admission,
             primary_socket,
             isolated_execution_gid: spawn::resolve_isolated_execution_gid()?,
+            extension_containment: Arc::new(OnceLock::new()),
         })
+    }
+
+    fn extension_containment(
+        &self,
+    ) -> Result<Arc<crate::extension_host::spawn::ContainmentRoot>, String> {
+        match self.extension_containment.get_or_init(|| {
+            crate::extension_host::spawn::ContainmentRoot::establish()
+                .map(Arc::new)
+                .map_err(Arc::<str>::from)
+        }) {
+            Ok(root) => Ok(root.clone()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn prime_extension_containment(&self) {
+        if let Err(error) = self.extension_containment() {
+            tracing::error!(
+                error = %error,
+                "extension containment unavailable; agent tasks will fail closed"
+            );
+        }
     }
 }
 
@@ -131,6 +156,9 @@ pub fn spawn_supervisor(
     broker: BrokerContext,
 ) -> tokio::task::JoinHandle<()> {
     let config = SupervisorConfig::from_env();
+    if config.enabled {
+        broker.prime_extension_containment();
+    }
     tokio::spawn(async move {
         if !config.enabled {
             tracing::warn!(
@@ -189,6 +217,9 @@ pub async fn run_with_store_and_broker(
     store: Store,
     broker: BrokerContext,
 ) -> Result<(), String> {
+    if config.enabled {
+        broker.prime_extension_containment();
+    }
     let signer = Arc::new(GrantSigner::generate()?);
     let permits = Arc::new(Semaphore::new(config.max_workers));
     let throttle = Arc::new(Mutex::new(SpawnThrottle::default()));
@@ -396,6 +427,17 @@ async fn supervise(
             return Ok(());
         }
     };
+    let containment = match broker.extension_containment() {
+        Ok(containment) => containment,
+        Err(error) => {
+            finish_error(
+                &store,
+                job,
+                &format!("extension containment boundary unavailable: {error}"),
+            );
+            return Ok(());
+        }
+    };
     if let Err(error) = crate::storage::ensure_owner_agent_state_dir(owner_uid, identity.gid) {
         finish_error(
             &store,
@@ -471,6 +513,7 @@ async fn supervise(
     let mut extension = match start_extension_host(
         &identity,
         &isolation,
+        &containment,
         &job,
         session.as_ref(),
         pid,
@@ -498,6 +541,7 @@ async fn supervise(
         extension.host.pid,
         extension.host.start_time_ticks,
         "attach",
+        true,
     );
 
     let lease = Lease {
@@ -536,22 +580,14 @@ async fn supervise(
         channel,
         &mut child,
         &mut extension.host.child,
+        &extension.host.cgroup,
         extension.lease.clone(),
     )
     .await;
 
     extension.lease.close();
-    reap(&mut child, pid).await;
-    reap_extension_host(&mut extension.host).await;
-    crate::clawd::audit::record_extension_host_event(
-        &job.id,
-        job.session_id.as_deref(),
-        owner_uid,
-        extension.host.pid,
-        extension.host.start_time_ticks,
-        "detach",
-    );
     extension.broker_task.abort();
+    reap(&mut child, pid).await;
     if let Some(session_id) = extension.host_session_id.as_deref() {
         for child_session in crate::proc::deregister_child_sessions_for_owner(session_id, owner_uid)
         {
@@ -560,6 +596,20 @@ async fn supervise(
         crate::proc::deregister_session_for_owner(session_id, owner_uid);
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
+    let containment_cleanup = reap_extension_host(&mut extension.host).await;
+    crate::clawd::audit::record_extension_host_event(
+        &job.id,
+        job.session_id.as_deref(),
+        owner_uid,
+        extension.host.pid,
+        extension.host.start_time_ticks,
+        if containment_cleanup.is_ok() {
+            "detach"
+        } else {
+            "cleanup-failed"
+        },
+        containment_cleanup.is_ok(),
+    );
     extension.host.paths.cleanup();
 
     // The worker's lease is over, so every grant its session accrued
@@ -582,6 +632,7 @@ async fn supervise(
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
 
+    let outcome = apply_containment_cleanup(outcome, containment_cleanup);
     match outcome {
         TaskOutcome::Reported(outcome) => {
             let finish: FinishOutcome = (*outcome).into();
@@ -611,6 +662,15 @@ enum TaskOutcome {
     Retry(String),
 }
 
+fn apply_containment_cleanup(outcome: TaskOutcome, cleanup: Result<(), String>) -> TaskOutcome {
+    match cleanup {
+        Ok(()) => outcome,
+        Err(error) => TaskOutcome::Failed(format!(
+            "extension containment cleanup failed; descendants may remain: {error}"
+        )),
+    }
+}
+
 struct ExtensionRuntime {
     host: crate::extension_host::spawn::SpawnedExtensionHost,
     lease: Arc<crate::extension_host::broker::ExtensionLease>,
@@ -622,6 +682,7 @@ struct ExtensionRuntime {
 async fn start_extension_host(
     identity: &spawn::WorkerIdentity,
     isolation: &spawn::ExecutionIsolation,
+    containment: &crate::extension_host::spawn::ContainmentRoot,
     job: &Job,
     session: Option<&crate::proc::SessionInfo>,
     worker_pid: u32,
@@ -649,6 +710,7 @@ async fn start_extension_host(
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
         isolation,
+        containment,
         &job.id,
         job.session_id.as_deref(),
         host_session_id.as_deref(),
@@ -695,12 +757,16 @@ async fn start_extension_host(
             ),
         };
         if let Err(error) = crate::proc::register_session_for_owner(info, identity.uid) {
-            unsafe {
-                crate::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
-            }
+            let cleanup = host.cgroup.cleanup().await;
+            let _ = host.child.start_kill();
             let _ = host.child.wait().await;
             host.paths.cleanup();
-            return Err(format!("register extension-host session: {error}"));
+            return Err(match cleanup {
+                Ok(()) => format!("register extension-host session: {error}"),
+                Err(cleanup) => format!(
+                    "register extension-host session: {error}; containment cleanup failed: {cleanup}"
+                ),
+            });
         }
     }
 
@@ -743,6 +809,7 @@ async fn pump(
     channel: tokio::net::UnixStream,
     child: &mut tokio::process::Child,
     extension_child: &mut tokio::process::Child,
+    extension_cgroup: &crate::extension_host::spawn::ResourceGroup,
     extension_lease: Arc<crate::extension_host::broker::ExtensionLease>,
 ) -> TaskOutcome {
     // Authority on this channel comes from the grant, not from the
@@ -885,6 +952,7 @@ async fn pump(
                     lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
                     lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
                     "crash",
+                    false,
                 );
                 return if cancel_sent {
                     TaskOutcome::Cancelled
@@ -906,6 +974,7 @@ async fn pump(
                         lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
                         lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
                         "cancel",
+                        true,
                     );
                     let _ = send(
                         &mut writer,
@@ -913,20 +982,19 @@ async fn pump(
                     )
                     .await;
                 }
-                // Escalate on the child handle, never on a bare pid: a
-                // reaped pid can be recycled, and signalling it would
-                // hit an unrelated process. The whole group goes, so App
-                // and MCP descendants do not survive the cancellation.
+                // The worker still uses its unreaped process-group leader.
+                // Dynamic descendants are terminated through the mandatory
+                // cgroup, which remains authoritative even if the host exits
+                // or a child daemonizes before cancellation.
                 if cancelled_at.is_some_and(|at| at.elapsed() > CANCEL_GRACE) {
                     let _ = child.start_kill();
                     unsafe {
                         spawn::terminate_worker_group(lease.worker_pid, libc::SIGKILL);
-                        if let Some(extension) = lease.extension.as_ref() {
-                            crate::extension_host::spawn::terminate_host_tree(
-                                extension.host_pid,
-                                None,
-                            );
-                        }
+                    }
+                    if let Err(error) = extension_cgroup.kill_all() {
+                        return TaskOutcome::Failed(format!(
+                            "failed to terminate extension containment after cancellation: {error}"
+                        ));
                     }
                 }
                 if !hello_seen && last_progress.elapsed() > config.heartbeat_grace {
@@ -938,12 +1006,6 @@ async fn pump(
                     let _ = child.start_kill();
                     unsafe {
                         spawn::terminate_worker_group(lease.worker_pid, libc::SIGKILL);
-                        if let Some(extension) = lease.extension.as_ref() {
-                            crate::extension_host::spawn::terminate_host_tree(
-                                extension.host_pid,
-                                None,
-                            );
-                        }
                         crate::clawd::audit::record_extension_host_event(
                             &lease.task_id,
                             lease.session_id.as_deref(),
@@ -951,7 +1013,13 @@ async fn pump(
                             lease.extension.as_ref().map(|binding| binding.host_pid).unwrap_or_default(),
                             lease.extension.as_ref().and_then(|binding| binding.host_start_time_ticks),
                             "timeout",
+                            false,
                         );
+                    }
+                    if let Err(error) = extension_cgroup.kill_all() {
+                        return TaskOutcome::Failed(format!(
+                            "failed to terminate timed-out extension containment: {error}"
+                        ));
                     }
                     return TaskOutcome::Retry(
                         "agent worker lease expired without a heartbeat".to_string(),
@@ -1396,37 +1464,27 @@ async fn reap(child: &mut tokio::process::Child, pid: u32) {
     }
 }
 
-async fn reap_extension_host(host: &mut crate::extension_host::spawn::SpawnedExtensionHost) {
-    match host.child.try_wait() {
-        Ok(Some(status)) => {
-            if let Some(cgroup) = host.cgroup.as_ref() {
-                cgroup.kill_all();
-            }
+async fn reap_extension_host(
+    host: &mut crate::extension_host::spawn::SpawnedExtensionHost,
+) -> Result<(), String> {
+    let cleanup = host.cgroup.cleanup().await;
+    let _ = host.child.start_kill();
+    let reaped = match tokio::time::timeout(SHUTDOWN_GRACE, host.child.wait()).await {
+        Ok(Ok(status)) => {
             tracing::debug!(host_pid = host.pid, %status, "extension host reaped");
+            Ok(())
         }
-        Ok(None) => {
-            unsafe {
-                crate::extension_host::spawn::terminate_host_tree(host.pid, host.cgroup.as_ref());
-            }
-            let _ = host.child.start_kill();
-            match tokio::time::timeout(SHUTDOWN_GRACE, host.child.wait()).await {
-                Ok(Ok(status)) => {
-                    tracing::debug!(host_pid = host.pid, %status, "extension host reaped");
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!(host_pid = host.pid, %error, "failed to reap extension host");
-                }
-                Err(_) => {
-                    tracing::warn!(
-                        host_pid = host.pid,
-                        "extension host did not exit before deadline"
-                    );
-                }
-            }
-        }
-        Err(error) => {
-            tracing::warn!(host_pid = host.pid, %error, "failed to inspect extension host");
-        }
+        Ok(Err(error)) => Err(format!("reap extension host {}: {error}", host.pid)),
+        Err(_) => Err(format!(
+            "extension host {} did not exit before the reap deadline",
+            host.pid
+        )),
+    };
+    match (cleanup, reaped) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(cleanup), Ok(())) => Err(cleanup),
+        (Ok(()), Err(reap)) => Err(reap),
+        (Err(cleanup), Err(reap)) => Err(format!("{cleanup}; {reap}")),
     }
 }
 

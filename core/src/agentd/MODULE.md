@@ -186,11 +186,13 @@ records correlate within a task rather than across the daemon's lifetime.
 A worker or extension host that panics, is killed, exits unexpectedly, stops
 heartbeating, sends a frame outside its grant, or speaks a different protocol
 version only ends its own task. The supervisor terminates both process trees
-(`cgroup.kill` when available, recursive pid and process-group cleanup
-otherwise), reaps them, then either
-releases the task for retry (bounded by the same recovery budget as orphan
-recovery) or fails it, and `clawd` keeps serving. `clawd` treats no worker exit
-— normal or not — as fatal.
+and reaps them. Extension execution starts only after a delegated cgroup-v2
+CPU/memory/pids subtree, finite limits, pre-exec host membership, and working
+`cgroup.kill` have all been verified. Cleanup closes the proxy and authority,
+writes `cgroup.kill`, requires recursive `populated 0` and an empty
+`cgroup.procs`, then removes the task cgroup. There is no `/proc`-ancestry
+fallback. Unavailable containment or unverifiable cleanup is a terminal task
+error; `clawd` continues serving non-agent primitives.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
 report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
@@ -207,6 +209,7 @@ keeps working.
 | `COS_AGENTD_BIN` | Worker executable (default: beside `clawd`, else `/usr/local/bin/claw-agentd`) |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated primary group for worker/host/App/MCP execution (packaged default `cos-extension`) |
 | `COS_EXTENSION_HOST_BIN` | Extension host executable (default: beside `clawd`, else `/usr/local/bin/claw-extension-host`) |
+| `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally `clawd` prepares its systemd unit subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | `off` disables best-effort IPC/UTS namespaces; all other host isolation remains |
 | `CLAWD_AGENTD_MAX_WORKERS` | Concurrent workers, 1–64 (default 4) |
 | `CLAWD_AGENTD_LEASE_SECS` | Heartbeat lease, 30–86400 (default 900) |
