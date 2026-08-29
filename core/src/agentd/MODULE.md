@@ -82,8 +82,9 @@ installs one.
 
 - The worker sends the **exact denied verb and canonical scope**, plus an
   optional validated operation digest when the capability does not fully
-  identify the invocation. There is no session, owner, task, requester,
-  reason, duration or capability set on the request wire.
+  identify the invocation. Each ask also carries a fresh unpredictable nonce.
+  There is no session, owner, requester, reason, duration or capability set on
+  the request wire.
 - `clawd` takes owner, session, task, worker pid/start time, and
   attended/unattended context from trusted lease/session state. It re-parses
   the verb and scope against the catalog and composes the reason itself.
@@ -94,7 +95,9 @@ installs one.
 - `Consume` atomically spends an exactly matching, live decision, then mints
   and exercises a one-use `clawd::authority` grant bound to this task and
   worker. Operation-bound decisions must carry the same digest through this
-  final redemption. A replay finds nothing.
+  final redemption. The broker echoes the nonce and complete ask, and the
+  worker accepts the reply only when correlation id, nonce, ask kind, verb,
+  scope, and digest all match its waiter. A replay finds nothing.
 - There is no decide route. A worker can never approve anything, name another
   session or owner, or receive a reusable capability.
 - Mediation is bounded on both sides (`protocol::MAX_APPROVAL_ASKS`), refused

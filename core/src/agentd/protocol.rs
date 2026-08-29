@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -107,6 +107,7 @@ pub enum BrokerFrame {
     /// request, the safe id the user will act on.
     ApprovalReply {
         correlation_id: u64,
+        exchange: ApprovalExchange,
         reply: ApprovalReply,
     },
 }
@@ -115,7 +116,7 @@ pub enum BrokerFrame {
 /// canonical scope, and optional digest of already-validated operation
 /// inputs. Session, owner, task and worker identity are never sent — the
 /// broker takes all four from the verified grant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum ApprovalAsk {
     /// Spend an already-approved, exactly-matching grant. One-shot: the
@@ -157,6 +158,34 @@ impl ApprovalAsk {
                 operation_digest, ..
             } => operation_digest.as_deref(),
         }
+    }
+}
+
+/// Unpredictable, exact binding for one approval round trip.
+///
+/// Correlation ids are only counters and are not authenticators. The broker
+/// echoes this whole value, and the worker accepts the reply only when the
+/// nonce, verb, scope, operation digest, and ask kind all match its waiter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalExchange {
+    pub nonce: String,
+    pub ask: ApprovalAsk,
+}
+
+impl ApprovalExchange {
+    pub fn new(ask: ApprovalAsk) -> Self {
+        Self {
+            nonce: uuid::Uuid::new_v4().simple().to_string(),
+            ask,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.nonce.len() == 32
+            && self
+                .nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
 }
 
@@ -241,7 +270,7 @@ pub enum WorkerFrame {
     Approval {
         task_id: String,
         correlation_id: u64,
-        ask: ApprovalAsk,
+        exchange: ApprovalExchange,
     },
     Result {
         task_id: String,

@@ -105,6 +105,56 @@ fn an_expired_lease_stops_accepting_frames() {
 }
 
 #[test]
+fn approval_frames_require_a_nonzero_correlation_and_valid_nonce() {
+    let mut lease = new_lease();
+    let (signer, _hello) = signer_and_hello(&lease);
+    let ask = ApprovalAsk::Consume {
+        verb: crate::caps::Verb::FS_READ.as_str().to_string(),
+        scope: crate::caps::Scope::path("/home/user/notes.txt"),
+        operation_digest: None,
+    };
+    let invalid_nonce = WorkerFrame::Approval {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        exchange: protocol::ApprovalExchange {
+            nonce: "predictable".to_string(),
+            ask: ask.clone(),
+        },
+    };
+    let error = accept(
+        &signer,
+        std::process::id(),
+        &mut lease,
+        &invalid_nonce,
+        true,
+    )
+    .expect_err("an invalid nonce must be refused");
+    assert!(error.contains("nonce"), "{error}");
+
+    let zero_correlation = WorkerFrame::Approval {
+        task_id: lease.task_id.clone(),
+        correlation_id: 0,
+        exchange: protocol::ApprovalExchange::new(ask.clone()),
+    };
+    let error = accept(
+        &signer,
+        std::process::id(),
+        &mut lease,
+        &zero_correlation,
+        true,
+    )
+    .expect_err("correlation zero must be refused");
+    assert!(error.contains("correlation"), "{error}");
+
+    let valid = WorkerFrame::Approval {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        exchange: protocol::ApprovalExchange::new(ask),
+    };
+    assert!(accept(&signer, std::process::id(), &mut lease, &valid, true,).is_ok());
+}
+
+#[test]
 fn the_grant_the_supervisor_mints_only_carries_worker_channel_routes() {
     let lease = new_lease();
     let claims = claims_for(std::process::id(), &lease, Duration::from_secs(60));
@@ -435,12 +485,7 @@ fn worker_authority_rechecks_operation_digest_after_durable_spend() {
     let session = lease.session_id.clone().expect("session");
     let approved = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
     let substituted = crate::crypto::sha256_hex(b"/bin/sh\0-c\0id");
-    approve_once_for_operation(
-        &lease,
-        crate::caps::Verb::PROC_SPAWN,
-        &scope,
-        &approved,
-    );
+    approve_once_for_operation(&lease, crate::caps::Verb::PROC_SPAWN, &scope, &approved);
     let consumed = crate::approvals::redeem_matching_worker_grant_for_owner_operation(
         &session,
         crate::caps::Verb::PROC_SPAWN,

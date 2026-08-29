@@ -112,15 +112,17 @@ fn an_ask_names_only_the_denied_capability_and_operation_digest() {
     let WorkerFrame::Approval {
         task_id,
         correlation_id,
-        ask,
+        exchange,
     } = frame
     else {
         panic!("expected an approval frame");
     };
+    let ask = &exchange.ask;
     assert_eq!(task_id, "task-a");
     assert_eq!(ask.verb(), Verb::FS_READ.as_str());
     assert_eq!(ask.scope(), &scope());
     assert_eq!(ask.operation_digest(), Some(digest.as_str()));
+    assert!(exchange.is_valid());
     // Nothing about identity travels: the frame has no session, owner,
     // worker or capability field at all.
     let encoded = serde_json::to_string(&ask).expect("encode");
@@ -130,7 +132,7 @@ fn an_ask_names_only_the_denied_capability_and_operation_digest() {
             "an ask must not carry `{forbidden}`: {encoded}"
         );
     }
-    state.deliver(correlation_id, ApprovalReply::Granted);
+    state.deliver(correlation_id, &exchange, ApprovalReply::Granted);
 }
 
 #[test]
@@ -138,14 +140,20 @@ fn a_refusal_keeps_the_gate_closed_rather_than_opening_it() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
     let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope(), None));
-    let correlation_id = loop {
-        if let Ok(WorkerFrame::Approval { correlation_id, .. }) = rx.try_recv() {
-            break correlation_id;
+    let (correlation_id, exchange) = loop {
+        if let Ok(WorkerFrame::Approval {
+            correlation_id,
+            exchange,
+            ..
+        }) = rx.try_recv()
+        {
+            break (correlation_id, exchange);
         }
         std::thread::sleep(Duration::from_millis(5));
     };
     state.deliver(
         correlation_id,
+        &exchange,
         ApprovalReply::Refused {
             message: "consent store is unavailable".to_string(),
         },
@@ -162,13 +170,22 @@ fn a_pending_request_does_not_grant_anything() {
     let (gateway, mut rx) = gateway();
     let state = gateway.state.clone();
     let handle = std::thread::spawn(move || gateway.consume(Verb::FS_READ, &scope(), None));
-    let correlation_id = loop {
-        if let Ok(WorkerFrame::Approval { correlation_id, .. }) = rx.try_recv() {
-            break correlation_id;
+    let (correlation_id, exchange) = loop {
+        if let Ok(WorkerFrame::Approval {
+            correlation_id,
+            exchange,
+            ..
+        }) = rx.try_recv()
+        {
+            break (correlation_id, exchange);
         }
         std::thread::sleep(Duration::from_millis(5));
     };
-    state.deliver(correlation_id, ApprovalReply::Pending { request_id: None });
+    state.deliver(
+        correlation_id,
+        &exchange,
+        ApprovalReply::Pending { request_id: None },
+    );
     assert_eq!(handle.join().expect("join"), Ok(false));
 }
 
@@ -214,18 +231,52 @@ fn losing_the_channel_refuses_every_waiter() {
 fn a_reply_is_delivered_only_to_its_own_waiter() {
     let (gateway, _rx) = gateway();
     let state = gateway.state.clone();
-    let waiter = state.register(7);
-    // A reply correlated to a different ask must not satisfy this one,
-    // so a replayed or mismatched frame cannot open an unrelated gate.
-    state.deliver(8, ApprovalReply::Granted);
+    let expected = ApprovalExchange {
+        nonce: "a".repeat(32),
+        ask: ApprovalAsk::Consume {
+            verb: Verb::FS_READ.as_str().to_string(),
+            scope: scope(),
+            operation_digest: Some(crate::crypto::sha256_hex(b"expected")),
+        },
+    };
+    let waiter = state.register(7, expected.clone());
+    // Correlation id alone is not enough: nonce and exact request binding
+    // must all match before a reply can open the waiter.
+    state.deliver(8, &expected, ApprovalReply::Granted);
     assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
-    state.deliver(7, ApprovalReply::Granted);
+    let wrong_nonce = ApprovalExchange {
+        nonce: "b".repeat(32),
+        ask: expected.ask.clone(),
+    };
+    state.deliver(7, &wrong_nonce, ApprovalReply::Granted);
+    assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+    let wrong_scope = ApprovalExchange {
+        nonce: expected.nonce.clone(),
+        ask: ApprovalAsk::Consume {
+            verb: Verb::FS_READ.as_str().to_string(),
+            scope: Scope::path("/home/user/other.txt"),
+            operation_digest: expected.ask.operation_digest().map(str::to_string),
+        },
+    };
+    state.deliver(7, &wrong_scope, ApprovalReply::Granted);
+    assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+    let wrong_digest = ApprovalExchange {
+        nonce: expected.nonce.clone(),
+        ask: ApprovalAsk::Consume {
+            verb: Verb::FS_READ.as_str().to_string(),
+            scope: scope(),
+            operation_digest: Some(crate::crypto::sha256_hex(b"substituted")),
+        },
+    };
+    state.deliver(7, &wrong_digest, ApprovalReply::Granted);
+    assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
+    state.deliver(7, &expected, ApprovalReply::Granted);
     assert_eq!(
         waiter.recv_timeout(Duration::from_millis(50)),
         Ok(ApprovalReply::Granted)
     );
     // Replaying the same correlation id finds no waiter at all.
-    state.deliver(7, ApprovalReply::Granted);
+    state.deliver(7, &expected, ApprovalReply::Granted);
     assert!(waiter.recv_timeout(Duration::from_millis(50)).is_err());
 }
 

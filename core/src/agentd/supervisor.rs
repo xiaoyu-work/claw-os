@@ -530,14 +530,16 @@ async fn pump(
                         }
                         WorkerFrame::Approval {
                             correlation_id,
-                            ask,
+                            exchange,
                             ..
                         } => {
-                            let reply = mediate_approval(&mut approvals_used, &lease, &ask);
+                            let reply =
+                                mediate_approval(&mut approvals_used, &lease, &exchange.ask);
                             let _ = send(
                                 &mut writer,
                                 &BrokerFrame::ApprovalReply {
                                     correlation_id,
+                                    exchange,
                                     reply,
                                 },
                             )
@@ -684,6 +686,19 @@ fn accept(
     }
     if frame.task_id() != Some(lease.task_id.as_str()) {
         return Err("frame is addressed to a different task".to_string());
+    }
+    if let WorkerFrame::Approval {
+        correlation_id,
+        exchange,
+        ..
+    } = frame
+    {
+        if *correlation_id == 0 {
+            return Err("approval correlation id is invalid".to_string());
+        }
+        if !exchange.is_valid() {
+            return Err("approval exchange nonce is invalid".to_string());
+        }
     }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());

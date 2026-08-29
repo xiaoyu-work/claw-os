@@ -48,8 +48,8 @@ use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
 use crate::caps::{ConsentContext, Scope, Verb};
 
 use super::protocol::{
-    self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, FrameReader, ProgressRecord,
-    RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
+    self, ApprovalAsk, ApprovalExchange, ApprovalReply, Assignment, BrokerFrame, FrameReader,
+    ProgressRecord, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -260,16 +260,28 @@ impl LocalIdentity {
 struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
-    waiters: Mutex<HashMap<u64, SyncSender<ApprovalReply>>>,
+    waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
 }
 
+#[derive(Debug)]
+struct ApprovalWaiter {
+    exchange: ApprovalExchange,
+    reply: SyncSender<ApprovalReply>,
+}
+
 impl ChannelState {
-    fn register(&self, correlation_id: u64) -> Receiver<ApprovalReply> {
+    fn register(&self, correlation_id: u64, exchange: ApprovalExchange) -> Receiver<ApprovalReply> {
         let (tx, rx) = sync_channel(1);
         if let Ok(mut waiters) = self.waiters.lock() {
-            waiters.insert(correlation_id, tx);
+            waiters.insert(
+                correlation_id,
+                ApprovalWaiter {
+                    exchange,
+                    reply: tx,
+                },
+            );
         }
         rx
     }
@@ -280,14 +292,15 @@ impl ChannelState {
         }
     }
 
-    fn deliver(&self, correlation_id: u64, reply: ApprovalReply) {
-        let waiter = self
-            .waiters
-            .lock()
-            .ok()
-            .and_then(|mut waiters| waiters.remove(&correlation_id));
+    fn deliver(&self, correlation_id: u64, exchange: &ApprovalExchange, reply: ApprovalReply) {
+        let waiter = self.waiters.lock().ok().and_then(|mut waiters| {
+            let matches = waiters
+                .get(&correlation_id)
+                .is_some_and(|waiter| &waiter.exchange == exchange);
+            matches.then(|| waiters.remove(&correlation_id)).flatten()
+        });
         if let Some(waiter) = waiter {
-            let _ = waiter.try_send(reply);
+            let _ = waiter.reply.try_send(reply);
         }
     }
 
@@ -297,7 +310,7 @@ impl ChannelState {
         let drained: Vec<SyncSender<ApprovalReply>> = self
             .waiters
             .lock()
-            .map(|mut waiters| waiters.drain().map(|(_, tx)| tx).collect())
+            .map(|mut waiters| waiters.drain().map(|(_, waiter)| waiter.reply).collect())
             .unwrap_or_default();
         for waiter in drained {
             let _ = waiter.try_send(ApprovalReply::Refused {
@@ -528,9 +541,10 @@ where
         match frames.next_frame::<BrokerFrame>().await {
             Ok(Some(BrokerFrame::ApprovalReply {
                 correlation_id,
+                exchange,
                 reply,
             })) => {
-                state.deliver(correlation_id, reply);
+                state.deliver(correlation_id, &exchange, reply);
             }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => break,
             Ok(Some(BrokerFrame::Shutdown)) => break,
@@ -578,14 +592,15 @@ impl ChannelApprovalGateway {
             ));
         }
         let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
-        let waiter = self.state.register(correlation_id);
+        let exchange = ApprovalExchange::new(ask);
+        let waiter = self.state.register(correlation_id, exchange.clone());
         if self
             .state
             .tx
             .send(WorkerFrame::Approval {
                 task_id: self.task_id.clone(),
                 correlation_id,
-                ask,
+                exchange,
             })
             .is_err()
         {

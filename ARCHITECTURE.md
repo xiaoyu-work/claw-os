@@ -288,6 +288,12 @@ broker-only lease nonce and deadline, and the revocation generation current at
 request time; a stale decision, replacement worker, or concurrent task cannot
 rebind it.
 
+Approval correlation counters are not trusted as authenticators. Every worker
+ask carries a fresh random nonce and the broker echoes that nonce plus the
+complete ask. The worker resolves a waiter only when correlation id, nonce,
+ask kind, verb, canonical scope, and operation digest all match; substituted
+or replayed replies remain pending and cannot open a capability gate.
+
 In-process Agent surfaces use the same binding model without a process-global
 identity. Each invocation installs a Tokio task-local identity derived from its
 actual task or conversation-turn identifier plus a fresh nonce. Invocation

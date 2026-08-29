@@ -62,7 +62,10 @@ is created and direct the caller to `cos_sandbox`. Non-Linux platforms also
 fail closed until they provide an equivalent handle-pinned execution path.
 
 Model output cannot approve a request. The worker channel has no decision
-route, and a request id is metadata rather than authority.
+route, and a request id is metadata rather than authority. Broker replies echo
+a fresh unpredictable ask nonce and the exact ask kind, verb, scope, and
+operation digest. A correlation-id collision, substituted reply, or replay
+does not satisfy the worker's waiter.
 
 ## Replay, expiry, and revocation
 
