@@ -1,5 +1,9 @@
 #!/bin/sh
 # claw-os-base postrm -- purge distribution-level systemd state.
+#
+# The update-security floor under /var/lib/cos/security is never
+# removed here: it must survive package removal so a later install of a
+# superseded release still has something to be measured against.
 
 set -e
 

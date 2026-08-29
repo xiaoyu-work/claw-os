@@ -14,6 +14,8 @@ persistence, and structured primitive dispatch.
 - Run the multi-turn agent, tool registry, memory, and provider integrations.
 - Discover app manifests and bridge bundled app execution.
 - Enforce capability scopes and write audit/session records.
+- Refuse to install, activate or run a Claw OS release older than the one this
+  machine has already accepted.
 
 ## Key Files
 
@@ -24,6 +26,8 @@ persistence, and structured primitive dispatch.
 | `src/router.rs` | Top-level command and hidden bridge dispatch |
 | `src/bin/clawd.rs` | System daemon entry |
 | `src/bin/claw-agentd.rs` | Unprivileged agent worker entry |
+| `src/bin/claw-security-floor.rs` | Update downgrade-protection verifier used by maintainer scripts |
+| `src/update/` | Signed release manifest, monotonic security floor, recovery authorizations, runtime gates |
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
@@ -53,6 +57,9 @@ cargo test -p cos <test-filter> -- --test-threads=1
 
 # Full core suite
 (cd core && cargo test -- --test-threads=1)
+
+# Update downgrade protection, including the dpkg ordering cross-check
+cargo test -p cos --test security_floor_process -- --test-threads=1
 
 # CI lint
 (cd core && cargo clippy -- -D warnings)

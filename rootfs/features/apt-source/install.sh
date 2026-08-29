@@ -63,14 +63,35 @@ if [ -n "$COS_APT_PUBLIC_KEY_FINGERPRINT" ]; then
 fi
 
 echo "  :: writing /etc/apt/sources.list.d/claw-os.list"
-mkdir -p "$ROOTFS/etc/apt/sources.list.d"
+mkdir -p "$ROOTFS/etc/apt/sources.list.d" "$ROOTFS/etc/apt/apt.conf.d"
 install -Dm0644 "$COS_APT_PUBLIC_KEY_FILE" \
     "$ROOTFS/usr/share/keyrings/claw-os-archive-keyring.gpg"
 
+# Signature options are freshness options too. `check-valid-until=yes`
+# makes APT refuse an index whose signed `Valid-Until` has passed, so a
+# stale or frozen mirror cannot keep offering a superseded release
+# indefinitely; the `allow-*` options refuse every insecure fallback
+# that would otherwise accept it. Downgrade protection itself lives in
+# the packages and in /var/lib/cos/security — these only stop the
+# repository layer from handing an old snapshot over in the first
+# place.
 cat > "$ROOTFS/etc/apt/sources.list.d/claw-os.list" <<EOF
 # Claw OS — official package repository.
 # Source: https://github.com/xiaoyu-work/claw-os
-deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg] $COS_APT_REPO_URL $COS_APT_REPO_SUITE main
+deb [signed-by=/usr/share/keyrings/claw-os-archive-keyring.gpg check-valid-until=yes allow-insecure=no allow-weak=no allow-downgrade-to-insecure=no by-hash=yes] $COS_APT_REPO_URL $COS_APT_REPO_SUITE main
+EOF
+
+cat > "$ROOTFS/etc/apt/apt.conf.d/50claw-os-repository" <<'EOF'
+// Claw OS repository freshness.
+//
+// APT signatures prove who published an index; `Valid-Until` is what
+// bounds how long that index may still be served. Keeping the check on
+// — and refusing the insecure fallbacks that would bypass it — is what
+// stops a stale or hostile mirror from replaying an old, still validly
+// signed snapshot at an installed system.
+Acquire::Check-Valid-Until "true";
+Acquire::AllowInsecureRepositories "false";
+Acquire::AllowDowngradeToInsecureRepositories "false";
 EOF
 
 echo "  :: apt source ready ($COS_APT_REPO_URL $COS_APT_REPO_SUITE main)"

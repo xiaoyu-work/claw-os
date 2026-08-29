@@ -30,8 +30,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$PROJECT_DIR/scripts/lib/git-readonly.sh"
 
-DEBS_DIR="$PROJECT_DIR/build/debs"
-REPO_DIR="$PROJECT_DIR/build/apt-repo"
+DEBS_DIR="${COS_DEBS_DIR:-$PROJECT_DIR/build/debs}"
+REPO_DIR="${COS_APT_REPO_DIR:-$PROJECT_DIR/build/apt-repo}"
 BRAND_ASSETS_DIR="$PROJECT_DIR/assets/brand"
 SUITE="${SUITE:-trixie}"
 COMPONENT="main"
@@ -111,6 +111,49 @@ for deb in "$DEBS_DIR"/*.deb; do
     echo "  :: pool/$COMPONENT/c/$pkg/$name"
 done
 
+# Export the publishing key before anything is validated with it: the
+# release-security metadata is verified against exactly the keyring the
+# repository publishes, not against whatever happens to be in the
+# builder's keyring.
+gpg --batch --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.gpg"
+gpg --batch --armor --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.asc"
+test -s "$REPO_DIR/claw-os-archive-keyring.gpg"
+
+# Freshness metadata. Refuses to publish a set that regresses a
+# security epoch or version, replaces a published version with
+# different content, or is not mutually compatible.
+echo ":: verifying release-security metadata"
+"$PROJECT_DIR/packaging/apt-repo/verify-release-security.sh" \
+    "$REPO_DIR" "$SUITE" "$COMPONENT" \
+    "$REPO_DIR/claw-os-archive-keyring.gpg" \
+    "${COS_PREVIOUS_RELEASE_SECURITY_DIR:-$PROJECT_DIR/build/release-security-previous}"
+
+# The verifier reports, in a structured file, whether it actually
+# produced and verified a signed baseline marker. `Release` advertises
+# the baseline only when it did: a repository that still predates
+# downgrade protection must stay honestly unprotected rather than claim
+# a guarantee that no artifact backs.
+RELEASE_SECURITY_STATUS="$REPO_DIR/.release-security-status"
+if [ ! -s "$RELEASE_SECURITY_STATUS" ]; then
+    echo "error: verify-release-security.sh reported no status" >&2
+    exit 1
+fi
+baseline_published="$(sed -n 's/^baseline=//p' "$RELEASE_SECURITY_STATUS")"
+case "$baseline_published" in
+    0|1) ;;
+    *)
+        echo "error: unusable release-security status '$baseline_published'" >&2
+        exit 1
+        ;;
+esac
+if [ "$baseline_published" = "1" ]; then
+    test -s "$REPO_DIR/dists/$SUITE/release-security/baseline.json"
+    test -s "$REPO_DIR/dists/$SUITE/release-security/baseline.json.asc"
+else
+    echo "warning: publishing without a release-security baseline marker" >&2
+fi
+rm -f "$RELEASE_SECURITY_STATUS"
+
 # Generate Packages files. apt-ftparchive packages walks the pool and
 # extracts the Architecture field from each .deb's control. The same
 # pool feeds every binary-<arch>/ index; apt's client filters by arch
@@ -137,6 +180,15 @@ if [ ${#binary_arches[@]} -eq 0 ]; then
 else
     arch_list="${binary_arches[*]} all"
 fi
+
+# Freshness of the index itself. `Valid-Until` bounds how long a mirror
+# may keep serving this snapshot; APT refuses an expired Release unless
+# a client explicitly disables the check, which the Claw OS apt source
+# and the shipped apt.conf.d snippet both forbid.
+RELEASE_VALID_DAYS="${COS_APT_RELEASE_VALID_DAYS:-30}"
+release_date="$(date -u -R)"
+valid_until="$(date -u -R -d "+${RELEASE_VALID_DAYS} days")"
+
 cat > "$REPO_DIR/apt-ftparchive-release.conf" <<EOF
 APT::FTPArchive::Release::Origin "Claw OS";
 APT::FTPArchive::Release::Label "Claw OS";
@@ -145,26 +197,122 @@ APT::FTPArchive::Release::Codename "$SUITE";
 APT::FTPArchive::Release::Architectures "$arch_list";
 APT::FTPArchive::Release::Components "$COMPONENT";
 APT::FTPArchive::Release::Description "Claw OS apt repository";
+APT::FTPArchive::Release::Date "$release_date";
+APT::FTPArchive::Release::Acquire-By-Hash "yes";
 EOF
+
+# Publish every index under by-hash/SHA256 as well, so a client that
+# fetched a Release can always retrieve exactly the index that Release
+# names even while the repository is being replaced.
+echo ":: publishing by-hash indexes"
+while IFS= read -r -d '' index; do
+    index_dir="$(dirname "$index")"
+    hash="$(sha256sum "$index" | cut -d' ' -f1)"
+    mkdir -p "$index_dir/by-hash/SHA256"
+    cp "$index" "$index_dir/by-hash/SHA256/$hash"
+done < <(find "dists/$SUITE/$COMPONENT" -type f \
+    \( -name 'Packages' -o -name 'Packages.gz' \) -print0)
 
 apt-ftparchive -c="$REPO_DIR/apt-ftparchive-release.conf" \
     release "dists/$SUITE" > "dists/$SUITE/Release"
 
 rm -f "$REPO_DIR/apt-ftparchive-release.conf"
 
+# `apt-ftparchive` does not emit `Valid-Until` on every apt version, and
+# publishing without it would silently drop the freshness bound that
+# stops a mirror serving this snapshot forever. Insert it beside `Date:`
+# ourselves, before the file is signed, and refuse to continue if it is
+# not there afterwards.
+awk -v valid_until="$valid_until" -v baseline="$baseline_published" '
+    /^Valid-Until:/ { next }
+    /^Claw-Os-Release-Security-Baseline:/ { next }
+    { print }
+    /^Date:/ {
+        printf "Valid-Until: %s\n", valid_until
+        if (baseline == "1") {
+            print "Claw-Os-Release-Security-Baseline: 1"
+        }
+    }
+' "dists/$SUITE/Release" > "dists/$SUITE/Release.tmp"
+mv "dists/$SUITE/Release.tmp" "dists/$SUITE/Release"
+if [ "$(grep -c '^Valid-Until:' "dists/$SUITE/Release")" != "1" ]; then
+    echo "error: Release must carry exactly one Valid-Until field" >&2
+    exit 1
+fi
+# The baseline field is what tells the *next* publication that this
+# repository already guarantees release-security metadata, so a fetch
+# failure can never be mistaken for a fresh repository. It is asserted
+# to match what was really published, in both directions.
+baseline_fields="$(grep -c '^Claw-Os-Release-Security-Baseline: 1$' \
+    "dists/$SUITE/Release" || true)"
+if [ "$baseline_fields" != "$baseline_published" ]; then
+    echo "error: Release advertises $baseline_fields baseline marker(s) but" >&2
+    echo "       the verifier published baseline=$baseline_published" >&2
+    exit 1
+fi
+grep -q '^Acquire-By-Hash: yes' "dists/$SUITE/Release" \
+    || echo "warning: this apt-ftparchive did not advertise Acquire-By-Hash" >&2
+
+# `apt-ftparchive release` only hashes the index files APT itself
+# fetches, so the release-security metadata would be authenticated only
+# by its own detached signatures. That is not enough: a signature says
+# who produced a file, not which published snapshot it belongs to, so an
+# origin could pair a current index with an older, separately signed
+# manifest it kept around. Listing those files in `Release` binds them
+# to this snapshot, and the publisher cross-checks them on the next run.
+if [ -d "dists/$SUITE/release-security" ]; then
+    python3 - "dists/$SUITE/Release" "dists/$SUITE/release-security" <<'PY'
+import hashlib
+import pathlib
+import sys
+
+release = pathlib.Path(sys.argv[1])
+metadata = pathlib.Path(sys.argv[2])
+base = release.parent
+
+entries = []
+for path in sorted(metadata.rglob("*")):
+    if not path.is_file():
+        continue
+    body = path.read_bytes()
+    entries.append(
+        (path.relative_to(base).as_posix(), hashlib.sha256(body).hexdigest(), len(body))
+    )
+if not entries:
+    raise SystemExit(0)
+
+lines = release.read_text(encoding="utf-8").splitlines()
+try:
+    start = lines.index("SHA256:")
+except ValueError:
+    raise SystemExit("error: the generated Release carries no SHA256 section")
+
+end = start + 1
+while end < len(lines) and lines[end].startswith(" "):
+    end += 1
+
+known = {line.split()[-1] for line in lines[start + 1 : end] if line.split()}
+added = [
+    f" {digest} {size:>16} {name}"
+    for name, digest, size in entries
+    if name not in known
+]
+release.write_text(
+    "\n".join(lines[:end] + added + lines[end:]) + "\n", encoding="utf-8"
+)
+print(f"  :: bound {len(added)} release-security file(s) to the signed index")
+PY
+fi
+
 # Sign Release in both formats and publish the exact binary keyring that
 # Claw OS images pin with signed-by=.
+#
+# The passphrase never reaches argv: `claw_gpg_*` hands it to gpg on a
+# pipe under --passphrase-fd 0.
 echo ":: signing with GPG key $GPG_KEY_ID"
-gpg_args=(--batch --yes --pinentry-mode loopback --default-key "$GPG_KEY_ID")
-if [ -n "$GPG_PASSPHRASE" ]; then
-    gpg_args+=(--passphrase "$GPG_PASSPHRASE")
-fi
-gpg "${gpg_args[@]}" --detach-sign \
-    --armor -o "dists/$SUITE/Release.gpg" "dists/$SUITE/Release"
-gpg "${gpg_args[@]}" --clearsign \
-    -o "dists/$SUITE/InRelease" "dists/$SUITE/Release"
-gpg --batch --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.gpg"
-gpg --batch --armor --export "$GPG_KEY_ID" > "$REPO_DIR/claw-os-archive-keyring.asc"
+source "$PROJECT_DIR/packaging/release-security/gpg-sign.sh"
+claw_gpg_sign_detached "$GPG_KEY_ID" "dists/$SUITE/Release" "dists/$SUITE/Release.gpg"
+claw_gpg_sign_clear "$GPG_KEY_ID" "dists/$SUITE/Release" "dists/$SUITE/InRelease"
 test -s "dists/$SUITE/InRelease"
 test -s "dists/$SUITE/Release.gpg"
 test -s "$REPO_DIR/claw-os-archive-keyring.gpg"

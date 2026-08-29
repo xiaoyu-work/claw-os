@@ -118,6 +118,16 @@ fn render(payload: &str, fmt: OutputFormat) -> String {
 }
 
 fn main() {
+    // Freshness gate, before argv is interpreted or a session is
+    // bootstrapped: a `cos` binary older than the release this system
+    // has already accepted refuses to act rather than reintroducing a
+    // fixed client-side flaw. Cheap — one small root-owned file.
+    if let Err(refusal) =
+        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+    {
+        eprintln!("cos: {refusal}");
+        process::exit(1);
+    }
     let raw_args: Vec<String> = env::args().skip(1).collect();
     let (raw_args, fmt) = extract_format(raw_args);
     let operation_accepts_stdin = router::app_operation_accepts_stdin(&raw_args);

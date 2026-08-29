@@ -5,7 +5,10 @@ Priority: optional
 Architecture: all
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Depends: claw-os-agent, systemd, systemd-coredump,
+XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
+XB-Claw-Os-Abi: __ABI__
+Depends: claw-os-agent (>= __MIN_AGENT__), claw-os-abi-__ABI__,
+ systemd, systemd-coredump,
  init-system-helpers (>= 1.52)
 Description: Claw OS distribution integration layer
  Extends `claw-os-agent` with the recovery helper, managed OverlayFS

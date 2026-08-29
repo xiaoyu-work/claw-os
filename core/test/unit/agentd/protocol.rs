@@ -73,6 +73,7 @@ fn every_worker_frame_names_its_route_and_task() {
     let frames = [
         WorkerFrame::Hello(Box::new(WorkerHello {
             protocol: PROTOCOL_VERSION,
+            security_epoch: crate::update::SECURITY_EPOCH,
             grant: signed_grant(),
             pid: 2,
             start_time_ticks: None,

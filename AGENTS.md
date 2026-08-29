@@ -55,6 +55,7 @@ editing additional surfaces.
 | Rootfs composition | `scripts/lib/image-profiles.sh`, `rootfs/build.sh`, `rootfs/features/` | target build script and package contents |
 | WSL or Docker image | `.github/workflows/build-docker-and-wsl.yml`, `targets/wsl/`, `targets/docker/` | shared rootfs profile |
 | Debian/APT package | `packaging/deb/`, `packaging/apt-repo/` | `publish-*-package.yml`, rootfs package-install features |
+| Update downgrade protection | `core/src/update/`, `packaging/release-security/policy.json` | `packaging/deb/common/`, maintainer scripts, `packaging/apt-repo/verify-release-security.sh`, `docs/updating.md` |
 | Web desktop or website | `web/src/App.tsx`, `web/MODULE.md` | `web/src/components/`, `web/public/site/`, Pages composition workflow |
 | Desktop component | `desktop/README.md`, `desktop/PROVENANCE.md`, component README | component Cargo/just manifest and license |
 | CI workflow | `.github/workflows/` | scripts invoked by the workflow; only `test.yml` runs on pull requests, while publication workflows are manually dispatched or reusable |
@@ -225,6 +226,16 @@ Decide separately whether the change belongs in:
 - target-only packaging (`targets/`).
 
 If installed-system update behavior changes, update `docs/updating.md`.
+
+### Release-security change
+
+`packaging/release-security/policy.json` and the constants in
+`core/src/update/mod.rs` are one contract; a unit test fails when they diverge.
+Raising the security epoch or the ABI generation is a coordinated change:
+update the policy, the compiled constants, the package `control` dependencies
+that encode the ABI, and `docs/updating.md`. Never lower an epoch, and never
+weaken a gate to make a release install — publish a newer one, or use the
+documented recovery authorization.
 
 ## Agent Workflow
 

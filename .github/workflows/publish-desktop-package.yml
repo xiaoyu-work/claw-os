@@ -2,7 +2,21 @@ name: Publish Desktop package
 
 on:
   workflow_dispatch:
+    inputs:
+      release_security_bootstrap:
+        description: >-
+          One-time migration: establish the release-security baseline for a
+          repository published before downgrade protection existed. Rejected
+          once a baseline exists.
+        required: false
+        default: false
+        type: boolean
   workflow_call:
+    inputs:
+      release_security_bootstrap:
+        required: false
+        default: false
+        type: boolean
 
 # Desktop package builds are intentionally separate from lightweight
 # Agent/base publication. They require a full Debian rootfs and the vendored
@@ -34,9 +48,47 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools debootstrap curl ca-certificates python3 gnupg git-lfs
 
-      - name: Build desktop package in Debian rootfs
+      # The desktop package is assembled inside the rootfs build, so the
+      # signing key has to be available to that invocation: the release
+      # manifest travels inside the .deb and is verified offline.
+      - name: Import release-security signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
         run: |
-          sudo env ARCH="$ARCH" DESKTOP_PACKAGE_ONLY=1 \
+          set -euo pipefail
+          if [ -z "${CLAW_OS_APT_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "error: CLAW_OS_APT_SIGNING_PRIVATE_KEY is required to sign" >&2
+            echo "       release-security metadata; publication cannot continue" >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-release-security-gnupg"
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(gpg --batch --with-colons --list-secret-keys \
+            | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$key_id"
+          # Export exactly the public key that will do the signing, so
+          # the build's own signatures are verified against the intended
+          # identity rather than against whatever else the runner's
+          # keyring happens to trust.
+          keyring="$RUNNER_TEMP/claw-os-release-security.gpg"
+          gpg --batch --export "$key_id" > "$keyring"
+          test -s "$keyring"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "CLAW_OS_RELEASE_SECURITY_KEY_ID=$key_id" >> "$GITHUB_ENV"
+          echo "CLAW_OS_RELEASE_SECURITY_KEYRING=$keyring" >> "$GITHUB_ENV"
+
+      - name: Build desktop package in Debian rootfs
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          # `sudo env GPG_PASSPHRASE=...` would put the signing
+          # passphrase in this process's argv, readable from /proc by
+          # anything else on the runner. --preserve-env hands it over
+          # through the environment instead.
+          sudo --preserve-env=GNUPGHOME,CLAW_OS_RELEASE_SECURITY_KEY_ID,GPG_PASSPHRASE \
+            env ARCH="$ARCH" DESKTOP_PACKAGE_ONLY=1 \
             ./rootfs/build.sh --features "$ROOTFS_FEATURES"
 
       - name: Verify desktop package
@@ -50,6 +102,18 @@ jobs:
           grep -q './usr/local/bin/cos-ask-claw-launcher$' "$RUNNER_TEMP/claw-os-desktop.files"
           grep -q './usr/lib/cos/apps/agent/app.json$' "$RUNNER_TEMP/claw-os-desktop.files"
           grep -q './usr/share/applications/com.clawos.Agent.desktop$' "$RUNNER_TEMP/claw-os-desktop.files"
+
+      # One shared script binds the embedded manifest to the built
+      # control fields and payload for every package, so the three
+      # publication workflows cannot drift apart.
+      - name: Verify desktop release-security metadata
+        run: |
+          set -euo pipefail
+          desktop_deb="$(printf '%s\n' build/debs/claw-os-desktop_*_"$ARCH".deb)"
+          ./packaging/release-security/verify-package-manifest.sh "$desktop_deb" \
+            --arch "$ARCH" \
+            --require-signature \
+            --keyring "$CLAW_OS_RELEASE_SECURITY_KEYRING"
 
       - name: Upload desktop package
         uses: actions/upload-artifact@v4
@@ -65,6 +129,7 @@ jobs:
     with:
       artifact_pattern: claw-os-desktop-*
       pages_artifact_name: github-pages-desktop
+      release_security_bootstrap: ${{ inputs.release_security_bootstrap }}
     permissions:
       actions: read
       contents: read

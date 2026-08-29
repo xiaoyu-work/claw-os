@@ -53,6 +53,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Notification service | Durable owner-scoped user-attention records, delivery policy, DND, deduplication, retries, and channel leases | `core/src/notifications/`, `core/src/clawd/notifications.rs` |
 | Apps and adapters | Declarative operation manifests plus Python, Node, shell, or binary runtime handlers | `apps/`, `adapters/`, `core/src/apps.rs`, `core/src/bridge.rs` |
 | Extension provenance | Publisher signing, trust roots, package verification, and the shared bounded installer for Apps, Skills, and MCP/adapter packages | `core/src/provenance/` |
+| Update freshness | Signed release-security manifest, monotonic local security floor, one-use recovery authorizations, and the install/activation/runtime gates that refuse a superseded release | `core/src/update/`, `packaging/release-security/`, `packaging/deb/common/` |
 | SDK/runtime | Public app SDKs and internal bundled-app policy helpers | `claw-os-sdk/`, `cos-runtime/` |
 | Browser and semantic services | Obscura browser stack, `cos-browser`, embedding and semantic-search services | `crates/obscura-*`, `crates/cos-browser`, `crates/claw-*` |
 | Desktop | Product desktop fork and native UI clients communicating through stable OS boundaries; the Agent UI and bridge share a versioned presentation protocol | `desktop/`, `desktop/agent/protocol/` |
@@ -180,6 +181,16 @@ lifecycle, configuration, service orchestration, and user-facing commands.
 - Debian packages are assembled from built binaries and source-tree files and
   do not require a rootfs build.
 - Docker and WSL share one rootfs per architecture in their combined workflow.
+- Authenticity and freshness are separate properties. Repository and package
+  signatures prove the publisher; a monotonic, root-owned local security floor
+  under `/var/lib/cos/security` proves the release is not superseded. Every
+  package carries its own canonical signed release-security manifest,
+  `preinst`, `prerm`, the APT pre-install hook and the binaries themselves all
+  decide against that floor, and the floor survives package removal.
+  Unprivileged processes enforce against a minimal root-owned projection in
+  `/var/lib/cos-security` that the privileged commit publishes; the private
+  tree is never widened. Local root and whole-state replacement remain outside
+  its reach; this is not hardware anti-rollback.
 
 ### Vendored boundaries
 
@@ -747,6 +758,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | Notification service | `core/src/notifications/`, `core/src/clawd/notifications.rs` | Durable notification state, broker routes, and channel dispatch |
 | App discovery | `core/src/apps.rs` | Provenance-gated `app.json` loading and schema generation |
 | Extension provenance | `core/src/provenance/` | Package envelope, trust roots, verification, bounded install |
+| Update downgrade protection | `core/src/update/`, `core/src/bin/claw-security-floor.rs` | Signed release manifest, security floor, recovery authorizations |
 | App runtime | `apps/<id>/main.py` | Bundled operation implementation |
 | Rootfs build | `rootfs/build.sh` | Feature composition |
 | Profile definitions | `scripts/lib/image-profiles.sh` | Target feature sets |

@@ -163,7 +163,12 @@ identity after all linked approvals are granted. An undecided wait expires
 after eight hours so abandoned consent prompts cannot retain tasks forever.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
-report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
+report a named mismatch that names the fix. The worker's `hello` additionally
+carries the release-security epoch it was compiled for, and the broker measures
+the installed worker executable against the local security floor *before*
+`execve`, so a worker replaced on disk behind the package manager's back is
+refused before it becomes a process rather than being asked to vouch for
+itself. `PR_SET_PDEATHSIG` means a worker
 cannot outlive the daemon that leased it, so every task left in `running/` at
 start-up belongs to a dead worker and is reconciled before the first claim.
 `CLAWD_AGENTD=off` disables supervision only; every other `clawd` primitive

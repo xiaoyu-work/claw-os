@@ -33,10 +33,10 @@ assert_contains() {
 bash -n "$POSTINST" || fail "claw-os-agent postinst is not valid sh"
 bash -n "$POSTRM" || fail "claw-os-agent postrm is not valid sh"
 
-assert_contains "$POSTINST" 'install -d -m 0700 -o root -g root /var/lib/cos/journal' \
+assert_contains "$POSTINST" 'install -d -m 0700 -o root -g root "$DPKG_ROOT/var/lib/cos/journal"' \
     "the journal root must be created root-owned and private"
 assert_contains "$POSTINST" \
-    'install -d -m 0700 -o root -g root /var/lib/cos/journal/keys' \
+    'install -d -m 0700 -o root -g root "$DPKG_ROOT/var/lib/cos/journal/keys"' \
     "the journal MAC keys must live in a root-only directory"
 
 # `install -d` re-asserts the mode on upgrade; it must never remove the

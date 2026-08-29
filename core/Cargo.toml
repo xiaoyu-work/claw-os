@@ -32,6 +32,10 @@ path = "src/bin/claw-app-runner.rs"
 name = "claw-mail-ai-host"
 path = "src/bin/claw-mail-ai-host.rs"
 
+[[bin]]
+name = "claw-security-floor"
+path = "src/bin/claw-security-floor.rs"
+
 [features]
 default = []
 

@@ -2,6 +2,11 @@
 fn main() {
     use std::os::unix::process::CommandExt;
 
+    if let Err(refusal) =
+        cos::update::runtime::enforce_startup(cos::update::runtime::Scope::CompiledEpoch)
+    {
+        fail(&refusal.message);
+    }
     let mut args = std::env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new("--")) {
         fail("usage: claw-app-runner -- PROGRAM [ARG...]");

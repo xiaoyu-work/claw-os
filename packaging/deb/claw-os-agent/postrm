@@ -1,16 +1,29 @@
 #!/bin/sh
 # claw-os-agent postrm -- purge systemd state owned by the agent package.
+#
+# The update-security floor under /var/lib/cos/security is deliberately
+# NOT removed, on remove or on purge. It is the record of the newest
+# Claw OS release this machine has ever accepted; deleting it would let
+# a later `apt install claw-os-agent=<old-version>` reinstate a
+# superseded, still validly signed release with nothing to compare
+# against. Removing it is an explicit, documented operator action —
+# see docs/updating.md.
 
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+
 case "$1" in
     purge)
-        rm -f /etc/systemd/user/default.target.wants/claw-recoll-index.service
-        rm -f /etc/systemd/user/default.target.wants/claw-semantic.service
-        if [ -x /usr/bin/deb-systemd-helper ]; then
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-recoll-index.service"
+        rm -f "$DPKG_ROOT/etc/systemd/user/default.target.wants/claw-semantic.service"
+        if [ -z "$DPKG_ROOT" ] && [ -x /usr/bin/deb-systemd-helper ]; then
             deb-systemd-helper purge clawd.service >/dev/null || true
             deb-systemd-helper purge cos-browser.service >/dev/null || true
         fi
+        # Candidate manifests staged by a preinst are scratch data, not
+        # floor state, so they are the only thing cleaned up here.
+        rm -rf "$DPKG_ROOT/var/lib/cos/security/staging"
         ;;
     remove|upgrade|abort-install|abort-upgrade|disappear|failed-upgrade)
         ;;

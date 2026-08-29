@@ -3,6 +3,12 @@
 
 set -e
 
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+RELEASE_MANIFEST="$DPKG_ROOT/usr/lib/cos/release-security/claw-os-base/manifest.json"
+RELEASE_SIGNATURE="$RELEASE_MANIFEST.asc"
+
 enable_if_previously_enabled() {
     unit="$1"
     deb-systemd-helper unmask "$unit" >/dev/null || true
@@ -13,35 +19,76 @@ enable_if_previously_enabled() {
     fi
 }
 
+# Record this release in the update-security floor only after its files
+# match the content its signed release manifest declares.
+commit_security_floor() {
+    if [ ! -x "$SECURITY_HELPER" ] || [ ! -f "$RELEASE_MANIFEST" ]; then
+        echo "error: claw-os-base is missing its update-security metadata" >&2
+        return 1
+    fi
+    if [ -f "$RELEASE_SIGNATURE" ]; then
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-base \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --signature "$RELEASE_SIGNATURE" \
+            --reason "claw-os-base configure"
+    else
+        "$SECURITY_HELPER" commit \
+            --root "$ROOT_ARG" \
+            --package claw-os-base \
+            --version "__VERSION__" \
+            --manifest "$RELEASE_MANIFEST" \
+            --reason "claw-os-base configure"
+    fi
+}
+
 case "$1" in
     configure)
-        if [ -x /usr/bin/deb-systemd-helper ]; then
-            enable_if_previously_enabled cos-home-setup.service
+        # Service management only applies to the running system; under
+        # DPKG_ROOT there is no init to talk to.
+        if [ -z "$DPKG_ROOT" ]; then
+            if [ -x /usr/bin/deb-systemd-helper ]; then
+                enable_if_previously_enabled cos-home-setup.service
 
-            # These policies belong to the Claw OS distribution, not to a
-            # reusable agent installed on an existing Debian/Ubuntu host.
-            if [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
-                enable_if_previously_enabled systemd-timesyncd.service
+                # These policies belong to the Claw OS distribution, not to a
+                # reusable agent installed on an existing Debian/Ubuntu host.
+                if [ -f /lib/systemd/system/systemd-timesyncd.service ]; then
+                    enable_if_previously_enabled systemd-timesyncd.service
+                fi
+                if [ -f /lib/systemd/system/ydotoold.service ]; then
+                    enable_if_previously_enabled ydotoold.service
+                fi
+                if [ -f /lib/systemd/system/fwupd-refresh.timer ]; then
+                    enable_if_previously_enabled fwupd-refresh.timer
+                fi
             fi
-            if [ -f /lib/systemd/system/ydotoold.service ]; then
-                enable_if_previously_enabled ydotoold.service
-            fi
-            if [ -f /lib/systemd/system/fwupd-refresh.timer ]; then
-                enable_if_previously_enabled fwupd-refresh.timer
+
+            if [ -d /run/systemd/system ]; then
+                systemctl --system daemon-reload >/dev/null || true
+                if [ -n "$2" ]; then
+                    deb-systemd-invoke try-restart cos-home-setup.service >/dev/null || true
+                else
+                    deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+                fi
             fi
         fi
 
-        if [ -d /run/systemd/system ]; then
-            systemctl --system daemon-reload >/dev/null || true
-            if [ -n "$2" ]; then
-                deb-systemd-invoke try-restart cos-home-setup.service >/dev/null || true
-            else
-                deb-systemd-invoke start cos-home-setup.service >/dev/null || true
+        commit_security_floor
+
+        # Base is configured after the agent it depends on, so this is
+        # where a deferred broker start is completed when an ordered
+        # transaction replaced both packages at once.
+        if [ -z "$DPKG_ROOT" ] && [ -d /run/systemd/system ] \
+            && [ -x "$SECURITY_HELPER" ]; then
+            if "$SECURITY_HELPER" verify-installed --root "$ROOT_ARG" >/dev/null 2>&1; then
+                deb-systemd-invoke start clawd.service >/dev/null || true
             fi
         fi
         ;;
     abort-remove)
-        if [ -d /run/systemd/system ]; then
+        if [ -z "$DPKG_ROOT" ] && [ -d /run/systemd/system ]; then
             deb-systemd-invoke start cos-home-setup.service >/dev/null || true
         fi
         ;;

@@ -28,7 +28,11 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 4;
+///
+/// v5 added the compiled release-security epoch to [`WorkerHello`], so
+/// a broker and a worker from different releases are named as such
+/// instead of silently pairing.
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -258,6 +262,12 @@ impl WorkerFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkerHello {
     pub protocol: u32,
+    /// The release-security epoch this worker binary was compiled for.
+    /// Corroboration only: the broker measures the worker executable
+    /// against the security floor before spawning it, so this field
+    /// names a mismatch rather than establishing trust.
+    #[serde(default)]
+    pub security_epoch: u64,
     pub grant: SignedGrant,
     pub pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]

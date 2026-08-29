@@ -103,6 +103,19 @@ fn main() {
         std::process::exit(1);
     }
 
+    // Freshness gate. The broker is the most privileged Claw OS process
+    // on the machine, so it refuses to start when this build is behind
+    // the security floor this system has already accepted, or when a
+    // security component on disk no longer matches the release that
+    // floor records. It also republishes the unprivileged runtime view
+    // when that has drifted, because every other Claw OS binary
+    // enforces against it. Maintainer scripts are bypassable by copying
+    // files into place; this is not.
+    if let Err(refusal) = cos::update::runtime::enforce_broker_startup() {
+        eprintln!("clawd: {refusal}");
+        std::process::exit(1);
+    }
+
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()

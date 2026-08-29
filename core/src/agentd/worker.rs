@@ -408,6 +408,7 @@ async fn io_main(
 
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: assignment.grant.clone(),
         pid: identity.pid,
         start_time_ticks: identity.start_time_ticks,

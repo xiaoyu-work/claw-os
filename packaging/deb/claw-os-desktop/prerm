@@ -1,0 +1,31 @@
+#!/bin/sh
+# claw-os-desktop prerm -- downgrade gate for the graphical package.
+#
+# `prerm upgrade <new-version>` runs before the incoming package's own
+# preinst and before anything is unpacked, so it is where the currently
+# installed release refuses to be replaced by an older one.
+
+set -e
+
+DPKG_ROOT="${DPKG_ROOT:-}"
+ROOT_ARG="${DPKG_ROOT:-/}"
+SECURITY_HELPER="$DPKG_ROOT/usr/lib/cos/bin/claw-security-floor"
+
+case "$1" in
+    upgrade)
+        if [ -x "$SECURITY_HELPER" ] && [ -n "$2" ]; then
+            "$SECURITY_HELPER" check-incoming \
+                --root "$ROOT_ARG" \
+                --package claw-os-desktop \
+                --version "$2"
+        fi
+        ;;
+    remove|deconfigure|failed-upgrade)
+        ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

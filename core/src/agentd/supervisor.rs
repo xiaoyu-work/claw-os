@@ -988,6 +988,10 @@ fn check_hello_with(
             protocol::PROTOCOL_VERSION
         ));
     }
+    if let Err(refusal) = crate::update::runtime::check_peer_epoch("claw-agentd", hello.security_epoch)
+    {
+        return Err(refusal.message);
+    }
     if hello.pid != lease.worker_pid {
         return Err(format!(
             "agent worker reported pid {} but the kernel reports {}",

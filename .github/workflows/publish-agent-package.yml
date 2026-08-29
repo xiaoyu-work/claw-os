@@ -2,7 +2,21 @@ name: Publish Agent package
 
 on:
   workflow_dispatch:
+    inputs:
+      release_security_bootstrap:
+        description: >-
+          One-time migration: establish the release-security baseline for a
+          repository published before downgrade protection existed. Rejected
+          once a baseline exists.
+        required: false
+        default: false
+        type: boolean
   workflow_call:
+    inputs:
+      release_security_bootstrap:
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   build-agent:
@@ -38,6 +52,38 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y musl-tools dpkg-dev fakeroot
 
+      # Release-security metadata is signed by the same publisher
+      # identity that signs the repository. It has to be signed here,
+      # while the package is being assembled, because the manifest
+      # travels *inside* the .deb: an installed system verifies it
+      # offline, without re-fetching anything.
+      - name: Import release-security signing key
+        env:
+          CLAW_OS_APT_SIGNING_PRIVATE_KEY: ${{ secrets.CLAW_OS_APT_SIGNING_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${CLAW_OS_APT_SIGNING_PRIVATE_KEY:-}" ]; then
+            echo "error: CLAW_OS_APT_SIGNING_PRIVATE_KEY is required to sign" >&2
+            echo "       release-security metadata; publication cannot continue" >&2
+            exit 1
+          fi
+          export GNUPGHOME="$RUNNER_TEMP/claw-os-release-security-gnupg"
+          mkdir -m 700 -p "$GNUPGHOME"
+          printf '%s' "$CLAW_OS_APT_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          key_id="$(gpg --batch --with-colons --list-secret-keys \
+            | awk -F: '$1 == "sec" { print $5; exit }')"
+          test -n "$key_id"
+          # Export exactly the public key that will do the signing, so
+          # the build's own signatures are verified against the intended
+          # identity rather than against whatever else the runner's
+          # keyring happens to trust.
+          keyring="$RUNNER_TEMP/claw-os-release-security.gpg"
+          gpg --batch --export "$key_id" > "$keyring"
+          test -s "$keyring"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          echo "CLAW_OS_RELEASE_SECURITY_KEY_ID=$key_id" >> "$GITHUB_ENV"
+          echo "CLAW_OS_RELEASE_SECURITY_KEYRING=$keyring" >> "$GITHUB_ENV"
+
       - name: Cache cargo registry and target
         uses: actions/cache@v4
         with:
@@ -57,6 +103,8 @@ jobs:
           cargo build --release -p claw-semantic --target ${{ matrix.gnu_target }}
 
       - name: Build Agent package
+        env:
+          GPG_PASSPHRASE: ${{ secrets.CLAW_OS_APT_SIGNING_PASSPHRASE }}
         run: ARCH="$ARCH" ./packaging/deb/build-debs.sh agent
 
       - name: Verify Agent package
@@ -82,6 +130,25 @@ jobs:
           ! grep -q './etc/cos/oauth.conf$' "$RUNNER_TEMP/claw-os-agent.files"
           ! grep -q '/apps/agent/' "$RUNNER_TEMP/claw-os-agent.files"
           ! grep -q '/apps/panel-calendar/' "$RUNNER_TEMP/claw-os-agent.files"
+
+      # Update downgrade protection has to be *in* the artifact, not
+      # only in the tree that produced it: the verifier, the signed
+      # release manifest, the APT hook, and a preinst that already
+      # carries this candidate's own evidence.
+      #
+      # The binding checks live in one shared script so the three
+      # publication workflows cannot drift apart.
+      - name: Verify Agent release-security metadata
+        run: |
+          set -euo pipefail
+          agent_deb="$(printf '%s\n' build/debs/claw-os-agent_*_"$ARCH".deb)"
+          grep -q './usr/lib/cos/bin/claw-security-floor$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './usr/lib/cos/apt/security-floor-hook$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './etc/apt/apt.conf.d/50claw-os-security-floor$' "$RUNNER_TEMP/claw-os-agent.files"
+          ./packaging/release-security/verify-package-manifest.sh "$agent_deb" \
+            --arch "$ARCH" \
+            --require-signature \
+            --keyring "$CLAW_OS_RELEASE_SECURITY_KEYRING"
 
       - name: Install Agent package on Ubuntu
         run: |
@@ -124,6 +191,7 @@ jobs:
     with:
       artifact_pattern: claw-os-agent-*
       pages_artifact_name: github-pages-agent
+      release_security_bootstrap: ${{ inputs.release_security_bootstrap }}
     permissions:
       actions: read
       contents: read

@@ -23,6 +23,7 @@ fn signer_and_hello(lease: &Lease) -> (GrantSigner, WorkerFrame) {
     ));
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant,
         pid: lease.worker_pid,
         start_time_ticks: lease.worker_start_time_ticks,
@@ -73,6 +74,7 @@ fn a_grant_for_a_different_worker_is_refused_at_the_handshake() {
     claims.worker_pid = lease.worker_pid.wrapping_add(1);
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: signer.issue(claims),
         pid: lease.worker_pid,
         start_time_ticks: lease.worker_start_time_ticks,
@@ -118,6 +120,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
     let lease = new_lease();
     let mut hello = WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
+        security_epoch: crate::update::SECURITY_EPOCH,
         grant: GrantSigner::from_secret([9u8; 32]).issue(claims_for(
             std::process::id(),
             &lease,

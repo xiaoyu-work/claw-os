@@ -49,6 +49,7 @@ pub mod storage;
 pub mod sysinfo;
 pub mod trace;
 pub mod triggers;
+pub mod update;
 pub mod watch;
 pub mod worker;
 

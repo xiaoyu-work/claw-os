@@ -38,6 +38,9 @@ jobs:
       - name: Test APT package synchronization
         run: bash packaging/apt-repo/tests/test-sync-existing-packages.sh
 
+      - name: Test release-security publication
+        run: bash packaging/apt-repo/tests/test-release-security-publication.sh
+
       - name: Test managed-home package removal
         run: bash packaging/deb/tests/test-remove-home-overlay.sh
 
@@ -95,6 +98,22 @@ jobs:
         env:
           COS_WORKER_SANDBOX_REQUIRED: "1"
         run: cd core && cargo test -- --test-threads=1
+
+      # Downgrade protection is exercised against real .deb archives,
+      # real maintainer scripts, real dpkg/apt transactions and real
+      # OpenPGP signatures. The signing keys are generated inside the
+      # tests and discarded with them, so these steps need no secret.
+      - name: Test update downgrade protection packaging
+        run: |
+          cd core && cargo build --bin claw-security-floor
+          cd "$GITHUB_WORKSPACE"
+          COS_SECURITY_FLOOR_BIN="$GITHUB_WORKSPACE/target/debug/claw-security-floor" \
+            bash packaging/deb/tests/test-security-floor-packaging.sh
+
+      - name: Test update downgrade protection installation
+        run: |
+          COS_SECURITY_FLOOR_BIN="$GITHUB_WORKSPACE/target/debug/claw-security-floor" \
+            bash packaging/deb/tests/test-security-floor-install.sh
 
       - name: Run cos-browser tests
         run: cargo test -p cos-browser

@@ -1,0 +1,37 @@
+// Claw OS update downgrade protection.
+//
+// APT proves *authenticity*: the repository signature says the
+// publisher produced these bytes. It does not prove *freshness* — an
+// artifact that was validly signed two years ago is still validly
+// signed today. The hook below compares every Claw OS candidate in a
+// transaction against this machine's monotonic security floor before
+// dpkg unpacks anything, so a stale mirror, a preserved repository
+// snapshot or an explicit `apt install claw-os-agent=<old-version>`
+// is refused rather than quietly reinstating a fixed vulnerability.
+//
+// The command must be a single executable token: APT looks the hook's
+// protocol version up under `DPkg::Tools::Options::<command>::Version`
+// using the command string verbatim, so a shell fragment here would
+// register a version for a key nothing matches and APT would fall back
+// to the version 1 protocol (bare filenames, no versions).
+//
+// /usr/lib/cos/apt/security-floor-hook decides for itself what to do
+// when the verifier is absent: on a genuine pre-install bootstrap it
+// drains APT's package list and succeeds, and once this machine has a
+// security floor it refuses instead.
+//
+// Removing this file does not disable the protection. The Debian
+// maintainer scripts and the Claw OS binaries enforce the same floor
+// independently; this hook only moves the refusal earlier, to before
+// the first file is unpacked.
+
+DPkg::Pre-Install-Pkgs { "/usr/lib/cos/apt/security-floor-hook"; };
+DPkg::Tools::Options::/usr/lib/cos/apt/security-floor-hook::Version "2";
+
+// Freshness of the repository metadata itself. `Valid-Until` in the
+// signed Release file bounds how long a mirror may keep serving an old
+// index; these keep APT's own checks on and refuse the insecure
+// fallbacks that would otherwise accept it.
+Acquire::Check-Valid-Until "true";
+Acquire::AllowInsecureRepositories "false";
+Acquire::AllowDowngradeToInsecureRepositories "false";

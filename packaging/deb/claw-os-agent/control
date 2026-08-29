@@ -5,6 +5,10 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
+Provides: claw-os-abi-__ABI__
+Breaks: claw-os-base (<< __MIN_BASE__), claw-os-desktop (<< __MIN_DESKTOP__)
+XB-Claw-Os-Security-Epoch: __SECURITY_EPOCH__
+XB-Claw-Os-Abi: __ABI__
 Depends: bash, coreutils, ca-certificates, bubblewrap (>= 0.8.0), curl, python3,
  python3-idna (>= 3.3), python3-idna (<< 4), sudo, systemd,
  init-system-helpers (>= 1.52),
