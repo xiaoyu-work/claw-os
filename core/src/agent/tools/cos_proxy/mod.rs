@@ -22,9 +22,11 @@
 //! tools backed by agent subsystems (e.g. `cos_memory` over
 //! [`crate::agent::memory::notes`]).
 //!
-//! Phase 5 will layer approval, redaction, and per-tool guardrails on top.
-//! For now, calls are dispatched directly. The `policy` module already
-//! self-polices destructive operations at the primitive layer.
+//! Proxy names are not an authorization boundary: one proxy may expose
+//! both read and write commands. Inputs are shape-checked here. A proxy
+//! bypasses the legacy name prompt only after every command derives and
+//! enforces an exact capability before side effects; mixed or incomplete
+//! proxies remain on `dangerous_tools`.
 
 pub mod app_memory;
 pub mod memory;
@@ -40,6 +42,7 @@ use serde_json::{json, Value};
 use super::exposure::ToolExposure;
 use super::registry::ToolRegistry;
 use super::{Tool, ToolResult};
+use crate::agent::runtime::approval::ApprovalBoundary;
 use crate::caps::Verb;
 
 /// Function pointer matching the uniform cos primitive `run` signature.
@@ -60,9 +63,13 @@ pub struct CosPrimitiveTool {
     /// once, and serial dispatch is the safe default.
     parallel_safe: bool,
     required_any_verbs: &'static [Verb],
+    approval_boundary: ApprovalBoundary,
 }
 
 impl CosPrimitiveTool {
+    /// Construct a serial primitive. It remains on the legacy
+    /// tool-name approval path until registration explicitly marks its
+    /// command mapping as capability-aware.
     pub const fn new(
         name: &'static str,
         description: &'static str,
@@ -86,12 +93,13 @@ impl CosPrimitiveTool {
             commands,
             parallel_safe: false,
             required_any_verbs,
+            approval_boundary: ApprovalBoundary::ToolName,
         }
     }
 
     /// Variant constructor for primitives whose every command is
-    /// read-only (e.g. `cos_sysinfo`). The dispatch loop may run
-    /// these concurrently with other parallel-safe calls.
+    /// read-only. The dispatch loop may run these concurrently with
+    /// other parallel-safe calls.
     pub const fn new_readonly(
         name: &'static str,
         description: &'static str,
@@ -115,7 +123,13 @@ impl CosPrimitiveTool {
             commands,
             parallel_safe: true,
             required_any_verbs,
+            approval_boundary: ApprovalBoundary::ToolName,
         }
+    }
+
+    pub(crate) const fn with_capability_approval(mut self) -> Self {
+        self.approval_boundary = ApprovalBoundary::Capability;
+        self
     }
 }
 
@@ -156,7 +170,13 @@ impl Tool for CosPrimitiveTool {
 
     async fn exec(&self, input: Value) -> ToolResult {
         let command = match input.get("command").and_then(|v| v.as_str()) {
-            Some(s) if !s.is_empty() => s.to_string(),
+            Some(s) if self.commands.contains(&s) => s.to_string(),
+            Some(s) if !s.is_empty() => {
+                return ToolResult::err(format!(
+                    "unknown command '{s}'. valid commands for {}: {:?}",
+                    self.name, self.commands
+                ));
+            }
             _ => {
                 return ToolResult::err(format!(
                     "missing 'command' field. valid commands for {}: {:?}",
@@ -165,15 +185,25 @@ impl Tool for CosPrimitiveTool {
             }
         };
 
-        let args: Vec<String> = input
-            .get("args")
-            .and_then(Value::as_array)
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default();
+        let args: Vec<String> = match input.get("args") {
+            None => Vec::new(),
+            Some(Value::Array(values)) => {
+                let mut args = Vec::with_capacity(values.len());
+                for (index, value) in values.iter().enumerate() {
+                    let Some(value) = value.as_str() else {
+                        return ToolResult::err(format!(
+                            "args[{index}] for {} must be a string",
+                            self.name
+                        ));
+                    };
+                    args.push(value.to_string());
+                }
+                args
+            }
+            Some(_) => {
+                return ToolResult::err(format!("'args' for {} must be an array", self.name));
+            }
+        };
 
         // cos primitives are sync and may do file IO / spawn processes.
         // A clawd-routed job carries Tokio task-local user/config overrides;
@@ -192,7 +222,13 @@ impl Tool for CosPrimitiveTool {
                 Err(message) => ToolResult::err(message),
             };
         }
-        let join = tokio::task::spawn_blocking(move || primitive(&command, &args)).await;
+        let local_execution = crate::approvals::capture_local_execution();
+        let join = tokio::task::spawn_blocking(move || {
+            crate::approvals::with_captured_local_execution(local_execution, || {
+                primitive(&command, &args)
+            })
+        })
+        .await;
 
         match join {
             Ok(Ok(value)) => {
@@ -207,6 +243,10 @@ impl Tool for CosPrimitiveTool {
 
     fn parallel_safe(&self) -> bool {
         self.parallel_safe
+    }
+
+    fn approval_boundary(&self) -> ApprovalBoundary {
+        self.approval_boundary
     }
 }
 
@@ -240,9 +280,11 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
     },
     PrimitiveSpec {
         name: "cos_proc",
-        description: "Manage long-running processes registered with cos: spawn, \
-                      query status/output, kill/signal, list, wait, renice, \
-                      stats, result.",
+        description: "Manage long-running processes registered with cos. Unsandboxed spawn accepts \
+                      only exact root-owned static Linux executables and argv/cwd schemas from the \
+                      audited proc allowlist; use cos_sandbox for every other command. Other \
+                      commands query status/output, kill/signal, list, wait, renice, stats, and \
+                      result.",
         primitive: crate::proc::run,
         commands: &[
             "spawn", "status", "output", "kill", "list", "wait", "signal", "result", "stats",
@@ -468,7 +510,7 @@ const PRIMITIVES: &[PrimitiveSpec] = &[
 /// Keeps the proxy registration pure (no IO during test setup).
 pub fn register_all(registry: &mut ToolRegistry) {
     for spec in PRIMITIVES {
-        let tool = if spec.parallel_safe {
+        let mut tool = if spec.parallel_safe {
             CosPrimitiveTool::new_readonly_with_requirements(
                 spec.name,
                 spec.description,
@@ -485,6 +527,12 @@ pub fn register_all(registry: &mut ToolRegistry) {
                 spec.required_any_verbs,
             )
         };
+        // Only proxies whose complete command surface has an exact
+        // validated capability mapping may bypass the legacy
+        // `dangerous_tools` prompt.
+        if spec.name == "cos_credential" {
+            tool = tool.with_capability_approval();
+        }
         registry.register(Arc::new(tool));
     }
     registry.register(Arc::new(oauth_login::CosOauthLoginTool::new()));

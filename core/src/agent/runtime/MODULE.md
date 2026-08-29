@@ -14,6 +14,10 @@ through model turns, tools, hooks, progress, and final records.
 - Dispatch parallel-safe and serial tools deterministically.
 - Build every provider tool schema and dispatch lookup from the same
   session-scoped exposure context.
+- Treat `dangerous_tools` as a legacy name filter only; capability-aware
+  proxies reach exact execution-time consent instead.
+- Install a fresh task-local approval identity for every invocation and retire
+  its consent state on completion or cancellation.
 - Run lifecycle hooks and progress/heartbeat reporting.
 - Record conversation, prompt injection, usage, and error state.
 
@@ -36,6 +40,10 @@ executes a model-emitted tool call outside `turn.rs` dispatch. The dispatch
 path repeats exposure checks before tool execution; exact capability checks
 remain inside tools/providers after argument validation. Message order and
 opaque provider state must survive every turn.
+
+`auto_deny_tools` remains a hard pre-dispatch block. `dangerous_tools` and
+`auto_approve_tools` cannot grant or widen a capability; core primitive proxies
+declare a capability-aware boundary and defer consent to `caps::require`.
 
 ## Tests
 

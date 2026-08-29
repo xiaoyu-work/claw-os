@@ -12,6 +12,19 @@ fn generated_sessions_get_independent_turn_leases() {
     assert_ne!(first_id, second_id);
 }
 
+#[test]
+fn web_turn_identity_separates_conversations_and_later_turns() {
+    let first = web_turn_scope("conversation-a");
+    let concurrent = web_turn_scope("conversation-b");
+    let later = web_turn_scope("conversation-a");
+
+    assert!(first.starts_with("web:conversation-a:turn:"));
+    assert!(concurrent.starts_with("web:conversation-b:turn:"));
+    assert!(later.starts_with("web:conversation-a:turn:"));
+    assert_ne!(first, concurrent);
+    assert_ne!(first, later);
+}
+
 #[tokio::test]
 async fn active_session_post_returns_conflict_until_turn_finishes() {
     let state = AppState::new(crate::config::AgentConfig::default(), 1000);
@@ -73,19 +86,8 @@ fn user_facing_tool_events_omit_inputs_and_results() {
         name: "cos_sysinfo".into(),
         input: json!({"secret": "input"}),
     }));
-    sink.on_tool_start(
-        "call-1",
-        "cos_sysinfo",
-        &json!({"secret": "input"}),
-    );
-    sink.on_tool_result(
-        "call-1",
-        "cos_sysinfo",
-        true,
-        12,
-        128,
-        "secret result",
-    );
+    sink.on_tool_start("call-1", "cos_sysinfo", &json!({"secret": "input"}));
+    sink.on_tool_result("call-1", "cos_sysinfo", true, 12, 128, "secret result");
     drop(sink);
 
     let mut output = String::new();

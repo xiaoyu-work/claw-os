@@ -92,6 +92,12 @@ fn registry_with_caps(sid: &str, caps_json: &str) -> String {
     )
 }
 
+fn with_local_invocation<R>(id: &str, f: impl FnOnce() -> R) -> R {
+    crate::approvals::LocalApprovalInvocation::new(id)
+        .unwrap()
+        .sync_scope(f)
+}
+
 #[test]
 fn permissive_allows_when_no_session() {
     let _lock = env_lock();
@@ -151,18 +157,26 @@ fn denies_with_verb_not_granted_when_verb_missing() {
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
-    let err = require(Verb::FS_DELETE, Scope::path("/home/jay/x")).unwrap_err();
-    assert!(matches!(
-        err.reason,
-        super::super::denial::DenialReason::VerbNotGranted
-    ));
-    assert!(err.hint.as_deref().is_some_and(|hint| {
-        hint.contains("approval request") && hint.contains("pending")
-    }));
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].verb, Verb::FS_DELETE.as_str());
-    assert_eq!(pending[0].scope, Scope::path("/home/jay/x"));
+    with_local_invocation("test:missing-verb", || {
+        let err = require(Verb::FS_DELETE, Scope::path("/home/jay/x")).unwrap_err();
+        assert!(matches!(
+            err.reason,
+            super::super::denial::DenialReason::VerbNotGranted
+        ));
+        assert!(err
+            .hint
+            .as_deref()
+            .is_some_and(|hint| { hint.contains("approval request") && hint.contains("pending") }));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].verb, Verb::FS_DELETE.as_str());
+        assert_eq!(pending[0].scope, Scope::path("/home/jay/x"));
+        assert_eq!(pending[0].risk, Some(crate::caps::Risk::High));
+        assert_eq!(
+            pending[0].context,
+            Some(crate::caps::ConsentContext::Attended)
+        );
+    });
 }
 
 /// Every capability denial gets an exact, one-shot request — not only
@@ -175,14 +189,18 @@ fn low_risk_denial_creates_an_exact_approval_request() {
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
-    let err = require(Verb::NET_RESOLVE, Scope::host("example.com")).unwrap_err();
-    assert!(err.hint.as_deref().is_some_and(|hint| {
-        hint.contains("approval request") && hint.contains("pending")
-    }));
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].verb, Verb::NET_RESOLVE.as_str());
-    assert_eq!(pending[0].scope, Scope::host("example.com"));
+    with_local_invocation("test:low-risk", || {
+        let err = require(Verb::NET_RESOLVE, Scope::host("example.com")).unwrap_err();
+        assert!(err
+            .hint
+            .as_deref()
+            .is_some_and(|hint| { hint.contains("approval request") && hint.contains("pending") }));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].verb, Verb::NET_RESOLVE.as_str());
+        assert_eq!(pending[0].scope, Scope::host("example.com"));
+        assert_eq!(pending[0].risk, Some(crate::caps::Risk::Low));
+    });
 }
 
 /// A path denial inside a verb the session already holds is the
@@ -195,26 +213,28 @@ fn scope_denial_files_a_request_for_that_exact_resource() {
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
 
-    let err = require(Verb::FS_READ, Scope::path("/etc/hosts")).unwrap_err();
-    assert!(matches!(
-        err.reason,
-        super::super::denial::DenialReason::ScopeOutOfRange
-    ));
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].scope, Scope::path("/etc/hosts"));
-    crate::approvals::approve(
-        &pending[0].id,
-        crate::approvals::GrantDuration::Once,
-        None,
-        None,
-    )
-    .unwrap();
+    with_local_invocation("test:scope-denial", || {
+        let err = require(Verb::FS_READ, Scope::path("/etc/hosts")).unwrap_err();
+        assert!(matches!(
+            err.reason,
+            super::super::denial::DenialReason::ScopeOutOfRange
+        ));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].scope, Scope::path("/etc/hosts"));
+        crate::approvals::approve(
+            &pending[0].id,
+            crate::approvals::GrantDuration::Once,
+            None,
+            None,
+        )
+        .unwrap();
 
-    // Spent exactly once, on exactly that path.
-    assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_ok());
-    assert!(require(Verb::FS_READ, Scope::path("/etc/shadow")).is_err());
-    assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_err());
+        // Spent exactly once, on exactly that path.
+        assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_ok());
+        assert!(require(Verb::FS_READ, Scope::path("/etc/shadow")).is_err());
+        assert!(require(Verb::FS_READ, Scope::path("/etc/hosts")).is_err());
+    });
 }
 
 #[test]
@@ -224,19 +244,24 @@ fn approved_high_risk_request_allows_retry() {
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
 
-    let first = require(Verb::SYS_CRASH, Scope::name("system")).unwrap_err();
-    assert!(first.hint.as_deref().is_some_and(|hint| hint.contains("pending")));
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    crate::approvals::approve(
-        &pending[0].id,
-        crate::approvals::GrantDuration::Once,
-        None,
-        None,
-    )
-    .unwrap();
+    with_local_invocation("test:high-risk", || {
+        let first = require(Verb::SYS_CRASH, Scope::name("system")).unwrap_err();
+        assert!(first
+            .hint
+            .as_deref()
+            .is_some_and(|hint| hint.contains("pending")));
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        crate::approvals::approve(
+            &pending[0].id,
+            crate::approvals::GrantDuration::Once,
+            None,
+            None,
+        )
+        .unwrap();
 
-    assert!(require(Verb::SYS_CRASH, Scope::name("system")).is_ok());
+        assert!(require(Verb::SYS_CRASH, Scope::name("system")).is_ok());
+    });
 }
 
 #[test]
@@ -245,22 +270,26 @@ fn approved_once_grant_allows_exactly_one_denied_request() {
     let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
     let reg = registry_with_caps("s1", caps);
     let _g = EnvGuard::new(&reg, Some("s1"), Some("strict"));
-    let id = crate::approvals::submit(
-        Verb::FS_WRITE,
-        Scope::path("/tmp/granted/**"),
-        "s1",
-        "test grant",
-        None,
-    )
-    .unwrap();
-    crate::approvals::approve(&id, crate::approvals::GrantDuration::Once, None, None).unwrap();
+    with_local_invocation("test:one-shot", || {
+        let id = crate::approvals::submit_owned_with_context(
+            Verb::FS_WRITE,
+            Scope::path("/tmp/granted/file"),
+            "s1",
+            "test grant",
+            None,
+            Some(unsafe { libc::geteuid() }),
+            Some(crate::caps::ConsentContext::Attended),
+        )
+        .unwrap();
+        crate::approvals::approve(&id, crate::approvals::GrantDuration::Once, None, None).unwrap();
 
-    assert!(require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).is_ok());
-    let err = require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).unwrap_err();
-    assert!(matches!(
-        err.reason,
-        super::super::denial::DenialReason::VerbNotGranted
-    ));
+        assert!(require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).is_ok());
+        let err = require(Verb::FS_WRITE, Scope::path("/tmp/granted/file")).unwrap_err();
+        assert!(matches!(
+            err.reason,
+            super::super::denial::DenialReason::VerbNotGranted
+        ));
+    });
 }
 
 #[test]
@@ -425,23 +454,25 @@ fn approved_host_grant_does_not_widen_siblings_or_persist() {
     let reg = system_agent_registry(1001, &owner_home);
     let _g = EnvGuard::new(&reg, Some("agent-task"), Some("strict"));
 
-    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
-    let pending = crate::approvals::list_pending();
-    assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].scope, Scope::host("api.example.com"));
-    crate::approvals::approve(
-        &pending[0].id,
-        crate::approvals::GrantDuration::Once,
-        None,
-        None,
-    )
-    .unwrap();
+    with_local_invocation("test:host-grant", || {
+        assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].scope, Scope::host("api.example.com"));
+        crate::approvals::approve(
+            &pending[0].id,
+            crate::approvals::GrantDuration::Once,
+            None,
+            None,
+        )
+        .unwrap();
 
-    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_ok());
-    // Siblings stay denied, and the grant is spent.
-    assert!(require(Verb::NET_DIAL, Scope::host("evil.example.com")).is_err());
-    assert!(require(Verb::NET_DIAL, Scope::Wild).is_err());
-    assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
+        assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_ok());
+        // Siblings stay denied, and the grant is spent.
+        assert!(require(Verb::NET_DIAL, Scope::host("evil.example.com")).is_err());
+        assert!(require(Verb::NET_DIAL, Scope::Wild).is_err());
+        assert!(require(Verb::NET_DIAL, Scope::host("api.example.com")).is_err());
+    });
     // Nothing was added to the session itself.
     let caps = crate::clawd::system_caps::system_agent_caps(1001, &owner_home);
     assert!(!caps.covers(&super::super::cap::Cap::new(
@@ -519,7 +550,14 @@ fn delegated_scheduler_session_gates_only_its_approved_authority() {
 #[test]
 fn audit_record_allow_carries_decision_verb_and_target() {
     let scope = Scope::path("/home/jay/notes.md");
-    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Strict, Some("s1"), &Ok(()));
+    let rec = build_cap_audit_record(
+        Verb::FS_READ,
+        &scope,
+        Mode::Strict,
+        Some("s1"),
+        &Ok(()),
+        None,
+    );
     assert_eq!(rec["decision"], "allow");
     assert_eq!(rec["verb"], "fs.read");
     assert_eq!(rec["session_id"], "s1");
@@ -529,6 +567,8 @@ fn audit_record_allow_carries_decision_verb_and_target() {
     assert_eq!(rec["scope"]["value"], "/home/jay/notes.md");
     assert!(rec["reason"].is_null());
     assert!(rec["hint"].is_null());
+    assert_eq!(rec["risk"], "low");
+    assert!(rec["approval"].is_null());
 }
 
 #[test]
@@ -536,17 +576,26 @@ fn audit_record_deny_emits_reason_and_hint() {
     let scope = Scope::path("/etc/passwd");
     let denial = super::super::denial::Denial::verb_not_granted(Verb::FS_DELETE, scope.clone())
         .with_hint("ask the user");
-    let rec = build_cap_audit_record(Verb::FS_DELETE, &scope, Mode::Strict, None, &Err(denial));
+    let rec = build_cap_audit_record(
+        Verb::FS_DELETE,
+        &scope,
+        Mode::Strict,
+        None,
+        &Err(denial),
+        None,
+    );
     assert_eq!(rec["decision"], "deny");
     assert_eq!(rec["reason"], "verb-not-granted");
     assert_eq!(rec["hint"], "ask the user");
+    assert_eq!(rec["risk"], "high");
+    assert!(rec["approval"].is_null());
     assert!(rec["session_id"].is_null());
 }
 
 #[test]
 fn audit_record_wild_scope_renders_as_star() {
     let scope = Scope::wild();
-    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Permissive, None, &Ok(()));
+    let rec = build_cap_audit_record(Verb::FS_READ, &scope, Mode::Permissive, None, &Ok(()), None);
     assert_eq!(rec["target_resource"], "*");
     assert_eq!(rec["scope"]["kind"], "wild");
     assert_eq!(rec["mode"], "permissive");
@@ -592,7 +641,8 @@ fn require_writes_to_caps_jsonl() {
 struct FakeGateway {
     consume: std::sync::Mutex<Result<bool, String>>,
     request: std::sync::Mutex<Result<crate::caps::PendingApproval, String>>,
-    asked: std::sync::Mutex<Vec<(String, String)>>,
+    asked: std::sync::Mutex<Vec<(String, String, Option<String>)>>,
+    context: crate::caps::ConsentContext,
 }
 
 impl FakeGateway {
@@ -604,24 +654,55 @@ impl FakeGateway {
             consume: std::sync::Mutex::new(consume),
             request: std::sync::Mutex::new(request),
             asked: std::sync::Mutex::new(Vec::new()),
+            context: crate::caps::ConsentContext::Attended,
         })
     }
 
-    fn record(&self, verb: Verb, scope: &Scope) {
+    fn unattended(
+        consume: Result<bool, String>,
+        request: Result<crate::caps::PendingApproval, String>,
+    ) -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self {
+            consume: std::sync::Mutex::new(consume),
+            request: std::sync::Mutex::new(request),
+            asked: std::sync::Mutex::new(Vec::new()),
+            context: crate::caps::ConsentContext::Unattended,
+        })
+    }
+
+    fn record(&self, verb: Verb, scope: &Scope, operation_digest: Option<&str>) {
         if let Ok(mut asked) = self.asked.lock() {
-            asked.push((verb.as_str().to_string(), scope.to_string()));
+            asked.push((
+                verb.as_str().to_string(),
+                scope.to_string(),
+                operation_digest.map(str::to_string),
+            ));
         }
     }
 }
 
 impl crate::caps::ApprovalGateway for FakeGateway {
-    fn consume(&self, verb: Verb, scope: &Scope) -> Result<bool, String> {
-        self.record(verb, scope);
+    fn context(&self) -> crate::caps::ConsentContext {
+        self.context
+    }
+
+    fn consume(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<bool, String> {
+        self.record(verb, scope, operation_digest);
         self.consume.lock().unwrap().clone()
     }
 
-    fn request(&self, verb: Verb, scope: &Scope) -> Result<crate::caps::PendingApproval, String> {
-        self.record(verb, scope);
+    fn request(
+        &self,
+        verb: Verb,
+        scope: &Scope,
+        operation_digest: Option<&str>,
+    ) -> Result<crate::caps::PendingApproval, String> {
+        self.record(verb, scope, operation_digest);
         self.request.lock().unwrap().clone()
     }
 }
@@ -659,9 +740,38 @@ fn a_worker_gate_reaches_consent_through_its_gateway_not_the_store() {
     let asked = gateway.asked.lock().unwrap().clone();
     assert!(asked.contains(&(
         "fs.delete".to_string(),
-        Scope::path("/home/jay/x").to_string()
+        Scope::path("/home/jay/x").to_string(),
+        None,
     )));
     assert!(crate::approvals::list_pending().is_empty());
+}
+
+#[test]
+fn a_worker_gate_preserves_the_validated_operation_digest() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-gw-digest", caps);
+    let _g = EnvGuard::new(&reg, Some("s-gw-digest"), Some("strict"));
+    let gateway = FakeGateway::new(
+        Ok(false),
+        Ok(crate::caps::PendingApproval {
+            request_id: Some("ap-test".to_string()),
+        }),
+    );
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+    let digest = crate::crypto::sha256_hex(b"/usr/bin/printf\0hello");
+
+    require_for_operation(
+        Verb::PROC_SPAWN,
+        Scope::self_ref("children"),
+        &digest,
+    )
+    .expect_err("the capability is not granted");
+
+    assert!(gateway.asked.lock().unwrap().iter().all(
+        |(_, _, operation_digest)| operation_digest.as_deref() == Some(digest.as_str())
+    ));
 }
 
 #[test]
@@ -699,4 +809,35 @@ fn an_unavailable_broker_keeps_the_gate_closed() {
         .expect_err("mediation failure must not open the gate");
     let hint = denial.hint.unwrap_or_default();
     assert!(hint.contains("could not create approval request"), "{hint}");
+}
+
+#[test]
+fn an_unattended_worker_fails_closed_without_filing_a_request() {
+    let _lock = env_lock();
+    let caps = r#"[{"verb":"fs.read","scope":{"kind":"path","value":"/home/jay/**"}}]"#;
+    let reg = registry_with_caps("s-unattended", caps);
+    let _g = EnvGuard::new(&reg, Some("s-unattended"), Some("strict"));
+    let gateway = FakeGateway::unattended(
+        Ok(false),
+        Err("request should not be attempted".to_string()),
+    );
+    crate::caps::approval_gateway::install(gateway.clone());
+    let _restore = GatewayGuard;
+
+    let denial = require(Verb::FS_DELETE, Scope::path("/home/jay/x"))
+        .expect_err("unattended work must not open a prompt");
+    assert_eq!(
+        denial.approval.as_ref().map(|approval| approval.status),
+        Some(crate::caps::ApprovalStatus::RequiredUnattended)
+    );
+    assert!(denial
+        .hint
+        .as_deref()
+        .is_some_and(|hint| hint.contains("unattended")));
+    assert_eq!(
+        gateway.asked.lock().unwrap().len(),
+        1,
+        "only the exact-grant consume probe should reach the broker"
+    );
+    assert!(crate::approvals::list_pending().is_empty());
 }

@@ -19,6 +19,7 @@ pub mod registry;
 pub mod skills;
 pub mod todo;
 
+use crate::agent::runtime::approval::ApprovalBoundary;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
@@ -33,7 +34,9 @@ pub(crate) enum MemoryScope<'a> {
 pub(crate) fn validate_memory_scope(value: &str, label: &str) -> Result<(), String> {
     let value = value.trim();
     if value.is_empty() || value.len() > 256 || value.chars().any(char::is_control) {
-        return Err(format!("{label} must be a non-empty single-line identifier"));
+        return Err(format!(
+            "{label} must be a non-empty single-line identifier"
+        ));
     }
     Ok(())
 }
@@ -122,5 +125,15 @@ pub trait Tool: Send + Sync {
     /// "what's the biggest file" UX.
     fn parallel_safe(&self) -> bool {
         false
+    }
+
+    /// Identify the authoritative consent boundary for this tool.
+    ///
+    /// Capability-aware tools must still honour `auto_deny_tools`, but
+    /// the legacy `dangerous_tools` prompt is skipped so a coarse tool
+    /// name cannot pre-approve or block unrelated commands exposed by
+    /// the same proxy.
+    fn approval_boundary(&self) -> ApprovalBoundary {
+        ApprovalBoundary::ToolName
     }
 }

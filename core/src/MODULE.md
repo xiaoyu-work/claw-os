@@ -25,6 +25,7 @@ library API exported by `core/src/lib.rs`.
 | `agent/` | Agent runtime and AI-facing tools |
 | `clawd/` | Privileged broker services |
 | `caps/` | Capability model and enforcement |
+| `proc.rs`, `proc/proc_spawn_allowlist.rs` | Session-scoped process lifecycle and root-owned, versioned, descriptor-pinned launch policy |
 | `model/` | Local/cloud model tasks and engines |
 | `session/` | Session persistence |
 | `apps.rs`, `bridge.rs` | App discovery and subprocess bridge |

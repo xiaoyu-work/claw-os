@@ -20,7 +20,7 @@ use crate::agent::llm::{ProviderFallbackState, StreamEvent};
 use crate::agent::runtime::evidence::EvidenceReport;
 use crate::agent::service::FinishOutcome;
 use crate::audit_policy::{TextDigest, ToolFacts};
-use crate::caps::Scope;
+use crate::caps::{ConsentContext, Scope};
 use crate::proc::SessionInfo;
 
 use super::grant::SignedGrant;
@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -36,6 +36,9 @@ pub const CHANNEL_FD: i32 = 3;
 /// Set in the worker environment so the child can assert it received a
 /// channel rather than guessing at fd 3.
 pub const CHANNEL_FD_ENV: &str = "COS_AGENTD_CHANNEL_FD";
+/// Bootstrap-only task hint retained for compatibility with older launchers.
+/// A current worker does not consume it and removes it before running tools.
+pub const TASK_HINT_ENV: &str = "COS_AGENTD_TASK";
 
 /// Hard cap on a single frame. Streaming deltas and final answers are
 /// far below this; anything larger is treated as a protocol fault and
@@ -54,8 +57,8 @@ pub const ROUTE_HEARTBEAT: &str = "heartbeat";
 pub const ROUTE_RESULT: &str = "result";
 /// Permission mediation. The only way a worker can reach the consent
 /// system: it may name the exact verb and canonical scope it was denied
-/// and nothing else — never a session, an owner, a decision, or a
-/// capability set.
+/// plus an optional digest of validated operation inputs — never a
+/// session, an owner, a decision, raw arguments, or a capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
 
 /// The complete route surface a worker grant may carry. Nothing else
@@ -104,22 +107,33 @@ pub enum BrokerFrame {
     /// request, the safe id the user will act on.
     ApprovalReply {
         correlation_id: u64,
+        exchange: ApprovalExchange,
         reply: ApprovalReply,
     },
 }
 
-/// What a worker may say when a capability check fails: the exact verb
-/// it was denied and the canonical scope it asked for. Session, owner,
-/// task and worker identity are never sent — the broker takes all four
-/// from the verified grant.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What a worker may say when a capability check fails: the exact verb,
+/// canonical scope, and optional digest of already-validated operation
+/// inputs. Session, owner, task and worker identity are never sent — the
+/// broker takes all four from the verified grant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "ask", rename_all = "snake_case")]
 pub enum ApprovalAsk {
     /// Spend an already-approved, exactly-matching grant. One-shot: the
     /// broker consumes it, so a replay finds nothing.
-    Consume { verb: String, scope: Scope },
+    Consume {
+        verb: String,
+        scope: Scope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_digest: Option<String>,
+    },
     /// File (or reuse) a pending request for this exact verb and scope.
-    Request { verb: String, scope: Scope },
+    Request {
+        verb: String,
+        scope: Scope,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        operation_digest: Option<String>,
+    },
 }
 
 impl ApprovalAsk {
@@ -133,6 +147,45 @@ impl ApprovalAsk {
         match self {
             ApprovalAsk::Consume { scope, .. } | ApprovalAsk::Request { scope, .. } => scope,
         }
+    }
+
+    pub fn operation_digest(&self) -> Option<&str> {
+        match self {
+            ApprovalAsk::Consume {
+                operation_digest, ..
+            }
+            | ApprovalAsk::Request {
+                operation_digest, ..
+            } => operation_digest.as_deref(),
+        }
+    }
+}
+
+/// Unpredictable, exact binding for one approval round trip.
+///
+/// Correlation ids are only counters and are not authenticators. The broker
+/// echoes this whole value, and the worker accepts the reply only when the
+/// nonce, verb, scope, operation digest, and ask kind all match its waiter.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ApprovalExchange {
+    pub nonce: String,
+    pub ask: ApprovalAsk,
+}
+
+impl ApprovalExchange {
+    pub fn new(ask: ApprovalAsk) -> Self {
+        Self {
+            nonce: uuid::Uuid::new_v4().simple().to_string(),
+            ask,
+        }
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.nonce.len() == 32
+            && self
+                .nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
 }
 
@@ -158,6 +211,11 @@ pub struct Assignment {
     pub protocol: u32,
     pub grant: SignedGrant,
     pub job: JobSpec,
+    /// Broker-derived execution context. The worker uses this only to
+    /// explain denials; the broker independently enforces it whenever
+    /// consent is requested.
+    #[serde(default = "unattended_consent")]
+    pub consent_context: ConsentContext,
     /// Session scope the *broker* derived. Capabilities are never taken
     /// from the worker; they are re-derived by `clawd` from root-owned
     /// session metadata and installed in the worker as a task-local.
@@ -167,6 +225,10 @@ pub struct Assignment {
     /// recently present. Never persisted in the task/session record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<crate::session::SessionPresence>,
+}
+
+fn unattended_consent() -> ConsentContext {
+    ConsentContext::Unattended
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -212,7 +274,7 @@ pub enum WorkerFrame {
     Approval {
         task_id: String,
         correlation_id: u64,
-        ask: ApprovalAsk,
+        exchange: ApprovalExchange,
     },
     Result {
         task_id: String,

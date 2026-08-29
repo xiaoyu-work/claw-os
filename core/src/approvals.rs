@@ -17,17 +17,21 @@
 //!     denied/<id>.json
 //! ```
 //!
-//! Rendering and notification are owned by the Agent UX. This module is just
-//! the storage + waiter layer.
+//! Rendering and notification are owned by the Agent UX. This module stores
+//! durable consent evidence and atomically spends it. For supervised Agent
+//! work, `clawd` then redeems that evidence into a one-use in-memory authority
+//! grant bound to the live task and worker.
 
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::caps::{Cap, Scope, Verb};
+use crate::caps::{Cap, ConsentContext, Risk, Scope, ScopeKind, Verb};
 
 pub mod generations;
 
@@ -68,6 +72,24 @@ pub struct Request {
     pub requested_at: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub owner_uid: Option<u32>,
+    /// Catalog risk captured when the exact capability was requested.
+    /// Missing on legacy records; those are re-derived before a new
+    /// decision is allowed to mint authority.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub risk: Option<Risk>,
+    /// Execution context for Agent-originated consent. Non-Agent
+    /// approval flows leave this absent and cannot satisfy an Agent
+    /// capability denial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ConsentContext>,
+    /// Broker/process identity that originated an Agent request.
+    /// Required whenever `context` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ApprovalExecutionBinding>,
+    /// SHA-256 of the validated operation inputs when the capability alone is
+    /// not specific enough to identify what will execute.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_digest: Option<String>,
     /// Process that asked. Helps the user distinguish "the file
     /// manager I just opened" from "some background cron job."
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -122,6 +144,83 @@ pub struct GrantBinding {
     pub generation: Option<u32>,
     /// Keyed, non-reversible reference shared with the audit trail.
     pub reference: String,
+    /// Exact authority this decision may redeem.
+    ///
+    /// This is deliberately duplicated from the request. A restored or
+    /// edited request cannot turn a historical decision into authority
+    /// for a different owner, session, task, worker lease, capability,
+    /// risk, or execution context. Bindings written before this field
+    /// existed fail closed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authorization: Option<ApprovalAuthorization>,
+}
+
+/// Exact capability, operation, and session context an approved record may
+/// redeem.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalAuthorization {
+    pub owner_uid: Option<u32>,
+    pub session: String,
+    pub capability: Cap,
+    pub risk: Risk,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ConsentContext>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<ApprovalExecutionBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_digest: Option<String>,
+}
+
+/// Stable identity of one running Agent execution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalExecutionIdentity {
+    pub task_id: String,
+    pub worker_pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_start_time_ticks: Option<u64>,
+    pub lease_nonce: String,
+}
+
+/// Request-time bounds attached to an Agent execution identity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ApprovalExecutionBinding {
+    #[serde(flatten)]
+    pub identity: ApprovalExecutionIdentity,
+    /// Wall-clock deadline inherited from the worker/process lease.
+    pub expires_at: u64,
+    /// Revocation generation when the request was filed.
+    pub generation: u32,
+}
+
+/// A durable approval use that has been atomically spent.
+///
+/// For an Agent worker this is not yet execution authority. `clawd`
+/// redeems it into a one-shot in-memory capability grant bound to the
+/// authenticated task and worker before returning success to the gate.
+#[derive(Debug, Clone)]
+pub struct ConsumedGrant {
+    pub duration: GrantDuration,
+    pub expires_at: u64,
+    pub uses_remaining: u32,
+    pub generation: u32,
+    pub reference: String,
+    pub authorization: ApprovalAuthorization,
+}
+
+impl ConsumedGrant {
+    pub fn expires_in(&self) -> Duration {
+        let execution_expiry = self
+            .authorization
+            .execution
+            .as_ref()
+            .map(|execution| execution.expires_at)
+            .unwrap_or(self.expires_at);
+        Duration::from_secs(
+            self.expires_at
+                .min(execution_expiry)
+                .saturating_sub(now_secs()),
+        )
+    }
 }
 
 /// Longest a `session`-scoped approval may stand.
@@ -132,9 +231,253 @@ const SESSION_GRANT_SECS: u64 = 8 * 60 * 60;
 const FOREVER_GRANT_SECS: u64 = 30 * 24 * 60 * 60;
 /// Uses a non-one-shot approval carries before it must be renewed.
 const REPEATABLE_GRANT_USES: u32 = 512;
+/// A local attended process has this long to approve and retry.
+const LOCAL_EXECUTION_SECS: u64 = 15 * 60;
+/// Matches the maximum accepted `claw-agentd` lease.
+const MAX_EXECUTION_BINDING_SECS: u64 = 24 * 60 * 60;
+
+tokio::task_local! {
+    static LOCAL_EXECUTION: LocalExecutionContext;
+}
+
+#[derive(Clone)]
+struct LocalExecutionContext {
+    identity: ApprovalExecutionIdentity,
+    state: Arc<LocalExecutionState>,
+}
+
+struct LocalExecutionState {
+    touched: AtomicBool,
+    ended: AtomicBool,
+}
+
+/// One in-process Agent invocation.
+///
+/// Multiplexed runtimes must create one of these for every conversation turn
+/// and scope the complete model/tool future with [`Self::scope`]. Dropping the
+/// invocation retires every pending or approved record carrying its fresh
+/// nonce, including cancellation and client-disconnect paths.
+pub(crate) struct LocalApprovalInvocation {
+    context: LocalExecutionContext,
+}
+
+impl LocalApprovalInvocation {
+    pub(crate) fn new(task_id: impl Into<String>) -> Result<Self, String> {
+        let task_id = task_id.into();
+        if task_id.is_empty() || task_id.len() > 128 || task_id.chars().any(char::is_control) {
+            return Err("local approval task id is invalid".to_string());
+        }
+        let worker_pid = std::process::id();
+        let worker_start_time_ticks = crate::proc::read_start_time_ticks_pub(worker_pid);
+        if cfg!(target_os = "linux") && worker_start_time_ticks.is_none() {
+            return Err("local approval process identity is not verifiable".to_string());
+        }
+        Ok(Self {
+            context: LocalExecutionContext {
+                identity: ApprovalExecutionIdentity {
+                    task_id,
+                    worker_pid,
+                    worker_start_time_ticks,
+                    lease_nonce: uuid::Uuid::new_v4().to_string(),
+                },
+                state: Arc::new(LocalExecutionState {
+                    touched: AtomicBool::new(false),
+                    ended: AtomicBool::new(false),
+                }),
+            },
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn identity(&self) -> &ApprovalExecutionIdentity {
+        &self.context.identity
+    }
+
+    pub(crate) async fn scope<F>(self, future: F) -> F::Output
+    where
+        F: std::future::Future,
+    {
+        let context = self.context.clone();
+        LOCAL_EXECUTION
+            .scope(context, async move {
+                let _invocation = self;
+                future.await
+            })
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn sync_scope<F, R>(self, f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let context = self.context.clone();
+        LOCAL_EXECUTION.sync_scope(context, || {
+            let _invocation = self;
+            f()
+        })
+    }
+}
+
+impl Drop for LocalApprovalInvocation {
+    fn drop(&mut self) {
+        self.context.state.ended.store(true, Ordering::SeqCst);
+        if !self.context.state.touched.load(Ordering::SeqCst) {
+            return;
+        }
+        if let Err(error) =
+            invalidate_local_execution(&self.context.identity, "local Agent invocation ended")
+        {
+            tracing::error!(
+                task_id = %self.context.identity.task_id,
+                error = %error,
+                "failed to retire local Agent approval state"
+            );
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CapturedLocalExecution(LocalExecutionContext);
+
+pub(crate) fn capture_local_execution() -> Option<CapturedLocalExecution> {
+    LOCAL_EXECUTION
+        .try_with(|context| CapturedLocalExecution(context.clone()))
+        .ok()
+}
+
+pub(crate) fn with_captured_local_execution<F, R>(
+    captured: Option<CapturedLocalExecution>,
+    f: F,
+) -> R
+where
+    F: FnOnce() -> R,
+{
+    match captured {
+        Some(CapturedLocalExecution(context)) => LOCAL_EXECUTION.sync_scope(context, f),
+        None => f(),
+    }
+}
+
+impl ApprovalExecutionBinding {
+    pub fn for_worker(
+        task_id: impl Into<String>,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+        lease_nonce: impl Into<String>,
+        expires_at: u64,
+        owner_uid: Option<u32>,
+        session: &str,
+    ) -> Result<Self, String> {
+        let task_id = task_id.into();
+        let lease_nonce = lease_nonce.into();
+        if task_id.is_empty() || task_id.len() > 128 {
+            return Err("approval task id is invalid".to_string());
+        }
+        if worker_pid == 0 || worker_start_time_ticks.is_none() {
+            return Err("approval worker identity is not verifiable".to_string());
+        }
+        if crate::proc::read_start_time_ticks_pub(worker_pid) != worker_start_time_ticks {
+            return Err("approval worker start time does not match the live process".to_string());
+        }
+        if lease_nonce.len() < 16 || lease_nonce.len() > 128 {
+            return Err("approval lease nonce is invalid".to_string());
+        }
+        let now = now_secs();
+        if expires_at <= now {
+            return Err("approval request lease has expired".to_string());
+        }
+        if expires_at > now.saturating_add(MAX_EXECUTION_BINDING_SECS) {
+            return Err("approval request lease exceeds the maximum lifetime".to_string());
+        }
+        Ok(Self {
+            identity: ApprovalExecutionIdentity {
+                task_id,
+                worker_pid,
+                worker_start_time_ticks,
+                lease_nonce,
+            },
+            expires_at,
+            generation: generations::current(owner_uid, session)?,
+        })
+    }
+
+    fn is_live_for(
+        &self,
+        expected: &ApprovalExecutionIdentity,
+        owner_uid: Option<u32>,
+        session: &str,
+        now: u64,
+    ) -> bool {
+        if self.identity.task_id.is_empty()
+            || self.identity.task_id.len() > 128
+            || self.identity.lease_nonce.len() < 16
+            || self.identity.lease_nonce.len() > 128
+            || &self.identity != expected
+            || now >= self.expires_at
+            || execution_is_revoked(&self.identity)
+        {
+            return false;
+        }
+        match self.identity.worker_start_time_ticks {
+            Some(expected_start)
+                if crate::proc::read_start_time_ticks_pub(self.identity.worker_pid)
+                    != Some(expected_start) =>
+            {
+                return false;
+            }
+            None if cfg!(target_os = "linux") => return false,
+            _ => {}
+        }
+        matches!(
+            generations::current(owner_uid, session),
+            Ok(current) if current == self.generation
+        )
+    }
+}
+
+fn local_execution_identity() -> Result<ApprovalExecutionIdentity, String> {
+    match LOCAL_EXECUTION.try_with(|context| {
+        if context.state.ended.load(Ordering::SeqCst) {
+            return Err("Agent approval invocation has ended".to_string());
+        }
+        context.state.touched.store(true, Ordering::SeqCst);
+        if context.state.ended.load(Ordering::SeqCst) {
+            let _ =
+                invalidate_local_execution(&context.identity, "local Agent invocation ended");
+            return Err("Agent approval invocation has ended".to_string());
+        }
+        Ok(context.identity.clone())
+    }) {
+        Ok(identity) => identity,
+        Err(_) => {
+            Err("Agent approval requires an active per-invocation execution identity".to_string())
+        }
+    }
+}
+
+fn local_execution_binding(
+    owner_uid: Option<u32>,
+    session: &str,
+) -> Result<ApprovalExecutionBinding, String> {
+    let identity = local_execution_identity()?;
+    let expires_at = now_secs().saturating_add(LOCAL_EXECUTION_SECS);
+    let generation = generations::current(owner_uid, session)?;
+    Ok(ApprovalExecutionBinding {
+        identity,
+        expires_at,
+        generation,
+    })
+}
 
 impl GrantBinding {
-    fn mint(duration: GrantDuration, id: &str, now: u64, generation: u32) -> Self {
+    fn mint(
+        duration: GrantDuration,
+        id: &str,
+        now: u64,
+        generation: u32,
+        authorization: ApprovalAuthorization,
+    ) -> Self {
         let (lifetime, uses) = match duration {
             GrantDuration::Once => (SESSION_GRANT_SECS, 1),
             GrantDuration::Session => (SESSION_GRANT_SECS, REPEATABLE_GRANT_USES),
@@ -145,19 +488,51 @@ impl GrantBinding {
             uses_remaining: uses,
             generation: Some(generation),
             reference: crate::audit_policy::text_digest(id).digest,
+            authorization: Some(authorization),
         }
     }
 
-    /// Is this binding still authority for `(owner_uid, session)`?
+    /// Is this binding still authority for the exact expected request?
     ///
     /// Three independent conditions, each of which alone kills the
     /// grant: the use budget, the deadline, and the revocation
     /// generation. The generation lookup reads root-owned state, and an
     /// error there is a refusal — an authority that cannot tell whether
     /// something was revoked must assume it was.
-    fn is_live(&self, now: u64, owner_uid: Option<u32>, session: &str) -> bool {
+    fn is_live(
+        &self,
+        now: u64,
+        expected: &ApprovalAuthorization,
+        expected_execution: Option<&ApprovalExecutionIdentity>,
+    ) -> bool {
         if self.uses_remaining == 0 || now >= self.expires_at {
             return false;
+        }
+        let Some(authorization) = self.authorization.as_ref() else {
+            return false;
+        };
+        if authorization.owner_uid != expected.owner_uid
+            || authorization.session != expected.session
+            || authorization.capability != expected.capability
+            || authorization.risk != expected.risk
+            || authorization.context != expected.context
+            || authorization.operation_digest != expected.operation_digest
+        {
+            return false;
+        }
+        match (authorization.execution.as_ref(), expected_execution) {
+            (Some(execution), Some(expected)) => {
+                if !execution.is_live_for(
+                    expected,
+                    authorization.owner_uid,
+                    &authorization.session,
+                    now,
+                ) {
+                    return false;
+                }
+            }
+            (None, None) => {}
+            _ => return false,
         }
         let Some(generation) = self.generation else {
             // Written before revocation generations existed. The
@@ -165,7 +540,7 @@ impl GrantBinding {
             // never bounded, so it is refused until re-approved.
             return false;
         };
-        match generations::current(owner_uid, session) {
+        match generations::current(authorization.owner_uid, &authorization.session) {
             Ok(current) => generation == current,
             Err(error) => {
                 tracing::error!(
@@ -213,6 +588,9 @@ fn denied_dir() -> PathBuf {
 fn consumed_dir() -> PathBuf {
     root().join("consumed")
 }
+fn revoked_execution_dir() -> PathBuf {
+    root().join("revoked-executions")
+}
 /// Holding area for requests that have been claimed by a resolver
 /// (atomically renamed out of `pending/`) but not yet written to
 /// `approved/` or `denied/`. A crash between the claim and the final
@@ -228,6 +606,7 @@ fn ensure_dirs() -> std::io::Result<()> {
     crate::storage::ensure_private_dir(&approved_dir())?;
     crate::storage::ensure_private_dir(&denied_dir())?;
     crate::storage::ensure_private_dir(&consumed_dir())?;
+    crate::storage::ensure_private_dir(&revoked_execution_dir())?;
     crate::storage::ensure_private_dir(&scratch_dir())?;
     Ok(())
 }
@@ -252,6 +631,49 @@ fn short_id() -> String {
         .hash(&mut h);
     std::process::id().hash(&mut h);
     format!("{:012x}", h.finish() & 0xFFFFFFFFFFFF)
+}
+
+fn execution_revocation_path(identity: &ApprovalExecutionIdentity) -> PathBuf {
+    let material = format!(
+        "{}\0{}\0{}\0{}",
+        identity.task_id,
+        identity.worker_pid,
+        identity.worker_start_time_ticks.unwrap_or_default(),
+        identity.lease_nonce
+    );
+    revoked_execution_dir().join(format!(
+        "{}.json",
+        crate::crypto::sha256_hex(material.as_bytes())
+    ))
+}
+
+fn execution_is_revoked(identity: &ApprovalExecutionIdentity) -> bool {
+    match fs::metadata(execution_revocation_path(identity)) {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => {
+            tracing::error!(
+                task_id = %identity.task_id,
+                error = %error,
+                "approval execution revocation state is unreadable; refusing the grant"
+            );
+            true
+        }
+    }
+}
+
+fn revoke_execution(identity: &ApprovalExecutionIdentity) -> Result<(), String> {
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    let payload = serde_json::to_vec_pretty(&serde_json::json!({
+        "revoked_at": now_secs(),
+    }))
+    .map_err(|error| error.to_string())?;
+    write_atomic_with(
+        &execution_revocation_path(identity),
+        &payload,
+        Durability::Committed,
+    )
+    .map_err(|error| format!("persist execution revocation: {error}"))
 }
 
 fn validate_approval_id(id: &str) -> Result<(), String> {
@@ -390,6 +812,117 @@ fn sync_dir(path: &Path) {
     }
 }
 
+pub fn canonical_capability(verb: Verb, scope: Scope) -> Result<(Cap, Risk), String> {
+    let meta = crate::caps::lookup_meta(verb)
+        .ok_or_else(|| format!("capability verb is not in the catalog: {}", verb.as_str()))?;
+    let scope = scope.canonicalized();
+    let kind_matches = matches!(
+        (meta.scope_kind, &scope),
+        (_, Scope::Wild)
+            | (ScopeKind::Path, Scope::Path(_))
+            | (ScopeKind::Host, Scope::Host(_))
+            | (ScopeKind::Name, Scope::Name(_))
+            | (ScopeKind::SelfRef, Scope::SelfRef(_))
+    );
+    if !kind_matches {
+        return Err(format!(
+            "capability {} expects {:?} scope, got {:?}",
+            verb.as_str(),
+            meta.scope_kind,
+            scope.kind()
+        ));
+    }
+    let rendered = scope.to_string();
+    if rendered.is_empty() || rendered.len() > 512 || rendered.contains(['\n', '\r', '\0']) {
+        return Err("capability scope is not a bounded single-line value".to_string());
+    }
+    Ok((Cap::new(verb, scope), meta.risk))
+}
+
+pub fn capability_risk(verb: Verb, scope: &Scope) -> Result<Risk, String> {
+    canonical_capability(verb, scope.clone()).map(|(_, risk)| risk)
+}
+
+fn canonical_operation_digest(digest: Option<&str>) -> Result<Option<String>, String> {
+    match digest {
+        None => Ok(None),
+        Some(value)
+            if value.len() == 64
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)) =>
+        {
+            Ok(Some(value.to_string()))
+        }
+        Some(_) => Err("approval operation digest must be lowercase SHA-256".to_string()),
+    }
+}
+
+fn authorization_for_request(request: &Request) -> Result<ApprovalAuthorization, String> {
+    let verb = Verb::parse(&request.verb)
+        .ok_or_else(|| format!("unknown capability verb: {}", request.verb))?;
+    let (capability, risk) = canonical_capability(verb, request.scope.clone())?;
+    if capability.scope != request.scope {
+        return Err(
+            "approval request scope is not canonical; request a fresh approval".to_string(),
+        );
+    }
+    if request.risk.is_some_and(|recorded| recorded != risk) {
+        return Err(format!(
+            "capability risk changed for {}; request a fresh approval",
+            request.verb
+        ));
+    }
+    match (request.context, request.execution.as_ref()) {
+        (Some(_), Some(execution)) => {
+            if !execution.is_live_for(
+                &execution.identity,
+                request.owner_uid,
+                &request.session,
+                now_secs(),
+            ) {
+                return Err("approval request no longer matches a live execution".to_string());
+            }
+        }
+        (Some(_), None) => {
+            return Err("Agent approval request has no execution binding".to_string());
+        }
+        (None, Some(_)) => {
+            return Err("non-Agent approval request carries an execution binding".to_string());
+        }
+        (None, None) => {}
+    }
+    Ok(ApprovalAuthorization {
+        owner_uid: request.owner_uid,
+        session: request.session.clone(),
+        capability,
+        risk,
+        context: request.context,
+        execution: request.execution.clone(),
+        operation_digest: canonical_operation_digest(request.operation_digest.as_deref())?,
+    })
+}
+
+fn validate_agent_duration(
+    authorization: &ApprovalAuthorization,
+    duration: GrantDuration,
+) -> Result<(), String> {
+    if authorization.context != Some(ConsentContext::Attended) {
+        return Ok(());
+    }
+    match (authorization.risk, duration) {
+        (Risk::Critical, GrantDuration::Session | GrantDuration::Forever) => Err(
+            "critical Agent capabilities may only be approved once; choose duration `once`"
+                .to_string(),
+        ),
+        (Risk::High, GrantDuration::Forever) => Err(
+            "high-risk Agent capabilities may not be approved forever; choose `once` or `session`"
+                .to_string(),
+        ),
+        _ => Ok(()),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Public API — write side
 // ---------------------------------------------------------------------------
@@ -414,15 +947,182 @@ pub fn submit_owned(
     requester: Option<String>,
     owner_uid: Option<u32>,
 ) -> Result<String, String> {
+    submit_owned_with_context(verb, scope, session, reason, requester, owner_uid, None)
+}
+
+/// Submit an Agent-originated capability request with its trusted
+/// attended/unattended context.
+pub fn submit_owned_with_context(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<String, String> {
+    submit_owned_with_context_for_operation(
+        verb, scope, session, reason, requester, owner_uid, context, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_owned_with_context_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<String, String> {
+    let session = session.into();
+    if context == Some(ConsentContext::Unattended) {
+        return Err("unattended execution cannot create an approval request".to_string());
+    }
+    let execution = match context {
+        Some(_) => Some(local_execution_binding(owner_uid, &session)?),
+        None => None,
+    };
+    submit_owned_with_execution_for_operation(
+        verb,
+        scope,
+        session,
+        reason,
+        requester,
+        owner_uid,
+        context,
+        execution,
+        operation_digest,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn submit_worker_request(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: u32,
+    task_id: impl Into<String>,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_nonce: impl Into<String>,
+    expires_at: u64,
+) -> Result<String, String> {
+    submit_worker_request_for_operation(
+        verb,
+        scope,
+        session,
+        reason,
+        requester,
+        owner_uid,
+        task_id,
+        worker_pid,
+        worker_start_time_ticks,
+        lease_nonce,
+        expires_at,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn submit_worker_request_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: u32,
+    task_id: impl Into<String>,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_nonce: impl Into<String>,
+    expires_at: u64,
+    operation_digest: Option<&str>,
+) -> Result<String, String> {
+    let session = session.into();
+    let execution = ApprovalExecutionBinding::for_worker(
+        task_id,
+        worker_pid,
+        worker_start_time_ticks,
+        lease_nonce,
+        expires_at,
+        Some(owner_uid),
+        &session,
+    )?;
+    submit_owned_with_execution_for_operation(
+        verb,
+        scope,
+        session,
+        reason,
+        requester,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        operation_digest,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn submit_owned_with_execution(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<ApprovalExecutionBinding>,
+) -> Result<String, String> {
+    submit_owned_with_execution_for_operation(
+        verb, scope, session, reason, requester, owner_uid, context, execution, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn submit_owned_with_execution_for_operation(
+    verb: Verb,
+    scope: Scope,
+    session: impl Into<String>,
+    reason: impl Into<String>,
+    requester: Option<String>,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<ApprovalExecutionBinding>,
+    operation_digest: Option<&str>,
+) -> Result<String, String> {
+    let session = session.into();
+    if context == Some(ConsentContext::Unattended) {
+        return Err("unattended execution cannot create an approval request".to_string());
+    }
+    if context.is_some() != execution.is_some() {
+        return Err(
+            "Agent consent context and execution binding must be provided together".to_string(),
+        );
+    }
+    if let Some(execution) = execution.as_ref() {
+        if !execution.is_live_for(&execution.identity, owner_uid, &session, now_secs()) {
+            return Err("approval request execution binding is not live".to_string());
+        }
+    }
+    let (capability, risk) = canonical_capability(verb, scope)?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     let req = Request {
         id: format!("ap-{}", short_id()),
         verb: verb.as_str().to_string(),
-        scope,
-        session: session.into(),
+        scope: capability.scope,
+        session,
         reason: reason.into(),
         requested_at: now_secs(),
         owner_uid,
+        risk: Some(risk),
+        context,
+        execution,
+        operation_digest,
         requester,
     };
     let path = pending_dir().join(format!("{}.json", req.id));
@@ -490,8 +1190,21 @@ fn resolve(
     note: Option<String>,
     owner_uid: Option<u32>,
 ) -> Result<Resolved, String> {
-    validate_approval_id(id)?;
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        resolve_locked(id, outcome, duration, decided_by, note, owner_uid)
+    })
+}
+
+fn resolve_locked(
+    id: &str,
+    outcome: Outcome,
+    duration: Option<GrantDuration>,
+    decided_by: Option<String>,
+    note: Option<String>,
+    owner_uid: Option<u32>,
+) -> Result<Resolved, String> {
+    validate_approval_id(id)?;
     let pending = pending_dir().join(format!("{id}.json"));
     if let Some(uid) = owner_uid {
         let request =
@@ -531,7 +1244,7 @@ fn resolve(
         Ok(s) => s,
         Err(e) => return Err(format!("read claimed {id}: {e}")),
     };
-    let request: Request =
+    let mut request: Request =
         serde_json::from_str(&data).map_err(|e| format!("parse claimed {id}: {e}"))?;
     if !request_visible_to(&request, owner_uid) {
         fs::rename(&scratch, &pending)
@@ -543,15 +1256,51 @@ fn resolve(
     }
 
     let decided_at = now_secs();
+    let authorization = if outcome == Outcome::Approved {
+        let authorization = match authorization_for_request(&request) {
+            Ok(authorization) => authorization,
+            Err(error) => {
+                invalidate_claimed_request(id, &scratch, &request, &error)?;
+                return Err(error);
+            }
+        };
+        if let Some(duration) = duration {
+            if let Err(error) = validate_agent_duration(&authorization, duration) {
+                fs::rename(&scratch, &pending)
+                    .map_err(|restore| format!("{error}; restore pending {id}: {restore}"))?;
+                return Err(error);
+            }
+        }
+        request.risk = Some(authorization.risk);
+        Some(authorization)
+    } else {
+        None
+    };
     // The generation is captured from root-owned state at decision
     // time, so a later revocation of this owner or this grant session
     // retires the record without touching it — and a restore of this
     // very file from an older backup cannot bring it back.
     let generation = match outcome {
-        Outcome::Approved => Some(
-            generations::current(request.owner_uid, &request.session)
-                .map_err(|error| format!("could not read approval revocation state: {error}"))?,
-        ),
+        Outcome::Approved => match generations::current(request.owner_uid, &request.session) {
+            Ok(generation)
+                if authorization
+                    .as_ref()
+                    .and_then(|authorization| authorization.execution.as_ref())
+                    .is_none_or(|execution| execution.generation == generation) =>
+            {
+                Some(generation)
+            }
+            Ok(_) => {
+                let message = "approval request generation changed before the decision".to_string();
+                invalidate_claimed_request(id, &scratch, &request, &message)?;
+                return Err(message);
+            }
+            Err(error) => {
+                let message = format!("could not read approval revocation state: {error}");
+                invalidate_claimed_request(id, &scratch, &request, &message)?;
+                return Err(message);
+            }
+        },
         Outcome::Denied => None,
     };
     let decision = Decision {
@@ -561,14 +1310,17 @@ fn resolve(
         duration,
         note,
         // Only an approval carries authority, and only a bounded one.
-        grant: generation.map(|generation| {
-            GrantBinding::mint(
-                duration.unwrap_or(GrantDuration::Once),
-                id,
-                decided_at,
-                generation,
-            )
-        }),
+        grant: generation
+            .zip(authorization)
+            .map(|(generation, authorization)| {
+                GrantBinding::mint(
+                    duration.unwrap_or(GrantDuration::Once),
+                    id,
+                    decided_at,
+                    generation,
+                    authorization,
+                )
+            }),
     };
     let resolved = Resolved { request, decision };
     let dest_dir = match outcome {
@@ -588,6 +1340,32 @@ fn resolve(
     crate::clawd::system_journal::record_approval_decision(&resolved);
 
     Ok(resolved)
+}
+
+fn invalidate_claimed_request(
+    id: &str,
+    scratch: &Path,
+    request: &Request,
+    reason: &str,
+) -> Result<(), String> {
+    let resolved = Resolved {
+        request: request.clone(),
+        decision: Decision {
+            outcome: Outcome::Denied,
+            decided_at: now_secs(),
+            decided_by: Some("system:validation".to_string()),
+            duration: None,
+            note: Some(reason.to_string()),
+            grant: None,
+        },
+    };
+    let dest = denied_dir().join(format!("{id}.json"));
+    let payload = serde_json::to_string_pretty(&resolved).map_err(|error| error.to_string())?;
+    write_atomic(&dest, payload.as_bytes())
+        .map_err(|error| format!("invalidate approval {id}: {error}"))?;
+    let _ = fs::remove_file(scratch);
+    crate::clawd::system_journal::record_approval_decision(&resolved);
+    Ok(())
 }
 
 fn outcome_dir_name(o: Outcome) -> &'static str {
@@ -645,6 +1423,109 @@ pub fn lookup_pending(id: &str) -> Option<Request> {
     serde_json::from_str(&data).ok()
 }
 
+/// Atomically retire pending requests created by one task/worker lease.
+///
+/// A concurrent human decision and teardown race on the same rename;
+/// exactly one wins. If the decision wins, the generation revocation
+/// performed by the caller still makes its grant unusable.
+pub fn invalidate_pending_for_execution(
+    owner_uid: Option<u32>,
+    session: &str,
+    execution: &ApprovalExecutionIdentity,
+    reason: &str,
+) -> Result<usize, String> {
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+    let mut invalidated = 0usize;
+    for path in list_dir(&pending_dir()) {
+        let Ok(data) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(request) = serde_json::from_str::<Request>(&data) else {
+            continue;
+        };
+        let expected_file = format!("{}.json", request.id);
+        if validate_approval_id(&request.id).is_err()
+            || path.file_name().and_then(|name| name.to_str()) != Some(expected_file.as_str())
+        {
+            continue;
+        }
+        if request.owner_uid != owner_uid
+            || request.session != session
+            || request.execution.as_ref().map(|binding| &binding.identity) != Some(execution)
+        {
+            continue;
+        }
+        let scratch = scratch_dir().join(format!("{}.{}.json", request.id, short_id()));
+        match fs::rename(&path, &scratch) {
+            Ok(()) => {
+                invalidate_claimed_request(&request.id, &scratch, &request, reason)?;
+                invalidated = invalidated.saturating_add(1);
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!("claim stale approval {}: {error}", request.id));
+            }
+        }
+    }
+    Ok(invalidated)
+}
+
+/// Permanently retire all consent state for one in-process Agent invocation.
+///
+/// The revocation marker is committed before files are moved, so a concurrent
+/// decision or a later restore of an old approved record still fails closed.
+fn invalidate_local_execution(
+    execution: &ApprovalExecutionIdentity,
+    reason: &str,
+) -> Result<(), String> {
+    revoke_execution(execution)?;
+    ensure_dirs().map_err(|error| format!("approvals dir: {error}"))?;
+
+    for path in list_dir(&pending_dir()) {
+        let Ok(data) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(request) = serde_json::from_str::<Request>(&data) else {
+            continue;
+        };
+        if request.execution.as_ref().map(|binding| &binding.identity) != Some(execution) {
+            continue;
+        }
+        let scratch = scratch_dir().join(format!("{}.{}.json", request.id, short_id()));
+        match fs::rename(&path, &scratch) {
+            Ok(()) => invalidate_claimed_request(&request.id, &scratch, &request, reason)?,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "claim ended-invocation approval {}: {error}",
+                    request.id
+                ));
+            }
+        }
+    }
+
+    crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
+        for path in list_dir(&approved_dir()) {
+            let Ok(data) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(resolved) = serde_json::from_str::<Resolved>(&data) else {
+                continue;
+            };
+            if resolved
+                .request
+                .execution
+                .as_ref()
+                .map(|binding| &binding.identity)
+                == Some(execution)
+            {
+                consume_grant_file(&path)?;
+            }
+        }
+        Ok(())
+    })
+}
+
 fn request_visible_to(request: &Request, owner_uid: Option<u32>) -> bool {
     match owner_uid {
         None => true,
@@ -668,44 +1549,181 @@ pub fn consume_matching_grant_for_owner(
     requested_scope: &Scope,
     owner_uid: Option<u32>,
 ) -> Result<Option<GrantDuration>, String> {
+    redeem_matching_grant_for_owner(session, verb, requested_scope, owner_uid, None)
+        .map(|grant| grant.map(|grant| grant.duration))
+}
+
+/// Atomically spend one Agent approval for an exact capability.
+///
+/// The returned record is consent evidence, not execution authority.
+/// The `agentd` broker must redeem it into a process-bound
+/// `clawd::authority` grant before the worker may proceed.
+pub fn redeem_matching_grant_for_owner(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_owner_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        context,
+        None,
+    )
+}
+
+pub(crate) fn redeem_matching_grant_for_owner_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
+    let execution = match context {
+        Some(_) => Some(local_execution_identity()?),
+        None => None,
+    };
+    redeem_matching_grant_for_execution_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        context,
+        execution.as_ref(),
+        operation_digest,
+    )
+}
+
+pub fn redeem_matching_grant_for_execution(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_execution_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn redeem_matching_grant_for_execution_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
+    let (capability, risk) = canonical_capability(verb, requested_scope.clone())?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
+    let expected = ApprovalAuthorization {
+        owner_uid,
+        session: session.to_string(),
+        capability,
+        risk,
+        context,
+        execution: None,
+        operation_digest,
+    };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     // The scan, the budget decrement and the retirement all happen
     // under one store-wide lock, so two callers cannot both spend the
     // last use of the same grant.
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         for path in list_dir(&approved_dir()) {
-            let Some(resolved) =
-                load_matching_grant(&path, session, verb, requested_scope, owner_uid)
-            else {
+            let Some(resolved) = load_matching_grant(&path, &expected, execution) else {
                 continue;
             };
-            let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
-            if spend_grant(&path, resolved)? {
-                return Ok(Some(duration));
+            if let Some(grant) = spend_grant(&path, resolved)? {
+                return Ok(Some(grant));
             }
         }
         Ok(None)
     })
 }
 
+pub fn redeem_matching_worker_grant_for_owner(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_worker_grant_for_owner_operation(
+        session,
+        verb,
+        requested_scope,
+        owner_uid,
+        execution,
+        None,
+    )
+}
+
+pub(crate) fn redeem_matching_worker_grant_for_owner_operation(
+    session: &str,
+    verb: Verb,
+    requested_scope: &Scope,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: Option<&str>,
+) -> Result<Option<ConsumedGrant>, String> {
+    redeem_matching_grant_for_execution_operation(
+        session,
+        verb,
+        requested_scope,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        operation_digest,
+    )
+}
+
 /// Spend one use of an approved grant, retiring it when the budget runs
 /// out.
 ///
-/// Called with the store lock held. Returns `Ok(false)` when another
+/// Called with the store lock held. Returns `Ok(None)` when another
 /// caller won the race and the record is already gone.
-fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<bool, String> {
+fn spend_grant(path: &Path, mut resolved: Resolved) -> Result<Option<ConsumedGrant>, String> {
+    let duration = resolved.decision.duration.unwrap_or(GrantDuration::Once);
     let Some(binding) = resolved.decision.grant.as_mut() else {
         // Refused by `load_matching_grant`; belt and braces.
-        return Ok(false);
+        return Ok(None);
+    };
+    let Some(generation) = binding.generation else {
+        return Ok(None);
+    };
+    let Some(authorization) = binding.authorization.clone() else {
+        return Ok(None);
     };
     binding.uses_remaining = binding.uses_remaining.saturating_sub(1);
+    let consumed = ConsumedGrant {
+        duration,
+        expires_at: binding.expires_at,
+        uses_remaining: binding.uses_remaining,
+        generation,
+        reference: binding.reference.clone(),
+        authorization,
+    };
     if binding.uses_remaining == 0 {
-        return consume_grant_file(path);
+        return consume_grant_file(path).map(|moved| moved.then_some(consumed));
     }
     let payload = serde_json::to_string_pretty(&resolved).map_err(|e| e.to_string())?;
     write_atomic(path, payload.as_bytes())
         .map_err(|e| format!("spend approved grant {}: {e}", path.display()))?;
-    Ok(true)
+    Ok(Some(consumed))
 }
 
 /// True when an approved, unconsumed grant already covers this exact
@@ -717,10 +1735,197 @@ pub fn has_approved_grant_for_owner(
     cap: &Cap,
     owner_uid: Option<u32>,
 ) -> Result<bool, String> {
+    has_approved_grant_for_context(session, cap, owner_uid, None)
+}
+
+pub fn has_approved_grant_for_context(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Result<bool, String> {
+    has_approved_grant_for_context_operation(session, cap, owner_uid, context, None)
+}
+
+pub(crate) fn has_approved_grant_for_context_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Result<bool, String> {
+    let execution = match context {
+        Some(_) => Some(local_execution_identity()?),
+        None => None,
+    };
+    has_approved_grant_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution.as_ref(),
+        operation_digest,
+    )
+}
+
+pub fn has_approved_grant_for_execution(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+) -> Result<bool, String> {
+    has_approved_grant_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn has_approved_grant_for_execution_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Result<bool, String> {
+    let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+    let operation_digest = canonical_operation_digest(operation_digest)?;
+    let expected = ApprovalAuthorization {
+        owner_uid,
+        session: session.to_string(),
+        capability,
+        risk,
+        context,
+        execution: None,
+        operation_digest,
+    };
     ensure_dirs().map_err(|e| format!("approvals dir: {e}"))?;
     Ok(list_dir(&approved_dir())
         .into_iter()
-        .any(|path| load_matching_grant(&path, session, cap.verb, &cap.scope, owner_uid).is_some()))
+        .any(|path| load_matching_grant(&path, &expected, execution).is_some()))
+}
+
+/// Find a pending request for exactly this owner/session/capability and
+/// execution context. Scope containment is intentionally not used:
+/// consent for one canonical operation must never be substituted for
+/// a sibling or broader resource.
+pub fn find_pending_exact(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+) -> Option<Request> {
+    find_pending_exact_for_operation(session, cap, owner_uid, context, None)
+}
+
+pub(crate) fn find_pending_exact_for_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
+    let execution = match context {
+        Some(_) => Some(local_execution_identity().ok()?),
+        None => None,
+    };
+    find_pending_exact_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution.as_ref(),
+        operation_digest,
+    )
+}
+
+pub fn find_pending_exact_for_execution(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+) -> Option<Request> {
+    find_pending_exact_for_execution_operation(
+        session,
+        cap,
+        owner_uid,
+        context,
+        execution,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn find_pending_exact_for_execution_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: Option<u32>,
+    context: Option<ConsentContext>,
+    execution: Option<&ApprovalExecutionIdentity>,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
+    let (cap, risk) = canonical_capability(cap.verb, cap.scope.clone()).ok()?;
+    let operation_digest = canonical_operation_digest(operation_digest).ok()?;
+    list_pending_for_owner(owner_uid)
+        .into_iter()
+        .find(|request| {
+            request.session == session
+                && request.owner_uid == owner_uid
+                && request.verb == cap.verb.as_str()
+                && request.scope == cap.scope
+                && request.context == context
+                && request.risk == Some(risk)
+                && request.operation_digest == operation_digest
+                && execution_matches(request.execution.as_ref(), execution, owner_uid, session)
+        })
+}
+
+pub fn find_pending_worker_request(
+    session: &str,
+    cap: &Cap,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+) -> Option<Request> {
+    find_pending_worker_request_for_operation(session, cap, owner_uid, execution, None)
+}
+
+pub(crate) fn find_pending_worker_request_for_operation(
+    session: &str,
+    cap: &Cap,
+    owner_uid: u32,
+    execution: &ApprovalExecutionIdentity,
+    operation_digest: Option<&str>,
+) -> Option<Request> {
+    find_pending_exact_for_execution_operation(
+        session,
+        cap,
+        Some(owner_uid),
+        Some(ConsentContext::Attended),
+        Some(execution),
+        operation_digest,
+    )
+}
+
+fn execution_matches(
+    binding: Option<&ApprovalExecutionBinding>,
+    expected: Option<&ApprovalExecutionIdentity>,
+    owner_uid: Option<u32>,
+    session: &str,
+) -> bool {
+    match (binding, expected) {
+        (Some(binding), Some(expected)) => {
+            binding.is_live_for(expected, owner_uid, session, now_secs())
+        }
+        (None, None) => true,
+        _ => false,
+    }
 }
 
 /// Decision state of one request, as reported to the requester.
@@ -806,9 +2011,18 @@ pub fn consume_grant_set_once_for_owner(
     crate::filelock::with_exclusive_path_lock(&grant_lock_path(), || {
         let mut claimed: Vec<PathBuf> = Vec::new();
         for cap in required {
+            let (capability, risk) = canonical_capability(cap.verb, cap.scope.clone())?;
+            let expected = ApprovalAuthorization {
+                owner_uid,
+                session: session.to_string(),
+                capability,
+                risk,
+                context: None,
+                execution: None,
+                operation_digest: None,
+            };
             let found = list_dir(&approved_dir()).into_iter().find(|path| {
-                !claimed.contains(path)
-                    && load_matching_grant(path, session, cap.verb, &cap.scope, owner_uid).is_some()
+                !claimed.contains(path) && load_matching_grant(path, &expected, None).is_some()
             });
             match found {
                 Some(path) => claimed.push(path),
@@ -850,8 +2064,8 @@ fn grant_lock_path() -> PathBuf {
     root().join("grants")
 }
 
-/// Load `path` when it holds an approved grant covering this exact
-/// session, owner, verb and scope.
+/// Load `path` when it holds an approved grant for this exact
+/// owner, session, verb, scope, risk, and consent context.
 ///
 /// A record with no [`GrantBinding`] is refused. Those are the records
 /// written before approvals carried an expiry, a use budget and a
@@ -862,36 +2076,43 @@ fn grant_lock_path() -> PathBuf {
 /// and so is one the revocation state cannot be read for.
 fn load_matching_grant(
     path: &Path,
-    session: &str,
-    verb: Verb,
-    requested_scope: &Scope,
-    owner_uid: Option<u32>,
+    expected: &ApprovalAuthorization,
+    expected_execution: Option<&ApprovalExecutionIdentity>,
 ) -> Option<Resolved> {
     let data = fs::read_to_string(path).ok()?;
     let resolved = serde_json::from_str::<Resolved>(&data).ok()?;
-    if resolved.request.session != session {
+    if resolved.request.session != expected.session {
         return None;
     }
-    if owner_uid.is_some() && resolved.request.owner_uid != owner_uid {
+    if resolved.request.owner_uid != expected.owner_uid {
         return None;
     }
-    if Verb::parse(&resolved.request.verb) != Some(verb) {
+    if Verb::parse(&resolved.request.verb) != Some(expected.capability.verb) {
         return None;
     }
     if resolved.decision.outcome != Outcome::Approved {
         return None;
     }
-    // Generations are keyed by the *record's* owner, not the caller's
-    // filter, so a lookup with no owner filter still compares against
-    // the counter the approval was minted under.
-    if !resolved.decision.grant.as_ref()?.is_live(
-        now_secs(),
-        resolved.request.owner_uid,
-        &resolved.request.session,
-    ) {
+    if resolved.request.scope != expected.capability.scope {
         return None;
     }
-    if !resolved.request.scope.covers(requested_scope) {
+    if resolved.request.context != expected.context {
+        return None;
+    }
+    if resolved.request.risk != Some(expected.risk) {
+        return None;
+    }
+    if resolved.request.operation_digest != expected.operation_digest {
+        return None;
+    }
+    let grant = resolved.decision.grant.as_ref()?;
+    let authorization = grant.authorization.as_ref()?;
+    if authorization.execution != resolved.request.execution
+        || authorization.operation_digest != resolved.request.operation_digest
+    {
+        return None;
+    }
+    if !grant.is_live(now_secs(), expected, expected_execution) {
         return None;
     }
     Some(resolved)

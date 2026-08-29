@@ -568,30 +568,29 @@ fn flatten_stored_content(content: &str) -> String {
         }
     };
 
-    let flush_result =
-        |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
-            if let Some((is_error, body)) = active.take() {
-                if !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                }
-                out.push_str(if is_error {
-                    "[tool result error]"
+    let flush_result = |active: &mut Option<(bool, String)>, out: &mut String, max_chars: usize| {
+        if let Some((is_error, body)) = active.take() {
+            if !out.is_empty() && !out.ends_with('\n') {
+                out.push('\n');
+            }
+            out.push_str(if is_error {
+                "[tool result error]"
+            } else {
+                "[tool result]"
+            });
+            let trimmed = body.trim();
+            if !trimmed.is_empty() {
+                out.push('\n');
+                if trimmed.chars().count() > max_chars {
+                    let preview: String = trimmed.chars().take(max_chars).collect();
+                    out.push_str(&preview);
+                    out.push_str("\n…[truncated]");
                 } else {
-                    "[tool result]"
-                });
-                let trimmed = body.trim();
-                if !trimmed.is_empty() {
-                    out.push('\n');
-                    if trimmed.chars().count() > max_chars {
-                        let preview: String = trimmed.chars().take(max_chars).collect();
-                        out.push_str(&preview);
-                        out.push_str("\n…[truncated]");
-                    } else {
-                        out.push_str(trimmed);
-                    }
+                    out.push_str(trimmed);
                 }
             }
-        };
+        }
+    };
 
     for line in content.lines() {
         let trimmed = line.trim_start();
@@ -737,7 +736,76 @@ fn build_request_user_message(
     Message::user_text(content)
 }
 
+fn local_approval_task_id(conversation_id: Option<&str>, task_or_turn_id: Option<&str>) -> String {
+    if let Some(id) = task_or_turn_id.filter(|id| !id.is_empty()) {
+        if id.len() <= 128 && !id.chars().any(char::is_control) {
+            return id.to_string();
+        }
+        return format!(
+            "task-sha256:{}",
+            &crate::crypto::sha256_hex(id.as_bytes())[..32]
+        );
+    }
+
+    let turn_id = uuid::Uuid::new_v4().simple().to_string();
+    match conversation_id.filter(|id| !id.is_empty()) {
+        Some(id)
+            if id.len() <= 64
+                && id
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || b"._-".contains(&byte)) =>
+        {
+            format!("conversation:{id}:turn:{turn_id}")
+        }
+        Some(id) => format!(
+            "conversation-sha256:{}:turn:{turn_id}",
+            &crate::crypto::sha256_hex(id.as_bytes())[..32]
+        ),
+        None => format!("agent-turn:{turn_id}"),
+    }
+}
+
 async fn ask_inner(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    recorder: Option<(&MemoryDb, &str)>,
+    compressor: Option<Arc<dyn Compressor>>,
+    initial_messages: Vec<Message>,
+) -> Result<AskResult, AgentError> {
+    if crate::caps::approval_gateway::installed().is_some() {
+        return ask_inner_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            tools,
+            exposure,
+            recorder,
+            compressor,
+            initial_messages,
+        )
+        .await;
+    }
+    let task_id = local_approval_task_id(recorder.map(|(_, session)| session), None);
+    let invocation =
+        crate::approvals::LocalApprovalInvocation::new(task_id).map_err(AgentError::Internal)?;
+    invocation
+        .scope(ask_inner_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            tools,
+            exposure,
+            recorder,
+            compressor,
+            initial_messages,
+        ))
+        .await
+}
+
+async fn ask_inner_scoped(
     provider: Arc<dyn Provider>,
     cfg: &AgentConfig,
     user_prompt: &str,
@@ -817,9 +885,8 @@ async fn ask_inner(
     let turn_limit = cfg.max_turns.max(1);
     for turn in 1..=turn_limit {
         let force_finalize = turn == turn_limit;
-        let finalization_system = force_finalize.then(|| {
-            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
-        });
+        let finalization_system =
+            force_finalize.then(|| format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}"));
         let turn_system = finalization_system.as_deref().unwrap_or(&system);
 
         if interrupt_handle.check() {
@@ -1117,6 +1184,59 @@ async fn ask_inner_streaming(
     initial_messages: Vec<Message>,
     interrupt_scope: Option<&str>,
 ) -> Result<AskResult, AgentError> {
+    if crate::caps::approval_gateway::installed().is_some() {
+        return ask_inner_streaming_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            transient_context,
+            tools,
+            exposure,
+            recorder,
+            compressor,
+            sink,
+            progress,
+            initial_messages,
+            interrupt_scope,
+        )
+        .await;
+    }
+    let task_id = local_approval_task_id(recorder.map(|(_, session)| session), interrupt_scope);
+    let invocation =
+        crate::approvals::LocalApprovalInvocation::new(task_id).map_err(AgentError::Internal)?;
+    invocation
+        .scope(ask_inner_streaming_scoped(
+            provider,
+            cfg,
+            user_prompt,
+            transient_context,
+            tools,
+            exposure,
+            recorder,
+            compressor,
+            sink,
+            progress,
+            initial_messages,
+            interrupt_scope,
+        ))
+        .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn ask_inner_streaming_scoped(
+    provider: Arc<dyn Provider>,
+    cfg: &AgentConfig,
+    user_prompt: &str,
+    transient_context: Option<&str>,
+    tools: &ToolRegistry,
+    exposure: &ToolExposureContext,
+    recorder: Option<(&MemoryDb, &str)>,
+    compressor: Option<Arc<dyn Compressor>>,
+    sink: Arc<dyn StreamSink>,
+    progress: Arc<dyn ProgressSink>,
+    initial_messages: Vec<Message>,
+    interrupt_scope: Option<&str>,
+) -> Result<AskResult, AgentError> {
     let sink = super::presentation::user_visible_stream_sink(sink);
     let progress = super::presentation::user_visible_progress_sink(progress);
     let redactor: Option<Redactor> = if cfg.redact_memory_enabled {
@@ -1187,9 +1307,8 @@ async fn ask_inner_streaming(
     let turn_limit = cfg.max_turns.max(1);
     for turn in 1..=turn_limit {
         let force_finalize = turn == turn_limit;
-        let finalization_system = force_finalize.then(|| {
-            format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}")
-        });
+        let finalization_system =
+            force_finalize.then(|| format!("{system}\n\n{TURN_LIMIT_FINALIZATION_PROMPT}"));
         let turn_system = finalization_system.as_deref().unwrap_or(&system);
 
         if interrupt_handle.check() {
@@ -1639,7 +1758,10 @@ fn compressor_from_cfg(
         return None;
     }
     let tool_tokens = compressor::estimate_tools_tokens(&tools.as_llm_tools_for(exposure));
-    let target_tokens = cfg.compress_target_tokens.saturating_sub(tool_tokens).max(1);
+    let target_tokens = cfg
+        .compress_target_tokens
+        .saturating_sub(tool_tokens)
+        .max(1);
     let trigger_tokens = cfg
         .compress_trigger_tokens
         .saturating_sub(tool_tokens)
@@ -1668,11 +1790,10 @@ pub fn guardrails_from_cfg(cfg: &AgentConfig) -> crate::agent::tools::guardrails
     g
 }
 
-/// Build an optional tool-level [`ApprovalGate`] from explicit operator
-/// configuration. Capability risk is enforced separately: high- and
-/// critical-risk capability denials create durable approval requests in the
-/// kernel, so the default tool-name gate stays empty and cannot intercept a
-/// call before its precise verb and scope are known.
+/// Build the legacy tool-name [`ApprovalGate`] from explicit operator
+/// configuration. Capability-aware tools use this only for hard
+/// `auto_deny_tools`; `dangerous_tools` cannot intercept them before
+/// validated arguments produce an exact verb, scope, and risk.
 pub fn approval_from_cfg(cfg: &AgentConfig) -> crate::agent::runtime::approval::ApprovalGate {
     use crate::agent::runtime::approval::{ApprovalConfig, ApprovalGate};
     let mut acfg = ApprovalConfig::new();

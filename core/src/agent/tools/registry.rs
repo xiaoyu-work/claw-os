@@ -1,9 +1,8 @@
 //! Tool registry — immutable descriptors and implementations keyed by name.
 //!
 //! Optionally carries an [`ApprovalGate`](super::super::runtime::approval::ApprovalGate)
-//! that gates per-call invocations of tools the policy classifies as
-//! dangerous. The default is an empty gate (every call short-circuits
-//! to `Approved`).
+//! for legacy tool-name filters and hard operator denies. Capability-aware
+//! tools derive consent from their exact validated operation at execution.
 //!
 //! Session authorization and reachability are deliberately absent from the
 //! cached entries. Every model projection and execution lookup receives a
@@ -203,7 +202,11 @@ impl ToolRegistry {
         };
 
         if self.approval.is_classified(name) {
-            match self.approval.evaluate(name, &input, approval_reason).await {
+            match self
+                .approval
+                .evaluate_for(name, &input, approval_reason, tool.approval_boundary())
+                .await
+            {
                 crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {}
                 crate::agent::runtime::approval::ApprovalOutcome::Denied { reason } => {
                     return ToolResult::err(format!(

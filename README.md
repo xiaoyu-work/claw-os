@@ -69,7 +69,8 @@ that means:
   looking, changing, and touching the kernel are each gated separately.
   Primitives return structured, machine-readable data instead of scraped UI,
   and setting up, asking, chatting, and diagnosing are first-class parts of the
-  OS.
+  OS. Agent consent is bound to the exact validated capability rather than a
+  coarse tool name; see [Capability-aware Agent consent](docs/capability-consent.md).
 
 Together, the system-level agent, persistent memory, local-first model runtime,
 scoped permission model, cross-app session store, audit trail, and app SDK form

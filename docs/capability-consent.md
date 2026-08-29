@@ -1,0 +1,155 @@
+# Capability-aware Agent consent
+
+Agent consent is an extension of the capability system, not a parallel source
+of authority. A model-visible tool name never determines whether an operation
+may run.
+
+## Decision flow
+
+1. The tool validates its structured arguments.
+2. The owning primitive derives the exact capability verb and canonical scope.
+   Operations whose arguments carry additional authority also derive a
+   SHA-256 invocation digest after validation and canonicalization.
+3. `caps::require` checks the session's existing capability set.
+4. If the capability is missing:
+   - an **attended** system-Agent session may file one request for that exact
+     verb, scope, catalog risk, owner, session, task, worker pid/start time,
+     lease nonce/deadline, request generation, and consent context;
+   - an **unattended** cron/trigger session fails closed and must receive the
+     exact authority when the automation is created.
+5. An approval creates a time-bounded, use-bounded, generation-bound consent
+   record. Critical Agent requests are one-shot; high-risk Agent requests may
+   be one-shot or session-limited, but not `forever`.
+6. When `claw-agentd` retries the operation, `clawd` atomically spends the
+   exact consent record and redeems it into an in-memory one-use capability
+   grant bound to the owner, session, task, worker pid/start time, verb, scope,
+   approval expiry, and revocation generation.
+7. The primitive's execution-time `caps::require` call succeeds only after that
+   grant is exercised. The capability check still occurs immediately before
+   the guarded operation; approval never edits the session's ambient `CapSet`.
+
+Daemon workers take their task identity from the authenticated broker lease.
+In-process runtimes (including the multiplexed web server) instead install a
+Tokio task-local identity for each Agent invocation. Web identities include the
+conversation and a fresh turn ID; every invocation also receives a fresh
+nonce. There is no process-wide fallback identity.
+
+For example, `cos_proc status <session>` derives low-risk
+`proc.observe:self:<session>`, while `cos_proc kill <session>` derives
+high-risk `proc.signal:self:<session>`. They share one proxy tool name but not
+one consent decision. `cos_proc spawn` remains on the legacy tool-name gate
+until its whole command surface is mapped. Independently of that compatibility
+gate, spawn resolves the executable to a canonical path, requires both
+`proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds both
+approval records to a digest of the validated executable, argv, working
+directory, and child-security options. On Linux the executable is opened with
+`O_NOFOLLOW`, checked as a regular executable owned by root or the execution
+user, copied into a sealed memfd, and retained through authorization. The
+digest includes the source device/inode/mode/owner and the SHA-256 of the exact
+sealed bytes. The working directory is likewise opened and bound by
+device/inode, then selected with `fchdir`. Execution uses
+`/proc/self/fd/<snapshot-fd>`, an atomic descriptor reference, rather than
+reopening the approved pathname. Changing `/usr/bin/printf` to `/bin/sh`,
+rewriting the same inode, swapping a symlink, replacing the cwd, or changing
+any argument cannot alter or redeem the approved invocation.
+
+`proc spawn` is intentionally narrower than a general command runner. It
+accepts only host-architecture, fixed-address ELF executables with an
+executable load segment and no `PT_INTERP`, `PT_DYNAMIC`, or executable stack.
+Shebang files, shells, language runtimes, script/module arguments, dynamically
+linked programs, and existing file arguments fail before an approval request
+is created and direct the caller to `cos_sandbox`. Non-Linux platforms also
+fail closed until they provide an equivalent handle-pinned execution path.
+
+Static ELF shape is necessary but not sufficient. Every unsandboxed command
+must also match `/etc/cos/proc-spawn-allowlist.json`, a regular version-1
+manifest owned by root and not writable by group or other users. Each entry
+binds:
+
+- a canonical root-owned executable path and exact SHA-256;
+- one exact argv vector;
+- one canonical root-owned, non-writable working directory; and
+- the argv indices that are descriptor-backed outputs.
+
+All remaining argv elements are scalar literals: absolute paths, path
+separators, and existing filesystem objects are refused. Directory and
+code-bearing inputs are not supported by the unsandboxed schema. The manifest
+content hash, entry ID, executable identity/hash, argv, and cwd identity all
+enter the operation digest, so changing the allowlist also invalidates prior
+consent. A missing, malformed, empty, stale, or non-root-owned manifest grants
+nothing. Proc children receive a minimal deterministic environment rather than
+language/plugin loader variables.
+
+An output argument never reaches the child as its original pathname. The
+parent pins its directory and requires it to be owned by root or the execution
+user without group/other write access. It opens the leaf with Linux `openat2`
+using `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS` and
+`O_NOFOLLOW | O_CREAT | O_EXCL`; an explicitly listed existing target is
+opened through a pinned descriptor only when it is a single-link regular file
+with safe ownership and mode. FIFOs, sockets, devices, directories, symlinks,
+and `/tmp`-style writable parents are refused. The output and parent
+device/inode identities plus a stable descriptor role enter the operation
+digest. The child receives `/proc/self/fd/<fd>`, and only those output fds and
+the sealed executable fd survive exec. A newly reserved empty output may
+remain when consent is still pending.
+
+Model output cannot approve a request. The worker channel has no decision
+route, and a request id is metadata rather than authority. Broker replies echo
+a fresh unpredictable ask nonce and the exact ask kind, verb, scope, and
+operation digest. A correlation-id collision, substituted reply, or replay
+does not satisfy the worker's waiter.
+
+## Replay, expiry, and revocation
+
+- Capability and scope matching is exact; scope containment is not used to
+  substitute a broader approval for the validated operation.
+- When an operation digest is present, request deduplication, decision,
+  redemption, broker audit, and final authority minting all require the same
+  digest.
+- A decision or redemption fails if the originating process is gone, the task
+  or lease identity differs, the request deadline passed, or the revocation
+  generation changed. A replacement worker is never silently rebound.
+- Ending or cancelling an in-process invocation writes a durable
+  execution-revocation marker and retires its pending and approved records.
+  A later turn, concurrent conversation, disconnected client, or restored
+  approval file cannot reuse that invocation's consent.
+- `once` has one use. `session` and `forever` remain use-limited and expire.
+- Concurrent spends and concurrent approve/deny decisions have one winner.
+- Revocation increments a root-owned owner/session generation. Every grant
+  checks that generation, so restoring an older approval file cannot revive
+  retired consent. Owner-wide revocation advances beyond the highest session
+  generation for that owner rather than merely incrementing the owner counter.
+- Approval records created before exact authorization metadata existed remain
+  visible as history but grant nothing.
+
+Audit records correlate the durable approval reference with the task/worker
+redemption and the one-use authority-grant reference without logging opaque
+handles or secret scope values.
+
+## `dangerous_tools` migration
+
+`dangerous_tools` is retained only as a compatibility prompt for tools that do
+not expose a capability-aware execution boundary. Capability-aware core
+`cos_*` primitive proxies may contain both read and write commands, so their
+tool name is too coarse and no longer intercepts execution.
+
+- Use `auto_deny_tools` for a hard operator block on an entire tool.
+- `auto_approve_tools` only bypasses the legacy name prompt. It never grants or
+  widens a capability.
+- Remove capability-aware core proxy names from `dangerous_tools`; exact
+  capability risk and scope now drive their consent requests.
+- Keep mixed or incomplete proxies on `dangerous_tools` until every sensitive
+  branch has an exact mapping. `cos_proc` remains legacy-filtered while spawn
+  additionally enforces exact executable and invocation-bound capabilities.
+  `cos_sysinfo` also remains legacy-filtered, and its `env --include-secrets`
+  branch separately requires
+  `secret.read:name:environment`; a low-risk `sys.observe` grant is
+  insufficient.
+
+The authoritative implementation is in
+[`core/src/caps/enforcement.rs`](../core/src/caps/enforcement.rs),
+[`core/src/approvals.rs`](../core/src/approvals.rs), and
+[`core/src/agentd/supervisor.rs`](../core/src/agentd/supervisor.rs). The
+descriptor-pinned process boundary is in
+[`core/src/proc.rs`](../core/src/proc.rs); the audited command schema is in
+[`core/src/proc/proc_spawn_allowlist.rs`](../core/src/proc/proc_spawn_allowlist.rs).

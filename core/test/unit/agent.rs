@@ -1873,6 +1873,15 @@ fn approval_cmd_check_safe_tool_returns_approved() {
 }
 
 #[test]
+fn approval_cmd_keeps_proc_on_legacy_authority_until_mapping_is_complete() {
+    let v = approval_cmd(&["check".into(), "cos_proc".into()]).expect("approval check ok");
+    assert_eq!(
+        v.get("authority").and_then(|v| v.as_str()),
+        Some("legacy_tool_name")
+    );
+}
+
+#[test]
 fn approval_cmd_check_requires_tool_name() {
     let err = approval_cmd(&["check".into()]).unwrap_err();
     assert!(err.contains("check"));

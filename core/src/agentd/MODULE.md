@@ -55,6 +55,14 @@ broker process, so a grant cannot be minted, edited, replayed against another
 worker, or used past its lease. Executable path, TTY, `NoNewPrivs`, socket
 group and prompt text confer nothing.
 
+After the worker adopts fd 3 it immediately sets `FD_CLOEXEC` and removes the
+channel/task bootstrap hints from its live environment. `proc spawn` applies a
+second boundary in its child: every descriptor above stderr is marked
+close-on-exec, and only the sealed executable snapshot is explicitly retained.
+The pinned cwd descriptor closes at exec. A model-started descendant therefore
+cannot inherit, read, or write the private worker channel or impersonate task
+frames.
+
 `SO_PEERCRED` is deliberately *not* used on this channel: the socket pair is
 created before the fork, so the kernel stamps it with the broker's own uid and
 pid. Checking it would prove nothing about the worker.
@@ -82,16 +90,24 @@ filesystem. `caps::approval_gateway` is the seam: `caps::require` uses it in
 place of the local store whenever one is installed, and only `claw-agentd`
 installs one.
 
-- The worker sends the **exact denied verb and canonical scope**, and nothing
-  else. There is no session, owner, task, requester, reason, duration or
-  capability field on the wire.
-- `clawd` takes owner, session and task from the verified grant, re-parses the
-  verb against the catalog, rejects a scope that will not render as a bounded
-  single-line record, and composes the reason text itself from the catalog
-  label.
-- `Consume` spends one exactly-matching approved grant, one-shot; a replay
-  finds nothing. `Request` files or dedupes a pending request under the
-  grant-bound session and owner and returns a bounded id.
+- The worker sends the **exact denied verb and canonical scope**, plus an
+  optional validated operation digest when the capability does not fully
+  identify the invocation. Each ask also carries a fresh unpredictable nonce.
+  There is no session, owner, requester, reason, duration or capability set on
+  the request wire.
+- `clawd` takes owner, session, task, worker pid/start time, and
+  attended/unattended context from trusted lease/session state. It re-parses
+  the verb and scope against the catalog and composes the reason itself.
+- Attended `Request` files or dedupes a pending record bound to the exact
+  capability, catalog risk, owner, session, task, worker pid/start time, lease
+  nonce/deadline, request generation, and consent context. Unattended requests
+  fail closed with a scheduling/delegation hint.
+- `Consume` atomically spends an exactly matching, live decision, then mints
+  and exercises a one-use `clawd::authority` grant bound to this task and
+  worker. Operation-bound decisions must carry the same digest through this
+  final redemption. The broker echoes the nonce and complete ask, and the
+  worker accepts the reply only when correlation id, nonce, ask kind, verb,
+  scope, and digest all match its waiter. A replay finds nothing.
 - There is no decide route. A worker can never approve anything, name another
   session or owner, or receive a reusable capability.
 - Mediation is bounded on both sides (`protocol::MAX_APPROVAL_ASKS`), refused

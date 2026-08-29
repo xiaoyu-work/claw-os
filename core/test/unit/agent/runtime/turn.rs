@@ -24,6 +24,20 @@ fn ctx() -> HookContext {
     HookContext::new("turn-tests".to_string(), "mock", "mock-model".to_string())
 }
 
+fn mixed_capability_primitive(command: &str, args: &[String]) -> Result<serde_json::Value, String> {
+    let path = args
+        .first()
+        .ok_or_else(|| "mixed proxy requires a path".to_string())?;
+    let verb = match command {
+        "read" => crate::caps::Verb::FS_READ,
+        "write" => crate::caps::Verb::FS_DELETE,
+        other => return Err(format!("unknown mixed command: {other}")),
+    };
+    crate::caps::require_or_json(verb, crate::caps::Scope::path(path))
+        .map_err(|value| value.to_string())?;
+    Ok(serde_json::json!({"command": command, "path": path}))
+}
+
 /// pre_tool returning Allow runs the tool unmodified and the
 /// hook's post_tool sees a successful result summary.
 #[tokio::test]
@@ -32,6 +46,7 @@ async fn pre_tool_allow_passes_through() {
         pre_calls: Arc<AtomicU32>,
         post_success: Arc<AtomicU32>,
     }
+
     impl Hook for Spy {
         fn name(&self) -> &str {
             "turn-allow-spy"
@@ -97,6 +112,94 @@ async fn pre_tool_allow_passes_through() {
 
     assert_eq!(pre.load(Ordering::SeqCst), 1);
     assert_eq!(post.load(Ordering::SeqCst), 1);
+}
+
+#[test]
+fn one_proxy_uses_capability_consent_for_read_and_write_commands() {
+    let _lock = crate::test_env::lock_env();
+    let tmp = tempfile::tempdir().unwrap();
+    let read_path = tmp.path().join("read.txt").to_string_lossy().into_owned();
+    let write_path = tmp.path().join("write.txt").to_string_lossy().into_owned();
+    let proc_dir = tmp.path().join("proc");
+    std::fs::create_dir_all(&proc_dir).unwrap();
+    std::fs::write(
+        proc_dir.join("registry.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "sessions": [{
+                "session_id": "mixed-session",
+                "pid": 0,
+                "caps": [{
+                    "verb": "fs.read",
+                    "scope": {"kind": "path", "value": read_path.clone()}
+                }]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let _data = crate::test_env::TestEnvVarGuard::set("COS_DATA_DIR", tmp.path());
+    let _log = crate::test_env::TestEnvVarGuard::set("COS_LOG_DIR", tmp.path());
+    let _session = crate::test_env::TestEnvVarGuard::set("COS_SESSION", "mixed-session");
+    let _mode = crate::test_env::TestEnvVarGuard::set("COS_PERMS_MODE", "strict");
+
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(
+        crate::agent::tools::cos_proxy::CosPrimitiveTool::new(
+            "cos_mixed",
+            "mixed capability proxy",
+            mixed_capability_primitive,
+            &["read", "write"],
+        )
+        .with_capability_approval(),
+    ));
+    registry.set_approval(
+        crate::agent::runtime::approval::ApprovalGate::new(
+            crate::agent::runtime::approval::ApprovalConfig::new()
+                .dangerous("cos_mixed")
+                .auto_approve("cos_mixed"),
+        ),
+    );
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+    let invocation =
+        crate::approvals::LocalApprovalInvocation::new("test:mixed-proxy:turn:1").unwrap();
+    runtime.block_on(invocation.scope(async {
+        let read = dispatch_tool(
+            &registry,
+            &ToolCall {
+                id: "read".to_string(),
+                name: "cos_mixed".to_string(),
+                input: serde_json::json!({"command": "read", "args": [read_path.clone()]}),
+            },
+            Some("mixed-session"),
+        )
+        .await;
+        assert!(!read.is_error, "read command should use its held cap: {read:?}");
+
+        let write = dispatch_tool(
+            &registry,
+            &ToolCall {
+                id: "write".to_string(),
+                name: "cos_mixed".to_string(),
+                input: serde_json::json!({"command": "write", "args": [write_path.clone()]}),
+            },
+            Some("mixed-session"),
+        )
+        .await;
+        assert!(write.is_error);
+        assert!(
+            write.content.contains("\"verb\":\"fs.delete\""),
+            "write must reach the exact capability gate, not the coarse tool-name prompt: {}",
+            write.content
+        );
+        let pending = crate::approvals::list_pending();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].scope, crate::caps::Scope::path(write_path));
+        assert_eq!(pending[0].risk, Some(crate::caps::Risk::High));
+    }));
 }
 
 /// pre_tool returning Deny short-circuits the dispatch and feeds

@@ -79,6 +79,16 @@ async fn missing_command_field_is_returned_as_tool_error() {
 }
 
 #[tokio::test]
+async fn non_string_args_are_rejected_before_primitive_dispatch() {
+    let tool = CosPrimitiveTool::new("cos_sysinfo", "test", crate::sysinfo::run, &["info"]);
+    let result = tool
+        .exec(json!({ "command": "info", "args": [42] }))
+        .await;
+    assert!(result.is_error);
+    assert!(result.content.contains("args[0]"));
+}
+
+#[tokio::test]
 async fn args_default_to_empty() {
     // sysinfo "info" works with zero args on every platform.
     let _perms = crate::test_env::PermissiveModeGuard::new();
@@ -114,5 +124,31 @@ fn registered_sysinfo_is_parallel_safe() {
     assert!(
         !r.is_parallel_safe("cos_sandbox"),
         "cos_sandbox (arbitrary command exec) must stay serial"
+    );
+}
+
+#[test]
+fn proxy_approval_boundary_tracks_real_capability_enforcement() {
+    let mut r = ToolRegistry::new();
+    register_all(&mut r);
+    assert_eq!(
+        r.get("cos_proc").unwrap().approval_boundary(),
+        crate::agent::runtime::approval::ApprovalBoundary::ToolName
+    );
+    assert_eq!(
+        r.get("cos_credential").unwrap().approval_boundary(),
+        crate::agent::runtime::approval::ApprovalBoundary::Capability
+    );
+    assert_eq!(
+        r.get("cos_sysinfo").unwrap().approval_boundary(),
+        crate::agent::runtime::approval::ApprovalBoundary::ToolName
+    );
+    assert_eq!(
+        r.get("cos_sandbox").unwrap().approval_boundary(),
+        crate::agent::runtime::approval::ApprovalBoundary::ToolName
+    );
+    assert_eq!(
+        r.get("cos_model").unwrap().approval_boundary(),
+        crate::agent::runtime::approval::ApprovalBoundary::ToolName
     );
 }

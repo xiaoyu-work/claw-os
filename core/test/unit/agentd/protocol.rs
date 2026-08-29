@@ -60,6 +60,7 @@ fn permission_mediation_is_the_only_consent_surface_and_carries_no_identity() {
     let ask = ApprovalAsk::Request {
         verb: "fs.read".to_string(),
         scope: crate::caps::Scope::path("/home/user/notes.txt"),
+        operation_digest: None,
     };
     let encoded = serde_json::to_string(&ask).expect("encode");
     for forbidden in ["session", "owner", "uid", "caps", "role", "duration"] {
@@ -69,6 +70,25 @@ fn permission_mediation_is_the_only_consent_surface_and_carries_no_identity() {
         );
     }
     assert_eq!(ask.verb(), "fs.read");
+}
+
+#[test]
+fn approval_exchange_nonce_is_unpredictable_and_binds_the_exact_ask() {
+    let ask = ApprovalAsk::Consume {
+        verb: "proc.spawn".to_string(),
+        scope: crate::caps::Scope::self_ref("children"),
+        operation_digest: Some(crate::crypto::sha256_hex(b"native invocation")),
+    };
+    let first = ApprovalExchange::new(ask.clone());
+    let second = ApprovalExchange::new(ask.clone());
+
+    assert!(first.is_valid());
+    assert!(second.is_valid());
+    assert_ne!(first.nonce, second.nonce);
+    assert_eq!(first.ask, ask);
+    let encoded = serde_json::to_string(&first).unwrap();
+    let decoded: ApprovalExchange = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, first);
 }
 
 #[test]

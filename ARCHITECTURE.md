@@ -326,13 +326,84 @@ admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
 
-Consent still works. `core/src/caps/approval_gateway.rs` is the seam
-`caps::require` consults instead of the root-owned approvals store: the worker
-names the exact verb and canonical scope it was denied and nothing else, and
-`clawd` supplies owner, session and task from the verified grant, spends an
-exactly-matching approved grant one-shot or files a deduped pending request
-under that identity. There is no route to decide a request or to obtain a
-reusable capability.
+The adopted fd 3 is marked close-on-exec before the runtime starts, and its
+bootstrap environment hints are removed. Process spawn independently marks
+every descriptor above stderr close-on-exec and clears agentd/clawd supervision
+hints from the child environment, preserving only the sealed executable memfd.
+Agent-started descendants therefore cannot forge worker frames or collide with
+the worker's approval traffic.
+
+Consent remains inside the capability boundary.
+`core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
+of the root-owned approvals store: after validated arguments produce an exact
+verb and canonical scope, the worker names only those values. `clawd` supplies
+owner, session, task, worker identity, attended/unattended context, and catalog
+risk from trusted state. Attended denials may file one exact request;
+unattended denials fail closed and must rely on authority delegated when the
+automation was created. The request captures the worker pid/start time, a
+broker-only lease nonce and deadline, and the revocation generation current at
+request time; a stale decision, replacement worker, or concurrent task cannot
+rebind it.
+
+Approval correlation counters are not trusted as authenticators. Every worker
+ask carries a fresh random nonce and the broker echoes that nonce plus the
+complete ask. The worker resolves a waiter only when correlation id, nonce,
+ask kind, verb, canonical scope, and operation digest all match; substituted
+or replayed replies remain pending and cannot open a capability gate.
+
+In-process Agent surfaces use the same binding model without a process-global
+identity. Each invocation installs a Tokio task-local identity derived from its
+actual task or conversation-turn identifier plus a fresh nonce. Invocation
+completion, cancellation, and web-client disconnect durably revoke that
+identity and retire its pending and approved records, so another conversation
+or a later turn in the same conversation cannot redeem them.
+
+An approved record is durable consent evidence, not ambient session authority.
+At execution `clawd` atomically spends the exact record, then mints and
+immediately exercises an in-memory `Issuer::Approval` capability grant bound to
+the owner, session, task, worker pid/start time, verb, scope, approval expiry,
+use budget, and revocation generation. Only then does the execution-time
+`caps::require` return success. There is no worker route to decide a request or
+obtain a reusable capability. See
+[`docs/capability-consent.md`](docs/capability-consent.md).
+
+Tool-name policy is not authority. `auto_deny_tools` remains a hard
+pre-dispatch block, while `dangerous_tools` is retained for tools whose
+complete command surface has not yet been mapped to exact capabilities.
+`cos_proc` and `cos_sysinfo`, for example, stay on that compatibility path.
+Process spawn also canonicalizes its executable before consent, requires both
+`proc.spawn:self:children` and `fs.exec:path:<executable>`, and binds approval
+matching across the worker protocol and authority redemption to a digest of
+the validated executable, argv, working directory, and child-security
+options. On Linux `core/src/proc.rs` opens the canonical executable without
+following a final symlink, validates its owner and mode, snapshots and seals
+its exact bytes in a memfd, and retains that descriptor through both
+capability checks. The digest includes source file identity and content hash.
+The cwd is also held by descriptor and selected with `fchdir`; execution uses
+the snapshot's `/proc/self/fd` descriptor path, so pathname, inode, symlink,
+in-place content, and cwd replacement races cannot change what runs.
+The accepted image must be a static, fixed-address ELF for the host
+architecture with no interpreter, dynamic segment, or executable stack.
+It must additionally match the root-owned versioned manifest at
+`/etc/cos/proc-spawn-allowlist.json` by canonical path and SHA-256. Each
+manifest entry fixes the exact argv, explicitly identifies output-path
+positions, and fixes a root-owned non-writable cwd. Non-output arguments cannot
+name filesystem objects or contain paths, and the manifest hash is included in
+the approval digest. Scripts, shells, language runtimes, unknown/renamed static
+executables, mutable package or project directories, dynamically linked
+executables, and file arguments are rejected before consent and routed to
+`cos_sandbox`. Non-Linux process spawn fails closed rather than using a weaker
+pathname-based fallback.
+
+Allowlisted outputs are descriptor capabilities rather than path capabilities.
+`openat2` pins a root- or execution-user-owned, non-group/world-writable parent
+with `RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS`, then exclusively creates the
+output with `O_NOFOLLOW` or pins an explicitly permitted existing single-link
+regular file. FIFO, socket, device, directory, symlink, and attacker-writable
+parents are rejected. Parent/output identities and descriptor roles are bound
+into consent, and the child receives only `/proc/self/fd/<fd>` for each output.
+`cos_sysinfo` additionally requires
+`secret.read:name:environment` before honoring `env --include-secrets`.
 
 The owner's baseline authority is still daemon policy rather than a consequence
 of process context. `core/src/clawd/system_caps.rs` records one
@@ -345,7 +416,7 @@ navigation, process spawn/exec, credentials, system/package/service/identity/
 storage/power mutation, cron persistence, device control, cross-user local
 channels, and observation domains that describe another principal, another
 account's units, or the machine's security posture are denied and require an
-authenticated task/session delegation or an exact, one-shot approval settled at
+authenticated task/session delegation or an exact, bounded approval settled at
 the gate. Resource-addressing verbs never receive an untyped wildcard, and a
 verb absent from the table is denied.
 
@@ -375,15 +446,18 @@ system authority. Owner homes for every one of these derivations come from
 no fallback.
 
 An approval is likewise a bounded decision rather than a licence.
-`core/src/approvals.rs` stamps every approved record with a wall-clock deadline,
-a use budget, a revocation generation and a keyed audit reference, and spends it
-atomically under a store-wide lock, so `once` cannot be double-spent and
+`core/src/approvals.rs` binds every new record to the exact owner, session,
+capability, catalog risk, and consent context, then stamps an approval with a
+wall-clock deadline, use budget, revocation generation, and keyed audit
+reference. Matching is exact rather than scope-covering, and spending is atomic
+under a store-wide lock, so `once` cannot be double-spent and
 `session`/`forever` still expire. Revocation lives in
 `core/src/approvals/generations.rs`: a monotonic counter in root-owned state
 that a binding captures at approval time and every load compares against, so
 retiring authority is an increment no restored backup can undo. `permission.revoke`
-is the root-only route that performs it, and session finish, task cancellation
-and worker-lease teardown call it for the session they tear down. A record with
+is the root-only route that performs it; owner-wide revocation advances beyond
+the highest per-session generation. Session finish, task cancellation and
+worker-lease teardown revoke the session they tear down. A record with
 no such provenance — one written before the binding existed — is evidence that a
 decision happened, not authority: it authorises nothing until the owner is asked
 again.

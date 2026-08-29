@@ -24,6 +24,8 @@ which tool calls are exposed and executed.
 - Advertise media tools only when a configured provider has a compatible
   exact name scope, then recheck that provider immediately before invocation;
   STT independently enforces its exact `fs.read` path scope.
+- Declare whether consent is enforced by an exact capability gate or
+  by the legacy tool-name compatibility filter.
 - Keep untrusted tool output inside explicit model-data boundaries.
 
 ## Key Files
@@ -47,6 +49,12 @@ dispatch; only immutable descriptors may be cached. Tools consume stable
 service/capability definitions and still perform exact argument-derived checks.
 Model output, client fields, process environment, and external tool results are
 untrusted; authority comes only from authenticated session/runtime facts.
+
+`auto_deny_tools` may block any tool early, but
+`dangerous_tools`/`auto_approve_tools` never grant capability authority. Only
+proxies whose complete command surface has an exact mapping declare a
+capability-aware boundary; mixed or incomplete proxies, including `cos_proc`,
+stay on the legacy filter.
 
 ## Tests
 

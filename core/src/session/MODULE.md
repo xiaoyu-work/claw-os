@@ -44,6 +44,10 @@ attendance.
 Generic detached child processes receive a derived `child-process` source with
 `attended = false`; copying the parent's terminal presence is forbidden.
 
+The same trusted origin selects consent context: ambient system-Agent tasks are
+attended, while cron/trigger delegations are unattended and cannot open a new
+approval prompt at execution time.
+
 ## Tests
 
 ```bash

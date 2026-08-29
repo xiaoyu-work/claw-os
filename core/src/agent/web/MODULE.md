@@ -12,6 +12,8 @@ web UI.
 - Stream text, tools, reasoning presentation, usage, and terminal state.
 - Reuse frozen session prompts and configured history compression through the
   shared runtime.
+- Give each conversation turn a unique invocation identity and let response
+  disconnect abort and revoke that turn's approval state.
 - Serve built UI assets without exposing credentials.
 
 ## Key Files

@@ -49,6 +49,8 @@ pub enum Audience {
     Daemon,
     /// Agent task submission, inspection and cancellation.
     Task,
+    /// One capability approved for one supervised Agent worker.
+    AgentWorker,
     /// Memory, context and journal reads.
     Context,
     /// The consent surface itself.
@@ -70,6 +72,7 @@ impl Audience {
         match self {
             Audience::Daemon => "daemon",
             Audience::Task => "task",
+            Audience::AgentWorker => "agent-worker",
             Audience::Context => "context",
             Audience::Permission => "permission",
             Audience::Transaction => "transaction",
@@ -128,6 +131,7 @@ impl AudienceSet {
         [
             Audience::Daemon,
             Audience::Task,
+            Audience::AgentWorker,
             Audience::Context,
             Audience::Permission,
             Audience::Transaction,

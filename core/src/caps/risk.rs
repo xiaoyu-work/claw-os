@@ -26,6 +26,16 @@ pub enum Risk {
 }
 
 impl Risk {
+    /// Stable lowercase label for persistence and audit records.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Risk::Low => "low",
+            Risk::Medium => "medium",
+            Risk::High => "high",
+            Risk::Critical => "critical",
+        }
+    }
+
     /// Localised one-word label (e.g. "Low risk", "Critical").
     pub fn label(self) -> LocalizedStr {
         match self {

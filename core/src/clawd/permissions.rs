@@ -24,6 +24,8 @@ pub fn request(params: Value, client: &ClientIdentity) -> Result<Value, String> 
         .unwrap_or_else(|| "clawd".to_string());
     let reason = required_string(&params, "reason")?;
     let requester = Some(format!("uid:{uid}"));
+    let (capability, risk) = approvals::canonical_capability(verb, scope)?;
+    let scope = capability.scope;
 
     let id = approvals::submit_owned(
         verb,
@@ -39,6 +41,7 @@ pub fn request(params: Value, client: &ClientIdentity) -> Result<Value, String> 
         "status": "pending",
         "verb": verb.as_str(),
         "scope": scope,
+        "risk": risk,
         "session": session,
         "reason": reason,
         "owner_uid": uid,
@@ -120,6 +123,10 @@ pub fn decide(params: Value, client: &ClientIdentity) -> Result<Value, String> {
                 "id": resolved.request.id,
                 "decision": "approved",
                 "duration": resolved.decision.duration,
+                "risk": resolved.request.risk,
+                "consent_context": resolved.request.context,
+                "expires_at": resolved.decision.grant.as_ref().map(|grant| grant.expires_at),
+                "uses_remaining": resolved.decision.grant.as_ref().map(|grant| grant.uses_remaining),
             }))
         }
         "deny" | "reject" => {
@@ -174,6 +181,16 @@ pub fn revoke(params: Value, client: &ClientIdentity) -> Result<Value, String> {
         None => approvals::RevocationScope::Owner { uid: owner_uid },
     };
     let generation = approvals::generations::revoke(&scope)?;
+    let retired = match &scope {
+        approvals::RevocationScope::Session { session, .. } => {
+            super::authority::authority().revoke_approvals_for_session(session)
+        }
+        approvals::RevocationScope::Owner { uid: Some(uid) } => {
+            super::authority::authority().revoke_approvals_for_owner(*uid)
+        }
+        approvals::RevocationScope::Owner { uid: None } => 0,
+    };
+    super::authority::audit::record_revoked(scope.kind(), session.as_deref(), retired);
     crate::clawd::audit::record_approval_revocation(
         &scope,
         session.as_deref().unwrap_or("*"),

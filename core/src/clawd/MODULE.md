@@ -261,15 +261,19 @@ existing, owned by that uid, and with no fallback, so the home stamped at
 creation and the ceiling applied at execution cannot disagree.
 
 Everything above the baseline arrives one of two ways: an authenticated
-task/session delegation, or an exact one-shot grant the user approved for that
-session, verb, and scope. `caps::enforcement` files one pending request per
-capability denial and spends it at the gate, so an approval covers the resource
-that was refused and nothing adjacent, and is never written back into a
-capability set.
+task/session delegation, or an exact grant the user approved for that session,
+verb, scope, catalog risk, and attended context. `caps::enforcement` files one
+pending request per attended capability denial. Unattended scheduler work
+cannot prompt and must carry authority proved when it was created.
 
 An approval is a decision about one capability, not a standing licence.
-`approvals.rs` stamps every approved record with a `GrantBinding`: a wall-clock
-deadline, a use budget, a revocation generation and a keyed audit reference.
+`approvals.rs` stamps every approved record with a `GrantBinding`: the exact
+owner/session/capability/risk/context and originating task/worker lease, a
+wall-clock deadline, a use budget, a request-time revocation generation and a
+keyed audit reference. Matching is equality, not scope containment. For a
+supervised Agent, spending that record mints and immediately exercises a
+one-use `Issuer::Approval` authority grant bound to the verified task and
+worker; approval is never written back into a capability set.
 `Once` spends exactly one use; `session` and `forever` bound the same grant by
 time and stay revocable, so "always" is a promise about not being re-prompted
 during ordinary use rather than a promise that authority never expires. The
@@ -285,7 +289,7 @@ current when it was approved; every load compares it against the generation
 current now. Retiring authority is therefore an increment, which nothing a
 record can say — including a copy restored from a backup taken before the
 increment — can undo. Counters are per owner and per grant session, with an
-owner-wide increment acting as a floor under every session it holds, so
+owner-wide increment advancing beyond every session generation it holds, so
 "retire everything this account approved" is one atomic write rather than a
 walk that could race a concurrent approval. Unreadable, unparseable or
 group-writable state fails closed, and so does a binding with no generation at

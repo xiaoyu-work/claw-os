@@ -71,10 +71,14 @@ struct GrantLifecycleAudit<'a> {
     issuer: &'static str,
     audience: Vec<&'static str>,
     owner_uid: u32,
+    bound_pid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<TextDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    generation: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     parent: Option<GrantRef>,
     depth: u16,
@@ -93,10 +97,14 @@ struct GrantUseAudit<'a> {
     audience: &'static str,
     issuer: &'static str,
     owner_uid: u32,
+    bound_pid: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     session: Option<TextDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     app_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    task_id: Option<String>,
+    generation: u64,
     decision: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     reason: Option<&'static str>,
@@ -131,12 +139,19 @@ pub fn record_issued(view: &GrantView, parent: Option<&GrantRef>) {
         issuer: view.issuer.as_str(),
         audience: view.audience.names(),
         owner_uid: view.owner_uid,
+        bound_pid: view.bound_pid,
         session: view
             .subject
             .session_id
             .as_deref()
             .map(crate::audit_policy::text_digest),
         app_id: view.subject.app_id.as_deref(),
+        task_id: view
+            .subject
+            .task_id
+            .as_deref()
+            .map(crate::audit_policy::safe_identity),
+        generation: view.generation,
         parent: parent.cloned(),
         depth: view.depth,
         expires_in_ms: view.expires_in.as_millis(),
@@ -155,8 +170,11 @@ pub fn record_use(decision: &Decision, required: &[Cap], uses_remaining: Option<
         audience: decision.audience().as_str(),
         issuer: decision.issuer().as_str(),
         owner_uid: decision.owner_uid(),
+        bound_pid: decision.bound_pid(),
         session: decision.session_id().map(crate::audit_policy::text_digest),
         app_id: decision.app_id(),
+        task_id: decision.task_id().map(crate::audit_policy::safe_identity),
+        generation: decision.generation(),
         decision: "allow",
         reason: None,
         uses_remaining,
@@ -171,8 +189,11 @@ pub fn record_use(decision: &Decision, required: &[Cap], uses_remaining: Option<
             audience: decision.audience().as_str(),
             issuer: decision.issuer().as_str(),
             owner_uid: decision.owner_uid(),
+            bound_pid: decision.bound_pid(),
             session: decision.session_id().map(crate::audit_policy::text_digest),
             app_id: decision.app_id(),
+            task_id: decision.task_id().map(crate::audit_policy::safe_identity),
+            generation: decision.generation(),
             decision: "retire",
             reason: Some("exhausted"),
             uses_remaining: Some(0),
@@ -191,8 +212,11 @@ pub fn record_denied(decision: &Decision, required: &[Cap], error: &AuthorityErr
         audience: decision.audience().as_str(),
         issuer: decision.issuer().as_str(),
         owner_uid: decision.owner_uid(),
+        bound_pid: decision.bound_pid(),
         session: decision.session_id().map(crate::audit_policy::text_digest),
         app_id: decision.app_id(),
+        task_id: decision.task_id().map(crate::audit_policy::safe_identity),
+        generation: decision.generation(),
         decision: "deny",
         reason: Some(error.class()),
         uses_remaining: None,
@@ -214,8 +238,11 @@ pub fn record_empty_requirement(decision: &Decision) {
         audience: decision.audience().as_str(),
         issuer: decision.issuer().as_str(),
         owner_uid: decision.owner_uid(),
+        bound_pid: decision.bound_pid(),
         session: decision.session_id().map(crate::audit_policy::text_digest),
         app_id: decision.app_id(),
+        task_id: decision.task_id().map(crate::audit_policy::safe_identity),
+        generation: decision.generation(),
         decision: "deny",
         reason: Some("empty_requirement"),
         uses_remaining: None,

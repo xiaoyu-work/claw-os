@@ -16,6 +16,7 @@ fn ord_is_total_and_intuitive() {
 #[test]
 fn label_returns_english_string() {
     assert_eq!(Risk::Critical.label().en(), "Critical risk");
+    assert_eq!(Risk::Critical.as_str(), "critical");
 }
 
 #[test]

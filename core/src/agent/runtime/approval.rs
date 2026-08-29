@@ -1,7 +1,7 @@
-//! Approval gating for dangerous tool invocations.
+//! Compatibility gating for tools without capability-aware consent.
 //!
 //! The agent loop consults [`ApprovalGate`] before executing a
-//! tool call that the policy classifies as dangerous. The gate
+//! tool call that the operator classifies by name. The gate
 //! either auto-approves (whitelisted), auto-denies (blacklisted),
 //! or defers to a [`Approver`] strategy — interactive prompt,
 //! external service, or in headless mode a `Deferred` outcome the
@@ -11,22 +11,18 @@
 //!
 //! Approval is orthogonal to [`super::guardrails::Guardrails`]
 //! (which decides which tools the LLM can *see*). Guardrails are
-//! a coarse pre-filter; approval is a per-call gate. A tool may
-//! be advertised to the model but its actual invocations may
-//! require explicit human consent — for example, `cos_proc`
-//! invocations with `command: kill` or `cos_credential` writes.
+//! a coarse pre-filter; this compatibility gate is per call. A
+//! third-party tool may be advertised to the model while an operator
+//! still requires a name-level prompt. Only fully mapped core proxies
+//! use the exact capability gate instead.
 //!
-//! ## Default policy
+//! ## Authority boundary
 //!
-//! No tools are dangerous by default. Callers configure the
-//! `dangerous` set explicitly (matched against tool name + an
-//! optional input-shape predicate). Failure-closed defaults are
-//! a deliberate choice deferred to the policy layer (which lives
-//! one rung above this module — see runtime integration).
-//!
-//! Library-only this commit. Wiring the gate into the per-turn
-//! loop (intercept tool dispatch, route Deferred outcomes back
-//! through the response stream) is a runtime-layer change.
+//! This module never grants a capability. A proxy with a complete
+//! command/argument mapping reaches the exact `(verb, scope)` gate at
+//! execution; for it, `dangerous_tools` is ignored as a deprecated
+//! early prompt while `auto_deny_tools` remains a hard operator block.
+//! Mixed or incomplete tools retain the legacy name-based prompt.
 
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -100,6 +96,17 @@ impl Approver for DeferringApprover {
     }
 }
 
+/// Which layer owns consent for a tool invocation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ApprovalBoundary {
+    /// Legacy tools have no exact capability preflight, so an explicit
+    /// `dangerous_tools` entry may still stop them by tool name.
+    ToolName,
+    /// The tool validates its arguments and calls `caps::require` with
+    /// the exact verb and canonical scope before any side effect.
+    Capability,
+}
+
 /// Configuration for [`ApprovalGate`]. All sets default empty.
 #[derive(Debug, Clone, Default)]
 pub struct ApprovalConfig {
@@ -108,8 +115,9 @@ pub struct ApprovalConfig {
     pub auto_approve: BTreeSet<String>,
     /// Tools that are *always* blocked.
     pub auto_deny: BTreeSet<String>,
-    /// Tools that require explicit approval. Names not in this
-    /// set bypass the approver entirely.
+    /// Legacy tools that require an explicit name-level approval.
+    /// Capability-aware tools bypass this set and use their exact
+    /// execution-time capability instead.
     pub dangerous: BTreeSet<String>,
 }
 
@@ -149,9 +157,9 @@ pub struct ApprovalGate {
 }
 
 impl Default for ApprovalGate {
-    /// Empty gate — every call short-circuits to `Approved`. Safe
-    /// to use in contexts where no policy has been configured (e.g.
-    /// the default [`crate::agent::tools::registry::ToolRegistry`]).
+    /// Empty compatibility gate — every call short-circuits to
+    /// `Approved`. Capability-aware tools still enforce their exact
+    /// operation independently.
     fn default() -> Self {
         Self::new(ApprovalConfig::default())
     }
@@ -203,10 +211,29 @@ impl ApprovalGate {
         tool_input: &serde_json::Value,
         reason: impl Into<String>,
     ) -> ApprovalOutcome {
+        self.evaluate_for(tool_name, tool_input, reason, ApprovalBoundary::ToolName)
+            .await
+    }
+
+    /// Evaluate the legacy name policy while respecting a tool's real
+    /// authorization boundary.
+    pub async fn evaluate_for(
+        &self,
+        tool_name: &str,
+        tool_input: &serde_json::Value,
+        reason: impl Into<String>,
+        boundary: ApprovalBoundary,
+    ) -> ApprovalOutcome {
         if self.config.auto_deny.contains(tool_name) {
             return ApprovalOutcome::Denied {
                 reason: Some(format!("`{tool_name}` is in auto_deny list")),
             };
+        }
+        if boundary == ApprovalBoundary::Capability {
+            let note = self.config.dangerous.contains(tool_name).then(|| {
+                "legacy dangerous_tools entry deferred to exact capability consent".to_string()
+            });
+            return ApprovalOutcome::Approved { note };
         }
         if self.config.auto_approve.contains(tool_name) {
             return ApprovalOutcome::Approved {
@@ -238,6 +265,14 @@ impl ApprovalGate {
         self.config.auto_deny.contains(tool_name)
             || self.config.auto_approve.contains(tool_name)
             || !self.config.dangerous.contains(tool_name)
+    }
+
+    pub fn would_short_circuit_for(
+        &self,
+        tool_name: &str,
+        boundary: ApprovalBoundary,
+    ) -> bool {
+        boundary == ApprovalBoundary::Capability || self.would_short_circuit(tool_name)
     }
 
     /// Single-lookup classification check: `true` iff `tool_name` is

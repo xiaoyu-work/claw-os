@@ -92,6 +92,8 @@ pub fn record_cap_decision(entry: &Value) {
         "decision": entry.get("decision").cloned().unwrap_or(Value::Null),
         "reason": entry.get("reason").cloned().unwrap_or(Value::Null),
         "hint": entry.get("hint").cloned().unwrap_or(Value::Null),
+        "risk": entry.get("risk").cloned().unwrap_or(Value::Null),
+        "approval": entry.get("approval").cloned().unwrap_or(Value::Null),
         "mode": entry.get("mode").cloned().unwrap_or(Value::Null),
         "owner_uid": entry.get("owner_uid").cloned().unwrap_or(Value::Null),
     });
@@ -113,6 +115,21 @@ fn approval_request_record(request: &ApprovalRequest) -> Value {
         "session_id": audit_policy::safe_reference(&request.session),
         "verb": &request.verb,
         "scope": &request.scope,
+        "risk": request.risk,
+        "consent_context": request.context,
+        "operation_digest": &request.operation_digest,
+        "task_id": request.execution.as_ref()
+            .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
+        "worker_pid": request.execution.as_ref()
+            .map(|execution| execution.identity.worker_pid),
+        "worker_start_time_ticks": request.execution.as_ref()
+            .and_then(|execution| execution.identity.worker_start_time_ticks),
+        "lease": request.execution.as_ref()
+            .map(|execution| audit_policy::text_digest(&execution.identity.lease_nonce)),
+        "request_expires_at": request.execution.as_ref()
+            .map(|execution| execution.expires_at),
+        "request_generation": request.execution.as_ref()
+            .map(|execution| execution.generation),
         // Free text the requester supplied for the user's prompt; the
         // approvals store keeps it, this projection does not.
         "reason": audit_policy::text_digest(&request.reason),
@@ -139,6 +156,27 @@ fn approval_decision_record(resolved: &ResolvedApproval) -> Value {
         "outcome": resolved.decision.outcome,
         "duration": resolved.decision.duration,
         "decided_by": &resolved.decision.decided_by,
+        "risk": resolved.request.risk,
+        "consent_context": resolved.request.context,
+        "operation_digest": &resolved.request.operation_digest,
+        "task_id": resolved.request.execution.as_ref()
+            .map(|execution| audit_policy::safe_identity(&execution.identity.task_id)),
+        "worker_pid": resolved.request.execution.as_ref()
+            .map(|execution| execution.identity.worker_pid),
+        "worker_start_time_ticks": resolved.request.execution.as_ref()
+            .and_then(|execution| execution.identity.worker_start_time_ticks),
+        "lease": resolved.request.execution.as_ref()
+            .map(|execution| audit_policy::text_digest(&execution.identity.lease_nonce)),
+        "request_expires_at": resolved.request.execution.as_ref()
+            .map(|execution| execution.expires_at),
+        "request_generation": resolved.request.execution.as_ref()
+            .map(|execution| execution.generation),
+        "grant": resolved.decision.grant.as_ref().map(|grant| json!({
+            "reference": grant.reference,
+            "expires_at": grant.expires_at,
+            "uses_remaining": grant.uses_remaining,
+            "generation": grant.generation,
+        })),
         // The approver's free-text note is never journalled.
         "note": resolved
             .decision
@@ -176,11 +214,7 @@ fn task_event_record(event: &'static str, job: &Job) -> Value {
     })
 }
 
-pub fn record_power_intent(
-    action: &str,
-    owner_uid: u32,
-    session_id: &str,
-) -> Result<(), String> {
+pub fn record_power_intent(action: &str, owner_uid: u32, session_id: &str) -> Result<(), String> {
     append(json!({
         "ts": Utc::now(),
         "event": "system.operation",
@@ -197,10 +231,7 @@ pub fn query(params: Value) -> Result<Value, String> {
     query_with_owner(params, None)
 }
 
-pub fn query_for_client(
-    params: Value,
-    client: &ClientIdentity,
-) -> Result<Value, String> {
+pub fn query_for_client(params: Value, client: &ClientIdentity) -> Result<Value, String> {
     let uid = client.require_uid()?;
     query_with_owner(params, (uid != 0).then_some(uid))
 }

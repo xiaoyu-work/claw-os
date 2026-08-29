@@ -98,9 +98,12 @@ fn generations_only_ever_move_forward() {
         assert!(next > last, "{next} must exceed {last}");
         last = next;
     }
-    // An owner-wide revocation cannot lower a session already above it.
+    // An owner-wide revocation must move strictly past every session
+    // counter, otherwise a grant minted at the session generation
+    // would remain live.
     let owner = revoke(&RevocationScope::Owner { uid: Some(1000) }).unwrap();
-    assert!(current(Some(1000), "sess-a").unwrap() >= last.max(owner));
+    assert!(owner > last);
+    assert_eq!(current(Some(1000), "sess-a").unwrap(), owner);
 }
 
 #[test]
