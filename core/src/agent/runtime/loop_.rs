@@ -702,10 +702,7 @@ fn merge_compaction_projection(
                     index += 1;
                 }
                 let next = next_durable[index];
-                let keep = ephemeral_is_outside_covered_prefix(previous, next, covered_end)?;
-                if !keep {
-                    continue;
-                }
+                ensure_ephemeral_outside_covered_prefix(previous, next, covered_end)?;
                 ensure_ephemeral_slot_is_unambiguous(
                     previous,
                     next,
@@ -845,19 +842,21 @@ fn next_durable_anchors(origins: &[MessageOrigin]) -> Vec<Option<DurableAnchor>>
     result
 }
 
-fn ephemeral_is_outside_covered_prefix(
+fn ensure_ephemeral_outside_covered_prefix(
     previous: Option<DurableAnchor>,
     next: Option<DurableAnchor>,
     covered_end: Option<i64>,
-) -> Result<bool, String> {
+) -> Result<(), String> {
     let Some(covered_end) = covered_end else {
-        return Ok(true);
+        return Ok(());
     };
     if previous.is_some_and(|anchor| anchor.end_id() >= covered_end) {
-        return Ok(true);
+        return Ok(());
     }
     if matches!(next, Some(DurableAnchor::Raw(id)) if id <= covered_end) {
-        return Ok(false);
+        return Err(format!(
+            "live ephemeral messages fall inside winner boundary {covered_end} but are absent from its durable compaction input"
+        ));
     }
     Err(format!(
         "cannot prove whether live ephemeral messages are before or after winner boundary {covered_end}"

@@ -18,7 +18,8 @@ through model turns, tools, hooks, progress, and final records.
   pre-lock plan becomes stale or already covered, then recheck and boundedly
   replan until the request is compliant or fails explicitly.
 - Merge unpersisted live messages by neighboring durable row anchors during
-  winner adoption, preserving tool evidence and rejecting ambiguous ordering.
+  winner adoption, preserving tool evidence and rejecting any ephemeral that
+  the winner collapsed without including in its durable inputs.
 - Execute one provider/tool-result turn.
 - Dispatch parallel-safe and serial tools deterministically.
 - Build every provider tool schema and dispatch lookup from the same

@@ -1015,6 +1015,35 @@ fn structured_tool_result(id: &str, content: &str) -> Message {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+enum CoveredEphemeralKind {
+    User,
+    Assistant,
+    ToolResult,
+}
+
+fn covered_ephemeral(kind: CoveredEphemeralKind, tool_use_id: &str) -> Message {
+    match kind {
+        CoveredEphemeralKind::User => Message::user_text("unpersisted user instruction"),
+        CoveredEphemeralKind::Assistant => {
+            Message::assistant_text("unpersisted assistant message")
+        }
+        CoveredEphemeralKind::ToolResult => {
+            structured_tool_result(tool_use_id, "unpersisted tool result")
+        }
+    }
+}
+
+fn covered_ephemeral_label(kind: CoveredEphemeralKind, tool_use_id: &str) -> String {
+    match kind {
+        CoveredEphemeralKind::User => "unpersisted user instruction".to_string(),
+        CoveredEphemeralKind::Assistant => "unpersisted assistant message".to_string(),
+        CoveredEphemeralKind::ToolResult => {
+            format!("tool-result:{tool_use_id}:unpersisted tool result")
+        }
+    }
+}
+
 fn raw_origin_index(seed: &ConversationSeed, id: i64) -> usize {
     seed.origins
         .iter()
@@ -1109,7 +1138,7 @@ async fn assert_provider_receives_tool_evidence(
 }
 
 #[test]
-fn adoption_merges_ephemerals_before_between_and_after_raw_tail_in_order() {
+fn adoption_merges_outside_ephemerals_but_rejects_covered_ephemeral() {
     use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
 
     let db = MemoryDb::open_in_memory().unwrap();
@@ -1154,12 +1183,6 @@ fn adoption_merges_ephemerals_before_between_and_after_raw_tail_in_order() {
 
     let rows = db.recent_replayable(sid, 100).unwrap();
     let mut live = rows_to_seed(&rows);
-    let inside_index = raw_origin_index(&live, second);
-    insert_ephemerals(
-        &mut live,
-        inside_index,
-        vec![Message::assistant_text("inside covered prefix")],
-    );
     let before_tail = raw_origin_index(&live, tool_use);
     insert_ephemerals(
         &mut live,
@@ -1184,7 +1207,8 @@ fn adoption_merges_ephemerals_before_between_and_after_raw_tail_in_order() {
         vec![Message::assistant_text("after raw tail")],
     );
 
-    let merged = adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap();
+    let merged =
+        adopt_compaction_projection(projection.clone(), &live.messages, &live.origins).unwrap();
     assert_eq!(
         live_message_labels(&merged.messages),
         vec![
@@ -1207,9 +1231,458 @@ fn adoption_merges_ephemerals_before_between_and_after_raw_tail_in_order() {
             .count()
             == 5
     );
-    assert!(!live_message_labels(&merged.messages)
+
+    let inside_index = raw_origin_index(&live, second);
+    insert_ephemerals(
+        &mut live,
+        inside_index,
+        vec![Message::assistant_text("inside covered prefix")],
+    );
+    let error =
+        adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap_err();
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error.to_string().contains("absent from its durable compaction input"));
+    assert!(live_message_labels(&live.messages)
         .iter()
         .any(|label| label == "inside covered prefix"));
+}
+
+#[tokio::test]
+async fn non_race_compaction_rejects_ephemerals_inside_planned_source() {
+    for kind in [
+        CoveredEphemeralKind::User,
+        CoveredEphemeralKind::Assistant,
+        CoveredEphemeralKind::ToolResult,
+    ] {
+        let sid = match kind {
+            CoveredEphemeralKind::User => "non-race-covered-user",
+            CoveredEphemeralKind::Assistant => "non-race-covered-assistant",
+            CoveredEphemeralKind::ToolResult => "non-race-covered-tool-result",
+        };
+        let tool_use_id = "non-race-covered-call";
+        let db = MemoryDb::open_in_memory().unwrap();
+        let first_content = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "[tool_use:lookup] {}".to_string()
+        } else {
+            format!("old user {}", "x".repeat(2000))
+        };
+        let first_role = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "assistant"
+        } else {
+            "user"
+        };
+        let first = db.record_message(sid, first_role, &first_content).unwrap();
+        let second = db
+            .record_message(
+                sid,
+                "assistant",
+                &format!("old assistant {}", "x".repeat(2000)),
+            )
+            .unwrap();
+        db.record_message(sid, "user", "real anchor").unwrap();
+        db.record_message(sid, "assistant", "durable tail")
+            .unwrap();
+
+        let rows = db.recent_replayable(sid, 100).unwrap();
+        let mut live = rows_to_seed(&rows);
+        if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            let tool_index = raw_origin_index(&live, first);
+            live.messages[tool_index] = structured_tool_use(tool_use_id, "lookup");
+        }
+        let insertion = raw_origin_index(&live, second);
+        insert_ephemerals(
+            &mut live,
+            insertion,
+            vec![covered_ephemeral(kind, tool_use_id)],
+        );
+        let original_labels = live_message_labels(&live.messages);
+        let mut messages = live.messages;
+        let mut origins = live.origins;
+
+        let compressor_cfg = CompressorConfig {
+            trigger_tokens: 500,
+            keep_tail_tokens: 100,
+            ..CompressorConfig::default()
+        };
+        let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+        let provider: Arc<dyn Provider> = mock.clone();
+        let compressor: Arc<dyn Compressor> =
+            Arc::new(LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg));
+        let error = maybe_compress_messages(
+            &compressor,
+            "system",
+            &mut messages,
+            &mut origins,
+            Some((&db, sid)),
+            None,
+            "mock",
+            "mock-model",
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, AgentError::Compression(_)));
+        assert!(error
+            .to_string()
+            .contains("no durably reconstructable source range"));
+        assert!(mock.last_request().is_none());
+        assert!(compressor.should_compress(Some("system"), &messages));
+        assert_eq!(live_message_labels(&messages), original_labels);
+        assert!(original_labels.contains(&covered_ephemeral_label(kind, tool_use_id)));
+    }
+}
+
+#[tokio::test]
+async fn already_covered_rejects_covered_ephemerals_without_provider_send() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    for kind in [
+        CoveredEphemeralKind::User,
+        CoveredEphemeralKind::Assistant,
+        CoveredEphemeralKind::ToolResult,
+    ] {
+        let sid = match kind {
+            CoveredEphemeralKind::User => "covered-ephemeral-user",
+            CoveredEphemeralKind::Assistant => "covered-ephemeral-assistant",
+            CoveredEphemeralKind::ToolResult => "covered-ephemeral-tool-result",
+        };
+        let tool_use_id = "covered-ephemeral-call";
+        let db = MemoryDb::open_in_memory().unwrap();
+        let first = db
+            .record_message(sid, "user", &format!("old user {}", "x".repeat(2000)))
+            .unwrap();
+        let _second = db
+            .record_message(
+                sid,
+                "assistant",
+                &format!("old assistant {}", "x".repeat(2000)),
+            )
+            .unwrap();
+        let third_content = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "[tool_use:lookup] {}".to_string()
+        } else {
+            "winner-covered user".to_string()
+        };
+        let third_role = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "assistant"
+        } else {
+            "user"
+        };
+        let third = db
+            .record_message(sid, third_role, &third_content)
+            .unwrap();
+        let fourth = db
+            .record_message(sid, "assistant", "winner-covered assistant")
+            .unwrap();
+        let anchor = db.record_message(sid, "user", "real anchor").unwrap();
+        db.record_message(sid, "assistant", "durable tail")
+            .unwrap();
+
+        let rows = db.recent_replayable(sid, 100).unwrap();
+        let mut live = rows_to_seed(&rows);
+        if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            let tool_index = raw_origin_index(&live, third);
+            live.messages[tool_index] = structured_tool_use(tool_use_id, "lookup");
+        }
+        let insertion = raw_origin_index(&live, fourth);
+        insert_ephemerals(
+            &mut live,
+            insertion,
+            vec![covered_ephemeral(kind, tool_use_id)],
+        );
+        let original_labels = live_message_labels(&live.messages);
+        let mut messages = live.messages;
+        let mut origins = live.origins;
+
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let winner_db = db.clone();
+        let winner = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let attempt = match winner_db
+                .begin_compaction(
+                    sid,
+                    NewCompaction {
+                        source_start_id: first,
+                        source_end_id: fourth,
+                        source_count: 4,
+                        protected_tail_start_id: Some(anchor),
+                        protected_user_message_id: Some(anchor),
+                        algorithm: "winner".into(),
+                        algorithm_version: 1,
+                        provider: "mock".into(),
+                        model: "mock".into(),
+                        previous_compaction_id: None,
+                        pruned_tool_results: 0,
+                    },
+                )
+                .unwrap()
+            {
+                BeginCompaction::Started(attempt) => attempt,
+                other => panic!("expected winner attempt, got {other:?}"),
+            };
+            attempt
+                .complete("[CONTEXT SUMMARY]\n\ncovered winner")
+                .unwrap();
+            done_tx.send(()).unwrap();
+        });
+
+        let compressor_cfg = CompressorConfig {
+            trigger_tokens: 500,
+            keep_tail_tokens: 100,
+            ..CompressorConfig::default()
+        };
+        let mock = Arc::new(MockProvider::new("mock-model", &cfg()));
+        let provider: Arc<dyn Provider> = mock.clone();
+        let compressor: Arc<dyn Compressor> = Arc::new(RaceAfterPlanCompressor {
+            inner: LlmCompressor::new(provider, "mock-model").with_config(compressor_cfg),
+            start_winner: std::sync::Mutex::new(Some(start_tx)),
+            winner_done: std::sync::Mutex::new(done_rx),
+        });
+        let error = maybe_compress_messages(
+            &compressor,
+            "system",
+            &mut messages,
+            &mut origins,
+            Some((&db, sid)),
+            None,
+            "mock",
+            "mock-model",
+        )
+        .await
+        .unwrap_err();
+        winner.join().unwrap();
+
+        assert!(matches!(error, AgentError::Compression(_)));
+        assert!(error
+            .to_string()
+            .contains("absent from its durable compaction input"));
+        assert!(mock.last_request().is_none());
+        assert!(compressor.should_compress(Some("system"), &messages));
+        assert_eq!(live_message_labels(&messages), original_labels);
+        assert!(original_labels.contains(&covered_ephemeral_label(kind, tool_use_id)));
+        assert_eq!(db.compactions_for_session(sid).unwrap().len(), 1);
+    }
+}
+
+#[test]
+fn stale_plan_rejects_covered_ephemerals_without_provider_send() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    for kind in [
+        CoveredEphemeralKind::User,
+        CoveredEphemeralKind::Assistant,
+        CoveredEphemeralKind::ToolResult,
+    ] {
+        let sid = match kind {
+            CoveredEphemeralKind::User => "stale-covered-user",
+            CoveredEphemeralKind::Assistant => "stale-covered-assistant",
+            CoveredEphemeralKind::ToolResult => "stale-covered-tool-result",
+        };
+        let tool_use_id = "stale-covered-call";
+        let db = MemoryDb::open_in_memory().unwrap();
+        let first_content = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "[tool_use:lookup] {}".to_string()
+        } else {
+            "winner-covered first".to_string()
+        };
+        let first_role = if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            "assistant"
+        } else {
+            "user"
+        };
+        let first = db.record_message(sid, first_role, &first_content).unwrap();
+        let second = db
+            .record_message(sid, "assistant", "winner-covered second")
+            .unwrap();
+        let third = db
+            .record_message(sid, "user", "stale extension user")
+            .unwrap();
+        let fourth = db
+            .record_message(sid, "assistant", "stale extension assistant")
+            .unwrap();
+        let anchor = db.record_message(sid, "user", "real anchor").unwrap();
+        db.record_message(sid, "assistant", "durable tail")
+            .unwrap();
+
+        let rows = db.recent_replayable(sid, 100).unwrap();
+        let mut live = rows_to_seed(&rows);
+        if matches!(kind, CoveredEphemeralKind::ToolResult) {
+            let tool_index = raw_origin_index(&live, first);
+            live.messages[tool_index] = structured_tool_use(tool_use_id, "lookup");
+        }
+        let insertion = raw_origin_index(&live, second);
+        insert_ephemerals(
+            &mut live,
+            insertion,
+            vec![covered_ephemeral(kind, tool_use_id)],
+        );
+        let original_labels = live_message_labels(&live.messages);
+
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let winner_db = db.clone();
+        let winner = std::thread::spawn(move || {
+            start_rx.recv().unwrap();
+            let attempt = match winner_db
+                .begin_compaction(
+                    sid,
+                    NewCompaction {
+                        source_start_id: first,
+                        source_end_id: second,
+                        source_count: 2,
+                        protected_tail_start_id: Some(third),
+                        protected_user_message_id: Some(third),
+                        algorithm: "winner".into(),
+                        algorithm_version: 1,
+                        provider: "mock".into(),
+                        model: "mock".into(),
+                        previous_compaction_id: None,
+                        pruned_tool_results: 0,
+                    },
+                )
+                .unwrap()
+            {
+                BeginCompaction::Started(attempt) => attempt,
+                other => panic!("expected winner attempt, got {other:?}"),
+            };
+            attempt
+                .complete("[CONTEXT SUMMARY]\n\nshort winner")
+                .unwrap();
+        });
+        start_tx.send(()).unwrap();
+        winner.join().unwrap();
+
+        let outcome = db
+            .begin_compaction(
+                sid,
+                NewCompaction {
+                    source_start_id: first,
+                    source_end_id: fourth,
+                    source_count: 4,
+                    protected_tail_start_id: Some(anchor),
+                    protected_user_message_id: Some(anchor),
+                    algorithm: "stale".into(),
+                    algorithm_version: 1,
+                    provider: "mock".into(),
+                    model: "mock".into(),
+                    previous_compaction_id: None,
+                    pruned_tool_results: 0,
+                },
+            )
+            .unwrap();
+        let projection = match outcome {
+            BeginCompaction::StalePlan(projection) => projection,
+            other => panic!("expected stale plan, got {other:?}"),
+        };
+        let mock = MockProvider::new("mock-model", &cfg());
+        let error =
+            adopt_compaction_projection(projection, &live.messages, &live.origins).unwrap_err();
+
+        assert!(matches!(error, AgentError::Compression(_)));
+        assert!(error
+            .to_string()
+            .contains("absent from its durable compaction input"));
+        assert!(mock.last_request().is_none());
+        assert_eq!(live_message_labels(&live.messages), original_labels);
+        assert!(original_labels.contains(&covered_ephemeral_label(kind, tool_use_id)));
+    }
+}
+
+#[test]
+fn repeated_adoption_rejects_ephemeral_newly_collapsed_by_successor() {
+    use crate::agent::memory::compaction::{BeginCompaction, NewCompaction};
+
+    let db = MemoryDb::open_in_memory().unwrap();
+    let sid = "repeated-covered-ephemeral";
+    let ids: Vec<i64> = (0..6)
+        .map(|index| {
+            db.record_message(
+                sid,
+                if index % 2 == 0 { "user" } else { "assistant" },
+                &format!("row {index}"),
+            )
+            .unwrap()
+        })
+        .collect();
+    let first = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[1],
+                source_count: 2,
+                protected_tail_start_id: Some(ids[2]),
+                protected_user_message_id: Some(ids[2]),
+                algorithm: "first".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: None,
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected first attempt, got {other:?}"),
+    }
+    .complete("[CONTEXT SUMMARY]\n\nfirst winner")
+    .unwrap();
+
+    let rows = db.recent_replayable(sid, 100).unwrap();
+    let mut live = rows_to_seed(&rows);
+    let insertion = raw_origin_index(&live, ids[3]);
+    insert_ephemerals(
+        &mut live,
+        insertion,
+        vec![Message::assistant_text("surviving ephemeral")],
+    );
+    let first_projection = db.continuation_projection(sid, 100, true).unwrap();
+    let first_merge =
+        adopt_compaction_projection(first_projection, &live.messages, &live.origins).unwrap();
+    assert!(live_message_labels(&first_merge.messages)
+        .iter()
+        .any(|label| label == "surviving ephemeral"));
+
+    let second = match db
+        .begin_compaction(
+            sid,
+            NewCompaction {
+                source_start_id: ids[0],
+                source_end_id: ids[3],
+                source_count: 4,
+                protected_tail_start_id: Some(ids[4]),
+                protected_user_message_id: Some(ids[4]),
+                algorithm: "second".into(),
+                algorithm_version: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                previous_compaction_id: Some(first.record.id),
+                pruned_tool_results: 0,
+            },
+        )
+        .unwrap()
+    {
+        BeginCompaction::Started(attempt) => attempt,
+        other => panic!("expected second attempt, got {other:?}"),
+    };
+    second
+        .complete("[CONTEXT SUMMARY]\n\nsecond winner")
+        .unwrap();
+    let second_projection = db.continuation_projection(sid, 100, true).unwrap();
+    let before = live_message_labels(&first_merge.messages);
+    let error = adopt_compaction_projection(
+        second_projection,
+        &first_merge.messages,
+        &first_merge.origins,
+    )
+    .unwrap_err();
+
+    assert!(matches!(error, AgentError::Compression(_)));
+    assert!(error
+        .to_string()
+        .contains("absent from its durable compaction input"));
+    assert_eq!(live_message_labels(&first_merge.messages), before);
 }
 
 #[test]

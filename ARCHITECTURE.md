@@ -121,10 +121,12 @@ replayable row, rejects tool-pair splits, and rechecks that a verbatim real-user
 anchor and both protected row identities are unchanged.
 Winner adoption deterministically merges live messages whose persistence
 failed into positions anchored by neighboring raw row IDs. Ephemerals proven
-inside the winner's covered prefix are not reintroduced; those proven outside
-keep their exact order, including structured tool results. Ambiguous placement,
-orphaned tool pairs, or a missing real-user anchor fails compression rather
-than dropping, duplicating, or reordering active evidence.
+outside keep their exact order, including structured tool results. An
+ephemeral between rows collapsed into the winner cannot have been part of the
+durable digest, so adoption rejects it rather than silently treating it as
+summarized. Covered or otherwise ambiguous placement, orphaned tool pairs, or
+a missing real-user anchor fails compression rather than dropping, duplicating,
+or reordering active evidence.
 Repair reroots a valid descendant around a damaged predecessor and records the
 removed lineage; it drops the dependent chain only when no safe root remains.
 
