@@ -108,7 +108,7 @@ fn completed_source_range_is_not_started_again() {
     assert!(matches!(
         db.begin_compaction("session", spec(&ids[..2], ids[2]))
             .unwrap(),
-        BeginCompaction::AlreadyCovered
+        BeginCompaction::AlreadyCovered(_)
     ));
     assert_eq!(db.compactions_for_session("session").unwrap().len(), 1);
 }
@@ -132,10 +132,10 @@ fn first_compaction_cannot_claim_a_predecessor() {
     let ids = seed_rows(&db, "session", 4);
     let mut invalid = spec(&ids[..2], ids[2]);
     invalid.previous_compaction_id = Some(42);
-    let error = db.begin_compaction("session", invalid).unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("first compaction cannot reference a predecessor"));
+    assert!(matches!(
+        db.begin_compaction("session", invalid).unwrap(),
+        BeginCompaction::StalePlan(_)
+    ));
 }
 
 #[test]
@@ -152,12 +152,11 @@ fn successor_must_extend_and_reference_the_latest_valid_predecessor() {
     let first = first.complete("[CONTEXT SUMMARY]\n\nfirst").unwrap();
 
     let missing_predecessor = spec(&ids[..4], ids[4]);
-    let error = db
-        .begin_compaction("session", missing_predecessor)
-        .unwrap_err();
-    assert!(error
-        .to_string()
-        .contains("must reference the latest valid predecessor"));
+    assert!(matches!(
+        db.begin_compaction("session", missing_predecessor)
+            .unwrap(),
+        BeginCompaction::StalePlan(_)
+    ));
 
     let mut shifted_start = spec(&ids[1..4], ids[4]);
     shifted_start.previous_compaction_id = Some(first.record.id);
@@ -277,6 +276,66 @@ fn concurrent_attempts_are_serialized_per_session() {
             .unwrap(),
         BeginCompaction::Started(_)
     ));
+}
+
+#[test]
+fn concurrent_winner_returns_current_projection_for_shorter_equal_and_longer_coverage() {
+    fn run_case(loser_count: usize, winner_count: usize, expect_stale: bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("memory.db");
+        let loser_db = MemoryDb::open(&path).unwrap();
+        let ids = seed_rows(&loser_db, "session", 8);
+
+        let loaded_before_winner = loser_db
+            .continuation_projection("session", 100, true)
+            .unwrap();
+        assert!(loaded_before_winner.summary.is_none());
+
+        let (start_tx, start_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let winner_path = path.clone();
+        let winner_ids = ids.clone();
+        let winner = std::thread::spawn(move || {
+            let winner_db = MemoryDb::open(&winner_path).unwrap();
+            start_rx.recv().unwrap();
+            let attempt = match winner_db
+                .begin_compaction(
+                    "session",
+                    spec(&winner_ids[..winner_count], winner_ids[winner_count]),
+                )
+                .unwrap()
+            {
+                BeginCompaction::Started(attempt) => attempt,
+                other => panic!("expected winning attempt, got {other:?}"),
+            };
+            let completed = attempt
+                .complete(&format!("[CONTEXT SUMMARY]\n\nwinner-{winner_count}"))
+                .unwrap();
+            done_tx.send(completed.record.id).unwrap();
+        });
+
+        let stale_spec = spec(&ids[..loser_count], ids[loser_count]);
+        start_tx.send(()).unwrap();
+        let winner_id = done_rx.recv().unwrap();
+        let outcome = loser_db.begin_compaction("session", stale_spec).unwrap();
+        let projection = match outcome {
+            BeginCompaction::StalePlan(projection) if expect_stale => projection,
+            BeginCompaction::AlreadyCovered(projection) if !expect_stale => projection,
+            other => panic!("unexpected stale-plan outcome: {other:?}"),
+        };
+        let summary = projection.summary.expect("winner summary");
+        assert_eq!(summary.record.id, winner_id);
+        assert!(summary.summary.contains(&format!("winner-{winner_count}")));
+        assert_eq!(
+            projection.tail.first().map(|row| row.id),
+            Some(ids[winner_count])
+        );
+        winner.join().unwrap();
+    }
+
+    run_case(4, 2, true);
+    run_case(4, 4, false);
+    run_case(4, 6, false);
 }
 
 #[test]

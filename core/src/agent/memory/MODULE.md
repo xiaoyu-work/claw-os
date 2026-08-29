@@ -14,6 +14,8 @@ results, and curates durable notes from completed work.
   crash-recoverable `started` / `completed` / `failed` lifecycle.
 - Project the latest valid summary plus uncompacted raw tail without deleting
   or hiding source rows from search and export.
+- Return the winning verified projection for stale or already-covered
+  pre-lock plans so normal concurrent completion is nonfatal.
 - Provide FTS and semantic recall behind stable interfaces.
 - Curate canonical, append-only facts with provenance and crash-safe run
   bracketing.

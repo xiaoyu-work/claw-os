@@ -193,7 +193,8 @@ pub struct NewCompaction {
 pub enum BeginCompaction {
     Started(CompactionAttempt),
     Busy,
-    AlreadyCovered,
+    AlreadyCovered(ContinuationProjection),
+    StalePlan(ContinuationProjection),
 }
 
 #[derive(Debug)]
@@ -335,20 +336,26 @@ impl MemoryDb {
 
         let mut conn = self.lock_conn()?;
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        close_interrupted_locked(&tx, session_id)?;
+        let recovered_interrupted = close_interrupted_locked(&tx, session_id)?;
 
         let earliest_replayable = earliest_replayable_id(&tx, session_id)?.ok_or_else(|| {
             MemoryError::Integrity(
                 "cannot compact a session without replayable message rows".to_string(),
             )
         })?;
-        let (latest, _) = latest_valid_locked(&tx, session_id)?;
+        let (latest, rejected_invalid) = latest_valid_locked(&tx, session_id)?;
         match latest.as_ref() {
             None => {
                 if spec.previous_compaction_id.is_some() {
-                    return Err(MemoryError::Integrity(
-                        "first compaction cannot reference a predecessor".to_string(),
-                    ));
+                    let projection = continuation_projection_locked(
+                        &tx,
+                        session_id,
+                        None,
+                        recovered_interrupted,
+                        rejected_invalid,
+                    )?;
+                    tx.commit()?;
+                    return Ok(BeginCompaction::StalePlan(projection));
                 }
                 if spec.source_start_id != earliest_replayable {
                     return Err(MemoryError::Integrity(format!(
@@ -357,14 +364,32 @@ impl MemoryDb {
                 }
             }
             Some(previous) => {
-                if spec.source_end_id <= previous.record.source_end_id {
-                    return Ok(BeginCompaction::AlreadyCovered);
-                }
                 if spec.previous_compaction_id != Some(previous.record.id) {
-                    return Err(MemoryError::Integrity(
-                        "successor compaction must reference the latest valid predecessor"
-                            .to_string(),
-                    ));
+                    let projection = continuation_projection_locked(
+                        &tx,
+                        session_id,
+                        latest.clone(),
+                        recovered_interrupted,
+                        rejected_invalid,
+                    )?;
+                    let covered = previous.record.source_end_id >= spec.source_end_id;
+                    tx.commit()?;
+                    return Ok(if covered {
+                        BeginCompaction::AlreadyCovered(projection)
+                    } else {
+                        BeginCompaction::StalePlan(projection)
+                    });
+                }
+                if spec.source_end_id <= previous.record.source_end_id {
+                    let projection = continuation_projection_locked(
+                        &tx,
+                        session_id,
+                        latest.clone(),
+                        recovered_interrupted,
+                        rejected_invalid,
+                    )?;
+                    tx.commit()?;
+                    return Ok(BeginCompaction::AlreadyCovered(projection));
                 }
                 if spec.source_start_id != previous.record.source_start_id {
                     return Err(MemoryError::Integrity(format!(
@@ -562,19 +587,7 @@ impl MemoryDb {
         after_id: i64,
     ) -> Result<Vec<MessageRow>, MemoryError> {
         let conn = self.lock_conn()?;
-        let mut statement = conn.prepare(
-            "SELECT id, session_id, role, content, ts_ms
-             FROM messages
-             WHERE session_id = ? AND role <> ? AND id > ?
-             ORDER BY id",
-        )?;
-        let rows = statement
-            .query_map(
-                params![session_id, INJECTED_ROLE, after_id],
-                super::sqlite_fts::row_to_message,
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows)
+        replayable_after_locked(&conn, session_id, after_id)
     }
 
     fn recover_interrupted_compactions(&self, session_id: &str) -> Result<usize, MemoryError> {
@@ -624,6 +637,45 @@ impl MemoryDb {
             file,
         }))
     }
+}
+
+fn continuation_projection_locked(
+    conn: &Connection,
+    session_id: &str,
+    summary: Option<CompactionSummary>,
+    recovered_interrupted: usize,
+    rejected_invalid: usize,
+) -> Result<ContinuationProjection, MemoryError> {
+    let after_id = summary
+        .as_ref()
+        .map(|value| value.record.source_end_id)
+        .unwrap_or(0);
+    Ok(ContinuationProjection {
+        summary,
+        tail: replayable_after_locked(conn, session_id, after_id)?,
+        recovered_interrupted,
+        rejected_invalid,
+    })
+}
+
+fn replayable_after_locked(
+    conn: &Connection,
+    session_id: &str,
+    after_id: i64,
+) -> Result<Vec<MessageRow>, MemoryError> {
+    let mut statement = conn.prepare(
+        "SELECT id, session_id, role, content, ts_ms
+         FROM messages
+         WHERE session_id = ? AND role <> ? AND id > ?
+         ORDER BY id",
+    )?;
+    let rows = statement
+        .query_map(
+            params![session_id, INJECTED_ROLE, after_id],
+            super::sqlite_fts::row_to_message,
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 fn row_to_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<CompactionRecord> {

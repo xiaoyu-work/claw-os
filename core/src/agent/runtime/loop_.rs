@@ -8,6 +8,7 @@
 //! conversation history (when a [`MemoryDb`] is supplied) so the agent can
 //! later recall what was said via the `cos_recall` tool.
 
+use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -575,6 +576,32 @@ fn projection_to_seed(
     seed
 }
 
+fn adopt_compaction_projection(
+    projection: crate::agent::memory::compaction::ContinuationProjection,
+    live_messages: &[Message],
+    live_origins: &[MessageOrigin],
+) -> ConversationSeed {
+    let live_by_id: HashMap<i64, (&Message, &MessageOrigin)> = live_messages
+        .iter()
+        .zip(live_origins)
+        .filter_map(|(message, origin)| match origin {
+            MessageOrigin::Raw { id, .. } => Some((*id, (message, origin))),
+            MessageOrigin::Summary(_) | MessageOrigin::Ephemeral => None,
+        })
+        .collect();
+    let mut adopted = projection_to_seed(projection);
+    for (message, origin) in adopted.messages.iter_mut().zip(&mut adopted.origins) {
+        let MessageOrigin::Raw { id, .. } = origin else {
+            continue;
+        };
+        if let Some((live_message, live_origin)) = live_by_id.get(id) {
+            *message = (*live_message).clone();
+            *origin = (*live_origin).clone();
+        }
+    }
+    adopted
+}
+
 fn rows_to_seed(rows: &[sqlite_fts::MessageRow]) -> ConversationSeed {
     let mut out = ConversationSeed {
         messages: Vec::with_capacity(rows.len()),
@@ -818,14 +845,27 @@ async fn maybe_compress_messages(
             *origins = original_origins;
             return Ok(false);
         }
-        Ok(BeginCompaction::AlreadyCovered) => {
+        Ok(BeginCompaction::AlreadyCovered(projection)) => {
             tracing::debug!(
                 session_id,
-                "context: source range is already covered by durable compaction"
+                "context: adopting concurrently completed durable compaction"
             );
-            *messages = original_messages;
-            *origins = original_origins;
-            return Ok(false);
+            let adopted =
+                adopt_compaction_projection(projection, &original_messages, &original_origins);
+            *messages = adopted.messages;
+            *origins = adopted.origins;
+            return Ok(true);
+        }
+        Ok(BeginCompaction::StalePlan(projection)) => {
+            tracing::debug!(
+                session_id,
+                "context: compaction plan became stale; adopting winner projection"
+            );
+            let adopted =
+                adopt_compaction_projection(projection, &original_messages, &original_origins);
+            *messages = adopted.messages;
+            *origins = adopted.origins;
+            return Ok(true);
         }
         Err(error) if error.is_integrity_failure() => {
             *messages = original_messages;

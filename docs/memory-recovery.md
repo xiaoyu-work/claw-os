@@ -58,6 +58,14 @@ summary generation. If the lock can be reacquired while a `started` record
 still exists, the prior process did not complete it; the record is marked
 `failed` and a later attempt may retry safely.
 
+Planning intentionally happens before that lock to avoid holding it during
+token estimation. The plan records the summary predecessor it observed. If a
+concurrent worker completes first, begin returns nonfatal `AlreadyCovered` or
+`StalePlan` together with the winner's verified summary and current raw tail.
+The runtime adopts that projection, preserving any matching live tail messages,
+rather than restoring the older oversized vector or reporting memory
+corruption.
+
 `cos agent replay <session-id>` continues to export the original message rows
 and now includes the compaction lifecycle metadata and raw-row recovery range.
 It does not substitute the summary for the audit source.
