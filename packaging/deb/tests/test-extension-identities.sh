@@ -252,6 +252,21 @@ echo "cos-extension:x:61010:" > "$SCRATCH/etc/group"
 identity_provision && fail "wrong fixed extension gid was accepted"
 
 reset_fixture
+populate_correct_accounts
+sed -i 's/Claw OS extension slot 0/changed comment/' "$SCRATCH/etc/passwd"
+identity_provision && fail "changed account comment was accepted"
+
+reset_fixture
+populate_correct_accounts
+sed -i 's/^cos-extension:x:/cos-extension:*:/' "$SCRATCH/etc/group"
+identity_provision && fail "changed group password field was accepted"
+
+reset_fixture
+populate_correct_accounts
+sed -i 's/^cos-ext-00:!:/cos-ext-00:!retained-hash:/' "$SCRATCH/etc/shadow"
+identity_provision && fail "locked account retaining password hash material was accepted"
+
+reset_fixture
 export MOCK_HOMED_IDENTITY=cos-ext-00
 identity_provision && fail "systemd-homed identity collision was accepted"
 
