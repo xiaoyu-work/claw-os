@@ -54,6 +54,17 @@ The host launch applies:
 - best-effort IPC/UTS namespaces;
 - mandatory cgroup-v2 CPU, memory, OOM-group, and pid limits.
 
+Runtime path setup is descriptor-relative. The runtime, per-owner, and task
+directories stay root-owned and non-writable. `openat2` rejects symlinks,
+magic links, and path escape; creation, metadata changes, stale-tree removal,
+and teardown use pinned directory FDs with `mkdirat`, `fchown`/`fchmod`,
+`fstatat(AT_SYMLINK_NOFOLLOW)`, and `unlinkat`. The root-owned private broker
+socket is bound before any directory is transferred, must remain a
+single-link Unix socket with stable device/inode identity, and must map to the
+listener inode in `/proc/net/unix`. Only the final control subdirectory is
+then made writable by the host identity. A symlink or hardlink is unlinked,
+never followed by privileged ownership or mode changes.
+
 Before spawning a host, `clawd` establishes a delegated cgroup-v2 subtree with
 the CPU, memory, and pids controllers. The host writes its own pid through a
 pre-opened `cgroup.procs` descriptor in `pre_exec`, before dropping privilege

@@ -28,6 +28,9 @@ extensions.
 - Tear down the host cgroup/process tree and every child session on task
   completion, cancellation, timeout, crash, or worker loss.
 - Treat descriptors and results returned by hosted code as untrusted.
+- Keep every setup parent root-owned and pinned by directory descriptor.
+  Create/open/remove children with `*at`/`openat2` calls; transfer only the
+  final control directory after the broker socket endpoint is verified.
 
 ## Key Files
 
@@ -65,6 +68,16 @@ is the exact host or a descendant bound to the nearest App/MCP session.
 Lifecycle routes are host-only; provider routes are child-only; task,
 scheduler, permission-decision, admin, and App-session routes are never
 available to an extension child.
+
+`HostPaths` never performs privileged metadata changes through a pathname
+under user control. It upgrades a legacy task-owned per-user directory by
+pinning it without following links, taking ownership through the descriptor,
+and recursively unlinking stale entries with `unlinkat`; symlinks and
+hardlinks are removed, never followed. The broker socket lives in a
+root-owned task directory. Its pathname must be absent, single-link, and a
+Unix socket whose device/inode remains stable and whose listener inode maps to
+that exact path in `/proc/net/unix` before the control directory is handed to
+the unprivileged host.
 
 The cgroup is created and its CPU, memory, process, OOM-group, membership, and
 `cgroup.kill` controls are verified before the host is returned to the

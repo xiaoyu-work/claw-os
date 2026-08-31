@@ -53,6 +53,15 @@ The service delegates its cgroup-v2 subtree and uses
 and pids controllers plus a working `cgroup.kill` are available; ordinary
 non-agent `clawd` primitives remain available. On supported systemd hosts no
 manual migration is required.
+
+On the first task after upgrading, `clawd` securely migrates any legacy
+task-owned `/run/cos/extension-hosts/<uid>` directory to a root-owned,
+non-writable parent. It pins the directory without following links and removes
+stale contents with descriptor-relative unlink operations; it never applies
+root ownership or mode changes to child pathnames. `/run` is ephemeral, so no
+operator migration is normally needed. A symlinked or otherwise unverifiable
+legacy parent fails agent execution closed and should be removed only after
+the administrator inspects it.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:

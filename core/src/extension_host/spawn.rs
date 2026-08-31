@@ -1,11 +1,14 @@
 //! Privilege drop and lifetime control for `claw-extension-host`.
 
+use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
@@ -55,53 +58,372 @@ const INHERITED_ENV_KEYS: &[&str] = &[
     "TZ",
 ];
 
+const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
+const RESOLVE_NO_SYMLINKS: u64 = 0x04;
+const RESOLVE_BENEATH: u64 = 0x08;
+
+#[repr(C)]
+struct OpenHow {
+    flags: u64,
+    mode: u64,
+    resolve: u64,
+}
+
+#[derive(Debug)]
+struct HostPathHandles {
+    owner_dir: OwnedFd,
+    task_dir: OwnedFd,
+    control_dir: OwnedFd,
+    task_name: CString,
+    activated: AtomicBool,
+    cleaned: AtomicBool,
+}
+
 #[derive(Debug, Clone)]
 pub struct HostPaths {
     pub dir: PathBuf,
+    pub control_dir: PathBuf,
     pub control_socket: PathBuf,
     pub broker_socket: PathBuf,
+    handles: Arc<HostPathHandles>,
 }
 
 impl HostPaths {
-    pub fn create(identity: &WorkerIdentity, execution_gid: u32) -> Result<Self, String> {
+    pub fn create(identity: &WorkerIdentity) -> Result<Self, String> {
+        if unsafe { libc::geteuid() } != 0 {
+            return Err("extension-host paths require a root broker".to_string());
+        }
         let base = crate::paths::runtime_dir().join("extension-hosts");
         let owner_root = base.join(identity.uid.to_string());
-        let dir = owner_root.join(uuid::Uuid::new_v4().simple().to_string());
-        std::fs::create_dir_all(&base)
-            .map_err(|error| format!("create extension-host runtime root: {error}"))?;
-        std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o711))
-            .map_err(|error| format!("protect extension-host runtime root: {error}"))?;
-        std::fs::create_dir_all(&owner_root)
-            .map_err(|error| format!("create owner extension-host runtime: {error}"))?;
-        std::fs::set_permissions(&owner_root, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("protect owner extension-host runtime: {error}"))?;
-        std::fs::create_dir(&dir)
-            .map_err(|error| format!("create extension-host runtime directory: {error}"))?;
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-            .map_err(|error| format!("protect extension-host runtime directory: {error}"))?;
-        if unsafe { libc::geteuid() } == 0 {
-            for path in [&owner_root, &dir] {
-                let path = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-                    .map_err(|_| "extension-host runtime path contains NUL".to_string())?;
-                if unsafe { libc::chown(path.as_ptr(), identity.uid, execution_gid) } != 0 {
-                    return Err(format!(
-                        "chown extension-host runtime directory: {}",
-                        std::io::Error::last_os_error()
-                    ));
-                }
-            }
+        let runtime = open_absolute_dir(&crate::paths::runtime_dir())?;
+        require_root_dir(&runtime, "extension runtime root")?;
+        let base_dir = ensure_root_child_dir(runtime.as_raw_fd(), c"extension-hosts", 0o711)?;
+        let owner_name = CString::new(identity.uid.to_string())
+            .map_err(|_| "extension owner directory name contains NUL".to_string())?;
+        let (owner_dir, legacy_writable) = ensure_owner_root(base_dir.as_raw_fd(), &owner_name)?;
+        if legacy_writable {
+            remove_dir_contents(owner_dir.as_raw_fd())
+                .map_err(|error| format!("clean legacy task-writable extension tree: {error}"))?;
         }
+
+        let task_name = CString::new(uuid::Uuid::new_v4().simple().to_string())
+            .map_err(|_| "extension task directory name contains NUL".to_string())?;
+        mkdirat_new(owner_dir.as_raw_fd(), &task_name, 0o700)
+            .map_err(|error| format!("create extension task directory: {error}"))?;
+        let setup = (|| {
+            let task_dir = openat2_dir(owner_dir.as_raw_fd(), &task_name)
+                .map_err(|error| format!("pin extension task directory: {error}"))?;
+            set_dir_identity(&task_dir, 0, 0, 0o711)
+                .map_err(|error| format!("protect extension task directory: {error}"))?;
+
+            mkdirat_new(task_dir.as_raw_fd(), c"control", 0o700)
+                .map_err(|error| format!("create extension control directory: {error}"))?;
+            let control_dir = openat2_dir(task_dir.as_raw_fd(), c"control")
+                .map_err(|error| format!("pin extension control directory: {error}"))?;
+            set_dir_identity(&control_dir, 0, 0, 0o700)
+                .map_err(|error| format!("protect extension control directory: {error}"))?;
+            Ok::<_, String>((task_dir, control_dir))
+        })();
+        let (task_dir, control_dir) = match setup {
+            Ok(setup) => setup,
+            Err(error) => {
+                if let Ok(task_dir) = openat2_dir(owner_dir.as_raw_fd(), &task_name) {
+                    let _ = remove_dir_contents(task_dir.as_raw_fd());
+                }
+                let _ = unlinkat_if_present(owner_dir.as_raw_fd(), &task_name, true);
+                return Err(error);
+            }
+        };
+
+        let dir = owner_root.join(task_name.to_string_lossy().as_ref());
+        let control_dir_path = dir.join("control");
         Ok(Self {
-            control_socket: dir.join("control.sock"),
+            control_socket: control_dir_path.join("control.sock"),
             broker_socket: dir.join("broker.sock"),
+            control_dir: control_dir_path,
             dir,
+            handles: Arc::new(HostPathHandles {
+                owner_dir,
+                task_dir,
+                control_dir,
+                task_name,
+                activated: AtomicBool::new(false),
+                cleaned: AtomicBool::new(false),
+            }),
         })
     }
 
+    pub(crate) fn task_dir_fd(&self) -> RawFd {
+        self.handles.task_dir.as_raw_fd()
+    }
+
+    pub(crate) fn activate(&self, uid: u32, gid: u32) -> Result<(), String> {
+        if self.handles.activated.swap(true, Ordering::SeqCst) {
+            return Err("extension-host paths were already activated".to_string());
+        }
+        set_dir_identity(&self.handles.control_dir, uid, gid, 0o710)
+            .map_err(|error| format!("activate extension control directory: {error}"))
+    }
+
     pub fn cleanup(&self) {
-        let _ = std::fs::remove_file(&self.control_socket);
-        let _ = std::fs::remove_file(&self.broker_socket);
-        let _ = std::fs::remove_dir(&self.dir);
+        if self.handles.cleaned.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let mut failures = Vec::new();
+        if let Err(error) =
+            unlinkat_if_present(self.handles.control_dir.as_raw_fd(), c"control.sock", false)
+        {
+            failures.push(format!("control socket: {error}"));
+        }
+        if let Err(error) =
+            unlinkat_if_present(self.handles.task_dir.as_raw_fd(), c"broker.sock", false)
+        {
+            failures.push(format!("broker socket: {error}"));
+        }
+        if let Err(error) = unlinkat_if_present(self.handles.task_dir.as_raw_fd(), c"control", true)
+        {
+            failures.push(format!("control directory: {error}"));
+        }
+        if let Err(error) = unlinkat_if_present(
+            self.handles.owner_dir.as_raw_fd(),
+            &self.handles.task_name,
+            true,
+        ) {
+            failures.push(format!("task directory: {error}"));
+        }
+        if !failures.is_empty() {
+            tracing::error!(
+                directory = %self.dir.display(),
+                error = %failures.join("; "),
+                "failed to clean extension-host runtime paths"
+            );
+        }
+    }
+}
+
+fn open_absolute_dir(path: &Path) -> Result<OwnedFd, String> {
+    if !path.is_absolute() {
+        return Err(format!(
+            "extension runtime root is not absolute: {}",
+            path.display()
+        ));
+    }
+    let relative = path
+        .strip_prefix("/")
+        .map_err(|_| "extension runtime root has no filesystem root".to_string())?;
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return Err(format!(
+            "extension runtime root has unsafe components: {}",
+            path.display()
+        ));
+    }
+    let root =
+        open_path_dir(Path::new("/")).map_err(|error| format!("open filesystem root: {error}"))?;
+    let relative = CString::new(relative.as_os_str().as_bytes())
+        .map_err(|_| "extension runtime root contains NUL".to_string())?;
+    openat2_dir(root.as_raw_fd(), &relative)
+        .map_err(|error| format!("pin extension runtime root: {error}"))
+}
+
+fn open_path_dir(path: &Path) -> std::io::Result<OwnedFd> {
+    let path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| std::io::Error::from_raw_os_error(libc::EINVAL))?;
+    let fd = unsafe {
+        libc::open(
+            path.as_ptr(),
+            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+        )
+    };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+}
+
+fn openat2_dir(parent: RawFd, name: &CStr) -> std::io::Result<OwnedFd> {
+    let how = OpenHow {
+        flags: (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC) as u64,
+        mode: 0,
+        resolve: RESOLVE_BENEATH | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS,
+    };
+    let fd = unsafe {
+        libc::syscall(
+            libc::SYS_openat2,
+            parent,
+            name.as_ptr(),
+            std::ptr::addr_of!(how),
+            std::mem::size_of::<OpenHow>(),
+        )
+    };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+    }
+}
+
+fn mkdirat_new(parent: RawFd, name: &CStr, mode: libc::mode_t) -> std::io::Result<()> {
+    if unsafe { libc::mkdirat(parent, name.as_ptr(), mode) } == 0 {
+        Ok(())
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn ensure_root_child_dir(
+    parent: RawFd,
+    name: &CStr,
+    mode: libc::mode_t,
+) -> Result<OwnedFd, String> {
+    match mkdirat_new(parent, name, mode) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {}
+        Err(error) => return Err(format!("create directory: {error}")),
+    }
+    let dir = openat2_dir(parent, name).map_err(|error| format!("open directory: {error}"))?;
+    set_dir_identity(&dir, 0, 0, mode).map_err(|error| format!("secure directory: {error}"))?;
+    Ok(dir)
+}
+
+fn ensure_owner_root(parent: RawFd, name: &CStr) -> Result<(OwnedFd, bool), String> {
+    match mkdirat_new(parent, name, 0o700) {
+        Ok(()) => {}
+        Err(error) if error.raw_os_error() == Some(libc::EEXIST) => {}
+        Err(error) => return Err(format!("create owner extension directory: {error}")),
+    }
+    let dir = openat2_dir(parent, name)
+        .map_err(|error| format!("pin owner extension directory: {error}"))?;
+    let before = fstat(dir.as_raw_fd())
+        .map_err(|error| format!("inspect owner extension directory: {error}"))?;
+    if before.st_mode & libc::S_IFMT != libc::S_IFDIR || before.st_nlink < 2 {
+        return Err("owner extension path is not a normal directory".to_string());
+    }
+    let legacy_writable = before.st_uid != 0 || before.st_gid != 0 || before.st_mode & 0o022 != 0;
+    set_dir_identity(&dir, 0, 0, 0o711)
+        .map_err(|error| format!("secure owner extension directory: {error}"))?;
+    Ok((dir, legacy_writable))
+}
+
+fn require_root_dir(dir: &OwnedFd, label: &str) -> Result<(), String> {
+    let stat = fstat(dir.as_raw_fd()).map_err(|error| format!("inspect {label}: {error}"))?;
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || stat.st_uid != 0
+        || stat.st_gid != 0
+        || stat.st_mode & 0o022 != 0
+    {
+        return Err(format!(
+            "{label} must be a root-owned, non-writable directory"
+        ));
+    }
+    Ok(())
+}
+
+fn set_dir_identity(dir: &OwnedFd, uid: u32, gid: u32, mode: libc::mode_t) -> std::io::Result<()> {
+    if unsafe { libc::fchown(dir.as_raw_fd(), uid, gid) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fchmod(dir.as_raw_fd(), mode) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let stat = fstat(dir.as_raw_fd())?;
+    if stat.st_mode & libc::S_IFMT != libc::S_IFDIR
+        || stat.st_uid != uid
+        || stat.st_gid != gid
+        || stat.st_mode & 0o7777 != mode
+    {
+        return Err(std::io::Error::from_raw_os_error(libc::EPERM));
+    }
+    Ok(())
+}
+
+fn fstat(fd: RawFd) -> std::io::Result<libc::stat> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, std::ptr::addr_of_mut!(stat)) } == 0 {
+        Ok(stat)
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+fn remove_dir_contents(dir: RawFd) -> std::io::Result<()> {
+    let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 3) };
+    if duplicate < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let stream = unsafe { libc::fdopendir(duplicate) };
+    if stream.is_null() {
+        unsafe {
+            libc::close(duplicate);
+        }
+        return Err(std::io::Error::last_os_error());
+    }
+    loop {
+        let entry = unsafe { libc::readdir(stream) };
+        if entry.is_null() {
+            break;
+        }
+        let name = unsafe { CStr::from_ptr((*entry).d_name.as_ptr()) };
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe {
+            libc::fstatat(
+                dir,
+                name.as_ptr(),
+                std::ptr::addr_of_mut!(stat),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        } != 0
+        {
+            let error = std::io::Error::last_os_error();
+            unsafe {
+                libc::closedir(stream);
+            }
+            return Err(error);
+        }
+        if stat.st_mode & libc::S_IFMT == libc::S_IFDIR {
+            let child = match openat2_dir(dir, name) {
+                Ok(child) => child,
+                Err(error) => {
+                    unsafe {
+                        libc::closedir(stream);
+                    }
+                    return Err(error);
+                }
+            };
+            if let Err(error) = remove_dir_contents(child.as_raw_fd()) {
+                unsafe {
+                    libc::closedir(stream);
+                }
+                return Err(error);
+            }
+            unlinkat_if_present(dir, name, true)?;
+        } else {
+            unlinkat_if_present(dir, name, false)?;
+        }
+    }
+    if unsafe { libc::closedir(stream) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn unlinkat_if_present(parent: RawFd, name: &CStr, directory: bool) -> std::io::Result<()> {
+    let flags = if directory { libc::AT_REMOVEDIR } else { 0 };
+    if unsafe { libc::unlinkat(parent, name.as_ptr(), flags) } == 0 {
+        return Ok(());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(())
+    } else {
+        Err(error)
     }
 }
 

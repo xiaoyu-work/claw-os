@@ -705,10 +705,9 @@ async fn start_extension_host(
     lease_duration: Duration,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
-    let paths =
-        crate::extension_host::spawn::HostPaths::create(identity, isolation.execution_gid())?;
+    let paths = crate::extension_host::spawn::HostPaths::create(identity)?;
     let listener = match crate::extension_host::broker::bind_listener(
-        &paths.broker_socket,
+        &paths,
         identity.uid,
         isolation.execution_gid(),
     ) {

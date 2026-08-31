@@ -215,6 +215,10 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     };
     let uid = unsafe { libc::geteuid() } as u32;
     let identity = cos::agentd::spawn::resolve_identity(uid).expect("identity");
+    if !cos::agentd::spawn::broker_is_root() {
+        eprintln!("skipping: secure extension path setup requires a root broker harness");
+        return;
+    }
     let worker_pid = std::process::id();
     let worker_start = process_start(worker_pid);
     let execution_gid = match cos::agentd::spawn::resolve_isolated_execution_gid() {
@@ -224,9 +228,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             return;
         }
     };
-    let paths = spawn::HostPaths::create(&identity, execution_gid).expect("paths");
-    let listener =
-        broker::bind_listener(&paths.broker_socket, identity.uid, execution_gid).expect("listener");
+    let paths = spawn::HostPaths::create(&identity).expect("paths");
+    let listener = broker::bind_listener(&paths, identity.uid, execution_gid).expect("listener");
     let isolation = match cos::agentd::spawn::ExecutionIsolation::capture(
         &paths.broker_socket,
         identity.uid,

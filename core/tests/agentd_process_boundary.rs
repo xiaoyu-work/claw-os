@@ -368,6 +368,27 @@ fn extension_cgroups(root: &std::path::Path) -> Vec<PathBuf> {
         .collect()
 }
 
+fn drop_command_identity(
+    command: &mut std::process::Command,
+    uid: u32,
+    gid: u32,
+) -> &mut std::process::Command {
+    use std::os::unix::process::CommandExt;
+
+    unsafe {
+        command.pre_exec(move || {
+            if libc::setgroups(0, std::ptr::null()) != 0
+                || libc::setresgid(gid, gid, gid) != 0
+                || libc::setresuid(uid, uid, uid) != 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    command
+}
+
 fn acl_probe_session(session_id: &str) -> cos::proc::SessionInfo {
     cos::proc::SessionInfo {
         session_id: session_id.to_string(),
@@ -770,13 +791,10 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         eprintln!("skipping: no usable root isolation harness");
         return;
     };
-    let paths = cos::extension_host::spawn::HostPaths::create(
-        &harness.identity,
-        harness.isolation.execution_gid(),
-    )
-    .expect("host paths");
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
     let _private_listener = cos::extension_host::broker::bind_listener(
-        &paths.broker_socket,
+        &paths,
         harness.identity.uid,
         harness.isolation.execution_gid(),
     )
@@ -858,6 +876,176 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
     host.paths.cleanup();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races() {
+    use std::os::unix::fs::{symlink, FileTypeExt, MetadataExt};
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let sentinel = harness.runtime_dir.join("root-sentinel");
+    std::fs::write(&sentinel, b"root-only").expect("write sentinel");
+    std::fs::set_permissions(&sentinel, std::fs::Permissions::from_mode(0o640))
+        .expect("chmod sentinel");
+    let original = std::fs::metadata(&sentinel).expect("sentinel metadata");
+    assert_eq!(original.uid(), 0);
+    assert_eq!(original.gid(), 0);
+
+    let owner = harness
+        .runtime_dir
+        .join("extension-hosts")
+        .join(harness.identity.uid.to_string());
+    std::fs::create_dir_all(&owner).expect("create legacy owner tree");
+    let owner_raw = std::ffi::CString::new(owner.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe {
+            libc::chown(
+                owner_raw.as_ptr(),
+                harness.identity.uid,
+                harness.identity.gid,
+            )
+        },
+        0
+    );
+    std::fs::set_permissions(&owner, std::fs::Permissions::from_mode(0o700))
+        .expect("chmod legacy owner");
+    symlink(&sentinel, owner.join("sentinel-symlink")).expect("legacy symlink");
+    std::fs::hard_link(&sentinel, owner.join("sentinel-hardlink")).expect("legacy hardlink");
+
+    let mut legacy_racer = std::process::Command::new("sh");
+    legacy_racer.args([
+        "-c",
+        &format!(
+            "while :; do ln -sf '{}' '{}/race-link' 2>/dev/null; rm -f '{}/race-link' 2>/dev/null; done",
+            sentinel.display(),
+            owner.display(),
+            owner.display()
+        ),
+    ]);
+    let mut legacy_racer = drop_command_identity(
+        &mut legacy_racer,
+        harness.identity.uid,
+        harness.identity.gid,
+    )
+    .spawn()
+    .expect("spawn legacy path racer");
+    std::thread::sleep(Duration::from_millis(25));
+
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("secure paths");
+    let _ = legacy_racer.kill();
+    let _ = legacy_racer.wait();
+
+    let owner_meta = std::fs::metadata(&owner).expect("owner root metadata");
+    assert_eq!(owner_meta.uid(), 0);
+    assert_eq!(owner_meta.gid(), 0);
+    assert_eq!(owner_meta.mode() & 0o7777, 0o711);
+    assert!(!owner.join("sentinel-symlink").exists());
+    assert!(!owner.join("sentinel-hardlink").exists());
+
+    let mut socket_racer = std::process::Command::new("sh");
+    socket_racer.args([
+        "-c",
+        &format!(
+            "while :; do ln -sf '{}' '{}' 2>/dev/null; rm -f '{}' 2>/dev/null; done",
+            sentinel.display(),
+            paths.broker_socket.display(),
+            paths.broker_socket.display()
+        ),
+    ]);
+    let mut socket_racer = drop_command_identity(
+        &mut socket_racer,
+        harness.identity.uid,
+        harness.identity.gid,
+    )
+    .spawn()
+    .expect("spawn broker socket racer");
+    let listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        harness.identity.uid,
+        harness.isolation.execution_gid(),
+    )
+    .expect("bind broker listener through pinned task directory");
+    let _ = socket_racer.kill();
+    let _ = socket_racer.wait();
+
+    let task_meta = std::fs::metadata(&paths.dir).expect("task directory metadata");
+    assert_eq!(task_meta.uid(), 0);
+    assert_eq!(task_meta.gid(), 0);
+    assert_eq!(task_meta.mode() & 0o7777, 0o711);
+    let control_meta = std::fs::metadata(&paths.control_dir).expect("control directory metadata");
+    assert_eq!(control_meta.uid(), harness.identity.uid);
+    assert_eq!(control_meta.gid(), harness.isolation.execution_gid());
+    assert_eq!(control_meta.mode() & 0o7777, 0o710);
+    let socket_meta = std::fs::symlink_metadata(&paths.broker_socket).expect("broker socket");
+    assert!(socket_meta.file_type().is_socket());
+    assert_eq!(socket_meta.uid(), harness.identity.uid);
+    assert_eq!(socket_meta.gid(), harness.isolation.execution_gid());
+    assert_eq!(socket_meta.mode() & 0o7777, 0o600);
+
+    let after = std::fs::metadata(&sentinel).expect("sentinel after races");
+    assert_eq!(after.uid(), original.uid());
+    assert_eq!(after.gid(), original.gid());
+    assert_eq!(after.mode() & 0o7777, original.mode() & 0o7777);
+    assert_eq!(
+        std::fs::read(&sentinel).expect("read sentinel"),
+        b"root-only"
+    );
+
+    drop(listener);
+    let control_symlink = std::process::Command::new("setpriv")
+        .args([
+            format!("--reuid={}", harness.identity.uid),
+            format!("--regid={}", harness.isolation.execution_gid()),
+            "--clear-groups".to_string(),
+            "ln".to_string(),
+            "-s".to_string(),
+            sentinel.to_string_lossy().into_owned(),
+            paths.control_socket.to_string_lossy().into_owned(),
+        ])
+        .status()
+        .expect("create adversarial control symlink");
+    assert!(control_symlink.success());
+    paths.cleanup();
+    let after_cleanup = std::fs::metadata(&sentinel).expect("sentinel after cleanup");
+    assert_eq!(after_cleanup.uid(), original.uid());
+    assert_eq!(after_cleanup.gid(), original.gid());
+    assert_eq!(after_cleanup.mode() & 0o7777, original.mode() & 0o7777);
+}
+
+#[test]
+fn symlinked_extension_owner_root_fails_without_mutating_its_target() {
+    use std::os::unix::fs::{symlink, MetadataExt};
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let target = harness.runtime_dir.join("sentinel-directory");
+    std::fs::create_dir(&target).expect("create sentinel directory");
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o750))
+        .expect("chmod sentinel directory");
+    let base = harness.runtime_dir.join("extension-hosts");
+    std::fs::create_dir(&base).expect("create extension base");
+    std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o711))
+        .expect("chmod extension base");
+    let owner = base.join(harness.identity.uid.to_string());
+    symlink(&target, &owner).expect("symlink owner root");
+    let original = std::fs::metadata(&target).expect("sentinel identity");
+
+    let error = cos::extension_host::spawn::HostPaths::create(&harness.identity)
+        .expect_err("symlinked owner root must fail closed");
+    assert!(
+        error.contains("pin owner extension directory") || error.contains("Too many levels"),
+        "{error}"
+    );
+    let after = std::fs::metadata(&target).expect("sentinel after refusal");
+    assert_eq!(after.uid(), original.uid());
+    assert_eq!(after.gid(), original.gid());
+    assert_eq!(after.mode() & 0o7777, original.mode() & 0o7777);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeathsig() {
     let Some(harness) = harness() else {
@@ -866,11 +1054,14 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
     };
     let malicious = install_daemonizing_host(&harness, true);
     std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
-    let paths = cos::extension_host::spawn::HostPaths::create(
-        &harness.identity,
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        harness.identity.uid,
         harness.isolation.execution_gid(),
     )
-    .expect("host paths");
+    .expect("activate secure host paths");
     let escaped_marker = PathBuf::from(format!(
         "{}.escaped",
         paths.control_socket.to_string_lossy()
@@ -932,11 +1123,14 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
     };
     let malicious = install_daemonizing_host(&harness, false);
     std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
-    let paths = cos::extension_host::spawn::HostPaths::create(
-        &harness.identity,
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        harness.identity.uid,
         harness.isolation.execution_gid(),
     )
-    .expect("host paths");
+    .expect("activate secure host paths");
     let escaped_marker = PathBuf::from(format!(
         "{}.escaped",
         paths.control_socket.to_string_lossy()

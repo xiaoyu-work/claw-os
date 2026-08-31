@@ -357,6 +357,17 @@ of the task cgroup, so `setsid`, double-forking, host-first exit, or clearing
 `cgroup.kill`, or unverifiable cleanup fails the task instead of falling back
 to `/proc` ancestry.
 
+The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
+its per-owner directory, and each task directory remain root-owned and
+non-writable. `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|
+RESOLVE_NO_MAGICLINKS)`, pinned directory descriptors, `mkdirat`, `fchown`,
+`fchmod`, `fstatat(AT_SYMLINK_NOFOLLOW)`, and `unlinkat` cover creation,
+upgrade cleanup, socket metadata, and teardown. Only the final control
+subdirectory is transferred after the root-owned broker listener has been
+bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
+have been verified. No privileged `chown` or `chmod` follows a pathname below
+a task-writable directory.
+
 The signed worker grant includes the extension protocol version, owner, task,
 durable session, worker pid/start-time, host pid/start-time, random lease nonce,
 deadline, and both socket paths. The host's control listener accepts frames

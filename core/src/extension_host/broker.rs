@@ -1,8 +1,7 @@
 //! Broker-owned private socket used by one task's extension tree.
 
-use std::os::unix::fs::PermissionsExt;
+use std::ffi::CStr;
 use std::os::unix::io::AsRawFd;
-use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -18,6 +17,7 @@ use crate::clawd::transport::frame::{PeerStream, ReadOutcome};
 use crate::clawd::transport::limits::Admission;
 use crate::clawd::transport::peer;
 use crate::clawd::wire::{Fault, Request, RequestId, MAX_REQUEST_BYTES, MAX_RESPONSE_BYTES};
+use crate::extension_host::spawn::HostPaths;
 
 const MAX_CONNECTIONS: usize = 16;
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
@@ -136,25 +136,172 @@ impl ExtensionLease {
     }
 }
 
-pub fn bind_listener(path: &Path, owner_uid: u32, owner_gid: u32) -> Result<UnixListener, String> {
-    let _ = std::fs::remove_file(path);
-    let listener = UnixListener::bind(path)
-        .map_err(|error| format!("bind extension broker socket: {error}"))?;
-    peer::enable_credential_passing(listener.as_raw_fd())
-        .map_err(|error| format!("enable extension broker credentials: {error}"))?;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-        .map_err(|error| format!("protect extension broker socket: {error}"))?;
-    if unsafe { libc::geteuid() } == 0 {
-        let raw = std::ffi::CString::new(path.as_os_str().as_encoded_bytes())
-            .map_err(|_| "extension broker socket path contains NUL".to_string())?;
-        if unsafe { libc::chown(raw.as_ptr(), owner_uid, owner_gid) } != 0 {
-            return Err(format!(
-                "chown extension broker socket: {}",
-                std::io::Error::last_os_error()
-            ));
+pub fn bind_listener(
+    paths: &HostPaths,
+    owner_uid: u32,
+    owner_gid: u32,
+) -> Result<UnixListener, String> {
+    if unsafe { libc::geteuid() } != 0 {
+        return Err("extension broker socket requires a root broker".to_string());
+    }
+    ensure_entry_absent(paths.task_dir_fd(), c"broker.sock")?;
+    let listener = match UnixListener::bind(&paths.broker_socket) {
+        Ok(listener) => listener,
+        Err(error) => {
+            paths.cleanup();
+            return Err(format!("bind extension broker socket: {error}"));
+        }
+    };
+    let configured = (|| {
+        peer::enable_credential_passing(listener.as_raw_fd())
+            .map_err(|error| format!("enable extension broker credentials: {error}"))?;
+        let identity = verify_listener_path(&listener, paths, None)?;
+        set_socket_identity(
+            paths.task_dir_fd(),
+            c"broker.sock",
+            owner_uid,
+            owner_gid,
+            0o600,
+        )?;
+        verify_listener_path(&listener, paths, Some(identity))?;
+        paths.activate(owner_uid, owner_gid)?;
+        verify_listener_path(&listener, paths, Some(identity))
+    })();
+    match configured {
+        Ok(_) => Ok(listener),
+        Err(error) => {
+            drop(listener);
+            paths.cleanup();
+            Err(error)
         }
     }
-    Ok(listener)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SocketPathIdentity {
+    device: u64,
+    inode: u64,
+}
+
+fn ensure_entry_absent(parent: i32, name: &CStr) -> Result<(), String> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            parent,
+            name.as_ptr(),
+            std::ptr::addr_of_mut!(stat),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Err("extension broker socket path already exists".to_string());
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(())
+    } else {
+        Err(format!("inspect extension broker socket path: {error}"))
+    }
+}
+
+fn set_socket_identity(
+    parent: i32,
+    name: &CStr,
+    uid: u32,
+    gid: u32,
+    mode: libc::mode_t,
+) -> Result<(), String> {
+    let before = socket_path_identity(parent, name)?;
+    if unsafe { libc::fchownat(parent, name.as_ptr(), uid, gid, libc::AT_SYMLINK_NOFOLLOW) } != 0 {
+        return Err(format!(
+            "chown extension broker socket: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if unsafe { libc::fchmodat(parent, name.as_ptr(), mode, 0) } != 0 {
+        return Err(format!(
+            "chmod extension broker socket: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let after = socket_path_identity(parent, name)?;
+    if before != after {
+        return Err("extension broker socket changed while it was secured".to_string());
+    }
+    let stat = socket_stat(parent, name)?;
+    if stat.st_uid != uid || stat.st_gid != gid || stat.st_mode & 0o7777 != mode {
+        return Err("extension broker socket ownership or mode did not apply".to_string());
+    }
+    Ok(())
+}
+
+fn socket_path_identity(parent: i32, name: &CStr) -> Result<SocketPathIdentity, String> {
+    let stat = socket_stat(parent, name)?;
+    Ok(SocketPathIdentity {
+        device: stat.st_dev,
+        inode: stat.st_ino,
+    })
+}
+
+fn socket_stat(parent: i32, name: &CStr) -> Result<libc::stat, String> {
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            parent,
+            name.as_ptr(),
+            std::ptr::addr_of_mut!(stat),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return Err(format!(
+            "inspect extension broker socket: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    if stat.st_mode & libc::S_IFMT != libc::S_IFSOCK || stat.st_nlink != 1 {
+        return Err("extension broker endpoint is not a single-link Unix socket".to_string());
+    }
+    Ok(stat)
+}
+
+fn verify_listener_path(
+    listener: &UnixListener,
+    paths: &HostPaths,
+    expected: Option<SocketPathIdentity>,
+) -> Result<SocketPathIdentity, String> {
+    let local = listener
+        .local_addr()
+        .map_err(|error| format!("inspect extension listener address: {error}"))?;
+    if local.as_pathname() != Some(paths.broker_socket.as_path()) {
+        return Err("extension listener is bound to an unexpected pathname".to_string());
+    }
+    let identity = socket_path_identity(paths.task_dir_fd(), c"broker.sock")?;
+    if expected.is_some_and(|expected| expected != identity) {
+        return Err("extension broker pathname changed after bind".to_string());
+    }
+    let mut endpoint: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(listener.as_raw_fd(), std::ptr::addr_of_mut!(endpoint)) } != 0 {
+        return Err(format!(
+            "inspect extension listener endpoint: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let endpoint_inode = endpoint.st_ino.to_string();
+    let path = paths.broker_socket.to_string_lossy();
+    let linked = std::fs::read_to_string("/proc/net/unix")
+        .map_err(|error| format!("verify extension listener in /proc/net/unix: {error}"))?
+        .lines()
+        .skip(1)
+        .any(|line| {
+            let fields = line.split_whitespace().collect::<Vec<_>>();
+            fields.get(6) == Some(&endpoint_inode.as_str())
+                && fields.get(7).is_some_and(|seen| *seen == path)
+        });
+    if !linked {
+        return Err("extension broker pathname is not the listener endpoint".to_string());
+    }
+    Ok(identity)
 }
 
 pub async fn serve(
