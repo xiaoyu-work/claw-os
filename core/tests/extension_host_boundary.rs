@@ -229,12 +229,9 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         }
     };
     let extension_identity = cos::extension_host::identity::ExtensionIdentity {
-        uid: cos::extension_host::identity::DEFAULT_UID_MIN,
+        uid: cos::extension_host::identity::FIRST_UID,
         gid: execution_gid,
-        username: format!(
-            "cos-extension-{}",
-            cos::extension_host::identity::DEFAULT_UID_MIN
-        ),
+        username: "cos-ext-00".to_string(),
     };
     let paths = spawn::HostPaths::create(&identity).expect("paths");
     let listener =
@@ -502,5 +499,8 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     broker_task.abort();
     cos::proc::deregister_session(host_session);
     host.cgroup.cleanup().await.expect("clean host containment");
-    host.paths.cleanup();
+    let _ = host.child.wait().await;
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
+    host.paths.cleanup().expect("clean host paths");
 }

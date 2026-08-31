@@ -48,10 +48,21 @@ the system is not normally needed.
 are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
-The package also installs `/etc/cos/extension-uids.conf`, defaulting to 64
-passwd-unmapped uids at `61184..=61247`. `postinst` and `clawd` both reject a
-range that overlaps any host account. Preserve a locally changed free range
-across upgrades; resolve collisions before restarting the daemon.
+The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs
+`61000..61063` and the `cos-extension` group at fixed GID `60999`, all below
+systemd DynamicUser. `preinst` checks every name, UID, and GID,
+the existing `cos-extension` group, shadow locking, systemd-homed, and all
+`/etc/subuid`/`/etc/subgid` ranges before making changes. A collision aborts
+without modifying the unrelated record; a partial attempt is rolled back.
+`postinst` revalidates everything and writes
+`/var/lib/cos/extension-identities.reserved`, which `clawd` requires.
+Each active slot also has a root-owned durable cleanup record under
+`/var/lib/cos/extension-quarantine/`. It is removed only after the host cgroup
+is empty and gone, private tmpfs mounts are unmounted, task-local state is
+recursively deleted, and routed ACLs are revoked. After a crash or failed
+cleanup, the slot remains unavailable across restart until recovery proves all
+residue is gone; administrators should investigate repeated
+`cleanup-failed` audit events rather than deleting these records manually.
 The service delegates its cgroup-v2 subtree and uses
 `KillMode=control-group`. Agent tasks now fail closed unless the CPU, memory,
 and pids controllers plus a working `cgroup.kill` are available; ordinary
@@ -67,10 +78,18 @@ operator migration is normally needed. A symlinked or otherwise unverifiable
 legacy parent fails agent execution closed and should be removed only after
 the administrator inspects it.
 Existing dynamic App/MCP tasks now receive task-local home/data/cache/log
-directories rather than task-owner home access. Bundled and system-installed
-extensions continue to work; custom MCP commands or working directories under
-owner-private paths must be moved to a system-readable location or have
-explicit read/traverse permissions.
+directories rather than task-owner home access, plus private tmpfs instances
+for `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock`. The remaining filesystem
+is read-only except for the task-local runtime tree. Bundled and
+system-installed extensions continue to work; custom MCP commands and working
+directories must be system-readable, and direct writes outside the task tree
+must use brokered App/SDK operations instead.
+
+On package purge, only users listed in the package ownership marker and still
+matching the exact account policy are removed. Preexisting correct accounts,
+an older unmarked `cos-extension` group, or any identity changed after install
+is retained with a warning. No home is created, and the package does not delete
+files merely because their numeric ownership matches a reserved UID.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:

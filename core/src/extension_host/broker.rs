@@ -151,7 +151,7 @@ pub fn bind_listener(
     let listener = match UnixListener::bind(&paths.broker_socket) {
         Ok(listener) => listener,
         Err(error) => {
-            paths.cleanup();
+            let _ = paths.cleanup();
             return Err(format!("bind extension broker socket: {error}"));
         }
     };
@@ -174,7 +174,7 @@ pub fn bind_listener(
         Ok(_) => Ok(listener),
         Err(error) => {
             drop(listener);
-            paths.cleanup();
+            let _ = paths.cleanup();
             Err(error)
         }
     }

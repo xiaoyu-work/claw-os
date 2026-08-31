@@ -176,6 +176,16 @@ impl BrokerContext {
             );
         }
     }
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn with_test_identity_pool(
+        self,
+        pool: Arc<crate::extension_host::identity::ExtensionIdentityPool>,
+    ) -> Self {
+        let _ = self.extension_identities.set(Ok(pool));
+        self
+    }
 }
 
 pub fn spawn_supervisor(
@@ -625,8 +635,8 @@ async fn supervise(
         crate::proc::deregister_session_for_owner(session_id, owner_uid);
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
-    let containment_cleanup = reap_extension_host(&mut extension.host).await;
-    let extension_cleanup = match containment_cleanup {
+    let host_cleanup = reap_extension_host(&mut extension.host).await;
+    let mut extension_cleanup = match host_cleanup {
         Ok(()) => {
             crate::storage::remove_routed_extension_reader(owner_uid, extension.extension_uid)
         }
@@ -634,7 +644,7 @@ async fn supervise(
     };
     if extension_cleanup.is_ok() {
         if let Some(identity) = extension.identity.take() {
-            identity.release();
+            extension_cleanup = identity.release();
         }
     }
     crate::clawd::audit::record_extension_host_event(
@@ -650,8 +660,6 @@ async fn supervise(
         },
         extension_cleanup.is_ok(),
     );
-    extension.host.paths.cleanup();
-
     // The worker's lease is over, so every grant its session accrued
     // goes with it — including any reusable approval the user made
     // "for this session". A grant outliving the process it was bound to
@@ -749,7 +757,28 @@ async fn start_extension_host(
 ) -> Result<ExtensionRuntime, String> {
     let mut execution_identity = broker.extension_identity_pool()?.acquire(identity.uid)?;
     let extension = execution_identity.identity().clone();
-    let paths = crate::extension_host::spawn::HostPaths::create(identity)?;
+    execution_identity.begin_task(identity.uid)?;
+    let task_name = crate::extension_host::spawn::HostPaths::new_task_name();
+    if let Err(error) = execution_identity.record_task(identity.uid, &task_name) {
+        let release = execution_identity.release();
+        return Err(match release {
+            Ok(()) => error,
+            Err(release) => format!("{error}; identity release failed: {release}"),
+        });
+    }
+    let paths = match crate::extension_host::spawn::HostPaths::create_named(identity, &task_name) {
+        Ok(paths) => paths,
+        Err(error) => {
+            let cleanup =
+                crate::extension_host::spawn::HostPaths::recover(identity.uid, &task_name);
+            let release = if cleanup.is_ok() {
+                execution_identity.release()
+            } else {
+                Err("identity retained because task-state recovery failed".to_string())
+            };
+            return Err(join_start_cleanup_failures(error, cleanup, release));
+        }
+    };
     let listener = match crate::extension_host::broker::bind_listener(
         &paths,
         extension.uid,
@@ -757,21 +786,35 @@ async fn start_extension_host(
     ) {
         Ok(listener) => listener,
         Err(error) => {
-            paths.cleanup();
-            return Err(error);
+            let cleanup = paths.cleanup();
+            let release = if cleanup.is_ok() {
+                execution_identity.release()
+            } else {
+                Err("identity retained because task-state cleanup failed".to_string())
+            };
+            return Err(join_start_cleanup_failures(error, cleanup, release));
         }
     };
     if let Err(error) = crate::storage::install_routed_extension_reader(identity.uid, extension.uid)
     {
         drop(listener);
-        paths.cleanup();
-        return Err(error);
+        let acl_cleanup = crate::storage::purge_routed_extension_reader(extension.uid);
+        let paths_cleanup = paths.cleanup();
+        let release = if acl_cleanup.is_ok() && paths_cleanup.is_ok() {
+            execution_identity.release()
+        } else {
+            Err("identity retained because pre-start cleanup failed".to_string())
+        };
+        return Err(join_start_cleanup_failures(
+            join_cleanup_failures(error, acl_cleanup, paths_cleanup),
+            Ok(()),
+            release,
+        ));
     }
     let host_session_id = session.map(|_| format!("extension-{}", uuid::Uuid::new_v4().simple()));
     let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
     let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
     let cleanup_paths = paths.clone();
-    execution_identity.retain_until_cleanup();
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
         &extension,
@@ -788,8 +831,12 @@ async fn start_extension_host(
     ) {
         Ok(host) => host,
         Err(error) => {
-            cleanup_paths.cleanup();
-            return Err(error);
+            let paths_cleanup = cleanup_paths.cleanup();
+            let acl_cleanup = crate::storage::purge_routed_extension_reader(extension.uid);
+            return Err(format!(
+                "{}; identity quarantined until restart recovery verifies containment",
+                join_cleanup_failures(error, acl_cleanup, paths_cleanup)
+            ));
         }
     };
     drain_extension_output(&mut host.child, &job.id);
@@ -823,24 +870,26 @@ async fn start_extension_host(
             ),
         };
         if let Err(error) = crate::proc::register_session_for_owner(info, identity.uid) {
-            let cleanup = host.cgroup.cleanup().await;
-            let _ = host.child.start_kill();
-            let _ = host.child.wait().await;
-            host.paths.cleanup();
+            let cleanup = reap_extension_host(&mut host).await;
             let reader_cleanup = if cleanup.is_ok() {
                 crate::storage::remove_routed_extension_reader(identity.uid, extension.uid)
             } else {
-                Err("containment cleanup was not verified".to_string())
+                Err("host cleanup was not verified".to_string())
             };
-            if cleanup.is_ok() && reader_cleanup.is_ok() {
-                execution_identity.release();
-            }
+            let identity_cleanup = if cleanup.is_ok() && reader_cleanup.is_ok() {
+                execution_identity.release()
+            } else {
+                Err("identity retained because extension cleanup failed".to_string())
+            };
             let mut message = format!("register extension-host session: {error}");
             if let Err(cleanup) = cleanup {
                 message.push_str(&format!("; containment cleanup failed: {cleanup}"));
             }
             if let Err(reader_cleanup) = reader_cleanup {
                 message.push_str(&format!("; routed ACL cleanup failed: {reader_cleanup}"));
+            }
+            if let Err(identity_cleanup) = identity_cleanup {
+                message.push_str(&format!("; identity cleanup failed: {identity_cleanup}"));
             }
             return Err(message);
         }
@@ -1548,8 +1597,8 @@ async fn reap(child: &mut tokio::process::Child, pid: u32) {
 async fn reap_extension_host(
     host: &mut crate::extension_host::spawn::SpawnedExtensionHost,
 ) -> Result<(), String> {
-    let cleanup = host.cgroup.cleanup().await;
     let _ = host.child.start_kill();
+    let containment = host.cgroup.cleanup().await;
     let reaped = match tokio::time::timeout(SHUTDOWN_GRACE, host.child.wait()).await {
         Ok(Ok(status)) => {
             tracing::debug!(host_pid = host.pid, %status, "extension host reaped");
@@ -1561,12 +1610,57 @@ async fn reap_extension_host(
             host.pid
         )),
     };
-    match (cleanup, reaped) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(cleanup), Ok(())) => Err(cleanup),
-        (Ok(()), Err(reap)) => Err(reap),
-        (Err(cleanup), Err(reap)) => Err(format!("{cleanup}; {reap}")),
+    let mounts = if containment.is_ok() {
+        host.cleanup_private_mounts()
+    } else {
+        Err("private mounts retained because containment cleanup was not verified".to_string())
+    };
+    let paths = if containment.is_ok() && mounts.is_ok() {
+        host.paths.cleanup()
+    } else {
+        Err("task state retained because process or mount cleanup was not verified".to_string())
+    };
+    let mut errors = Vec::new();
+    for cleanup in [containment, reaped, mounts, paths] {
+        if let Err(error) = cleanup {
+            errors.push(error);
+        }
     }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors.join("; "))
+    }
+}
+
+fn join_cleanup_failures(
+    error: String,
+    acl_cleanup: Result<(), String>,
+    paths_cleanup: Result<(), String>,
+) -> String {
+    let mut errors = vec![error];
+    if let Err(cleanup) = acl_cleanup {
+        errors.push(format!("routed ACL cleanup failed: {cleanup}"));
+    }
+    if let Err(cleanup) = paths_cleanup {
+        errors.push(format!("task-state cleanup failed: {cleanup}"));
+    }
+    errors.join("; ")
+}
+
+fn join_start_cleanup_failures(
+    error: String,
+    paths_cleanup: Result<(), String>,
+    identity_cleanup: Result<(), String>,
+) -> String {
+    let mut errors = vec![error];
+    if let Err(cleanup) = paths_cleanup {
+        errors.push(format!("task-state cleanup failed: {cleanup}"));
+    }
+    if let Err(cleanup) = identity_cleanup {
+        errors.push(format!("identity cleanup failed: {cleanup}"));
+    }
+    errors.join("; ")
 }
 
 fn drain_worker_output(child: &mut tokio::process::Child, task_id: &str) {

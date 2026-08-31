@@ -1,0 +1,22 @@
+#!/bin/sh
+
+set -e
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+command -v identity_provision >/dev/null 2>&1 ||
+    . "$SCRIPT_DIR/extension-identities.sh"
+
+case "$1" in
+    install|upgrade)
+        identity_provision
+        ;;
+    abort-upgrade)
+        identity_rollback_pending
+        ;;
+    *)
+        echo "preinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

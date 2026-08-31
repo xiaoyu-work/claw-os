@@ -9,7 +9,7 @@ For each daemon-backed task:
 
 1. `clawd` claims the task and spawns `claw-agentd` as the task uid with the
    package-created `cos-extension` primary gid.
-2. `clawd` leases an unmapped uid that no other active task may use, creates a
+2. `clawd` leases a package-created locked uid that no other active task may use, creates a
    private runtime directory and route-filtered broker socket, then spawns
    `claw-extension-host` with that uid and the dedicated gid.
 3. `clawd` registers the exact host pid/start-time as a child of the task
@@ -40,7 +40,7 @@ authority, provider-side checks, and audit.
 The host launch applies:
 
 - `setgroups(0, NULL)`, then irreversible uid drop to an exclusively leased
-  passwd-unmapped identity and gid drop to `cos-extension`;
+  package-created identity and gid drop to `cos-extension`;
 - a pinned snapshot of the real primary broker socket inode, ownership, mode,
   and canonical ancestors, plus an actual denied post-drop `connect(2)` before
   either worker or host may exec;
@@ -51,6 +51,9 @@ The host launch applies:
 - empty environment rebuilt from an explicit non-secret allowlist;
 - close-on-exec for every inherited descriptor;
 - finite address-space, process, file-size, and descriptor limits;
+- a mandatory private mount namespace with private propagation and fresh
+  tmpfs mounts for `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock`; the
+  remaining mount tree is read-only except for the pinned task directory;
 - best-effort IPC/UTS namespaces;
 - mandatory cgroup-v2 CPU, memory, OOM-group, and pid limits.
 - inherited seccomp `EPERM` denial for `ptrace`, process-vm read/write, `kcmp`,
@@ -68,12 +71,21 @@ listener inode in `/proc/net/unix`. Only the final control subdirectory is
 then made writable by the host identity. A symlink or hardlink is unlinked,
 never followed by privileged ownership or mode changes.
 
-The package reserves 64 numeric identities (`61184..=61247`) above the normal
-login allocation range without creating passwd accounts. Every allocation
-rechecks passwd/NSS and `/proc`; any collision or live process fails closed.
-The uid remains reserved until cgroup cleanup and routed-registry ACL
-revocation both succeed. Before reuse, `clawd` rewrites owner registry ACLs to
-remove stale readers. The proxy authenticates the actual extension uid but
+The package creates locked system accounts `cos-ext-00..63` with fixed UIDs
+`61000..61063`, `/nonexistent` homes, `/usr/sbin/nologin` shells, and the
+dedicated `cos-extension` primary group at fixed GID `60999`. The range is below systemd
+DynamicUser (`61184..65519`) and above the supported default login range.
+Preinstall checks exact NSS and shadow records, systemd-homed, reverse UID/GID
+lookups, and overlapping subordinate-ID ranges. Every runtime allocation
+revalidates those records, the package reservation manifest, and `/proc`; any
+collision or live process fails closed.
+The uid remains reserved until cgroup cleanup, private filesystem unmount,
+recursive task-state deletion, and routed-registry ACL revocation all succeed.
+Before task state is created, `clawd` writes a durable root-owned quarantine
+record. A failed cleanup retains the cross-process uid lock for the daemon
+lifetime; after restart, recovery first kills stale cgroups and then proves
+that processes, `/run/user/<uid>`, task state, and routed ACLs are gone before
+removing the record. The proxy authenticates the actual extension uid but
 projects only the already-bound task-owner principal through normal
 capability/approval enforcement. Home, data, cache, and log locations are
 task-local controlled directories; owner-private custom MCP executables must
@@ -89,10 +101,15 @@ assignment; dynamic code is never started without containment.
 
 Teardown closes the private proxy and revokes child sessions first, then
 requires `cgroup.kill`, recursive `populated 0`, an empty `cgroup.procs`, and
-successful cgroup removal. It does not infer descendants from post-exit
-`/proc` ancestry. A child remains contained after `setsid`, double-forking,
-host-first exit, or clearing `PDEATHSIG`; cleanup failure is terminal, logged,
-and audited rather than reported as a clean task completion.
+successful cgroup removal. It then unmounts every private tmpfs, recursively
+removes the descriptor-pinned task tree without following symlinks or crossing
+mounts, verifies the tree is absent, and revokes routed ACLs. Open file
+descriptors do not retain directory entries; hardlinks and symlinks are
+unlinked rather than followed; nested mountpoints make cleanup fail closed.
+It does not infer descendants from post-exit `/proc` ancestry. A child remains
+contained after `setsid`, double-forking, host-first exit, or clearing
+`PDEATHSIG`; cleanup failure is terminal, logged, audited, and quarantined
+rather than reported as a clean task completion.
 
 The retry boundary is the complete worker assignment frame. Launch failures or
 an assignment write that cannot deliver a full frame are pre-execution and may
@@ -131,8 +148,6 @@ before entering model context.
 | --- | --- |
 | `COS_EXTENSION_HOST_BIN` | Host executable; defaults beside `clawd`, then `/usr/local/bin/claw-extension-host` |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated execution group; packaged default `cos-extension` |
-| `COS_EXTENSION_UID_MIN` | First unmapped execution uid; packaged default `61184` |
-| `COS_EXTENSION_UID_COUNT` | Number of exclusive execution uids; packaged default/max `64` |
 | `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally omitted so `clawd.service` prepares its own delegated subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | Set to `off` to disable best-effort IPC/UTS namespaces |
 

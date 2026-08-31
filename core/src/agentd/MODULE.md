@@ -6,7 +6,7 @@
 HTTP clients, streaming parsers, prompt assembly, and tool orchestration run in
 a short-lived `claw-agentd` process owned by the task's submitter. Dynamic App
 and MCP code runs one boundary farther out under an exclusively leased,
-passwd-unmapped uid in `claw-extension-host`. Root `clawd` supervises both but
+package-created locked uid in `claw-extension-host`. Root `clawd` supervises both but
 executes neither.
 
 ## Responsibilities
@@ -161,7 +161,7 @@ this module exists to prevent. Single-account container and WSL images must give
 the agent its own unprivileged account; there is no opt-out switch.
 
 This residual boundary no longer applies to dynamic App/MCP code. Each active
-extension containment domain has a distinct unmapped host uid, so it cannot
+extension containment domain has a distinct reserved host uid, so it cannot
 ptrace the task-owner worker, another user process, or another task's
 extension. An inherited seccomp filter also denies ptrace/process-vm/kcmp and
 pidfd descriptor borrowing, while `PR_SET_DUMPABLE=0` protects both worker and
@@ -198,11 +198,17 @@ heartbeating, sends a frame outside its grant, or speaks a different protocol
 version only ends its own task. The supervisor terminates both process trees
 and reaps them. Extension execution starts only after a delegated cgroup-v2
 CPU/memory/pids subtree, finite limits, pre-exec host membership, and working
-`cgroup.kill` have all been verified. Cleanup closes the proxy and authority,
-writes `cgroup.kill`, requires recursive `populated 0` and an empty
-`cgroup.procs`, then removes the task cgroup. There is no `/proc`-ancestry
-fallback. Unavailable containment or unverifiable cleanup is a terminal task
-error; `clawd` continues serving non-agent primitives.
+`cgroup.kill` have all been verified. A mandatory private mount namespace
+provides task-private tmpfs instances for `/tmp`, `/var/tmp`, `/dev/shm`, and
+`/run/lock`; every other mount is read-only except the task's pinned runtime
+directory. Cleanup closes the proxy and authority, writes `cgroup.kill`,
+requires recursive `populated 0` and an empty `cgroup.procs`, removes the task
+cgroup, unmounts those filesystems, recursively removes task state without
+following links or crossing mounts, and revokes routed ACLs. Only then is the
+identity lock released. A durable quarantine marker preserves failed cleanup
+across broker restart. There is no `/proc`-ancestry fallback. Unavailable
+containment or unverifiable cleanup is a terminal task error; `clawd`
+continues serving non-agent primitives.
 
 Retry is limited to failures before a complete assignment reaches the worker,
 such as worker/host launch failure or a broken assignment channel. Once the
@@ -225,8 +231,6 @@ keeps working.
 | `CLAWD_AGENTD` | `off` disables agent supervision (default on) |
 | `COS_AGENTD_BIN` | Worker executable (default: beside `clawd`, else `/usr/local/bin/claw-agentd`) |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated primary group for worker/host/App/MCP execution (packaged default `cos-extension`) |
-| `COS_EXTENSION_UID_MIN` | First passwd-unmapped extension uid (packaged default 61184) |
-| `COS_EXTENSION_UID_COUNT` | Exclusive uid-pool size, 1–64 (packaged default 64) |
 | `COS_EXTENSION_HOST_BIN` | Extension host executable (default: beside `clawd`, else `/usr/local/bin/claw-extension-host`) |
 | `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally `clawd` prepares its systemd unit subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | `off` disables best-effort IPC/UTS namespaces; all other host isolation remains |

@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -39,6 +39,7 @@ const HOST_ADDRESS_SPACE_LIMIT: libc::rlim_t = 2 * 1024 * 1024 * 1024;
 const HOST_FILE_SIZE_LIMIT: libc::rlim_t = 256 * 1024 * 1024;
 const CGROUP_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUIRED_CONTROLLERS: [&str; 3] = ["cpu", "memory", "pids"];
+const PRIVATE_TMP_PATHS: [&CStr; 4] = [c"/tmp", c"/var/tmp", c"/dev/shm", c"/run/lock"];
 const CGROUP_LIMITS: [(&str, &str); 4] = [
     ("pids.max", "128"),
     ("memory.max", "1073741824"),
@@ -61,6 +62,9 @@ const INHERITED_ENV_KEYS: &[&str] = &[
 const RESOLVE_NO_MAGICLINKS: u64 = 0x02;
 const RESOLVE_NO_SYMLINKS: u64 = 0x04;
 const RESOLVE_BENEATH: u64 = 0x08;
+const PATHS_ACTIVE: u8 = 0;
+const PATHS_CLEANING: u8 = 1;
+const PATHS_CLEANED: u8 = 2;
 
 #[repr(C)]
 struct OpenHow {
@@ -69,6 +73,17 @@ struct OpenHow {
     resolve: u64,
 }
 
+#[repr(C)]
+struct MountAttr {
+    attr_set: u64,
+    attr_clr: u64,
+    propagation: u64,
+    userns_fd: u64,
+}
+
+const MOUNT_ATTR_RDONLY: u64 = 0x0000_0001;
+const AT_RECURSIVE: libc::c_int = 0x8000;
+
 #[derive(Debug)]
 struct HostPathHandles {
     owner_dir: OwnedFd,
@@ -76,7 +91,7 @@ struct HostPathHandles {
     control_dir: OwnedFd,
     task_name: CString,
     activated: AtomicBool,
-    cleaned: AtomicBool,
+    cleanup_state: AtomicU8,
 }
 
 #[derive(Debug, Clone)]
@@ -90,8 +105,23 @@ pub struct HostPaths {
 
 impl HostPaths {
     pub fn create(identity: &WorkerIdentity) -> Result<Self, String> {
+        Self::create_named(identity, &Self::new_task_name())
+    }
+
+    pub(crate) fn new_task_name() -> String {
+        uuid::Uuid::new_v4().simple().to_string()
+    }
+
+    pub(crate) fn create_named(identity: &WorkerIdentity, task_name: &str) -> Result<Self, String> {
         if unsafe { libc::geteuid() } != 0 {
             return Err("extension-host paths require a root broker".to_string());
+        }
+        if task_name.len() != 32
+            || !task_name
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("extension task directory name is invalid".to_string());
         }
         let base = crate::paths::runtime_dir().join("extension-hosts");
         let owner_root = base.join(identity.uid.to_string());
@@ -102,11 +132,13 @@ impl HostPaths {
             .map_err(|_| "extension owner directory name contains NUL".to_string())?;
         let (owner_dir, legacy_writable) = ensure_owner_root(base_dir.as_raw_fd(), &owner_name)?;
         if legacy_writable {
-            remove_dir_contents(owner_dir.as_raw_fd())
+            let mount_id = fd_mount_id(owner_dir.as_raw_fd())
+                .map_err(|error| format!("inspect legacy extension mount: {error}"))?;
+            remove_dir_contents(owner_dir.as_raw_fd(), mount_id)
                 .map_err(|error| format!("clean legacy task-writable extension tree: {error}"))?;
         }
 
-        let task_name = CString::new(uuid::Uuid::new_v4().simple().to_string())
+        let task_name = CString::new(task_name)
             .map_err(|_| "extension task directory name contains NUL".to_string())?;
         mkdirat_new(owner_dir.as_raw_fd(), &task_name, 0o700)
             .map_err(|error| format!("create extension task directory: {error}"))?;
@@ -128,7 +160,9 @@ impl HostPaths {
             Ok(setup) => setup,
             Err(error) => {
                 if let Ok(task_dir) = openat2_dir(owner_dir.as_raw_fd(), &task_name) {
-                    let _ = remove_dir_contents(task_dir.as_raw_fd());
+                    if let Ok(mount_id) = fd_mount_id(task_dir.as_raw_fd()) {
+                        let _ = remove_dir_contents(task_dir.as_raw_fd(), mount_id);
+                    }
                 }
                 let _ = unlinkat_if_present(owner_dir.as_raw_fd(), &task_name, true);
                 return Err(error);
@@ -148,13 +182,21 @@ impl HostPaths {
                 control_dir,
                 task_name,
                 activated: AtomicBool::new(false),
-                cleaned: AtomicBool::new(false),
+                cleanup_state: AtomicU8::new(PATHS_ACTIVE),
             }),
         })
     }
 
     pub(crate) fn task_dir_fd(&self) -> RawFd {
         self.handles.task_dir.as_raw_fd()
+    }
+
+    #[doc(hidden)]
+    pub fn task_name(&self) -> &str {
+        self.handles
+            .task_name
+            .to_str()
+            .expect("UUID task directory names are ASCII")
     }
 
     pub(crate) fn activate(&self, uid: u32, gid: u32) -> Result<(), String> {
@@ -165,39 +207,68 @@ impl HostPaths {
             .map_err(|error| format!("activate extension control directory: {error}"))
     }
 
-    pub fn cleanup(&self) {
-        if self.handles.cleaned.swap(true, Ordering::SeqCst) {
-            return;
-        }
-        let mut failures = Vec::new();
-        if let Err(error) =
-            unlinkat_if_present(self.handles.control_dir.as_raw_fd(), c"control.sock", false)
-        {
-            failures.push(format!("control socket: {error}"));
-        }
-        if let Err(error) =
-            unlinkat_if_present(self.handles.task_dir.as_raw_fd(), c"broker.sock", false)
-        {
-            failures.push(format!("broker socket: {error}"));
-        }
-        if let Err(error) = unlinkat_if_present(self.handles.task_dir.as_raw_fd(), c"control", true)
-        {
-            failures.push(format!("control directory: {error}"));
-        }
-        if let Err(error) = unlinkat_if_present(
-            self.handles.owner_dir.as_raw_fd(),
-            &self.handles.task_name,
-            true,
+    pub fn cleanup(&self) -> Result<(), String> {
+        match self.handles.cleanup_state.compare_exchange(
+            PATHS_ACTIVE,
+            PATHS_CLEANING,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
         ) {
-            failures.push(format!("task directory: {error}"));
+            Ok(_) => {}
+            Err(PATHS_CLEANED) => return Ok(()),
+            Err(_) => return Err("extension-host paths are already being cleaned".to_string()),
         }
-        if !failures.is_empty() {
-            tracing::error!(
-                directory = %self.dir.display(),
-                error = %failures.join("; "),
-                "failed to clean extension-host runtime paths"
-            );
+        let cleanup = cleanup_task_directory(
+            self.handles.owner_dir.as_raw_fd(),
+            self.handles.task_dir.as_raw_fd(),
+            &self.handles.task_name,
+        )
+        .map_err(|error| {
+            format!(
+                "clean extension-host runtime paths {}: {error}",
+                self.dir.display()
+            )
+        });
+        self.handles.cleanup_state.store(
+            if cleanup.is_ok() {
+                PATHS_CLEANED
+            } else {
+                PATHS_ACTIVE
+            },
+            Ordering::SeqCst,
+        );
+        cleanup
+    }
+
+    pub(crate) fn recover(owner_uid: u32, task_name: &str) -> Result<(), String> {
+        if task_name.len() != 32
+            || !task_name
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err("quarantined extension task name is invalid".to_string());
         }
+        let runtime = open_absolute_dir(&crate::paths::runtime_dir())?;
+        require_root_dir(&runtime, "extension runtime root")?;
+        let Some(base_dir) = openat2_dir_if_present(runtime.as_raw_fd(), c"extension-hosts")?
+        else {
+            return Ok(());
+        };
+        require_root_dir(&base_dir, "extension-host runtime directory")?;
+        let owner_name = CString::new(owner_uid.to_string())
+            .map_err(|_| "extension owner directory name contains NUL".to_string())?;
+        let Some(owner_dir) = openat2_dir_if_present(base_dir.as_raw_fd(), &owner_name)? else {
+            return Ok(());
+        };
+        require_root_dir(&owner_dir, "extension owner directory")?;
+        let task_name = CString::new(task_name)
+            .map_err(|_| "extension task directory name contains NUL".to_string())?;
+        let Some(task_dir) = openat2_dir_if_present(owner_dir.as_raw_fd(), &task_name)? else {
+            return Ok(());
+        };
+        require_root_dir(&task_dir, "extension task directory")?;
+        cleanup_task_directory(owner_dir.as_raw_fd(), task_dir.as_raw_fd(), &task_name)
+            .map_err(|error| format!("recover quarantined extension task: {error}"))
     }
 }
 
@@ -264,6 +335,14 @@ fn openat2_dir(parent: RawFd, name: &CStr) -> std::io::Result<OwnedFd> {
         Err(std::io::Error::last_os_error())
     } else {
         Ok(unsafe { OwnedFd::from_raw_fd(fd as RawFd) })
+    }
+}
+
+fn openat2_dir_if_present(parent: RawFd, name: &CStr) -> Result<Option<OwnedFd>, String> {
+    match openat2_dir(parent, name) {
+        Ok(directory) => Ok(Some(directory)),
+        Err(error) if error.raw_os_error() == Some(libc::ENOENT) => Ok(None),
+        Err(error) => Err(format!("open extension directory: {error}")),
     }
 }
 
@@ -350,16 +429,38 @@ fn fstat(fd: RawFd) -> std::io::Result<libc::stat> {
     }
 }
 
-fn remove_dir_contents(dir: RawFd) -> std::io::Result<()> {
-    let duplicate = unsafe { libc::fcntl(dir, libc::F_DUPFD_CLOEXEC, 3) };
-    if duplicate < 0 {
-        return Err(std::io::Error::last_os_error());
+fn cleanup_task_directory(
+    owner_dir: RawFd,
+    task_dir: RawFd,
+    task_name: &CStr,
+) -> std::io::Result<()> {
+    let mount_id = fd_mount_id(task_dir)?;
+    remove_dir_contents(task_dir, mount_id)?;
+    unlinkat_if_present(owner_dir, task_name, true)?;
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            owner_dir,
+            task_name.as_ptr(),
+            std::ptr::addr_of_mut!(stat),
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } == 0
+    {
+        return Err(std::io::Error::from_raw_os_error(libc::EEXIST));
     }
-    let stream = unsafe { libc::fdopendir(duplicate) };
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::ENOENT) {
+        Ok(())
+    } else {
+        Err(error)
+    }
+}
+
+fn remove_dir_contents(dir: RawFd, root_mount_id: u64) -> std::io::Result<()> {
+    let duplicate = openat2_dir(dir, c".")?;
+    let stream = unsafe { libc::fdopendir(std::os::fd::IntoRawFd::into_raw_fd(duplicate)) };
     if stream.is_null() {
-        unsafe {
-            libc::close(duplicate);
-        }
         return Err(std::io::Error::last_os_error());
     }
     loop {
@@ -397,21 +498,55 @@ fn remove_dir_contents(dir: RawFd) -> std::io::Result<()> {
                     return Err(error);
                 }
             };
-            if let Err(error) = remove_dir_contents(child.as_raw_fd()) {
+            let child_mount_id = match fd_mount_id(child.as_raw_fd()) {
+                Ok(mount_id) => mount_id,
+                Err(error) => {
+                    unsafe {
+                        libc::closedir(stream);
+                    }
+                    return Err(error);
+                }
+            };
+            if child_mount_id != root_mount_id {
+                unsafe {
+                    libc::closedir(stream);
+                }
+                return Err(std::io::Error::from_raw_os_error(libc::EXDEV));
+            }
+            if let Err(error) = remove_dir_contents(child.as_raw_fd(), root_mount_id) {
                 unsafe {
                     libc::closedir(stream);
                 }
                 return Err(error);
             }
-            unlinkat_if_present(dir, name, true)?;
+            if let Err(error) = unlinkat_if_present(dir, name, true) {
+                unsafe {
+                    libc::closedir(stream);
+                }
+                return Err(error);
+            }
         } else {
-            unlinkat_if_present(dir, name, false)?;
+            if let Err(error) = unlinkat_if_present(dir, name, false) {
+                unsafe {
+                    libc::closedir(stream);
+                }
+                return Err(error);
+            }
         }
     }
     if unsafe { libc::closedir(stream) } != 0 {
         return Err(std::io::Error::last_os_error());
     }
     Ok(())
+}
+
+fn fd_mount_id(fd: RawFd) -> std::io::Result<u64> {
+    let content = std::fs::read_to_string(format!("/proc/self/fdinfo/{fd}"))?;
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix("mnt_id:"))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| std::io::Error::from_raw_os_error(libc::EIO))
 }
 
 fn unlinkat_if_present(parent: RawFd, name: &CStr, directory: bool) -> std::io::Result<()> {
@@ -435,6 +570,7 @@ pub struct SpawnedExtensionHost {
     pub binding: ExtensionBinding,
     pub paths: HostPaths,
     pub cgroup: ResourceGroup,
+    private_mounts: PrivateMountNamespace,
 }
 
 pub fn host_binary_path() -> PathBuf {
@@ -471,44 +607,41 @@ pub fn spawn_host(
         || extension.uid == owner.uid
         || extension.gid != isolation.execution_gid()
     {
-        paths.cleanup();
+        let _ = paths.cleanup();
         return Err("extension execution identity is not isolated from the task owner".to_string());
+    }
+    if let Err(error) = validate_private_mount_targets() {
+        let _ = paths.cleanup();
+        return Err(error);
     }
     let seccomp = match process_isolation_filter() {
         Ok(filter) => Arc::new(filter),
         Err(error) => {
-            paths.cleanup();
-            return Err(error);
+            return Err(combine_cleanup_error(error, Ok(()), paths.cleanup()));
         }
     };
     let mut cgroup = match ResourceGroup::create(containment, task_id) {
         Ok(cgroup) => cgroup,
         Err(error) => {
-            paths.cleanup();
-            return Err(error);
+            return Err(combine_cleanup_error(error, Ok(()), paths.cleanup()));
         }
     };
     let binary = host_binary_path();
     if !binary.exists() {
         let cleanup = cgroup.cleanup_blocking();
-        paths.cleanup();
-        let mut error = format!(
-            "extension host binary is not installed at {}",
-            binary.display()
-        );
-        if let Err(cleanup) = cleanup {
-            error.push_str(&format!("; containment cleanup failed: {cleanup}"));
-        }
-        return Err(error);
+        return Err(combine_cleanup_error(
+            format!(
+                "extension host binary is not installed at {}",
+                binary.display()
+            ),
+            cleanup,
+            paths.cleanup(),
+        ));
     }
     if crate::agentd::spawn::broker_is_root() {
         if let Err(error) = crate::agentd::spawn::validate_root_owned_executable(&binary) {
             let cleanup = cgroup.cleanup_blocking();
-            paths.cleanup();
-            return Err(match cleanup {
-                Ok(()) => error,
-                Err(cleanup) => format!("{error}; containment cleanup failed: {cleanup}"),
-            });
+            return Err(combine_cleanup_error(error, cleanup, paths.cleanup()));
         }
     }
     let enforce_groups = crate::agentd::spawn::broker_is_root();
@@ -521,10 +654,14 @@ pub fn spawn_host(
     command.current_dir(&paths.control_dir);
     command.env_clear();
     command.env("HOME", &paths.control_dir);
+    command.env("XDG_RUNTIME_DIR", paths.control_dir.join("runtime"));
     command.env("USER", &extension.username);
     command.env("LOGNAME", &extension.username);
     command.env("PATH", SAFE_PATH);
     command.env("SHELL", "/bin/sh");
+    command.env("TMPDIR", "/tmp");
+    command.env("TMP", "/tmp");
+    command.env("TEMP", "/tmp");
     command.env("COS_PERMS_MODE", "strict");
     command.env(
         "COS_PROC_DATA_DIR",
@@ -569,6 +706,8 @@ pub fn spawn_host(
     let gid = isolation.execution_gid();
     let child_isolation = isolation.clone();
     let cgroup_procs_fd = cgroup.procs_fd();
+    let writable_task_path = CString::new(paths.dir.as_os_str().as_bytes())
+        .map_err(|_| "extension task path contains NUL".to_string())?;
     let try_namespaces = std::env::var("CLAWD_EXTENSION_HOST_NAMESPACES")
         .map(|value| !matches!(value.trim(), "0" | "off" | "false" | "no"))
         .unwrap_or(true);
@@ -577,6 +716,7 @@ pub fn spawn_host(
             attach_current_process(cgroup_procs_fd)?;
             libc::umask(0o077);
             crate::agentd::spawn::mark_inherited_descriptors_cloexec(3);
+            setup_private_mount_namespace(&writable_task_path)?;
             if try_namespaces {
                 // IPC and UTS isolation do not change filesystem or network
                 // reachability. They are opportunistic because some kernels
@@ -601,37 +741,42 @@ pub fn spawn_host(
         .spawn()
         .map_err(|error| {
             let cleanup = cgroup.cleanup_blocking();
-            paths.cleanup();
-            match cleanup {
-                Ok(()) => format!("spawn {}: {error}", binary.display()),
-                Err(cleanup) => format!(
-                    "spawn {}: {error}; containment cleanup failed: {cleanup}",
-                    binary.display()
-                ),
-            }
+            combine_cleanup_error(
+                format!("spawn {}: {error}", binary.display()),
+                cleanup,
+                paths.cleanup(),
+            )
         })?;
     let Some(pid) = child.id() else {
         let _ = child.start_kill();
         let cleanup = cgroup.cleanup_blocking();
-        paths.cleanup();
-        return Err(match cleanup {
-            Ok(()) => "extension host exited before it could be identified".to_string(),
-            Err(cleanup) => format!(
-                "extension host exited before it could be identified; containment cleanup failed: {cleanup}"
-            ),
-        });
+        return Err(combine_cleanup_error(
+            "extension host exited before it could be identified".to_string(),
+            cleanup,
+            paths.cleanup(),
+        ));
     };
     if let Err(error) = cgroup.verify_member(pid) {
         let _ = child.start_kill();
         let cleanup = cgroup.cleanup_blocking();
-        paths.cleanup();
-        return Err(match cleanup {
-            Ok(()) => format!("extension host containment verification failed: {error}"),
-            Err(cleanup) => format!(
-                "extension host containment verification failed: {error}; containment cleanup failed: {cleanup}"
-            ),
-        });
+        return Err(combine_cleanup_error(
+            format!("extension host containment verification failed: {error}"),
+            cleanup,
+            paths.cleanup(),
+        ));
     }
+    let mut private_mounts = match PrivateMountNamespace::capture(pid, &paths.dir) {
+        Ok(namespace) => namespace,
+        Err(error) => {
+            let _ = child.start_kill();
+            let cleanup = cgroup.cleanup_blocking();
+            return Err(combine_cleanup_error(
+                format!("capture extension mount namespace: {error}"),
+                cleanup,
+                paths.cleanup(),
+            ));
+        }
+    };
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
     let binding = ExtensionBinding {
         protocol: protocol::PROTOCOL_VERSION,
@@ -652,11 +797,21 @@ pub fn spawn_host(
     if let Err(error) = binding.validate_shape() {
         let _ = child.start_kill();
         let cleanup = cgroup.cleanup_blocking();
-        paths.cleanup();
-        return Err(match cleanup {
-            Ok(()) => error,
-            Err(cleanup) => format!("{error}; containment cleanup failed: {cleanup}"),
-        });
+        let mounts = if cleanup.is_ok() {
+            private_mounts.cleanup()
+        } else {
+            Err("private mounts retained because containment cleanup failed".to_string())
+        };
+        let paths_cleanup = if mounts.is_ok() {
+            paths.cleanup()
+        } else {
+            Err("task state retained because private mounts remain".to_string())
+        };
+        let mut error = combine_cleanup_error(error, cleanup, paths_cleanup);
+        if let Err(mounts) = mounts {
+            error.push_str(&format!("; private-mount cleanup failed: {mounts}"));
+        }
+        return Err(error);
     }
     Ok(SpawnedExtensionHost {
         child,
@@ -665,7 +820,293 @@ pub fn spawn_host(
         binding,
         paths,
         cgroup,
+        private_mounts,
     })
+}
+
+impl SpawnedExtensionHost {
+    #[doc(hidden)]
+    pub fn cleanup_private_mounts(&mut self) -> Result<(), String> {
+        self.private_mounts.cleanup()
+    }
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn mount_private_tmp_test_child(&self) -> Result<(), String> {
+        self.private_mounts.run_test_helper(true)
+    }
+
+    #[cfg(debug_assertions)]
+    #[doc(hidden)]
+    pub fn unmount_private_tmp_test_child(&self) -> Result<(), String> {
+        self.private_mounts.run_test_helper(false)
+    }
+}
+
+fn validate_private_mount_targets() -> Result<(), String> {
+    use std::os::unix::fs::MetadataExt;
+
+    for path in PRIVATE_TMP_PATHS {
+        let path = Path::new(
+            path.to_str()
+                .map_err(|_| "private tmp mount path is not UTF-8".to_string())?,
+        );
+        let metadata = std::fs::symlink_metadata(path)
+            .map_err(|error| format!("inspect private tmp mount {}: {error}", path.display()))?;
+        let mode = metadata.mode() & 0o7777;
+        if metadata.file_type().is_symlink()
+            || !metadata.is_dir()
+            || metadata.uid() != 0
+            || metadata.gid() != 0
+            || mode & 0o022 != 0 && mode & 0o1000 == 0
+        {
+            return Err(format!(
+                "private tmp mount target has unsafe identity: {}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn setup_private_mount_namespace(writable_task_path: &CStr) -> std::io::Result<()> {
+    if unsafe { libc::unshare(libc::CLONE_NEWNS) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::mount(
+            std::ptr::null(),
+            c"/".as_ptr(),
+            std::ptr::null(),
+            libc::MS_REC | libc::MS_PRIVATE,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe {
+        libc::mount(
+            writable_task_path.as_ptr(),
+            writable_task_path.as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
+    set_mount_read_only(c"/", true)?;
+    set_mount_read_only(writable_task_path, false)?;
+    for path in PRIVATE_TMP_PATHS {
+        if unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                path.as_ptr(),
+                c"tmpfs".as_ptr(),
+                libc::MS_NOSUID | libc::MS_NODEV,
+                c"mode=1777,size=67108864,nr_inodes=16384".as_ptr().cast(),
+            )
+        } != 0
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        let mut stat: libc::statfs = unsafe { std::mem::zeroed() };
+        if unsafe { libc::statfs(path.as_ptr(), std::ptr::addr_of_mut!(stat)) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        const TMPFS_MAGIC: libc::c_long = 0x0102_1994;
+        if stat.f_type as libc::c_long != TMPFS_MAGIC {
+            return Err(std::io::Error::from_raw_os_error(libc::ENODEV));
+        }
+    }
+    Ok(())
+}
+
+fn set_mount_read_only(path: &CStr, read_only: bool) -> std::io::Result<()> {
+    let attributes = MountAttr {
+        attr_set: if read_only { MOUNT_ATTR_RDONLY } else { 0 },
+        attr_clr: if read_only { 0 } else { MOUNT_ATTR_RDONLY },
+        propagation: 0,
+        userns_fd: 0,
+    };
+    if unsafe {
+        libc::syscall(
+            libc::SYS_mount_setattr,
+            libc::AT_FDCWD,
+            path.as_ptr(),
+            AT_RECURSIVE,
+            std::ptr::addr_of!(attributes),
+            std::mem::size_of::<MountAttr>(),
+        )
+    } != 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+struct PrivateMountNamespace {
+    fd: OwnedFd,
+    task_path: CString,
+    active: bool,
+}
+
+impl PrivateMountNamespace {
+    fn capture(pid: u32, task_path: &Path) -> Result<Self, String> {
+        let path = CString::new(format!("/proc/{pid}/ns/mnt"))
+            .map_err(|_| "extension mount namespace path contains NUL".to_string())?;
+        let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let fd = unsafe { OwnedFd::from_raw_fd(fd) };
+        let own = open_namespace(c"/proc/self/ns/mnt")?;
+        let captured = fstat(fd.as_raw_fd())
+            .map_err(|error| format!("inspect extension mount namespace: {error}"))?;
+        let broker = fstat(own.as_raw_fd())
+            .map_err(|error| format!("inspect broker mount namespace: {error}"))?;
+        if captured.st_dev == broker.st_dev && captured.st_ino == broker.st_ino {
+            return Err("extension host did not enter a private mount namespace".to_string());
+        }
+        let task_path = CString::new(task_path.as_os_str().as_bytes())
+            .map_err(|_| "extension task mount path contains NUL".to_string())?;
+        Ok(Self {
+            fd,
+            task_path,
+            active: true,
+        })
+    }
+
+    fn cleanup(&mut self) -> Result<(), String> {
+        if !self.active {
+            return Ok(());
+        }
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(format!(
+                "fork private-mount cleanup helper: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if pid == 0 {
+            if unsafe { libc::setns(self.fd.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+                unsafe { libc::_exit(100) };
+            }
+            for (index, path) in PRIVATE_TMP_PATHS.iter().rev().enumerate() {
+                if unsafe { libc::umount2(path.as_ptr(), 0) } != 0
+                    && std::io::Error::last_os_error().raw_os_error() != Some(libc::EINVAL)
+                {
+                    unsafe { libc::_exit(101 + index as i32) };
+                }
+            }
+            if unsafe { libc::umount2(self.task_path.as_ptr(), 0) } != 0 {
+                unsafe { libc::_exit(110) };
+            }
+            unsafe { libc::_exit(0) };
+        }
+        let mut status = 0;
+        loop {
+            let waited = unsafe { libc::waitpid(pid, std::ptr::addr_of_mut!(status), 0) };
+            if waited == pid {
+                break;
+            }
+            if waited < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(format!(
+                "wait for private-mount cleanup helper: {}",
+                std::io::Error::last_os_error()
+            ));
+        }
+        if !libc::WIFEXITED(status) || libc::WEXITSTATUS(status) != 0 {
+            return Err(format!(
+                "private-mount cleanup helper failed with status {status}"
+            ));
+        }
+        self.active = false;
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
+    fn run_test_helper(&self, mount_child: bool) -> Result<(), String> {
+        let pid = unsafe { libc::fork() };
+        if pid < 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if pid == 0 {
+            if unsafe { libc::setns(self.fd.as_raw_fd(), libc::CLONE_NEWNS) } != 0 {
+                unsafe { libc::_exit(120) };
+            }
+            if mount_child {
+                if unsafe { libc::mkdir(c"/tmp/cos-nested-mount".as_ptr(), 0o700) } != 0
+                    && std::io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST)
+                {
+                    unsafe { libc::_exit(121) };
+                }
+                if unsafe {
+                    libc::mount(
+                        c"tmpfs".as_ptr(),
+                        c"/tmp/cos-nested-mount".as_ptr(),
+                        c"tmpfs".as_ptr(),
+                        libc::MS_NOSUID | libc::MS_NODEV,
+                        c"mode=0700,size=4096,nr_inodes=8".as_ptr().cast(),
+                    )
+                } != 0
+                {
+                    unsafe { libc::_exit(122) };
+                }
+            } else if unsafe { libc::umount2(c"/tmp/cos-nested-mount".as_ptr(), 0) } != 0 {
+                unsafe { libc::_exit(123) };
+            }
+            unsafe { libc::_exit(0) };
+        }
+        let mut status = 0;
+        loop {
+            let waited = unsafe { libc::waitpid(pid, std::ptr::addr_of_mut!(status), 0) };
+            if waited == pid {
+                break;
+            }
+            if waited < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
+                continue;
+            }
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        if libc::WIFEXITED(status) && libc::WEXITSTATUS(status) == 0 {
+            Ok(())
+        } else {
+            Err(format!(
+                "private-mount test helper failed with status {status}"
+            ))
+        }
+    }
+}
+
+fn open_namespace(path: &CStr) -> Result<OwnedFd, String> {
+    let fd = unsafe { libc::open(path.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC) };
+    if fd < 0 {
+        Err(std::io::Error::last_os_error().to_string())
+    } else {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
+    }
+}
+
+fn combine_cleanup_error(
+    error: String,
+    containment: Result<(), String>,
+    paths: Result<(), String>,
+) -> String {
+    let mut errors = vec![error];
+    if let Err(containment) = containment {
+        errors.push(format!("containment cleanup failed: {containment}"));
+    }
+    if let Err(paths) = paths {
+        errors.push(format!("task-state cleanup failed: {paths}"));
+    }
+    errors.join("; ")
 }
 
 fn apply_resource_limits() -> std::io::Result<()> {

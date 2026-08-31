@@ -3,15 +3,15 @@
 ## Purpose
 
 `extension_host/` keeps dynamic App and MCP code outside both privileged
-`clawd` and the model/tool worker. `clawd` leases one unmapped host uid per
-active task and spawns `claw-extension-host` with that uid plus the dedicated
+`clawd` and the model/tool worker. `clawd` leases one package-reserved locked
+system account per active task and spawns `claw-extension-host` with that uid plus the dedicated
 `cos-extension` primary gid; `claw-agentd`
 uses a separate task-bound control socket to attach, call, cancel, and detach
 extensions.
 
 ## Responsibilities
 
-- Spawn the host with an exclusive unmapped uid, dedicated non-broker gid, no supplementary
+- Spawn the host with an exclusive package-reserved uid, dedicated non-broker gid, no supplementary
   groups, `NoNewPrivs`, `0077` umask,
   descriptor and environment allowlists, its own session/process group, finite
   rlimits, mandatory verified cgroup-v2 containment, and optional IPC/UTS
@@ -37,7 +37,7 @@ extensions.
 | Path | Role |
 | --- | --- |
 | `protocol.rs` | Versioned worker-control contract and signed binding fields |
-| `identity.rs` | Passwd-unmapped uid-pool validation, exclusive leasing, and safe reuse |
+| `identity.rs` | Exact package-created account/manifest/subid validation, exclusive leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
 | `client.rs` | `claw-agentd` client used by App and MCP registry adapters |
 | `host.rs` | Host process, control admission, App/MCP lifecycle and cancellation |
@@ -84,15 +84,22 @@ the unprivileged host.
 The cgroup is created and its CPU, memory, process, OOM-group, membership, and
 `cgroup.kill` controls are verified before the host is returned to the
 supervisor. The host enters it in `pre_exec`, before privilege drop and
-`exec`. Cleanup never reconstructs ancestry from `/proc`: it revokes the proxy,
-writes `cgroup.kill`, waits for recursive `populated 0` plus an empty
-`cgroup.procs`, and removes the cgroup. Any failure is terminal and audited as
-`cleanup-failed`.
+`exec`. The same closure must create a private mount namespace and task-private
+tmpfs mounts for `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock`; the remaining
+mount tree is read-only except for the pinned task directory. Cleanup never
+reconstructs ancestry from `/proc`: it revokes the proxy, writes
+`cgroup.kill`, waits for recursive `populated 0` plus an empty `cgroup.procs`,
+removes the cgroup, unmounts private filesystems, recursively removes the
+descriptor-pinned task tree without crossing mounts, and then revokes ACLs.
+Any failure is terminal and audited as `cleanup-failed`.
 
-The uid pool is a package-configured, passwd-unmapped range. Concurrent tasks
-never share an extension uid. A uid is released only after verified cgroup
-emptiness and routed-registry ACL revocation; stale processes or ACLs make it
-unavailable until they are safely purged. The proxy preserves task-owner
+The uid pool is the fixed package-created account set `cos-ext-00..63`
+(`61000..61063`), outside systemd DynamicUser. Concurrent tasks never share an
+extension uid. A uid is released only after verified cgroup
+emptiness, private-mount teardown, task-state removal, and routed-registry ACL
+revocation. A durable quarantine marker makes failures survive broker restart;
+startup recovery keeps the uid unavailable until residue is safely purged.
+The proxy preserves task-owner
 authority as a separate principal field while recording the actual execution
 uid. Host/child seccomp denies ptrace, process-vm access, `kcmp`, and
 `pidfd_getfd`, and task-local home/data/cache/log paths avoid exposing the

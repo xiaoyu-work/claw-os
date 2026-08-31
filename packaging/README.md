@@ -31,16 +31,21 @@ packaging/
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
-It creates the system group `cos-extension`; supervised workers keep the task
-uid, while hosted extensions use an exclusive passwd-unmapped uid from the
-configured 64-id range plus that primary gid. This blocks process injection
+It creates the fixed-GID (`60999`) system group `cos-extension`; supervised
+workers keep the task uid, while hosted extensions use an exclusive
+package-created locked account from `cos-ext-00..63` (`61000..61063`) plus
+that primary gid. This blocks process injection
 into the task owner or another extension domain. `clawd.service` also
 delegates its cgroup-v2 subtree and pins `KillMode=control-group`; dynamic
 extension execution fails closed unless per-task CPU, memory, pids, and
-`cgroup.kill` containment can be verified.
-The uid range is a conffile at `/etc/cos/extension-uids.conf`; package
-configuration refuses to restart `clawd` if any configured uid maps to a
-passwd/NSS account.
+`cgroup.kill` containment plus private tmpfs mounts can be verified. Cleanup
+failures retain a durable per-uid quarantine record until restart recovery
+proves process, mount, task-state, and routed-ACL residue is gone.
+`preinst` validates all name/UID/GID/NSS/shadow/systemd-homed and subordinate-ID
+collisions before provisioning, rolls back partial attempts, and `postinst`
+writes the exact root-owned runtime reservation manifest. Purge removes only
+accounts recorded as package-created and still matching policy; preexisting
+correct accounts or changed records are retained.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the

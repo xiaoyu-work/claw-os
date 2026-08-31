@@ -16,10 +16,11 @@ BUILD_DEBS="$PROJECT_DIR/packaging/deb/build-debs.sh"
 UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.service"
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
 SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
+PREINST="$PROJECT_DIR/packaging/deb/claw-os-agent/preinst"
 POSTINST="$PROJECT_DIR/packaging/deb/claw-os-agent/postinst"
-UID_CONFIG="$PROJECT_DIR/packaging/deb/claw-os-agent/extension-uids.conf"
+POSTRM="$PROJECT_DIR/packaging/deb/claw-os-agent/postrm"
+IDENTITY_HELPER="$PROJECT_DIR/packaging/deb/claw-os-agent/extension-identities.sh"
 IDENTITY_RS="$PROJECT_DIR/core/src/extension_host/identity.rs"
-CONFFILES="$PROJECT_DIR/packaging/deb/claw-os-agent/conffiles"
 
 fail() {
     printf 'not ok - %s\n' "$*" >&2
@@ -34,7 +35,19 @@ assert_contains() {
 }
 
 bash -n "$BUILD_DEBS" || fail "build-debs.sh is not valid bash"
-bash -n "$POSTINST" || fail "claw-os-agent postinst is not valid shell"
+for shell in bash dash; do
+    "$shell" -n "$PREINST" || fail "claw-os-agent preinst is not valid $shell"
+    "$shell" -n "$POSTINST" || fail "claw-os-agent postinst is not valid $shell"
+    "$shell" -n "$POSTRM" || fail "claw-os-agent postrm is not valid $shell"
+    "$shell" -n "$IDENTITY_HELPER" || fail "extension identity helper is not valid $shell"
+    for script in "$PREINST" "$POSTINST" "$POSTRM"; do
+        {
+            cat "$IDENTITY_HELPER"
+            tail -n +2 "$script"
+        } | "$shell" -n ||
+            fail "assembled $(basename "$script") is not valid $shell"
+    done
+done
 
 assert_contains "$CARGO_TOML" 'name = "claw-agentd"' \
     "the agent worker must be a first-class cargo binary"
@@ -59,30 +72,32 @@ assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-extension-host' \
     "claw-os-agent must install the extension host beside claw-agentd"
 assert_contains "$BUILD_DEBS" '/usr/lib/sysusers.d/claw-os-agent.conf' \
     "claw-os-agent must install its dedicated extension group definition"
-assert_contains "$SYSUSERS" 'g cos-extension - -' \
-    "the extension host must have a dedicated system group"
+assert_contains "$SYSUSERS" 'g cos-extension 60999 -' \
+    "the extension host must have a fixed package-reserved system group"
 assert_contains "$POSTINST" 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf' \
     "postinst must create the extension execution group before starting clawd"
-assert_contains "$BUILD_DEBS" '/etc/cos/extension-uids.conf' \
-    "claw-os-agent must install its reserved extension uid range"
-assert_contains "$CONFFILES" '/etc/cos/extension-uids.conf' \
-    "local uid-range changes must survive package upgrades"
-assert_contains "$UID_CONFIG" 'COS_EXTENSION_UID_MIN=61184' \
-    "the package must pin the isolated uid range"
-assert_contains "$UID_CONFIG" 'COS_EXTENSION_UID_COUNT=64' \
-    "the uid pool must cover the maximum worker concurrency"
-assert_contains "$IDENTITY_RS" 'DEFAULT_UID_MIN: u32 = 61_184' \
+assert_contains "$BUILD_DEBS" 'claw-os-agent/preinst' \
+    "claw-os-agent must ship an identity-provisioning preinst"
+assert_contains "$BUILD_DEBS" 'extension-identities.sh' \
+    "maintainer scripts must embed the shared identity policy"
+assert_contains "$PREINST" 'identity_provision' \
+    "preinst must provision identities before unpack/restart"
+assert_contains "$POSTINST" 'identity_finalize' \
+    "postinst must validate and write the runtime reservation manifest"
+assert_contains "$POSTRM" 'identity_purge_owned' \
+    "purge must remove only identities proven package-owned"
+assert_contains "$IDENTITY_HELPER" 'COS_EXT_UID_FIRST=61000' \
+    "package identity range must start below systemd DynamicUser"
+assert_contains "$IDENTITY_HELPER" 'COS_EXT_GID=60999' \
+    "package identity group must use the fixed reserved gid"
+assert_contains "$IDENTITY_HELPER" 'COS_EXT_DYNAMIC_UID_FIRST=61184' \
+    "package policy must encode systemd DynamicUser boundaries"
+assert_contains "$IDENTITY_RS" 'FIRST_UID: u32 = 61_000' \
     "runtime and packaged uid-range start must agree"
-assert_contains "$IDENTITY_RS" 'DEFAULT_UID_COUNT: u32 = 64' \
-    "runtime and packaged uid-range size must agree"
-assert_contains "$POSTINST" 'reserved extension uid $uid belongs to a host account' \
-    "upgrades must fail closed on uid collisions"
-uid_min=$(sed -n 's/^COS_EXTENSION_UID_MIN=//p' "$UID_CONFIG")
-uid_count=$(sed -n 's/^COS_EXTENSION_UID_COUNT=//p' "$UID_CONFIG")
-for uid in $(seq "$uid_min" $((uid_min + uid_count - 1))); do
-    getent passwd "$uid" >/dev/null 2>&1 &&
-        fail "packaged extension uid $uid collides with a host account"
-done
+assert_contains "$IDENTITY_RS" 'GROUP_GID: u32 = 60_999' \
+    "runtime and packaged gid must agree"
+assert_contains "$IDENTITY_RS" 'IDENTITY_COUNT: u32 = 64' \
+    "runtime and packaged identity count must agree"
 
 # The staged worker path and the path the unit hands clawd have to agree,
 # or the daemon looks for a binary the package never installed.
@@ -92,8 +107,6 @@ assert_contains "$UNIT" 'COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-ho
     "clawd.service must point at the installed extension host"
 assert_contains "$UNIT" 'COS_EXTENSION_EXEC_GROUP=cos-extension' \
     "clawd.service must pin the dedicated extension execution group"
-assert_contains "$UNIT" 'EnvironmentFile=-/etc/cos/extension-uids.conf' \
-    "clawd.service must load the reserved extension uid range"
 assert_contains "$UNIT" 'CLAWD_EXTENSION_HOST_NAMESPACES=on' \
     "clawd.service must enable available extension-host namespaces"
 grep -Eq '^Delegate=yes$' "$UNIT" ||
@@ -114,5 +127,7 @@ grep -Eq '^Environment=CLAWD_SOCKET_MODE=0660$' "$UNIT" ||
     fail "clawd.sock permissions must not be widened"
 grep -Eq '^Group=sudo$' "$UNIT" ||
     fail "clawd.service must keep its socket group"
+
+bash "$SCRIPT_DIR/test-extension-identities.sh"
 
 printf 'ok - agent isolation packaging contract\n'

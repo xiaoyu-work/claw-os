@@ -274,14 +274,25 @@ chmod 0755 "$AGENT_STAGE/DEBIAN"
 
 render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"
-install -m 755 "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/preinst"
+} > "$AGENT_STAGE/DEBIAN/preinst"
+chmod 0755 "$AGENT_STAGE/DEBIAN/preinst"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/postinst"
+} > "$AGENT_STAGE/DEBIAN/postinst"
+chmod 0755 "$AGENT_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
-install -m 755 "$SCRIPT_DIR/claw-os-agent/postrm" "$AGENT_STAGE/DEBIAN/postrm"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/postrm"
+} > "$AGENT_STAGE/DEBIAN/postrm"
+chmod 0755 "$AGENT_STAGE/DEBIAN/postrm"
 install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
-install -m 644 "$SCRIPT_DIR/claw-os-agent/extension-uids.conf" \
-    "$AGENT_STAGE/etc/cos/extension-uids.conf"
 
 COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }

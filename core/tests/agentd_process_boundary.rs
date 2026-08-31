@@ -62,8 +62,6 @@ impl Drop for Harness {
         std::env::remove_var("COS_RUNTIME_DIR");
         std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
         std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
-        std::env::remove_var(cos::extension_host::identity::UID_MIN_ENV);
-        std::env::remove_var(cos::extension_host::identity::UID_COUNT_ENV);
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
         let _ = std::fs::remove_dir(&self.cgroup_root);
     }
@@ -74,6 +72,7 @@ fn harness() -> Option<Harness> {
         eprintln!("skipping: secure worker spawn integration requires root");
         return None;
     }
+
     let uid = std::env::var("SUDO_UID").ok()?.parse::<u32>().ok()?;
     if uid == 0 {
         return None;
@@ -191,12 +190,9 @@ fn harness() -> Option<Harness> {
         }
     };
     let extension_identity = cos::extension_host::identity::ExtensionIdentity {
-        uid: cos::extension_host::identity::DEFAULT_UID_MIN,
+        uid: cos::extension_host::identity::FIRST_UID,
         gid: execution_gid,
-        username: format!(
-            "cos-extension-{}",
-            cos::extension_host::identity::DEFAULT_UID_MIN
-        ),
+        username: "cos-ext-00".to_string(),
     };
     let cgroup_root = PathBuf::from(format!(
         "/sys/fs/cgroup/cos-test-{}",
@@ -246,6 +242,22 @@ fn harness() -> Option<Harness> {
         cgroup_root,
         containment,
     })
+}
+
+fn test_broker_context(harness: &Harness) -> cos::agentd::supervisor::BrokerContext {
+    cos::agentd::supervisor::BrokerContext::new(
+        cos::clawd::state::DaemonState::try_new().expect("daemon state"),
+        cos::clawd::transport::limits::Admission::new(
+            cos::clawd::transport::limits::Limits::default(),
+        ),
+        harness.primary_path.clone(),
+    )
+    .expect("broker context")
+    .with_test_identity_pool(
+        cos::extension_host::identity::ExtensionIdentityPool::for_test(
+            harness.isolation.execution_gid(),
+        ),
+    )
 }
 
 fn assignment(
@@ -502,16 +514,11 @@ fn install_crashing_control_host(harness: &Harness, marker: &std::path::Path) ->
             "header = receive_exact(connection, 10)\n",
             "length = int.from_bytes(header[6:10], 'big')\n",
             "receive_exact(connection, length)\n",
-            "with open("
+            "effect = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)\n",
+            "effect.sendto(b'executed\\n', "
         ),
         marker,
-        concat!(
-            ", 'ab') as output:\n",
-            "    output.write(b'executed\\n')\n",
-            "    output.flush()\n",
-            "    os.fsync(output.fileno())\n",
-            "os._exit(23)\n",
-        )
+        concat!(")\n", "os._exit(23)\n",)
     );
     std::fs::write(&path, script).expect("write crashing control host");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
@@ -591,6 +598,52 @@ while True:
     path
 }
 
+fn install_private_tmp_probe(harness: &Harness) -> PathBuf {
+    let path = harness.runtime_dir.join("private-tmp-host.py");
+    let shared = harness.runtime_dir.join("shared-writable");
+    std::fs::create_dir(&shared).expect("create shared writable fixture");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o777))
+        .expect("chmod shared writable fixture");
+    let persistent = serde_json::to_string(&shared.join("persistent").to_string_lossy())
+        .expect("encode shared writable path");
+    std::fs::write(
+        &path,
+        format!(
+            "{}{}{}",
+            concat!(
+                "#!/usr/bin/python3\n",
+                "import os\n",
+                "import time\n",
+                "shared = '/tmp/cos-extension-private-tmp-probe'\n",
+                "existed = os.path.exists(shared)\n",
+                "with open(shared, 'w', encoding='utf-8') as output:\n",
+                "    output.write(os.environ['COS_EXTENSION_TASK_ID'])\n",
+                "persistent_errno = 0\n",
+                "try:\n",
+                "    with open("
+            ),
+            persistent,
+            concat!(
+                ", 'w', encoding='utf-8') as output:\n",
+                "        output.write('forbidden')\n",
+                "except OSError as error:\n",
+                "    persistent_errno = error.errno\n",
+                "report = os.environ['COS_EXTENSION_CONTROL_SOCKET'] + '.tmp'\n",
+                "with open(report, 'w', encoding='utf-8') as output:\n",
+                "    output.write(('1' if existed else '0') + ':' + str(persistent_errno))\n",
+                "    output.flush()\n",
+                "    os.fsync(output.fileno())\n",
+                "while True:\n",
+                "    time.sleep(60)\n",
+            )
+        ),
+    )
+    .expect("write private tmp probe");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod private tmp probe");
+    path
+}
+
 async fn wait_for_pid(path: &std::path::Path) -> u32 {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {
@@ -604,6 +657,21 @@ async fn wait_for_pid(path: &std::path::Path) -> u32 {
         assert!(
             tokio::time::Instant::now() < deadline,
             "daemonizing host did not publish its descendant pid"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+async fn wait_for_text(path: &std::path::Path) -> String {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            return raw;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "probe did not write {}",
+            path.display()
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }
@@ -991,11 +1059,95 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
     let cgroup_path = host.cgroup.path().to_path_buf();
     host.cgroup.cleanup().await.expect("clean host cgroup");
     let _ = host.child.wait().await;
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
     assert!(
         !cgroup_path.exists(),
         "task completion left its containment cgroup behind"
     );
-    host.paths.cleanup();
+    host.paths.cleanup().expect("clean host paths");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let probe = install_private_tmp_probe(&harness);
+    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &probe);
+    let start_time = {
+        let stat = std::fs::read_to_string(format!("/proc/{}/stat", std::process::id()))
+            .expect("test process stat");
+        stat[stat.rfind(')').unwrap() + 1..]
+            .split_whitespace()
+            .nth(19)
+            .and_then(|value| value.parse::<u64>().ok())
+    };
+    let mut hosts = Vec::new();
+    let mut listeners = Vec::new();
+    for task in ["private-tmp-a", "private-tmp-b"] {
+        let paths =
+            cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+        listeners.push(
+            cos::extension_host::broker::bind_listener(
+                &paths,
+                harness.extension_identity.uid,
+                harness.isolation.execution_gid(),
+            )
+            .expect("private broker listener"),
+        );
+        let report = PathBuf::from(format!("{}.tmp", paths.control_socket.to_string_lossy()));
+        let host = cos::extension_host::spawn::spawn_host(
+            &harness.identity,
+            &harness.extension_identity,
+            &harness.isolation,
+            &harness.containment,
+            task,
+            None,
+            None,
+            std::process::id(),
+            start_time,
+            "0123456789abcdef0123456789abcdef",
+            cos::agentd::grant::now_ms() + 60_000,
+            paths,
+        )
+        .expect("spawn private tmp probe");
+        let result = wait_for_text(&report).await;
+        let (tmp_seen, persistent_errno) = result.split_once(':').expect("tmp probe result");
+        assert_eq!(tmp_seen, "0");
+        assert_ne!(
+            persistent_errno, "0",
+            "host wrote outside its task-private mount tree"
+        );
+        hosts.push(host);
+    }
+    assert!(
+        !harness
+            .runtime_dir
+            .join("shared-writable/persistent")
+            .exists(),
+        "extension left persistent state outside its task tree"
+    );
+    drop(listeners);
+    hosts[0]
+        .mount_private_tmp_test_child()
+        .expect("mount nested private tmpfs");
+    for (index, host) in hosts.iter_mut().enumerate() {
+        host.cgroup.cleanup().await.expect("clean host cgroup");
+        let _ = host.child.wait().await;
+        if index == 0 {
+            assert!(
+                host.cleanup_private_mounts().is_err(),
+                "nested mount must block parent tmpfs cleanup"
+            );
+            host.unmount_private_tmp_test_child()
+                .expect("remove nested private tmpfs");
+        }
+        host.cleanup_private_mounts()
+            .expect("clean private tmp mounts");
+        host.paths.cleanup().expect("clean host paths");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1004,28 +1156,26 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         eprintln!("skipping: no usable root isolation harness");
         return;
     };
-    let pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
-    )
-    .expect("load extension uid pool");
+    );
     assert_eq!(pool.len(), 64);
     let first = pool.acquire(harness.identity.uid).expect("first uid lease");
     let second = pool
         .acquire(harness.identity.uid)
         .expect("second uid lease");
     assert_ne!(first.identity().uid, second.identity().uid);
-    let independent_pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+    let independent_pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
-    )
-    .expect("load independent uid pool");
+    );
     let third = independent_pool
         .acquire(harness.identity.uid)
         .expect("cross-pool uid lease");
     assert_ne!(third.identity().uid, first.identity().uid);
     assert_ne!(third.identity().uid, second.identity().uid);
-    first.release();
-    second.release();
-    third.release();
+    first.release().expect("release first identity");
+    second.release().expect("release second identity");
+    third.release().expect("release cross-process identity");
 
     let mut worker = spawn::spawn_worker(&harness.identity, &harness.isolation, "ptrace-target")
         .expect("worker");
@@ -1101,7 +1251,9 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
     let seccomp = proc_field(host.pid, "Seccomp:");
     host.cgroup.cleanup().await.expect("clean probe cgroup");
     let _ = host.child.wait().await;
-    host.paths.cleanup();
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
+    host.paths.cleanup().expect("clean host paths");
     let _ = worker.child.start_kill();
     unsafe {
         spawn::terminate_worker_group(worker_pid, libc::SIGKILL);
@@ -1135,7 +1287,9 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         assert!(
             matches!(
                 values[name][1].as_i64(),
-                Some(value) if value == i64::from(libc::EACCES) || value == i64::from(libc::EPERM)
+                Some(value) if value == i64::from(libc::EACCES)
+                    || value == i64::from(libc::EPERM)
+                    || value == i64::from(libc::EROFS)
             ),
             "{name}: {values}"
         );
@@ -1275,7 +1429,7 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
         .status()
         .expect("create adversarial control symlink");
     assert!(control_symlink.success());
-    paths.cleanup();
+    paths.cleanup().expect("clean adversarial host paths");
     let after_cleanup = std::fs::metadata(&sentinel).expect("sentinel after cleanup");
     assert_eq!(after_cleanup.uid(), original.uid());
     assert_eq!(after_cleanup.gid(), original.gid());
@@ -1312,6 +1466,134 @@ fn symlinked_extension_owner_root_fails_without_mutating_its_target() {
     assert_eq!(after.uid(), original.uid());
     assert_eq!(after.gid(), original.gid());
     assert_eq!(after.mode() & 0o7777, original.mode() & 0o7777);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn failed_mount_cleanup_quarantines_uid_until_restart_recovery() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let quarantine = harness.runtime_dir.join("extension-quarantine");
+    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+        harness.isolation.execution_gid(),
+        quarantine.clone(),
+    )
+    .expect("create quarantine pool");
+    let mut lease = pool
+        .acquire(harness.identity.uid)
+        .expect("acquire quarantined identity");
+    lease
+        .begin_task(harness.identity.uid)
+        .expect("record active identity");
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    lease
+        .record_task(harness.identity.uid, paths.task_name())
+        .expect("record task paths");
+    let listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        lease.identity().uid,
+        harness.isolation.execution_gid(),
+    )
+    .expect("bind extension listener");
+
+    let source = harness.runtime_dir.join("mount-source");
+    let mountpoint = paths.control_dir.join("mounted");
+    std::fs::create_dir(&source).expect("create mount source");
+    std::fs::create_dir(&mountpoint).expect("create mountpoint");
+    std::fs::write(source.join("residual"), b"quarantined").expect("write mounted residual");
+    let source_raw =
+        std::ffi::CString::new(source.as_os_str().as_encoded_bytes()).expect("source path");
+    let mount_raw =
+        std::ffi::CString::new(mountpoint.as_os_str().as_encoded_bytes()).expect("mount path");
+    assert_eq!(
+        unsafe {
+            libc::mount(
+                source_raw.as_ptr(),
+                mount_raw.as_ptr(),
+                std::ptr::null(),
+                libc::MS_BIND,
+                std::ptr::null(),
+            )
+        },
+        0,
+        "bind mount failed: {}",
+        std::io::Error::last_os_error()
+    );
+
+    let first_uid = lease.identity().uid;
+    drop(listener);
+    drop(paths);
+    drop(lease);
+    drop(pool);
+    assert!(quarantine.join(format!("{first_uid}.state")).exists());
+
+    let blocked = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+        harness.isolation.execution_gid(),
+        quarantine.clone(),
+    )
+    .expect("reload quarantine pool");
+    let alternate = blocked
+        .acquire(harness.identity.uid)
+        .expect("use a different identity while first is quarantined");
+    assert_ne!(alternate.identity().uid, first_uid);
+    alternate.release().expect("release alternate identity");
+    drop(blocked);
+
+    assert_eq!(
+        unsafe { libc::umount2(mount_raw.as_ptr(), 0) },
+        0,
+        "unmount recovery fixture: {}",
+        std::io::Error::last_os_error()
+    );
+    let recovered = cos::extension_host::identity::ExtensionIdentityPool::for_test_with_quarantine(
+        harness.isolation.execution_gid(),
+        quarantine,
+    )
+    .expect("recover quarantined identity");
+    let reused = recovered
+        .acquire(harness.identity.uid)
+        .expect("reuse recovered identity");
+    assert_eq!(reused.identity().uid, first_uid);
+    reused.release().expect("release recovered identity");
+}
+
+#[test]
+fn extension_identity_pool_exhausts_without_sharing_and_reuses_after_release() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
+        harness.isolation.execution_gid(),
+    );
+    let mut leases = Vec::new();
+    for _ in 0..pool.len() {
+        leases.push(
+            pool.acquire(harness.identity.uid)
+                .expect("acquire unique extension identity"),
+        );
+    }
+    let mut uids = leases
+        .iter()
+        .map(|lease| lease.identity().uid)
+        .collect::<Vec<_>>();
+    uids.sort_unstable();
+    uids.dedup();
+    assert_eq!(uids.len(), pool.len());
+    assert!(pool.acquire(harness.identity.uid).is_err());
+    for lease in leases {
+        lease.release().expect("release exhausted identity");
+    }
+    let reused = pool
+        .acquire(harness.identity.uid.saturating_add(1))
+        .expect("reuse identity for a different owner");
+    assert_eq!(
+        reused.identity().uid,
+        cos::extension_host::identity::FIRST_UID
+    );
+    reused.release().expect("release reused identity");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1381,7 +1663,9 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         "setsid/double-fork descendant survived cgroup.kill"
     );
     assert!(!cgroup_path.exists(), "empty cgroup was not removed");
-    host.paths.cleanup();
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
+    host.paths.cleanup().expect("clean host paths");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1441,7 +1725,9 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         !cos::proc::is_pid_alive(escaped),
         "daemonized child survived active cancellation"
     );
-    host.paths.cleanup();
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
+    host.paths.cleanup().expect("clean host paths");
 }
 
 #[test]
@@ -1652,7 +1938,7 @@ async fn a_cancelled_task_is_reported_as_cancelled_by_the_worker() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
     use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -1697,7 +1983,13 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         heartbeat_grace: Duration::from_secs(60),
         ..SupervisorConfig::default()
     };
-    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let broker = test_broker_context(&harness);
+    let supervisor = tokio::spawn(run_with_store_and_broker(
+        config,
+        shutdown.clone(),
+        store.clone(),
+        broker,
+    ));
 
     // The whole production sequence runs here: claim → spawn a real
     // `claw-agentd` → handshake → assignment → result → finish.
@@ -1742,24 +2034,23 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         extension_cgroups(&harness.cgroup_root).is_empty(),
         "task completion left an extension cgroup behind"
     );
-    let released_pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+    let released_pool = cos::extension_host::identity::ExtensionIdentityPool::for_test(
         harness.isolation.execution_gid(),
-    )
-    .expect("reload extension uid pool");
+    );
     let released = released_pool
         .acquire(harness.identity.uid)
         .expect("completed task released its extension uid");
     assert_eq!(
         released.identity().uid,
-        cos::extension_host::identity::DEFAULT_UID_MIN
+        cos::extension_host::identity::FIRST_UID
     );
-    released.release();
+    released.release().expect("release reused identity");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
     use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -1791,7 +2082,17 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
     );
     std::fs::set_permissions(&marker_dir, std::fs::Permissions::from_mode(0o730))
         .expect("chmod side-effect directory");
-    let marker = marker_dir.join("host-side-effect.log");
+    let marker = marker_dir.join("host-side-effect.sock");
+    let side_effect =
+        std::os::unix::net::UnixDatagram::bind(&marker).expect("bind side-effect socket");
+    let raw_socket = std::ffi::CString::new(marker.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe { libc::chown(raw_socket.as_ptr(), 0, harness.isolation.execution_gid(),) },
+        0,
+        "chown side-effect socket"
+    );
+    std::fs::set_permissions(&marker, std::fs::Permissions::from_mode(0o620))
+        .expect("chmod side-effect socket");
     let malicious = install_crashing_control_host(&harness, &marker);
     std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
     let queue = tempfile::tempdir().expect("queue");
@@ -1813,7 +2114,13 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
         heartbeat_grace: Duration::from_secs(30),
         ..SupervisorConfig::default()
     };
-    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let broker = test_broker_context(&harness);
+    let supervisor = tokio::spawn(run_with_store_and_broker(
+        config,
+        shutdown.clone(),
+        store.clone(),
+        broker,
+    ));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let finished = loop {
         if let Some((_, current)) = store.locate(&job.id).expect("locate") {
@@ -1842,9 +2149,21 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
         store.claim_one().expect("requeue probe").is_none(),
         "post-assignment host crash re-entered the queue"
     );
-    assert_eq!(
-        std::fs::read_to_string(&marker).expect("side-effect marker"),
-        "executed\n",
+    side_effect
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .expect("set side-effect timeout");
+    let mut effect = [0u8; 32];
+    let received = side_effect.recv(&mut effect).expect("side-effect datagram");
+    assert_eq!(&effect[..received], b"executed\n");
+    assert!(
+        matches!(
+            side_effect.recv(&mut effect),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                )
+        ),
         "the hosted side effect ran more than once"
     );
     assert!(
@@ -1856,7 +2175,7 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
     use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -1884,7 +2203,13 @@ async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
         max_workers: 1,
         ..SupervisorConfig::default()
     };
-    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let broker = test_broker_context(&harness);
+    let supervisor = tokio::spawn(run_with_store_and_broker(
+        config,
+        shutdown.clone(),
+        store.clone(),
+        broker,
+    ));
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
     let finished = loop {
         if let Some((_, current)) = store.locate(&job.id).expect("locate") {
@@ -1914,7 +2239,7 @@ async fn unavailable_cgroup_fails_before_worker_or_extension_execution() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_root_owned_task_never_spawns_a_worker_or_initialises_a_provider() {
     use cos::agent::service::{JobStatus, Store};
-    use cos::agentd::supervisor::{run_with_store, SupervisorConfig};
+    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
 
@@ -1958,7 +2283,13 @@ async fn a_root_owned_task_never_spawns_a_worker_or_initialises_a_provider() {
         max_workers: 1,
         ..SupervisorConfig::default()
     };
-    let supervisor = tokio::spawn(run_with_store(config, shutdown.clone(), store.clone()));
+    let broker = test_broker_context(&_harness);
+    let supervisor = tokio::spawn(run_with_store_and_broker(
+        config,
+        shutdown.clone(),
+        store.clone(),
+        broker,
+    ));
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let finished = loop {

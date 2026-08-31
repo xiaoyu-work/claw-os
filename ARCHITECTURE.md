@@ -348,16 +348,20 @@ binds a second broker socket there, and spawns `claw-extension-host` as the task
 owner's authority but under a distinct, exclusively leased host-kernel uid.
 The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
 environment/descriptor allowlists, separate session/process group, finite
-rlimits, and non-dumpable process state. IPC/UTS namespaces remain an optional
-additional layer, but cgroup-v2 containment is mandatory. `clawd` establishes
-a delegated CPU/memory/pids subtree, creates and verifies a bounded task
-cgroup, and moves the host into it in the pre-exec closure before any dynamic
-code can run. Every descendant inherits that membership. Teardown requires a
-successful `cgroup.kill`, `populated 0`, an empty `cgroup.procs`, and removal
-of the task cgroup, so `setsid`, double-forking, host-first exit, or clearing
-`PDEATHSIG` cannot escape cleanup. Missing controllers, an unusable
-`cgroup.kill`, or unverifiable cleanup fails the task instead of falling back
-to `/proc` ancestry.
+rlimits, and non-dumpable process state. A private mount namespace is
+mandatory and replaces `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock` with
+task-private tmpfs mounts. The host sees the rest of the mount tree read-only;
+only its descriptor-verified task directory is remounted writable. IPC/UTS
+namespaces remain an optional additional layer. `clawd` also establishes a
+delegated CPU/memory/pids subtree, creates
+and verifies a bounded task cgroup, and moves the host into it in the pre-exec
+closure before any dynamic code can run. Every descendant inherits that
+membership. Teardown requires a successful `cgroup.kill`, `populated 0`, an
+empty `cgroup.procs`, removal of the task cgroup, successful private-mount
+unmounts, and descriptor-relative recursive removal of all task state.
+`setsid`, double-forking, host-first exit, clearing `PDEATHSIG`, symlinks,
+hardlinks, open descriptors, or nested mountpoints cannot produce a clean
+release while residue remains.
 
 The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
 its per-owner directory, and each task directory remain root-owned and
@@ -370,10 +374,20 @@ bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
 have been verified. No privileged `chown` or `chmod` follows a pathname below
 a task-writable directory.
 
-The packaged range `61184..=61247` contains no passwd accounts and provides one
-exclusive uid per maximum concurrent containment domain. `clawd` rechecks that
-every uid remains unmapped and process-free before leasing it, never reuses it
-until cgroup and routed-ACL cleanup succeed, and purges stale ACLs before reuse.
+The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
+`61000..=61063` with fixed primary GID `60999`, below systemd's `DynamicUser`
+range (`61184..=65519`) and above the supported default login allocation.
+Preinstall validation rejects
+NSS/name/UID collisions, systemd-homed records, and any overlapping
+`/etc/subuid` or `/etc/subgid` range before creating anything; partial
+provisioning rolls back only records created in that attempt. `clawd` requires
+the exact name/uid/gid/home/shell/locked-shadow records plus a root-owned
+package reservation manifest on every start. It never reuses an identity until
+cgroup, private-mount, task-state, and routed-ACL cleanup succeed. A durable
+root-owned quarantine record is written before task state is created and
+removed only after every cleanup step succeeds. On restart, cgroup recovery
+runs first; quarantined identities remain locked until their process, runtime
+directory, `/run/user/<uid>`, and routed-reader state are all proven absent.
 The control socket admits the task-owner worker through the shared execution
 gid but checks its exact pid/start-time/task/nonce; the private broker socket
 belongs only to the extension uid. The proxy authenticates that kernel uid,
