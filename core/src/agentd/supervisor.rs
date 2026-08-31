@@ -111,6 +111,9 @@ pub struct BrokerContext {
     pub isolated_execution_gid: u32,
     extension_containment:
         Arc<OnceLock<Result<Arc<crate::extension_host::spawn::ContainmentRoot>, Arc<str>>>>,
+    extension_identities: Arc<
+        OnceLock<Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, Arc<str>>>,
+    >,
 }
 
 impl BrokerContext {
@@ -125,6 +128,7 @@ impl BrokerContext {
             primary_socket,
             isolated_execution_gid: spawn::resolve_isolated_execution_gid()?,
             extension_containment: Arc::new(OnceLock::new()),
+            extension_identities: Arc::new(OnceLock::new()),
         })
     }
 
@@ -149,6 +153,29 @@ impl BrokerContext {
             );
         }
     }
+
+    fn extension_identity_pool(
+        &self,
+    ) -> Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, String> {
+        match self.extension_identities.get_or_init(|| {
+            crate::extension_host::identity::ExtensionIdentityPool::load(
+                self.isolated_execution_gid,
+            )
+            .map_err(Arc::<str>::from)
+        }) {
+            Ok(pool) => Ok(pool.clone()),
+            Err(error) => Err(error.to_string()),
+        }
+    }
+
+    fn prime_extension_identities(&self) {
+        if let Err(error) = self.extension_identity_pool() {
+            tracing::error!(
+                error = %error,
+                "extension execution uid pool unavailable; agent tasks will fail closed"
+            );
+        }
+    }
 }
 
 pub fn spawn_supervisor(
@@ -158,6 +185,7 @@ pub fn spawn_supervisor(
     let config = SupervisorConfig::from_env();
     if config.enabled {
         broker.prime_extension_containment();
+        broker.prime_extension_identities();
     }
     tokio::spawn(async move {
         if !config.enabled {
@@ -219,6 +247,7 @@ pub async fn run_with_store_and_broker(
 ) -> Result<(), String> {
     if config.enabled {
         broker.prime_extension_containment();
+        broker.prime_extension_identities();
     }
     let signer = Arc::new(GrantSigner::generate()?);
     let permits = Arc::new(Semaphore::new(config.max_workers));
@@ -597,18 +626,29 @@ async fn supervise(
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
     let containment_cleanup = reap_extension_host(&mut extension.host).await;
+    let extension_cleanup = match containment_cleanup {
+        Ok(()) => {
+            crate::storage::remove_routed_extension_reader(owner_uid, extension.extension_uid)
+        }
+        Err(error) => Err(error),
+    };
+    if extension_cleanup.is_ok() {
+        if let Some(identity) = extension.identity.take() {
+            identity.release();
+        }
+    }
     crate::clawd::audit::record_extension_host_event(
         &job.id,
         job.session_id.as_deref(),
         owner_uid,
         extension.host.pid,
         extension.host.start_time_ticks,
-        if containment_cleanup.is_ok() {
+        if extension_cleanup.is_ok() {
             "detach"
         } else {
             "cleanup-failed"
         },
-        containment_cleanup.is_ok(),
+        extension_cleanup.is_ok(),
     );
     extension.host.paths.cleanup();
 
@@ -632,7 +672,7 @@ async fn supervise(
         crate::clawd::authority::revoke_session_for_owner(session_id, owner_uid);
     }
 
-    let outcome = apply_containment_cleanup(outcome, containment_cleanup);
+    let outcome = apply_containment_cleanup(outcome, extension_cleanup);
     finish_task_outcome(&store, &job, outcome);
     Ok(())
 }
@@ -688,6 +728,8 @@ fn post_assignment_interruption(detail: String, cancel_sent: bool) -> TaskOutcom
 
 struct ExtensionRuntime {
     host: crate::extension_host::spawn::SpawnedExtensionHost,
+    identity: Option<crate::extension_host::identity::ExtensionIdentityLease>,
+    extension_uid: u32,
     lease: Arc<crate::extension_host::broker::ExtensionLease>,
     broker_task: tokio::task::JoinHandle<()>,
     host_session_id: Option<String>,
@@ -705,10 +747,12 @@ async fn start_extension_host(
     lease_duration: Duration,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
+    let mut execution_identity = broker.extension_identity_pool()?.acquire(identity.uid)?;
+    let extension = execution_identity.identity().clone();
     let paths = crate::extension_host::spawn::HostPaths::create(identity)?;
     let listener = match crate::extension_host::broker::bind_listener(
         &paths,
-        identity.uid,
+        extension.uid,
         isolation.execution_gid(),
     ) {
         Ok(listener) => listener,
@@ -717,12 +761,20 @@ async fn start_extension_host(
             return Err(error);
         }
     };
+    if let Err(error) = crate::storage::install_routed_extension_reader(identity.uid, extension.uid)
+    {
+        drop(listener);
+        paths.cleanup();
+        return Err(error);
+    }
     let host_session_id = session.map(|_| format!("extension-{}", uuid::Uuid::new_v4().simple()));
     let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
     let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
     let cleanup_paths = paths.clone();
+    execution_identity.retain_until_cleanup();
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
+        &extension,
         isolation,
         containment,
         &job.id,
@@ -752,7 +804,7 @@ async fn start_extension_host(
             stderr_path: String::new(),
             group: Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string()),
             parent: job.session_id.clone(),
-            workdir: Some(identity.home.to_string_lossy().into_owned()),
+            workdir: Some(host.paths.control_dir.to_string_lossy().into_owned()),
             exit_code: None,
             ended_at: None,
             tier: parent.tier,
@@ -775,12 +827,22 @@ async fn start_extension_host(
             let _ = host.child.start_kill();
             let _ = host.child.wait().await;
             host.paths.cleanup();
-            return Err(match cleanup {
-                Ok(()) => format!("register extension-host session: {error}"),
-                Err(cleanup) => format!(
-                    "register extension-host session: {error}; containment cleanup failed: {cleanup}"
-                ),
-            });
+            let reader_cleanup = if cleanup.is_ok() {
+                crate::storage::remove_routed_extension_reader(identity.uid, extension.uid)
+            } else {
+                Err("containment cleanup was not verified".to_string())
+            };
+            if cleanup.is_ok() && reader_cleanup.is_ok() {
+                execution_identity.release();
+            }
+            let mut message = format!("register extension-host session: {error}");
+            if let Err(cleanup) = cleanup {
+                message.push_str(&format!("; containment cleanup failed: {cleanup}"));
+            }
+            if let Err(reader_cleanup) = reader_cleanup {
+                message.push_str(&format!("; routed ACL cleanup failed: {reader_cleanup}"));
+            }
+            return Err(message);
         }
     }
 
@@ -789,6 +851,7 @@ async fn start_extension_host(
         job.session_id.clone(),
         host_session_id.clone(),
         identity.uid,
+        extension.uid,
         isolation.execution_gid(),
         worker_pid,
         worker_start_time_ticks,
@@ -804,6 +867,8 @@ async fn start_extension_host(
     ));
     Ok(ExtensionRuntime {
         host,
+        identity: Some(execution_identity),
+        extension_uid: extension.uid,
         lease,
         broker_task,
         host_session_id,
@@ -1389,6 +1454,9 @@ fn check_hello_with(
     }
     if !hello.no_new_privs {
         return Err("agent worker did not set PR_SET_NO_NEW_PRIVS".to_string());
+    }
+    if hello.dumpable {
+        return Err("agent worker remained dumpable after startup".to_string());
     }
     Ok(())
 }

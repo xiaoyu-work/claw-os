@@ -22,8 +22,8 @@ Environment=CLAWD_SOCKET_MODE=0660
 # the task owner with supplementary groups cleared, NoNewPrivs set, its
 # own session/process group, and only a private job channel on fd 3.
 # Dynamic App and MCP code runs one boundary farther out in
-# /usr/local/bin/claw-extension-host. The host is also task-owned and
-# receives only per-task control and route-filtered proxy sockets.
+# /usr/local/bin/claw-extension-host. The host uses an exclusive unmapped uid
+# and receives only per-task control and route-filtered proxy sockets.
 # Tasks owned by root are refused: the runtime has no account to drop
 # to. Set CLAWD_AGENTD=off to stop running agent tasks; every other
 # clawd primitive keeps working.
@@ -31,6 +31,7 @@ Environment=CLAWD_AGENTD=on
 Environment=COS_AGENTD_BIN=/usr/local/bin/claw-agentd
 Environment=COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-host
 Environment=COS_EXTENSION_EXEC_GROUP=cos-extension
+EnvironmentFile=-/etc/cos/extension-uids.conf
 Environment=CLAWD_EXTENSION_HOST_NAMESPACES=on
 Environment=CLAWD_AGENTD_MAX_WORKERS=4
 Environment=CLAWD_AGENTD_LEASE_SECS=900

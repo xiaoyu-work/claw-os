@@ -89,6 +89,7 @@ Usage:
 
 fn run() -> Result<(), String> {
     crate::storage::set_private_umask();
+    super::spawn::set_process_undumpable()?;
     let channel = adopt_channel()?;
     let identity = LocalIdentity::read()?;
 
@@ -194,6 +195,7 @@ struct LocalIdentity {
     egid: u32,
     groups: Vec<u32>,
     no_new_privs: bool,
+    dumpable: bool,
 }
 
 impl LocalIdentity {
@@ -221,6 +223,7 @@ impl LocalIdentity {
             egid,
             groups,
             no_new_privs: crate::caps::enforcement::process_has_no_new_privs(),
+            dumpable: unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) } == 1,
         })
     }
 
@@ -250,6 +253,9 @@ impl LocalIdentity {
         }
         if !self.groups.is_empty() {
             return Err("agent worker retained supplementary groups".to_string());
+        }
+        if self.dumpable {
+            return Err("agent worker remained dumpable after startup".to_string());
         }
         if self.uid == 0 || self.euid == 0 || self.gid == 0 || self.egid == 0 {
             return Err(
@@ -448,6 +454,7 @@ async fn io_main(
         egid: identity.egid,
         supplementary_groups: identity.groups.clone(),
         no_new_privs: identity.no_new_privs,
+        dumpable: identity.dumpable,
     }));
     let encoded = match protocol::encode(&hello) {
         Ok(encoded) => encoded,
@@ -556,6 +563,7 @@ where
         if extension.task_id != assignment.job.id
             || extension.session_id != assignment.job.session_id
             || extension.owner_uid != assignment.job.owner_uid
+            || extension.owner_gid != identity.gid
         {
             return Err("extension host is bound to different task metadata".to_string());
         }

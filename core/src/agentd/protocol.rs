@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -332,6 +332,7 @@ pub struct WorkerHello {
     pub egid: u32,
     pub supplementary_groups: Vec<u32>,
     pub no_new_privs: bool,
+    pub dumpable: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

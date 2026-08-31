@@ -420,8 +420,11 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
             "process {child_pid} is not descended from launcher {launcher_pid}"
         ));
     }
-    if process_uid(child_pid) != Some(uid) {
-        return Err(format!("App process {child_pid} is not owned by uid {uid}"));
+    let execution_uid = client.process_uid().unwrap_or(uid);
+    if process_uid(child_pid) != Some(execution_uid) {
+        return Err(format!(
+            "App process {child_pid} is not owned by execution uid {execution_uid}"
+        ));
     }
     let bind_id = session_id.clone();
     let bound_caps = crate::paths::with_user_override(uid, home, async move {
@@ -701,8 +704,11 @@ async fn authenticate_launcher(
     if pid <= 1 {
         return Err("clawd peer pid is not a launchable process".to_string());
     }
-    if process_uid(pid) != Some(uid) {
-        return Err(format!("clawd peer {pid} is not owned by uid {uid}"));
+    let execution_uid = client.process_uid().unwrap_or(uid);
+    if process_uid(pid) != Some(execution_uid) {
+        return Err(format!(
+            "clawd peer {pid} is not owned by execution uid {execution_uid}"
+        ));
     }
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
     let sessions = crate::paths::with_user_override(uid, home.clone(), async {

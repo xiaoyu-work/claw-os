@@ -70,6 +70,7 @@ jobs:
           grep -q './usr/local/bin/claw-agentd$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-extension-host$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/lib/sysusers.d/claw-os-agent.conf$' "$RUNNER_TEMP/claw-os-agent.files"
+          grep -q './etc/cos/extension-uids.conf$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/cos-browser$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-semantic$' "$RUNNER_TEMP/claw-os-agent.files"
           grep -q './usr/local/bin/claw-semantic-daemon$' "$RUNNER_TEMP/claw-os-agent.files"

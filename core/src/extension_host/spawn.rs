@@ -12,6 +12,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
+use crate::extension_host::identity::ExtensionIdentity;
 
 use super::protocol::{self, ExtensionBinding};
 
@@ -19,6 +20,7 @@ pub const HOST_BINARY_ENV: &str = "COS_EXTENSION_HOST_BIN";
 pub const TASK_ENV: &str = "COS_EXTENSION_TASK_ID";
 pub const TASK_SESSION_ENV: &str = "COS_EXTENSION_TASK_SESSION";
 pub const HOST_SESSION_ENV: &str = "COS_EXTENSION_HOST_SESSION";
+pub const WORKER_UID_ENV: &str = "COS_EXTENSION_WORKER_UID";
 pub const WORKER_PID_ENV: &str = "COS_EXTENSION_WORKER_PID";
 pub const WORKER_START_ENV: &str = "COS_EXTENSION_WORKER_START";
 pub const LEASE_NONCE_ENV: &str = "COS_EXTENSION_LEASE_NONCE";
@@ -26,6 +28,7 @@ pub const LEASE_EXPIRES_ENV: &str = "COS_EXTENSION_LEASE_EXPIRES_MS";
 pub const CONTROL_SOCKET_ENV: &str = "COS_EXTENSION_CONTROL_SOCKET";
 pub const ENFORCE_GROUPS_ENV: &str = "COS_EXTENSION_ENFORCE_GROUPS";
 pub const EXECUTION_GID_ENV: &str = "COS_EXTENSION_EXECUTION_GID";
+pub const EXTENSION_UID_ENV: &str = "COS_EXTENSION_EXECUTION_UID";
 pub const CGROUP_ROOT_ENV: &str = "CLAWD_EXTENSION_CGROUP_ROOT";
 
 const HOST_PATH: &str = "/usr/local/bin/claw-extension-host";
@@ -47,9 +50,6 @@ const BROKER_CGROUP: &str = "cos-broker";
 const INHERITED_ENV_KEYS: &[&str] = &[
     "COS_APPS_DIR",
     "COS_BIN",
-    "COS_CACHE_DIR",
-    "COS_CONFIG_DIR",
-    "COS_LOG_DIR",
     "COS_SDK_PYTHON_DIR",
     "LANG",
     "LC_ALL",
@@ -454,7 +454,8 @@ pub fn host_binary_path() -> PathBuf {
 
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_host(
-    identity: &WorkerIdentity,
+    owner: &WorkerIdentity,
+    extension: &ExtensionIdentity,
     isolation: &ExecutionIsolation,
     containment: &ContainmentRoot,
     task_id: &str,
@@ -466,6 +467,20 @@ pub fn spawn_host(
     expires_at_ms: u64,
     paths: HostPaths,
 ) -> Result<SpawnedExtensionHost, String> {
+    if extension.uid == 0
+        || extension.uid == owner.uid
+        || extension.gid != isolation.execution_gid()
+    {
+        paths.cleanup();
+        return Err("extension execution identity is not isolated from the task owner".to_string());
+    }
+    let seccomp = match process_isolation_filter() {
+        Ok(filter) => Arc::new(filter),
+        Err(error) => {
+            paths.cleanup();
+            return Err(error);
+        }
+    };
     let mut cgroup = match ResourceGroup::create(containment, task_id) {
         Ok(cgroup) => cgroup,
         Err(error) => {
@@ -503,11 +518,11 @@ pub fn spawn_host(
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
-    command.current_dir(&identity.home);
+    command.current_dir(&paths.control_dir);
     command.env_clear();
-    command.env("HOME", &identity.home);
-    command.env("USER", &identity.username);
-    command.env("LOGNAME", &identity.username);
+    command.env("HOME", &paths.control_dir);
+    command.env("USER", &extension.username);
+    command.env("LOGNAME", &extension.username);
     command.env("PATH", SAFE_PATH);
     command.env("SHELL", "/bin/sh");
     command.env("COS_PERMS_MODE", "strict");
@@ -515,15 +530,13 @@ pub fn spawn_host(
         "COS_PROC_DATA_DIR",
         std::env::var_os("COS_PROC_DATA_DIR")
             .map(PathBuf::from)
-            .unwrap_or_else(|| PathBuf::from("/run/cos/caps").join(identity.uid.to_string())),
+            .unwrap_or_else(|| PathBuf::from("/run/cos/caps").join(owner.uid.to_string())),
     );
-    command.env(
-        "COS_DATA_DIR",
-        std::env::var_os("COS_USER_DATA_DIR")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| identity.home.join(".local").join("share").join("cos")),
-    );
+    command.env("COS_DATA_DIR", paths.control_dir.join("data"));
+    command.env("COS_CACHE_DIR", paths.control_dir.join("cache"));
+    command.env("COS_LOG_DIR", paths.control_dir.join("log"));
     command.env(TASK_ENV, task_id);
+    command.env(WORKER_UID_ENV, owner.uid.to_string());
     command.env(WORKER_PID_ENV, worker_pid.to_string());
     command.env(
         WORKER_START_ENV,
@@ -536,6 +549,7 @@ pub fn spawn_host(
     command.env(CONTROL_SOCKET_ENV, &paths.control_socket);
     command.env(ENFORCE_GROUPS_ENV, if enforce_groups { "1" } else { "0" });
     command.env(EXECUTION_GID_ENV, isolation.execution_gid().to_string());
+    command.env(EXTENSION_UID_ENV, extension.uid.to_string());
     command.env(protocol::BROKER_SOCKET_ENV, &paths.broker_socket);
     if let Some(task_session_id) = task_session_id {
         command.env(TASK_SESSION_ENV, task_session_id);
@@ -551,7 +565,7 @@ pub fn spawn_host(
     }
 
     let expected_parent = unsafe { libc::getpid() };
-    let uid = identity.uid;
+    let uid = extension.uid;
     let gid = isolation.execution_gid();
     let child_isolation = isolation.clone();
     let cgroup_procs_fd = cgroup.procs_fd();
@@ -574,6 +588,7 @@ pub fn spawn_host(
             child_isolation.verify_after_drop(uid)?;
             apply_resource_limits()?;
             crate::agentd::spawn::harden_child(expected_parent)?;
+            install_process_isolation_seccomp(seccomp.as_slice())?;
             if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
@@ -622,7 +637,8 @@ pub fn spawn_host(
         protocol: protocol::PROTOCOL_VERSION,
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
-        owner_uid: identity.uid,
+        owner_uid: owner.uid,
+        extension_uid: extension.uid,
         owner_gid: gid,
         worker_pid,
         worker_start_time_ticks,
@@ -658,6 +674,115 @@ fn apply_resource_limits() -> std::io::Result<()> {
     set_limit(libc::RLIMIT_NPROC, HOST_NPROC_LIMIT)?;
     set_limit(libc::RLIMIT_AS, HOST_ADDRESS_SPACE_LIMIT)?;
     set_limit(libc::RLIMIT_FSIZE, HOST_FILE_SIZE_LIMIT)
+}
+
+fn process_isolation_filter() -> Result<Vec<libc::sock_filter>, String> {
+    const BPF_LD_W_ABS: u16 = 0x20;
+    const BPF_JMP_JEQ_K: u16 = 0x15;
+    const BPF_RET_K: u16 = 0x06;
+    const SECCOMP_RET_KILL_PROCESS: u32 = 0x8000_0000;
+    const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
+    const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
+    #[cfg(target_arch = "x86_64")]
+    const AUDIT_ARCH: u32 = 0xc000_003e;
+    #[cfg(target_arch = "aarch64")]
+    const AUDIT_ARCH: u32 = 0xc000_00b7;
+
+    #[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
+    return Err("extension seccomp filter is unsupported on this architecture".to_string());
+
+    #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+    {
+        let denied = [
+            libc::SYS_ptrace as u32,
+            libc::SYS_process_vm_readv as u32,
+            libc::SYS_process_vm_writev as u32,
+            libc::SYS_kcmp as u32,
+            libc::SYS_pidfd_getfd as u32,
+        ];
+        let mut filter = Vec::with_capacity(5 + denied.len() * 4);
+        filter.push(libc::sock_filter {
+            code: BPF_LD_W_ABS,
+            jt: 0,
+            jf: 0,
+            k: 4,
+        });
+        filter.push(libc::sock_filter {
+            code: BPF_JMP_JEQ_K,
+            jt: 1,
+            jf: 0,
+            k: AUDIT_ARCH,
+        });
+        filter.push(libc::sock_filter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_KILL_PROCESS,
+        });
+        filter.push(libc::sock_filter {
+            code: BPF_LD_W_ABS,
+            jt: 0,
+            jf: 0,
+            k: 0,
+        });
+        for syscall in denied {
+            filter.push(libc::sock_filter {
+                code: BPF_JMP_JEQ_K,
+                jt: 0,
+                jf: 1,
+                k: syscall,
+            });
+            filter.push(libc::sock_filter {
+                code: BPF_RET_K,
+                jt: 0,
+                jf: 0,
+                k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+            });
+            #[cfg(target_arch = "x86_64")]
+            {
+                filter.push(libc::sock_filter {
+                    code: BPF_JMP_JEQ_K,
+                    jt: 0,
+                    jf: 1,
+                    k: syscall | 0x4000_0000,
+                });
+                filter.push(libc::sock_filter {
+                    code: BPF_RET_K,
+                    jt: 0,
+                    jf: 0,
+                    k: SECCOMP_RET_ERRNO | libc::EPERM as u32,
+                });
+            }
+        }
+        filter.push(libc::sock_filter {
+            code: BPF_RET_K,
+            jt: 0,
+            jf: 0,
+            k: SECCOMP_RET_ALLOW,
+        });
+        Ok(filter)
+    }
+}
+
+fn install_process_isolation_seccomp(filter: &[libc::sock_filter]) -> std::io::Result<()> {
+    let len =
+        u16::try_from(filter.len()).map_err(|_| crate::agentd::spawn::raw_error(libc::E2BIG))?;
+    let program = libc::sock_fprog {
+        len,
+        filter: filter.as_ptr().cast_mut(),
+    };
+    if unsafe {
+        libc::prctl(
+            libc::PR_SET_SECCOMP,
+            libc::SECCOMP_MODE_FILTER,
+            std::ptr::addr_of!(program),
+        )
+    } != 0
+    {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(target_env = "gnu")]

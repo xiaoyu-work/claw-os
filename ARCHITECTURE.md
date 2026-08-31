@@ -42,7 +42,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
-| `claw-extension-host` | Task-owned process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
+| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -239,7 +239,8 @@ CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
   -> claw-agentd (task uid, dedicated cos-extension gid, no supplementary groups, NoNewPrivs)
-  -> clawd also spawns claw-extension-host for dynamic App/MCP processes
+  -> clawd allocates an unmapped per-task extension uid and spawns
+     claw-extension-host for dynamic App/MCP processes
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
@@ -344,7 +345,8 @@ the worker's approval traffic.
 Dynamic App and MCP code is not loaded into either `clawd` or `claw-agentd`.
 For every claimed task, the supervisor creates a private runtime directory,
 binds a second broker socket there, and spawns `claw-extension-host` as the task
-owner. The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
+owner's authority but under a distinct, exclusively leased host-kernel uid.
+The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
 environment/descriptor allowlists, separate session/process group, finite
 rlimits, and non-dumpable process state. IPC/UTS namespaces remain an optional
 additional layer, but cgroup-v2 containment is mandatory. `clawd` establishes
@@ -367,6 +369,20 @@ subdirectory is transferred after the root-owned broker listener has been
 bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
 have been verified. No privileged `chown` or `chmod` follows a pathname below
 a task-writable directory.
+
+The packaged range `61184..=61247` contains no passwd accounts and provides one
+exclusive uid per maximum concurrent containment domain. `clawd` rechecks that
+every uid remains unmapped and process-free before leasing it, never reuses it
+until cgroup and routed-ACL cleanup succeed, and purges stale ACLs before reuse.
+The control socket admits the task-owner worker through the shared execution
+gid but checks its exact pid/start-time/task/nonce; the private broker socket
+belongs only to the extension uid. The proxy authenticates that kernel uid,
+then explicitly projects the already-bound task-owner principal into normal
+route/capability enforcement and records the execution uid in audit identity.
+The host and all descendants inherit a seccomp filter denying `ptrace`,
+`process_vm_readv`, `process_vm_writev`, `kcmp`, and `pidfd_getfd`. Both worker
+and host set `PR_SET_DUMPABLE=0` at process entry. Extension data, cache, log,
+and home paths are task-controlled directories rather than the owner's home.
 
 The signed worker grant includes the extension protocol version, owner, task,
 durable session, worker pid/start-time, host pid/start-time, random lease nonce,
@@ -669,7 +685,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Task-owned dynamic App/MCP host, spawned per task by `clawd` |
+| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, spawned per task by `clawd` |
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |

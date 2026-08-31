@@ -75,6 +75,7 @@ async fn a_root_peer_cannot_submit_an_agent_task() {
         pid: Some(std::process::id()),
         uid: Some(0),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
     };
@@ -90,6 +91,7 @@ fn attended_client() -> ClientIdentity {
         pid: Some(4242),
         uid: Some(1000),
         gid: Some(1000),
+        execution_uid: None,
         start_time_ticks: Some(77),
         attended_local: true,
     }

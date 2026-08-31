@@ -44,6 +44,7 @@ fn signer_and_hello(lease: &Lease) -> (GrantSigner, WorkerFrame) {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }));
     (signer, hello)
 }
@@ -94,6 +95,7 @@ fn a_grant_for_a_different_worker_is_refused_at_the_handshake() {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }));
     let error = accept(&signer, std::process::id(), &mut lease, &hello, false)
         .expect_err("a grant bound to another pid must be refused");
@@ -193,6 +195,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     };
     assert!(check_hello_with(&hello, &lease, true).is_ok());
 
@@ -201,6 +204,12 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
         .unwrap_err()
         .contains("NO_NEW_PRIVS"));
     hello.no_new_privs = true;
+
+    hello.dumpable = true;
+    assert!(check_hello_with(&hello, &lease, true)
+        .unwrap_err()
+        .contains("dumpable"));
+    hello.dumpable = false;
 
     hello.supplementary_groups = vec![27];
     assert!(check_hello_with(&hello, &lease, true)

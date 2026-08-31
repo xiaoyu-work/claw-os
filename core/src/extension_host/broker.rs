@@ -70,6 +70,7 @@ pub struct ExtensionLease {
     pub task_session_id: Option<String>,
     pub host_session_id: Option<String>,
     pub owner_uid: u32,
+    pub extension_uid: u32,
     pub owner_gid: u32,
     pub worker_pid: u32,
     pub worker_start_time_ticks: Option<u64>,
@@ -86,6 +87,7 @@ impl ExtensionLease {
         task_session_id: Option<String>,
         host_session_id: Option<String>,
         owner_uid: u32,
+        extension_uid: u32,
         owner_gid: u32,
         worker_pid: u32,
         worker_start_time_ticks: Option<u64>,
@@ -98,6 +100,7 @@ impl ExtensionLease {
             task_session_id,
             host_session_id,
             owner_uid,
+            extension_uid,
             owner_gid,
             worker_pid,
             worker_start_time_ticks,
@@ -372,14 +375,15 @@ async fn serve_connection(
         write_fault(&mut peer_stream, id, Fault::PeerUnverified).await;
         return;
     };
-    let client = ClientIdentity::from_verified_parts(
+    let client = ClientIdentity::from_verified_delegation(
         process.pid,
+        lease.owner_uid,
         process.uid,
         process.gid,
         process.start_time_ticks,
     );
     if lease.verify_live().is_err()
-        || process.uid != lease.owner_uid
+        || process.uid != lease.extension_uid
         || process.gid != lease.owner_gid
         || !request_allowed(&request, process, &lease)
     {

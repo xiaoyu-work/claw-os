@@ -10,6 +10,7 @@ fn identity(uid: u32, gid: u32) -> LocalIdentity {
         egid: gid,
         groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }
 }
 

@@ -46,6 +46,7 @@ struct Harness {
     leaked_path: PathBuf,
     leaked_fd: i32,
     identity: WorkerIdentity,
+    extension_identity: cos::extension_host::identity::ExtensionIdentity,
     isolation: ExecutionIsolation,
     cgroup_root: PathBuf,
     containment: std::sync::Arc<cos::extension_host::spawn::ContainmentRoot>,
@@ -61,6 +62,8 @@ impl Drop for Harness {
         std::env::remove_var("COS_RUNTIME_DIR");
         std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
         std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+        std::env::remove_var(cos::extension_host::identity::UID_MIN_ENV);
+        std::env::remove_var(cos::extension_host::identity::UID_COUNT_ENV);
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
         let _ = std::fs::remove_dir(&self.cgroup_root);
     }
@@ -187,6 +190,14 @@ fn harness() -> Option<Harness> {
             return None;
         }
     };
+    let extension_identity = cos::extension_host::identity::ExtensionIdentity {
+        uid: cos::extension_host::identity::DEFAULT_UID_MIN,
+        gid: execution_gid,
+        username: format!(
+            "cos-extension-{}",
+            cos::extension_host::identity::DEFAULT_UID_MIN
+        ),
+    };
     let cgroup_root = PathBuf::from(format!(
         "/sys/fs/cgroup/cos-test-{}",
         uuid::Uuid::new_v4()
@@ -230,6 +241,7 @@ fn harness() -> Option<Harness> {
         leaked_path,
         leaked_fd,
         identity,
+        extension_identity,
         isolation,
         cgroup_root,
         containment,
@@ -484,7 +496,7 @@ fn install_crashing_control_host(harness: &Harness, marker: &std::path::Path) ->
             "    pass\n",
             "listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\n",
             "listener.bind(control)\n",
-            "os.chmod(control, 0o600)\n",
+            "os.chmod(control, 0o660)\n",
             "listener.listen(1)\n",
             "connection, _ = listener.accept()\n",
             "header = receive_exact(connection, 10)\n",
@@ -504,6 +516,78 @@ fn install_crashing_control_host(harness: &Harness, marker: &std::path::Path) ->
     std::fs::write(&path, script).expect("write crashing control host");
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
         .expect("chmod crashing control host");
+    path
+}
+
+fn install_process_isolation_probe(
+    harness: &Harness,
+    worker_pid: u32,
+    ordinary_pid: u32,
+    sibling_pid: u32,
+) -> PathBuf {
+    let path = harness.runtime_dir.join("process-isolation-host.py");
+    let escape = harness.containment.path().join("cgroup.procs");
+    let script = format!(
+        r#"#!/usr/bin/python3
+import ctypes
+import errno
+import json
+import os
+import time
+
+libc = ctypes.CDLL(None, use_errno=True)
+
+class IOVec(ctypes.Structure):
+    _fields_ = [("base", ctypes.c_void_p), ("length", ctypes.c_size_t)]
+
+def call(name, function):
+    ctypes.set_errno(0)
+    result = function()
+    values[name] = [int(result), ctypes.get_errno()]
+
+values = {{}}
+targets = {{"worker": {worker_pid}, "ordinary": {ordinary_pid}, "sibling": {sibling_pid}}}
+for name, pid in targets.items():
+    call("ptrace_" + name, lambda pid=pid: libc.ptrace(16, pid, 0, 0))
+    try:
+        with open("/proc/%d/mem" % pid, "rb", buffering=0):
+            values["mem_" + name] = [0, 0]
+    except OSError as error:
+        values["mem_" + name] = [-1, error.errno]
+
+local = ctypes.c_long(7)
+local_iov = IOVec(ctypes.addressof(local), ctypes.sizeof(local))
+remote_iov = IOVec(ctypes.addressof(local), ctypes.sizeof(local))
+call("ptrace_self", lambda: libc.ptrace(0, 0, 0, 0))
+call("dumpable", lambda: libc.prctl(3, 0, 0, 0, 0))
+call("process_vm_readv_self", lambda: libc.syscall({readv}, os.getpid(), ctypes.byref(local_iov), 1, ctypes.byref(remote_iov), 1, 0))
+call("process_vm_writev_self", lambda: libc.syscall({writev}, os.getpid(), ctypes.byref(local_iov), 1, ctypes.byref(remote_iov), 1, 0))
+call("kcmp_self", lambda: libc.syscall({kcmp}, os.getpid(), os.getpid(), 0, 0, 0))
+call("pidfd_getfd", lambda: libc.syscall({pidfd_getfd}, -1, 0, 0))
+
+try:
+    with open({escape:?}, "w", encoding="utf-8") as output:
+        output.write(str(os.getpid()))
+    values["cgroup_escape"] = [0, 0]
+except OSError as error:
+    values["cgroup_escape"] = [-1, error.errno]
+
+report = os.environ["COS_EXTENSION_CONTROL_SOCKET"] + ".isolation"
+with open(report, "w", encoding="utf-8") as output:
+    json.dump(values, output)
+    output.flush()
+    os.fsync(output.fileno())
+while True:
+    time.sleep(60)
+"#,
+        readv = libc::SYS_process_vm_readv,
+        writev = libc::SYS_process_vm_writev,
+        kcmp = libc::SYS_kcmp,
+        pidfd_getfd = libc::SYS_pidfd_getfd,
+    );
+    std::fs::write(&path, script).expect("write process isolation host");
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+        .expect("chmod process isolation host");
     path
 }
 
@@ -690,6 +774,7 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     assert_eq!(hello.gid, harness.isolation.execution_gid());
     assert_eq!(hello.egid, harness.isolation.execution_gid());
     assert!(hello.supplementary_groups.is_empty());
+    assert!(!hello.dumpable, "agent worker remained dumpable");
     let primary = std::fs::metadata(&harness.primary_path).expect("primary broker socket");
     use std::os::unix::fs::MetadataExt;
     assert_eq!(
@@ -740,6 +825,24 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
     // retain a key after libc removes it. The worker unit test checks the live
     // environment; the descendant exec test checks that it is not propagated.
     assert!(!environ.contains(protocol::TASK_HINT_ENV));
+
+    let same_uid_mem = std::process::Command::new("setpriv")
+        .args([
+            format!("--reuid={}", harness.identity.uid),
+            format!("--regid={}", harness.identity.gid),
+            "--clear-groups".to_string(),
+            "python3".to_string(),
+            "-c".to_string(),
+            format!("open('/proc/{pid}/mem', 'rb', buffering=0)"),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("probe worker mem access");
+    assert!(
+        !same_uid_mem.success(),
+        "same-uid sibling opened the non-dumpable worker memory"
+    );
 
     // The task still round-trips a result even with no provider
     // configured, which is what proves the queue's outcome now arrives
@@ -795,13 +898,14 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
     let _private_listener = cos::extension_host::broker::bind_listener(
         &paths,
-        harness.identity.uid,
+        harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("private broker listener");
     let expires = cos::agentd::grant::now_ms() + 60_000;
     let mut host = cos::extension_host::spawn::spawn_host(
         &harness.identity,
+        &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
         "gid-boundary",
@@ -823,7 +927,11 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
     .expect("spawn host");
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert!(host.child.try_wait().expect("host status").is_none());
-    assert_eq!(status_ids(host.pid, "Uid:"), vec![harness.identity.uid; 4]);
+    assert_eq!(
+        status_ids(host.pid, "Uid:"),
+        vec![harness.extension_identity.uid; 4]
+    );
+    assert_ne!(harness.extension_identity.uid, harness.identity.uid);
     assert_eq!(
         status_ids(host.pid, "Gid:"),
         vec![harness.isolation.execution_gid(); 4]
@@ -839,11 +947,25 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
             .any(|target| target.ends_with("cgroup.procs")),
         "extension host inherited its cgroup attachment descriptor: {descriptors:?}"
     );
+    assert!(
+        !descriptors
+            .iter()
+            .any(|target| target.starts_with(&host.paths.dir)),
+        "extension host inherited a broker path descriptor: {descriptors:?}"
+    );
     let environ = std::fs::read(format!("/proc/{}/environ", host.pid)).expect("host environment");
     let environ = String::from_utf8_lossy(&environ);
     assert!(
         !environ.contains(cos::extension_host::spawn::CGROUP_ROOT_ENV),
         "extension host inherited broker cgroup configuration"
+    );
+    assert!(
+        !environ.contains(harness.identity.home.to_string_lossy().as_ref()),
+        "extension host inherited the task owner's home path"
+    );
+    assert!(
+        environ.contains(host.paths.control_dir.to_string_lossy().as_ref()),
+        "extension host did not receive its controlled task-local home"
     );
     let socket = std::fs::metadata(&harness.primary_path).expect("primary socket");
     use std::os::unix::fs::MetadataExt;
@@ -874,6 +996,152 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         "task completion left its containment cgroup behind"
     );
     host.paths.cleanup();
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+        harness.isolation.execution_gid(),
+    )
+    .expect("load extension uid pool");
+    assert_eq!(pool.len(), 64);
+    let first = pool.acquire(harness.identity.uid).expect("first uid lease");
+    let second = pool
+        .acquire(harness.identity.uid)
+        .expect("second uid lease");
+    assert_ne!(first.identity().uid, second.identity().uid);
+    let independent_pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+        harness.isolation.execution_gid(),
+    )
+    .expect("load independent uid pool");
+    let third = independent_pool
+        .acquire(harness.identity.uid)
+        .expect("cross-pool uid lease");
+    assert_ne!(third.identity().uid, first.identity().uid);
+    assert_ne!(third.identity().uid, second.identity().uid);
+    first.release();
+    second.release();
+    third.release();
+
+    let mut worker = spawn::spawn_worker(&harness.identity, &harness.isolation, "ptrace-target")
+        .expect("worker");
+    let worker_pid = worker.pid;
+
+    let mut ordinary_command = std::process::Command::new("sleep");
+    ordinary_command.arg("60");
+    let mut ordinary = drop_command_identity(
+        &mut ordinary_command,
+        harness.identity.uid,
+        harness.identity.gid,
+    )
+    .spawn()
+    .expect("ordinary same-user process");
+
+    let sibling_uid = harness.extension_identity.uid + 1;
+    let mut sibling_command = std::process::Command::new("sleep");
+    sibling_command.arg("60");
+    let mut sibling = drop_command_identity(
+        &mut sibling_command,
+        sibling_uid,
+        harness.isolation.execution_gid(),
+    )
+    .spawn()
+    .expect("sibling extension process");
+
+    let probe = install_process_isolation_probe(&harness, worker_pid, ordinary.id(), sibling.id());
+    std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &probe);
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _private_listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        harness.extension_identity.uid,
+        harness.isolation.execution_gid(),
+    )
+    .expect("activate secure host paths");
+    let report = PathBuf::from(format!(
+        "{}.isolation",
+        paths.control_socket.to_string_lossy()
+    ));
+    let mut host = cos::extension_host::spawn::spawn_host(
+        &harness.identity,
+        &harness.extension_identity,
+        &harness.isolation,
+        &harness.containment,
+        "process-isolation",
+        None,
+        None,
+        std::process::id(),
+        process_start(std::process::id()),
+        "0123456789abcdef0123456789abcdef",
+        cos::agentd::grant::now_ms() + 60_000,
+        paths,
+    )
+    .expect("spawn process isolation probe");
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let values: serde_json::Value = loop {
+        if let Ok(raw) = std::fs::read_to_string(&report) {
+            if let Ok(values) = serde_json::from_str(&raw) {
+                break values;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "extension isolation probe did not report"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    };
+    let _ = std::fs::remove_file(&report);
+
+    let host_uids = status_ids(host.pid, "Uid:");
+    let seccomp = proc_field(host.pid, "Seccomp:");
+    host.cgroup.cleanup().await.expect("clean probe cgroup");
+    let _ = host.child.wait().await;
+    host.paths.cleanup();
+    let _ = worker.child.start_kill();
+    unsafe {
+        spawn::terminate_worker_group(worker_pid, libc::SIGKILL);
+    }
+    let _ = worker.child.wait().await;
+    let _ = ordinary.kill();
+    let _ = ordinary.wait();
+    let _ = sibling.kill();
+    let _ = sibling.wait();
+
+    assert_eq!(host_uids, vec![harness.extension_identity.uid; 4]);
+    assert_eq!(seccomp.as_deref(), Some("2"));
+    for name in [
+        "ptrace_worker",
+        "ptrace_ordinary",
+        "ptrace_sibling",
+        "ptrace_self",
+        "process_vm_readv_self",
+        "process_vm_writev_self",
+        "kcmp_self",
+        "pidfd_getfd",
+    ] {
+        assert_eq!(
+            values[name],
+            serde_json::json!([-1, libc::EPERM]),
+            "{name}: {values}"
+        );
+    }
+    for name in ["mem_worker", "mem_ordinary", "mem_sibling", "cgroup_escape"] {
+        assert_eq!(values[name][0], -1, "{name}: {values}");
+        assert!(
+            matches!(
+                values[name][1].as_i64(),
+                Some(value) if value == i64::from(libc::EACCES) || value == i64::from(libc::EPERM)
+            ),
+            "{name}: {values}"
+        );
+    }
+    assert_ne!(harness.extension_identity.uid, harness.identity.uid);
+    assert_ne!(harness.extension_identity.uid, sibling_uid);
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -963,7 +1231,7 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
     .expect("spawn broker socket racer");
     let listener = cos::extension_host::broker::bind_listener(
         &paths,
-        harness.identity.uid,
+        harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("bind broker listener through pinned task directory");
@@ -975,12 +1243,12 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
     assert_eq!(task_meta.gid(), 0);
     assert_eq!(task_meta.mode() & 0o7777, 0o711);
     let control_meta = std::fs::metadata(&paths.control_dir).expect("control directory metadata");
-    assert_eq!(control_meta.uid(), harness.identity.uid);
+    assert_eq!(control_meta.uid(), harness.extension_identity.uid);
     assert_eq!(control_meta.gid(), harness.isolation.execution_gid());
     assert_eq!(control_meta.mode() & 0o7777, 0o710);
     let socket_meta = std::fs::symlink_metadata(&paths.broker_socket).expect("broker socket");
     assert!(socket_meta.file_type().is_socket());
-    assert_eq!(socket_meta.uid(), harness.identity.uid);
+    assert_eq!(socket_meta.uid(), harness.extension_identity.uid);
     assert_eq!(socket_meta.gid(), harness.isolation.execution_gid());
     assert_eq!(socket_meta.mode() & 0o7777, 0o600);
 
@@ -996,7 +1264,7 @@ async fn root_path_setup_resists_legacy_symlinks_hardlinks_and_replacement_races
     drop(listener);
     let control_symlink = std::process::Command::new("setpriv")
         .args([
-            format!("--reuid={}", harness.identity.uid),
+            format!("--reuid={}", harness.extension_identity.uid),
             format!("--regid={}", harness.isolation.execution_gid()),
             "--clear-groups".to_string(),
             "ln".to_string(),
@@ -1058,7 +1326,7 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
     let _private_listener = cos::extension_host::broker::bind_listener(
         &paths,
-        harness.identity.uid,
+        harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("activate secure host paths");
@@ -1069,6 +1337,7 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
     let expires = cos::agentd::grant::now_ms() + 60_000;
     let mut host = cos::extension_host::spawn::spawn_host(
         &harness.identity,
+        &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
         "daemonized-descendant",
@@ -1127,7 +1396,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
     let _private_listener = cos::extension_host::broker::bind_listener(
         &paths,
-        harness.identity.uid,
+        harness.extension_identity.uid,
         harness.isolation.execution_gid(),
     )
     .expect("activate secure host paths");
@@ -1137,6 +1406,7 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
     ));
     let mut host = cos::extension_host::spawn::spawn_host(
         &harness.identity,
+        &harness.extension_identity,
         &harness.isolation,
         &harness.containment,
         "cancel-daemonized-descendant",
@@ -1184,11 +1454,16 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
     let session_id = "acl-probe-session";
     cos::proc::register_session_for_owner(acl_probe_session(session_id), PROBE_UID)
         .expect("register routed ACL probe");
+    cos::storage::install_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
+        .expect("grant extension registry reader");
     let registry = format!("/run/cos/caps/{PROBE_UID}/proc/registry.json");
 
     for (uid, gid) in [
         (PROBE_UID, harness.identity.gid),
-        (PROBE_UID, harness.isolation.execution_gid()),
+        (
+            harness.extension_identity.uid,
+            harness.isolation.execution_gid(),
+        ),
     ] {
         let read = std::process::Command::new("setpriv")
             .args([
@@ -1228,6 +1503,10 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
 
     for (uid, gid) in [
         (harness.identity.uid, harness.isolation.execution_gid()),
+        (
+            harness.extension_identity.uid + 1,
+            harness.isolation.execution_gid(),
+        ),
         (424_243, 424_243),
     ] {
         let denied = std::process::Command::new("setpriv")
@@ -1247,6 +1526,24 @@ fn routed_registry_is_readable_but_not_writable_by_authorized_identities() {
             "unrelated uid {uid} gid {gid} read routed registry"
         );
     }
+    cos::storage::remove_routed_extension_reader(PROBE_UID, harness.extension_identity.uid)
+        .expect("revoke extension registry reader");
+    let revoked = std::process::Command::new("setpriv")
+        .args([
+            format!("--reuid={}", harness.extension_identity.uid),
+            format!("--regid={}", harness.isolation.execution_gid()),
+            "--clear-groups".to_string(),
+            "cat".to_string(),
+            registry.clone(),
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .expect("run revoked registry reader");
+    assert!(
+        !revoked.success(),
+        "revoked extension uid retained ACL access"
+    );
     cos::proc::deregister_session_for_owner(session_id, PROBE_UID);
     let _ = std::fs::remove_dir_all(format!("/run/cos/caps/{PROBE_UID}"));
 }
@@ -1445,6 +1742,18 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
         extension_cgroups(&harness.cgroup_root).is_empty(),
         "task completion left an extension cgroup behind"
     );
+    let released_pool = cos::extension_host::identity::ExtensionIdentityPool::load(
+        harness.isolation.execution_gid(),
+    )
+    .expect("reload extension uid pool");
+    let released = released_pool
+        .acquire(harness.identity.uid)
+        .expect("completed task released its extension uid");
+    assert_eq!(
+        released.identity().uid,
+        cos::extension_host::identity::DEFAULT_UID_MIN
+    );
+    released.release();
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1472,7 +1781,17 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
         0,
         "chown owner home"
     );
-    let marker = owner_home.path().join("host-side-effect.log");
+    let marker_dir = harness.runtime_dir.join("host-side-effect");
+    std::fs::create_dir(&marker_dir).expect("create side-effect directory");
+    let raw_marker = std::ffi::CString::new(marker_dir.as_os_str().as_encoded_bytes()).unwrap();
+    assert_eq!(
+        unsafe { libc::chown(raw_marker.as_ptr(), 0, harness.isolation.execution_gid(),) },
+        0,
+        "chown side-effect directory"
+    );
+    std::fs::set_permissions(&marker_dir, std::fs::Permissions::from_mode(0o730))
+        .expect("chmod side-effect directory");
+    let marker = marker_dir.join("host-side-effect.log");
     let malicious = install_crashing_control_host(&harness, &marker);
     std::env::set_var(cos::extension_host::spawn::HOST_BINARY_ENV, &malicious);
     let queue = tempfile::tempdir().expect("queue");
@@ -1513,12 +1832,11 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
 
     assert_eq!(finished.status, JobStatus::Error);
     assert_eq!(finished.recovery_count, 0);
+    let error = finished.error.unwrap_or_default();
     assert!(
-        finished
-            .error
-            .unwrap_or_default()
-            .contains("extension host exited early"),
-        "unexpected terminal error"
+        error.contains("extension host exited early")
+            || error.contains("worker closed its channel"),
+        "unexpected terminal error: {error}"
     );
     assert!(
         store.claim_one().expect("requeue probe").is_none(),

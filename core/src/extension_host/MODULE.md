@@ -3,15 +3,15 @@
 ## Purpose
 
 `extension_host/` keeps dynamic App and MCP code outside both privileged
-`clawd` and the model/tool worker. `clawd` spawns one
-`claw-extension-host` process per task as the task uid with the dedicated
+`clawd` and the model/tool worker. `clawd` leases one unmapped host uid per
+active task and spawns `claw-extension-host` with that uid plus the dedicated
 `cos-extension` primary gid; `claw-agentd`
 uses a separate task-bound control socket to attach, call, cancel, and detach
 extensions.
 
 ## Responsibilities
 
-- Spawn the host with the task uid, dedicated non-broker gid, no supplementary
+- Spawn the host with an exclusive unmapped uid, dedicated non-broker gid, no supplementary
   groups, `NoNewPrivs`, `0077` umask,
   descriptor and environment allowlists, its own session/process group, finite
   rlimits, mandatory verified cgroup-v2 containment, and optional IPC/UTS
@@ -37,6 +37,7 @@ extensions.
 | Path | Role |
 | --- | --- |
 | `protocol.rs` | Versioned worker-control contract and signed binding fields |
+| `identity.rs` | Passwd-unmapped uid-pool validation, exclusive leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
 | `client.rs` | `claw-agentd` client used by App and MCP registry adapters |
 | `host.rs` | Host process, control admission, App/MCP lifecycle and cancellation |
@@ -49,7 +50,7 @@ extensions.
 clawd supervisor
   -> spawn claw-agentd
   -> bind private extension broker socket
-  -> spawn claw-extension-host as task uid + cos-extension gid
+  -> lease unique extension uid and spawn host + descendants under it
   -> register exact host pid/start-time as an extension-host session
   -> sign host pid/start-time + socket paths + nonce into the worker grant
 
@@ -62,9 +63,10 @@ claw-agentd registry call
   -> normal route registry, capability authority, provider check and audit
 ```
 
-The private proxy is not `/run/cos/clawd.sock`. A same-uid sibling can discover
-or connect to its pathname, but it is rejected unless its kernel pid/start-time
-is the exact host or a descendant bound to the nearest App/MCP session.
+The private proxy is not `/run/cos/clawd.sock`. It belongs to the leased
+extension uid and rejects every other uid before checking whether the kernel
+pid/start-time is the exact host or a descendant bound to the nearest App/MCP
+session.
 Lifecycle routes are host-only; provider routes are child-only; task,
 scheduler, permission-decision, admin, and App-session routes are never
 available to an extension child.
@@ -86,6 +88,15 @@ supervisor. The host enters it in `pre_exec`, before privilege drop and
 writes `cgroup.kill`, waits for recursive `populated 0` plus an empty
 `cgroup.procs`, and removes the cgroup. Any failure is terminal and audited as
 `cleanup-failed`.
+
+The uid pool is a package-configured, passwd-unmapped range. Concurrent tasks
+never share an extension uid. A uid is released only after verified cgroup
+emptiness and routed-registry ACL revocation; stale processes or ACLs make it
+unavailable until they are safely purged. The proxy preserves task-owner
+authority as a separate principal field while recording the actual execution
+uid. Host/child seccomp denies ptrace, process-vm access, `kcmp`, and
+`pidfd_getfd`, and task-local home/data/cache/log paths avoid exposing the
+owner's home. The worker and host both become non-dumpable at process entry.
 
 The supervisor retries only failures proven to precede delivery of the worker
 assignment. After delivery, an extension call may already have produced an

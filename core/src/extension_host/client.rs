@@ -125,10 +125,17 @@ impl ExtensionHostClient {
                 Ok(HostResult::Ready {
                     pid,
                     start_time_ticks,
+                    dumpable,
+                    seccomp_mode,
                 }) if pid == self.binding.host_pid
                     && start_time_ticks == self.binding.host_start_time_ticks =>
                 {
-                    return Ok(())
+                    if dumpable || seccomp_mode != 2 {
+                        return Err(
+                            "extension host did not retain dumpable/seccomp hardening".to_string()
+                        );
+                    }
+                    return Ok(());
                 }
                 Ok(_) => {
                     return Err("extension host returned an invalid ready response".to_string())
@@ -579,7 +586,7 @@ fn verify_host_peer(stream: &UnixStream, binding: &ExtensionBinding) -> Result<(
         .pid()
         .and_then(|pid| u32::try_from(pid).ok())
         .ok_or_else(|| "extension-host peer pid is unavailable".to_string())?;
-    if credentials.uid() != binding.owner_uid || pid != binding.host_pid {
+    if credentials.uid() != binding.extension_uid || pid != binding.host_pid {
         return Err("extension-host socket belongs to a different process".to_string());
     }
     if crate::proc::read_start_time_ticks_pub(pid) != binding.host_start_time_ticks {

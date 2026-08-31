@@ -13,6 +13,33 @@ enable_if_previously_enabled() {
     fi
 }
 
+validate_extension_uid_range() {
+    config=/etc/cos/extension-uids.conf
+    uid_min=$(sed -n 's/^COS_EXTENSION_UID_MIN=//p' "$config")
+    uid_count=$(sed -n 's/^COS_EXTENSION_UID_COUNT=//p' "$config")
+    case "$uid_min:$uid_count" in
+        *[!0-9:]*|:*|*:) echo "invalid extension uid configuration in $config" >&2; exit 1 ;;
+    esac
+    if [ "$uid_min" -le 60000 ] || [ "$uid_count" -lt 1 ] || [ "$uid_count" -gt 64 ]; then
+        echo "extension uid range must start above 60000 and contain 1..64 uids" >&2
+        exit 1
+    fi
+    uid_last=$((uid_min + uid_count - 1))
+    if [ "$uid_last" -lt "$uid_min" ] || [ "$uid_last" -ge 4294967295 ]; then
+        echo "extension uid range overflows" >&2
+        exit 1
+    fi
+    uid=$uid_min
+    while [ "$uid" -le "$uid_last" ]; do
+        if getent passwd "$uid" >/dev/null 2>&1; then
+            echo "reserved extension uid $uid belongs to a host account" >&2
+            echo "choose a free range in $config before restarting clawd" >&2
+            exit 1
+        fi
+        uid=$((uid + 1))
+    done
+}
+
 case "$1" in
     configure)
         if command -v systemd-sysusers >/dev/null 2>&1; then
@@ -20,6 +47,7 @@ case "$1" in
         elif ! getent group cos-extension >/dev/null 2>&1; then
             groupadd --system cos-extension
         fi
+        validate_extension_uid_range
         install -d -m 0700 /var/lib/cos /var/log/cos
         rmdir /var/log/aos 2>/dev/null || true
 

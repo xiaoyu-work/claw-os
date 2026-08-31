@@ -609,6 +609,17 @@ pub(crate) fn raw_error(errno: libc::c_int) -> std::io::Error {
     std::io::Error::from_raw_os_error(errno)
 }
 
+pub(crate) fn set_process_undumpable() -> Result<(), String> {
+    #[cfg(target_os = "linux")]
+    if unsafe { libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) } != 0 {
+        return Err(format!(
+            "set process non-dumpable: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(())
+}
+
 fn place_channel_fd(channel_fd: RawFd) -> std::io::Result<()> {
     if channel_fd == protocol::CHANNEL_FD {
         // `dup2(fd, fd)` is a no-op and would leave FD_CLOEXEC set.

@@ -66,6 +66,7 @@ fn extension(
         task_id: task.to_string(),
         session_id: Some(session.to_string()),
         owner_uid: 1000,
+        extension_uid: 61_184,
         owner_gid: 1000,
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
@@ -125,6 +126,18 @@ fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
     replayed.claims.extension = Some(extension(88, "task-a", "session-b"));
     assert_eq!(
         signer.verify(&replayed, &expectation("hello"), 2_000),
+        Err(GrantError::Signature)
+    );
+
+    let mut substituted_uid = grant;
+    substituted_uid
+        .claims
+        .extension
+        .as_mut()
+        .unwrap()
+        .extension_uid += 1;
+    assert_eq!(
+        signer.verify(&substituted_uid, &expectation("hello"), 2_000),
         Err(GrantError::Signature)
     );
 }

@@ -48,6 +48,10 @@ the system is not normally needed.
 are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
+The package also installs `/etc/cos/extension-uids.conf`, defaulting to 64
+passwd-unmapped uids at `61184..=61247`. `postinst` and `clawd` both reject a
+range that overlaps any host account. Preserve a locally changed free range
+across upgrades; resolve collisions before restarting the daemon.
 The service delegates its cgroup-v2 subtree and uses
 `KillMode=control-group`. Agent tasks now fail closed unless the CPU, memory,
 and pids controllers plus a working `cgroup.kill` are available; ordinary
@@ -62,6 +66,11 @@ root ownership or mode changes to child pathnames. `/run` is ephemeral, so no
 operator migration is normally needed. A symlinked or otherwise unverifiable
 legacy parent fails agent execution closed and should be removed only after
 the administrator inspects it.
+Existing dynamic App/MCP tasks now receive task-local home/data/cache/log
+directories rather than task-owner home access. Bundled and system-installed
+extensions continue to work; custom MCP commands or working directories under
+owner-private paths must be moved to a system-readable location or have
+explicit read/traverse permissions.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:

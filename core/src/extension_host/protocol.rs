@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -68,6 +68,7 @@ pub struct ExtensionBinding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub owner_uid: u32,
+    pub extension_uid: u32,
     pub owner_gid: u32,
     pub worker_pid: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,7 +100,13 @@ impl ExtensionBinding {
         {
             return Err("extension-host binding has an invalid session id".to_string());
         }
-        if self.owner_uid == 0 || self.owner_gid == 0 || self.worker_pid <= 1 || self.host_pid <= 1 {
+        if self.owner_uid == 0
+            || self.extension_uid == 0
+            || self.extension_uid == self.owner_uid
+            || self.owner_gid == 0
+            || self.worker_pid <= 1
+            || self.host_pid <= 1
+        {
             return Err("extension-host binding names a privileged or invalid process".to_string());
         }
         if self.lease_nonce.len() != 32
@@ -256,6 +263,8 @@ pub enum HostResult {
         pid: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         start_time_ticks: Option<u64>,
+        dumpable: bool,
+        seccomp_mode: u32,
     },
     AppOutput {
         #[serde(default, skip_serializing_if = "Option::is_none")]

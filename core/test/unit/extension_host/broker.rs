@@ -107,6 +107,7 @@ fn the_private_broker_lease_binds_both_process_identities() {
         Some("session-a".to_string()),
         Some("extension-a".to_string()),
         unsafe { libc::geteuid() },
+        61_184,
         unsafe { libc::getegid() },
         pid,
         start,

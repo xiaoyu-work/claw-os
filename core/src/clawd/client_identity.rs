@@ -5,10 +5,10 @@ use super::transport::PeerProcess;
 
 /// The peer a request came from.
 ///
-/// Built from the credentials the kernel attached to the request
-/// message and confirmed against `/proc`, never from anything the
-/// request said about itself. See [`super::transport::peer`] for the
-/// exact Linux semantics.
+/// Built from credentials the kernel attached to the request and confirmed
+/// against `/proc`, never from request fields. The broker-owned extension
+/// proxy may additionally project its signed task-owner principal while
+/// retaining the actual host uid in [`Self::execution_uid`].
 #[derive(Debug, Clone, Serialize)]
 pub struct ClientIdentity {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -17,6 +17,12 @@ pub struct ClientIdentity {
     pub uid: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gid: Option<u32>,
+    /// Host-kernel uid of a process executing for the authenticated principal.
+    ///
+    /// Present only for the extension proxy, where an isolated uid is mapped
+    /// to the task owner's authority after exact lease/session checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_uid: Option<u32>,
     /// Field 22 of `/proc/<pid>/stat`, read when the peer was verified.
     ///
     /// Kept out of every serialization: it is an internal
@@ -39,6 +45,7 @@ impl ClientIdentity {
             pid: Some(process.pid),
             uid: Some(process.uid),
             gid: Some(process.gid),
+            execution_uid: None,
             start_time_ticks: Some(process.start_time_ticks),
             attended_local,
         }
@@ -49,22 +56,33 @@ impl ClientIdentity {
             pid: None,
             uid: None,
             gid: None,
+            execution_uid: None,
             start_time_ticks: None,
             attended_local: false,
         }
     }
 
-    /// Identity already verified from SCM credentials by a private broker
-    /// listener. This is not exposed outside the crate so request fields can
-    /// never manufacture a client principal.
-    pub(crate) fn from_verified_parts(pid: u32, uid: u32, gid: u32, start_time_ticks: u64) -> Self {
+    /// Identity already verified by the extension proxy. The host-kernel uid
+    /// stays visible while authority is projected as the task owner.
+    pub(crate) fn from_verified_delegation(
+        pid: u32,
+        principal_uid: u32,
+        execution_uid: u32,
+        gid: u32,
+        start_time_ticks: u64,
+    ) -> Self {
         Self {
             pid: Some(pid),
-            uid: Some(uid),
+            uid: Some(principal_uid),
             gid: Some(gid),
+            execution_uid: Some(execution_uid),
             start_time_ticks: Some(start_time_ticks),
             attended_local: false,
         }
+    }
+
+    pub fn process_uid(&self) -> Option<u32> {
+        self.execution_uid.or(self.uid)
     }
 
     /// Resolve this peer's `$HOME` directory from the passwd database

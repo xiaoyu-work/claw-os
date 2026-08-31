@@ -31,12 +31,16 @@ packaging/
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
-It creates the system group `cos-extension`; supervised workers and hosted
-extensions keep the task uid but use that primary gid so account membership in
-the broker socket group never becomes broker access. `clawd.service` also
+It creates the system group `cos-extension`; supervised workers keep the task
+uid, while hosted extensions use an exclusive passwd-unmapped uid from the
+configured 64-id range plus that primary gid. This blocks process injection
+into the task owner or another extension domain. `clawd.service` also
 delegates its cgroup-v2 subtree and pins `KillMode=control-group`; dynamic
 extension execution fails closed unless per-task CPU, memory, pids, and
 `cgroup.kill` containment can be verified.
+The uid range is a conffile at `/etc/cos/extension-uids.conf`; package
+configuration refuses to restart `clawd` if any configured uid maps to a
+passwd/NSS account.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the

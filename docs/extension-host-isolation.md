@@ -9,9 +9,9 @@ For each daemon-backed task:
 
 1. `clawd` claims the task and spawns `claw-agentd` as the task uid with the
    package-created `cos-extension` primary gid.
-2. `clawd` creates a private runtime directory and route-filtered broker
-   socket, then spawns `claw-extension-host` with the same uid and dedicated
-   gid.
+2. `clawd` leases an unmapped uid that no other active task may use, creates a
+   private runtime directory and route-filtered broker socket, then spawns
+   `claw-extension-host` with that uid and the dedicated gid.
 3. `clawd` registers the exact host pid/start-time as a child of the task
    session and signs the host identity, worker identity, socket paths, nonce,
    protocol version, and lease deadline into the worker grant.
@@ -30,8 +30,8 @@ Linux `SCM_CREDENTIALS` on every frame:
 - its request must name its nearest live App/MCP session, whose parent is the
   registered host session.
 
-A same-uid sibling, another task, another session, a recycled pid, or a child
-that names its host/sibling session is refused before normal broker dispatch.
+Another uid, task, session, recycled pid, or child that names its host/sibling
+session is refused before normal broker dispatch.
 Accepted requests still pass typed decoding, admission ceilings, capability
 authority, provider-side checks, and audit.
 
@@ -39,8 +39,8 @@ authority, provider-side checks, and audit.
 
 The host launch applies:
 
-- `setgroups(0, NULL)`, then irreversible uid drop to the task owner and gid
-  drop to `cos-extension`;
+- `setgroups(0, NULL)`, then irreversible uid drop to an exclusively leased
+  passwd-unmapped identity and gid drop to `cos-extension`;
 - a pinned snapshot of the real primary broker socket inode, ownership, mode,
   and canonical ancestors, plus an actual denied post-drop `connect(2)` before
   either worker or host may exec;
@@ -53,6 +53,9 @@ The host launch applies:
 - finite address-space, process, file-size, and descriptor limits;
 - best-effort IPC/UTS namespaces;
 - mandatory cgroup-v2 CPU, memory, OOM-group, and pid limits.
+- inherited seccomp `EPERM` denial for `ptrace`, process-vm read/write, `kcmp`,
+  and `pidfd_getfd`;
+- `PR_SET_DUMPABLE=0` at the first worker/host application entry point.
 
 Runtime path setup is descriptor-relative. The runtime, per-owner, and task
 directories stay root-owned and non-writable. `openat2` rejects symlinks,
@@ -64,6 +67,17 @@ single-link Unix socket with stable device/inode identity, and must map to the
 listener inode in `/proc/net/unix`. Only the final control subdirectory is
 then made writable by the host identity. A symlink or hardlink is unlinked,
 never followed by privileged ownership or mode changes.
+
+The package reserves 64 numeric identities (`61184..=61247`) above the normal
+login allocation range without creating passwd accounts. Every allocation
+rechecks passwd/NSS and `/proc`; any collision or live process fails closed.
+The uid remains reserved until cgroup cleanup and routed-registry ACL
+revocation both succeed. Before reuse, `clawd` rewrites owner registry ACLs to
+remove stale readers. The proxy authenticates the actual extension uid but
+projects only the already-bound task-owner principal through normal
+capability/approval enforcement. Home, data, cache, and log locations are
+task-local controlled directories; owner-private custom MCP executables must
+be explicitly made readable or installed system-wide.
 
 Before spawning a host, `clawd` establishes a delegated cgroup-v2 subtree with
 the CPU, memory, and pids controllers. The host writes its own pid through a
@@ -117,6 +131,8 @@ before entering model context.
 | --- | --- |
 | `COS_EXTENSION_HOST_BIN` | Host executable; defaults beside `clawd`, then `/usr/local/bin/claw-extension-host` |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated execution group; packaged default `cos-extension` |
+| `COS_EXTENSION_UID_MIN` | First unmapped execution uid; packaged default `61184` |
+| `COS_EXTENSION_UID_COUNT` | Number of exclusive execution uids; packaged default/max `64` |
 | `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally omitted so `clawd.service` prepares its own delegated subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | Set to `off` to disable best-effort IPC/UTS namespaces |
 

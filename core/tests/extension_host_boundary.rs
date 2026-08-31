@@ -228,8 +228,17 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
             return;
         }
     };
+    let extension_identity = cos::extension_host::identity::ExtensionIdentity {
+        uid: cos::extension_host::identity::DEFAULT_UID_MIN,
+        gid: execution_gid,
+        username: format!(
+            "cos-extension-{}",
+            cos::extension_host::identity::DEFAULT_UID_MIN
+        ),
+    };
     let paths = spawn::HostPaths::create(&identity).expect("paths");
-    let listener = broker::bind_listener(&paths, identity.uid, execution_gid).expect("listener");
+    let listener =
+        broker::bind_listener(&paths, extension_identity.uid, execution_gid).expect("listener");
     let isolation = match cos::agentd::spawn::ExecutionIsolation::capture(
         &paths.broker_socket,
         identity.uid,
@@ -255,6 +264,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
     let expires = cos::agentd::grant::now_ms() + 120_000;
     let mut host = spawn::spawn_host(
         &identity,
+        &extension_identity,
         &isolation,
         &containment,
         task_id,
@@ -303,6 +313,7 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         Some(task_session.to_string()),
         Some(host_session.to_string()),
         uid,
+        extension_identity.uid,
         unsafe { libc::getegid() },
         worker_pid,
         worker_start,

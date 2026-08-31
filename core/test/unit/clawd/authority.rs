@@ -19,6 +19,7 @@ fn client() -> crate::clawd::client_identity::ClientIdentity {
         pid: Some(pid),
         uid: Some(current_uid()),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         attended_local: false,
     }

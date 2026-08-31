@@ -106,6 +106,7 @@ fn every_worker_frame_names_its_route_and_task() {
             egid: 1000,
             supplementary_groups: Vec::new(),
             no_new_privs: true,
+            dumpable: false,
         })),
         WorkerFrame::Heartbeat {
             task_id: "task-a".to_string(),

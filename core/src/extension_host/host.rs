@@ -23,8 +23,9 @@ use super::protocol::{
     MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
 };
 use super::spawn::{
-    CONTROL_SOCKET_ENV, ENFORCE_GROUPS_ENV, EXECUTION_GID_ENV, LEASE_EXPIRES_ENV, LEASE_NONCE_ENV,
-    TASK_ENV, TASK_SESSION_ENV, WORKER_PID_ENV, WORKER_START_ENV,
+    CONTROL_SOCKET_ENV, ENFORCE_GROUPS_ENV, EXECUTION_GID_ENV, EXTENSION_UID_ENV,
+    LEASE_EXPIRES_ENV, LEASE_NONCE_ENV, TASK_ENV, TASK_SESSION_ENV, WORKER_PID_ENV,
+    WORKER_START_ENV, WORKER_UID_ENV,
 };
 
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -40,7 +41,7 @@ struct HostedMcp {
 struct HostState {
     task_id: String,
     session_id: Option<String>,
-    owner_uid: u32,
+    worker_uid: u32,
     owner_gid: u32,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
@@ -65,6 +66,7 @@ pub fn main() -> ! {
 
 fn run() -> Result<(), String> {
     crate::storage::set_private_umask();
+    crate::agentd::spawn::set_process_undumpable()?;
     #[cfg(target_os = "linux")]
     unsafe {
         if libc::prctl(libc::PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0 {
@@ -78,6 +80,9 @@ fn run() -> Result<(), String> {
     let control_socket = required_path(CONTROL_SOCKET_ENV)?;
     let task_id = required_env(TASK_ENV)?;
     let session_id = optional_env(TASK_SESSION_ENV);
+    let worker_uid = required_env(WORKER_UID_ENV)?
+        .parse::<u32>()
+        .map_err(|error| format!("invalid extension worker uid: {error}"))?;
     let worker_pid = required_env(WORKER_PID_ENV)?
         .parse::<u32>()
         .map_err(|error| format!("invalid extension worker pid: {error}"))?;
@@ -95,21 +100,27 @@ fn run() -> Result<(), String> {
     if crate::agentd::grant::now_ms() > initial_expires_at_ms {
         return Err("extension-host task lease expired before startup".to_string());
     }
-    let owner_uid = unsafe { libc::geteuid() } as u32;
-    if owner_uid == 0 {
-        return Err("extension host must not run as root".to_string());
+    let extension_uid = required_env(EXTENSION_UID_ENV)?
+        .parse::<u32>()
+        .map_err(|error| format!("invalid extension execution uid: {error}"))?;
+    if extension_uid == 0
+        || extension_uid == worker_uid
+        || unsafe { libc::geteuid() } as u32 != extension_uid
+    {
+        return Err("extension host must run as its distinct leased uid".to_string());
     }
     let owner_gid = required_env(EXECUTION_GID_ENV)?
         .parse::<u32>()
         .map_err(|error| format!("invalid extension execution gid: {error}"))?;
     require_hardened_identity(
-        owner_uid,
+        extension_uid,
         owner_gid,
         std::env::var(ENFORCE_GROUPS_ENV).as_deref() == Ok("1"),
     )?;
     for key in [
         TASK_ENV,
         TASK_SESSION_ENV,
+        WORKER_UID_ENV,
         WORKER_PID_ENV,
         WORKER_START_ENV,
         LEASE_NONCE_ENV,
@@ -117,6 +128,7 @@ fn run() -> Result<(), String> {
         CONTROL_SOCKET_ENV,
         ENFORCE_GROUPS_ENV,
         EXECUTION_GID_ENV,
+        EXTENSION_UID_ENV,
     ] {
         std::env::remove_var(key);
     }
@@ -136,13 +148,13 @@ fn run() -> Result<(), String> {
             .map_err(|error| format!("bind extension control socket: {error}"))?;
         peer::enable_credential_passing(listener.as_raw_fd())
             .map_err(|error| format!("enable extension peer credentials: {error}"))?;
-        std::fs::set_permissions(&control_socket, std::fs::Permissions::from_mode(0o600))
+        std::fs::set_permissions(&control_socket, std::fs::Permissions::from_mode(0o660))
             .map_err(|error| format!("protect extension control socket: {error}"))?;
 
         let state = Arc::new(HostState {
             task_id,
             session_id,
-            owner_uid,
+            worker_uid,
             owner_gid,
             worker_pid,
             worker_start_time_ticks,
@@ -322,7 +334,7 @@ fn validate_request(
             request.protocol, PROTOCOL_VERSION
         ));
     }
-    if process.uid != state.owner_uid
+    if process.uid != state.worker_uid
         || process.gid != state.owner_gid
         || process.pid != state.worker_pid
         || Some(process.start_time_ticks) != state.worker_start_time_ticks
@@ -372,6 +384,10 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         HostAction::Ping => Ok(HostResult::Ready {
             pid: std::process::id(),
             start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
+            dumpable: unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) } == 1,
+            seccomp_mode: unsafe { libc::prctl(libc::PR_GET_SECCOMP, 0, 0, 0, 0) }
+                .try_into()
+                .unwrap_or_default(),
         }),
         HostAction::RunApp {
             app_id,

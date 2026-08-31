@@ -1158,6 +1158,7 @@ fn test_client() -> ClientIdentity {
         pid: Some(pid),
         uid: Some(this_uid()),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks,
         attended_local: false,
     }
@@ -1429,6 +1430,7 @@ fn e2e_client() -> ClientIdentity {
         pid: Some(pid),
         uid: Some(E2E_UID),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks,
         attended_local: false,
     }

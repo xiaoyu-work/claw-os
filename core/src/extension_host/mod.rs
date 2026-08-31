@@ -12,6 +12,8 @@ pub mod broker;
 pub mod client;
 #[cfg(unix)]
 pub mod host;
+#[cfg(unix)]
+pub mod identity;
 pub mod protocol;
 #[cfg(unix)]
 pub mod spawn;

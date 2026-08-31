@@ -5,8 +5,9 @@
 `agentd/` isolates the model/tool runtime from the privileged broker. Provider
 HTTP clients, streaming parsers, prompt assembly, and tool orchestration run in
 a short-lived `claw-agentd` process owned by the task's submitter. Dynamic App
-and MCP code runs one boundary farther out in a task-owned
-`claw-extension-host`. Root `clawd` supervises both but executes neither.
+and MCP code runs one boundary farther out under an exclusively leased,
+passwd-unmapped uid in `claw-extension-host`. Root `clawd` supervises both but
+executes neither.
 
 ## Responsibilities
 
@@ -72,8 +73,9 @@ cannot inherit, read, or write the private worker channel or impersonate task
 frames.
 
 The signed job grant also covers an `ExtensionBinding`: the owner, task,
-durable session, worker pid/start-time, host pid/start-time, protocol version,
-random lease nonce, deadline, and private socket paths. The host accepts
+durable session, distinct extension uid, worker pid/start-time, host
+pid/start-time, protocol version, random lease nonce, deadline, and private
+socket paths. The host accepts
 control requests only from the exact worker credentials. Its broker proxy
 accepts lifecycle routes only from the exact host and provider routes only
 from a descendant's nearest registered App/MCP session.
@@ -158,6 +160,14 @@ one would put the model/tool loop back in a root process, which is the thing
 this module exists to prevent. Single-account container and WSL images must give
 the agent its own unprivileged account; there is no opt-out switch.
 
+This residual boundary no longer applies to dynamic App/MCP code. Each active
+extension containment domain has a distinct unmapped host uid, so it cannot
+ptrace the task-owner worker, another user process, or another task's
+extension. An inherited seccomp filter also denies ptrace/process-vm/kcmp and
+pidfd descriptor borrowing, while `PR_SET_DUMPABLE=0` protects both worker and
+host. The broker temporarily grants only that extension uid read access to the
+owner's routed session registry; the ACL is revoked before uid reuse.
+
 ## Known Consequences
 
 Removing the worker's broker access is deliberate:
@@ -215,6 +225,8 @@ keeps working.
 | `CLAWD_AGENTD` | `off` disables agent supervision (default on) |
 | `COS_AGENTD_BIN` | Worker executable (default: beside `clawd`, else `/usr/local/bin/claw-agentd`) |
 | `COS_EXTENSION_EXEC_GROUP` | Dedicated primary group for worker/host/App/MCP execution (packaged default `cos-extension`) |
+| `COS_EXTENSION_UID_MIN` | First passwd-unmapped extension uid (packaged default 61184) |
+| `COS_EXTENSION_UID_COUNT` | Exclusive uid-pool size, 1–64 (packaged default 64) |
 | `COS_EXTENSION_HOST_BIN` | Extension host executable (default: beside `clawd`, else `/usr/local/bin/claw-extension-host`) |
 | `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally `clawd` prepares its systemd unit subtree |
 | `CLAWD_EXTENSION_HOST_NAMESPACES` | `off` disables best-effort IPC/UTS namespaces; all other host isolation remains |

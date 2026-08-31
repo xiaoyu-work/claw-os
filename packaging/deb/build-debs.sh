@@ -280,6 +280,8 @@ install -m 755 "$SCRIPT_DIR/claw-os-agent/postrm" "$AGENT_STAGE/DEBIAN/postrm"
 install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
+install -m 644 "$SCRIPT_DIR/claw-os-agent/extension-uids.conf" \
+    "$AGENT_STAGE/etc/cos/extension-uids.conf"
 
 COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }

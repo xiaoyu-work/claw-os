@@ -17,6 +17,9 @@ UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
 SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
 POSTINST="$PROJECT_DIR/packaging/deb/claw-os-agent/postinst"
+UID_CONFIG="$PROJECT_DIR/packaging/deb/claw-os-agent/extension-uids.conf"
+IDENTITY_RS="$PROJECT_DIR/core/src/extension_host/identity.rs"
+CONFFILES="$PROJECT_DIR/packaging/deb/claw-os-agent/conffiles"
 
 fail() {
     printf 'not ok - %s\n' "$*" >&2
@@ -31,6 +34,7 @@ assert_contains() {
 }
 
 bash -n "$BUILD_DEBS" || fail "build-debs.sh is not valid bash"
+bash -n "$POSTINST" || fail "claw-os-agent postinst is not valid shell"
 
 assert_contains "$CARGO_TOML" 'name = "claw-agentd"' \
     "the agent worker must be a first-class cargo binary"
@@ -59,6 +63,26 @@ assert_contains "$SYSUSERS" 'g cos-extension - -' \
     "the extension host must have a dedicated system group"
 assert_contains "$POSTINST" 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf' \
     "postinst must create the extension execution group before starting clawd"
+assert_contains "$BUILD_DEBS" '/etc/cos/extension-uids.conf' \
+    "claw-os-agent must install its reserved extension uid range"
+assert_contains "$CONFFILES" '/etc/cos/extension-uids.conf' \
+    "local uid-range changes must survive package upgrades"
+assert_contains "$UID_CONFIG" 'COS_EXTENSION_UID_MIN=61184' \
+    "the package must pin the isolated uid range"
+assert_contains "$UID_CONFIG" 'COS_EXTENSION_UID_COUNT=64' \
+    "the uid pool must cover the maximum worker concurrency"
+assert_contains "$IDENTITY_RS" 'DEFAULT_UID_MIN: u32 = 61_184' \
+    "runtime and packaged uid-range start must agree"
+assert_contains "$IDENTITY_RS" 'DEFAULT_UID_COUNT: u32 = 64' \
+    "runtime and packaged uid-range size must agree"
+assert_contains "$POSTINST" 'reserved extension uid $uid belongs to a host account' \
+    "upgrades must fail closed on uid collisions"
+uid_min=$(sed -n 's/^COS_EXTENSION_UID_MIN=//p' "$UID_CONFIG")
+uid_count=$(sed -n 's/^COS_EXTENSION_UID_COUNT=//p' "$UID_CONFIG")
+for uid in $(seq "$uid_min" $((uid_min + uid_count - 1))); do
+    getent passwd "$uid" >/dev/null 2>&1 &&
+        fail "packaged extension uid $uid collides with a host account"
+done
 
 # The staged worker path and the path the unit hands clawd have to agree,
 # or the daemon looks for a binary the package never installed.
@@ -68,6 +92,8 @@ assert_contains "$UNIT" 'COS_EXTENSION_HOST_BIN=/usr/local/bin/claw-extension-ho
     "clawd.service must point at the installed extension host"
 assert_contains "$UNIT" 'COS_EXTENSION_EXEC_GROUP=cos-extension' \
     "clawd.service must pin the dedicated extension execution group"
+assert_contains "$UNIT" 'EnvironmentFile=-/etc/cos/extension-uids.conf' \
+    "clawd.service must load the reserved extension uid range"
 assert_contains "$UNIT" 'CLAWD_EXTENSION_HOST_NAMESPACES=on' \
     "clawd.service must enable available extension-host namespaces"
 grep -Eq '^Delegate=yes$' "$UNIT" ||

@@ -21,7 +21,7 @@ use sha2::Sha256;
 
 /// Wire format version. Bumped whenever the claim set changes shape so
 /// a mixed old/new install fails closed instead of mis-parsing.
-pub const GRANT_VERSION: u32 = 5;
+pub const GRANT_VERSION: u32 = 6;
 
 /// Intended recipient of the grant. A token issued for the worker
 /// channel is meaningless anywhere else because every verifier requires
@@ -191,6 +191,7 @@ impl GrantClaims {
                     None => push_u64(&mut buf, 0),
                 }
                 push_u64(&mut buf, extension.owner_uid as u64);
+                push_u64(&mut buf, extension.extension_uid as u64);
                 push_u64(&mut buf, extension.owner_gid as u64);
                 push_u64(&mut buf, extension.worker_pid as u64);
                 push_optional_u64(&mut buf, extension.worker_start_time_ticks);

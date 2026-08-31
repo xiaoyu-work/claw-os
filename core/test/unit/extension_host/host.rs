@@ -5,7 +5,7 @@ fn state() -> HostState {
     HostState {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
-        owner_uid: unsafe { libc::geteuid() },
+        worker_uid: unsafe { libc::geteuid() },
         owner_gid: unsafe { libc::getegid() },
         worker_pid: pid,
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),

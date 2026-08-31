@@ -1,6 +1,10 @@
+#[cfg(target_os = "linux")]
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -228,6 +232,120 @@ pub fn set_routed_registry_file(path: &Path, uid: u32) -> io::Result<()> {
     }
 }
 
+#[cfg(target_os = "linux")]
+fn routed_extension_readers() -> &'static Mutex<BTreeMap<u32, BTreeSet<u32>>> {
+    static READERS: OnceLock<Mutex<BTreeMap<u32, BTreeSet<u32>>>> = OnceLock::new();
+    READERS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(target_os = "linux")]
+pub fn install_routed_extension_reader(owner_uid: u32, execution_uid: u32) -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 || owner_uid == 0 || execution_uid == 0 {
+        return Err(
+            "routed extension ACLs require non-root identities and a root broker".to_string(),
+        );
+    }
+    {
+        let mut readers = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?;
+        readers.entry(owner_uid).or_default().insert(execution_uid);
+    }
+    if let Err(error) = refresh_routed_acl(owner_uid) {
+        if let Ok(mut readers) = routed_extension_readers().lock() {
+            if let Some(owner) = readers.get_mut(&owner_uid) {
+                owner.remove(&execution_uid);
+                if owner.is_empty() {
+                    readers.remove(&owner_uid);
+                }
+            }
+        }
+        let _ = refresh_routed_acl(owner_uid);
+        return Err(format!("install routed extension reader: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn remove_routed_extension_reader(owner_uid: u32, execution_uid: u32) -> Result<(), String> {
+    {
+        let mut readers = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?;
+        if let Some(owner) = readers.get_mut(&owner_uid) {
+            owner.remove(&execution_uid);
+            if owner.is_empty() {
+                readers.remove(&owner_uid);
+            }
+        }
+    }
+    refresh_routed_acl(owner_uid)
+        .map_err(|error| format!("remove routed extension reader: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+pub fn purge_routed_extension_reader(execution_uid: u32) -> Result<(), String> {
+    let root = Path::new("/run/cos/caps");
+    if !root.exists() {
+        return Ok(());
+    }
+    reject_symlink(root).map_err(|error| format!("inspect routed caps root: {error}"))?;
+    let owners = fs::read_dir(root).map_err(|error| format!("list routed caps owners: {error}"))?;
+    for entry in owners {
+        let entry = entry.map_err(|error| format!("read routed caps owner: {error}"))?;
+        let Some(owner_uid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let active = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?
+            .get(&owner_uid)
+            .is_some_and(|readers| readers.contains(&execution_uid));
+        if !active {
+            refresh_routed_acl(owner_uid).map_err(|error| {
+                format!("purge extension uid {execution_uid} from owner {owner_uid}: {error}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn install_routed_extension_reader(_owner_uid: u32, _execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn remove_routed_extension_reader(_owner_uid: u32, _execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn purge_routed_extension_reader(_execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_routed_acl(owner_uid: u32) -> Result<(), String> {
+    let root = Path::new("/run/cos/caps").join(owner_uid.to_string());
+    if !root.exists() {
+        return Ok(());
+    }
+    ensure_routed_caps_dir(&root, owner_uid)
+        .map_err(|error| format!("refresh routed capability directories: {error}"))?;
+    let registry = root.join("proc/registry.json");
+    if registry.exists() {
+        reject_symlink(&registry).map_err(|error| error.to_string())?;
+        set_routed_registry_file(&registry, owner_uid)
+            .map_err(|error| format!("refresh routed capability registry: {error}"))?;
+    }
+    Ok(())
+}
+
 fn harden_private_tree(root: &Path) -> io::Result<()> {
     let metadata = fs::symlink_metadata(root)?;
     if metadata.file_type().is_symlink() {
@@ -381,13 +499,26 @@ fn set_routed_acl(path: &Path, uid: u32, directory: bool) -> io::Result<()> {
         read | write
     };
     let reader_perm = if directory { read | execute } else { read };
-    let entries = [
-        (ACL_USER_OBJ, owner_perm, ACL_UNDEFINED_ID),
-        (ACL_USER, reader_perm, uid),
-        (ACL_GROUP_OBJ, 0, ACL_UNDEFINED_ID),
-        (ACL_MASK, reader_perm, ACL_UNDEFINED_ID),
-        (ACL_OTHER, 0, ACL_UNDEFINED_ID),
-    ];
+    let mut readers = BTreeSet::from([uid]);
+    if let Ok(active) = routed_extension_readers().lock() {
+        if let Some(extension_uids) = active.get(&uid) {
+            readers.extend(extension_uids);
+        }
+    } else {
+        return Err(io::Error::other(
+            "routed extension ACL registry is poisoned",
+        ));
+    }
+    let mut entries = Vec::with_capacity(4 + readers.len());
+    entries.push((ACL_USER_OBJ, owner_perm, ACL_UNDEFINED_ID));
+    entries.extend(
+        readers
+            .into_iter()
+            .map(|reader| (ACL_USER, reader_perm, reader)),
+    );
+    entries.push((ACL_GROUP_OBJ, 0, ACL_UNDEFINED_ID));
+    entries.push((ACL_MASK, reader_perm, ACL_UNDEFINED_ID));
+    entries.push((ACL_OTHER, 0, ACL_UNDEFINED_ID));
     let mut value = Vec::with_capacity(4 + entries.len() * 8);
     value.extend_from_slice(&ACL_XATTR_VERSION.to_le_bytes());
     for (tag, perm, id) in entries {
