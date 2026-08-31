@@ -119,6 +119,15 @@ fn sample_proc_stats_returns_self() {
     assert!(map.contains_key(&pid), "current process should be visible");
 }
 
+#[test]
+fn owner_visibility_requires_a_matching_process_uid() {
+    assert!(owner_can_observe_uid(1000, Some(1000)));
+    assert!(!owner_can_observe_uid(1000, Some(1001)));
+    assert!(!owner_can_observe_uid(1000, None));
+    assert!(owner_can_observe_uid(0, Some(1001)));
+    assert!(owner_can_observe_uid(0, None));
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn process_inspection_returns_owner_command_and_ancestry() {
@@ -185,19 +194,12 @@ fn num_cores_is_at_least_one() {
 // Capability gate
 // -----------------------------------------------------------------
 
-/// Regression: the top-level `run()` gate is read-only system
-/// observation, NOT kernel-module loading. Before this fix every
-/// subcommand asked for [`Verb::SYS_KERNEL`] ("Load kernel modules
-/// … reserved for trusted system tools", Risk::Critical), which
-/// the clawd-routed agent doesn't have by default. The correct
-/// verb per `caps::catalog` is [`Verb::SYS_OBSERVE`] ("Inspect
-/// system state … without changing them", Risk::Low) — already
-/// granted by [`crate::clawd::system_caps::system_agent_caps`].
-/// This test fails closed if anyone re-classifies the gate as a
-/// privileged verb again.
+/// Regression: use the exact capability set `clawd` gives a system-Agent
+/// task. A fixture with `Scope::Wild` previously hid the production mismatch
+/// between the narrow named domains and `sysinfo::run`.
 #[test]
 fn run_clears_gate_with_sys_observe_only() {
-    use crate::caps::{Cap, CapSet, Role};
+    use crate::caps::Role;
     use crate::proc::{deregister_session, register_session, SessionInfo};
 
     let _lock = crate::caps::test_env_lock::env_lock();
@@ -213,13 +215,11 @@ fn run_clears_gate_with_sys_observe_only() {
     let prev_perms = env::var_os("COS_PERMS_MODE");
     env::remove_var("COS_PERMS_MODE");
 
-    // Build a session that holds SYS_OBSERVE only — mirrors what
-    // `clawd::system_caps::system_agent_caps` hands out. PID is
-    // our own so the ancestry check in caps::enforcement passes
-    // without a real fork.
+    // Build the real system-Agent baseline. PID is our own so the ancestry
+    // check in caps::enforcement passes without a real fork.
     let session_id = format!("sysinfo-cap-test-{}", std::process::id());
-    let mut caps = CapSet::new();
-    caps.insert(Cap::new(Verb::SYS_OBSERVE, Scope::Wild));
+    let owner_uid = observation_owner_uid();
+    let caps = crate::clawd::system_caps::system_agent_caps(owner_uid, tmp.path());
     let info = SessionInfo {
         session_id: session_id.clone(),
         pid: std::process::id(),
@@ -245,11 +245,7 @@ fn run_clears_gate_with_sys_observe_only() {
     register_session(info).expect("register session");
     env::set_var("COS_SESSION", &session_id);
 
-    // Bogus command name so we hit the dispatch's "unknown
-    // command" arm immediately after the cap gate clears. If the
-    // gate is still on SYS_KERNEL, this errors with
-    // "permission denied" / "verb-not-granted" instead.
-    let result = run("__definitely-not-a-real-command__", &[]);
+    let result = run("info", &[]);
 
     // Restore env BEFORE asserting so a panic doesn't leak state
     // into other tests that share the lock.
@@ -267,14 +263,66 @@ fn run_clears_gate_with_sys_observe_only() {
         None => env::remove_var("COS_DATA_DIR"),
     }
 
-    let err = result.expect_err("dispatch should error on bogus command");
-    let lower = err.to_lowercase();
-    assert!(
-        !lower.contains("permission denied") && !lower.contains("not granted"),
-        "SYS_OBSERVE should be sufficient to clear the run() cap gate, but got: {err}"
+    let value = result.expect("the real system-Agent baseline should inspect host identity");
+    assert!(value.get("distribution").is_some());
+}
+
+#[test]
+fn request_plan_uses_exact_resource_capabilities() {
+    assert_eq!(
+        plan_request("info", &[]).unwrap().caps,
+        vec![Cap::new(Verb::SYS_OBSERVE, Scope::name("hardware"))]
     );
-    assert!(
-        lower.contains("unknown command"),
-        "expected to reach command dispatch (unknown command arm), got: {err}"
+    assert_eq!(
+        plan_request("coredumps", &[]).unwrap().caps,
+        vec![Cap::new(Verb::SYS_CRASH, Scope::name("system"))]
     );
+    assert_eq!(
+        plan_request("journal", &[]).unwrap().caps,
+        vec![Cap::new(Verb::SYS_EVENTS, Scope::name("observe"))]
+    );
+}
+
+#[test]
+fn largest_files_plan_is_bound_to_the_canonical_metadata_subtree() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let args = vec![
+        "--top".to_string(),
+        "5".to_string(),
+        root.path().display().to_string(),
+    ];
+    let plan = plan_request("largest_files", &args).expect("largest-files plan");
+    let canonical = root.path().canonicalize().expect("canonical root");
+    assert_eq!(
+        plan.largest_files_root.as_deref(),
+        Some(canonical.as_path())
+    );
+    assert_eq!(
+        plan.caps,
+        vec![Cap::new(
+            Verb::FS_META,
+            Scope::path(subtree_scope(&canonical))
+        )]
+    );
+}
+
+#[test]
+fn system_agent_baseline_does_not_cover_sensitive_sysinfo_plans() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let caps = crate::clawd::system_caps::system_agent_caps(observation_owner_uid(), root.path());
+    for command in [
+        "env",
+        "who",
+        "desktop",
+        "journal",
+        "services",
+        "coredumps",
+        "pkg_updates",
+    ] {
+        let plan = plan_request(command, &[]).expect("known command");
+        assert!(
+            plan.caps.iter().any(|cap| !caps.covers(cap)),
+            "{command} must retain at least one exact non-baseline capability"
+        );
+    }
 }

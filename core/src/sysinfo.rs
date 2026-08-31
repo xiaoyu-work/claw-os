@@ -1,7 +1,8 @@
 use serde_json::{json, Value};
 use std::env;
+use std::path::{Path, PathBuf};
 
-use crate::caps::{require_or_json, Scope, Verb};
+use crate::caps::{require_or_json, Cap, Scope, Verb};
 
 /// Built-in system information (replaces Python sys app for basic queries).
 ///
@@ -11,18 +12,18 @@ use crate::caps::{require_or_json, Scope, Verb};
 /// kernel surfaces return an explicit "requires Linux" error so the
 /// shape of the response is always machine-readable.
 ///
-/// Capability: every subcommand is read-only system observation, so the
-/// gate is [`Verb::SYS_OBSERVE`] (catalog: "Inspect system state … without
-/// changing them", Risk::Low). The previous gate was `Verb::SYS_KERNEL`
-/// ("Load kernel modules … reserved for trusted system tools",
-/// Risk::Critical), which mis-classified read-only ops like `loadavg` /
-/// `resources` / `uptime` as kernel-module loading and made
-/// clawd-routed agent jobs fail with `verb-not-granted: sys.kernel` even
-/// though [`crate::clawd::system_caps::system_agent_caps`] already
-/// grants `SYS_OBSERVE`. The cron/netfilter/checkpoint sites that
-/// *do* mutate kernel state still use `SYS_KERNEL`.
+/// Each subcommand is authorized against the resource it actually reads.
+/// Ordinary device telemetry uses a named `sys.observe` domain, process
+/// inspection is owner-filtered under `proc.observe`, filesystem walks use
+/// the exact `fs.meta` subtree, and sensitive logs/crash data retain their
+/// dedicated capabilities. A blanket `sys.observe:*` request would not be
+/// covered by the system Agent's intentionally narrow baseline.
 pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
-    require_or_json(Verb::SYS_OBSERVE, Scope::wild()).map_err(|v| v.to_string())?;
+    let plan = plan_request(command, args)?;
+    for cap in plan.caps {
+        require_or_json(cap.verb, cap.scope).map_err(|value| value.to_string())?;
+    }
+
     match command {
         // identity / environment
         "info" => cmd_info(),
@@ -51,7 +52,13 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         // storage
         "mounts" => cmd_mounts(),
         "disk_io" => cmd_disk_io(args),
-        "largest_files" => cmd_largest_files(args),
+        "largest_files" => {
+            let root = plan
+                .largest_files_root
+                .as_deref()
+                .ok_or_else(|| "internal: largest_files request omitted its root".to_string())?;
+            cmd_largest_files(root, args)
+        }
 
         // logs
         "journal" => cmd_journal(args),
@@ -66,6 +73,117 @@ pub fn run(command: &str, args: &[String]) -> Result<Value, String> {
         "pkg_updates" => cmd_pkg_updates(),
 
         _ => Err(format!("unknown command: {command}")),
+    }
+}
+
+#[derive(Debug)]
+struct RequestPlan {
+    caps: Vec<Cap>,
+    largest_files_root: Option<PathBuf>,
+}
+
+impl RequestPlan {
+    fn new(caps: impl IntoIterator<Item = Cap>) -> Self {
+        Self {
+            caps: caps.into_iter().collect(),
+            largest_files_root: None,
+        }
+    }
+
+    fn largest_files(root: PathBuf) -> Self {
+        let scope = subtree_scope(&root);
+        Self {
+            caps: vec![Cap::new(Verb::FS_META, Scope::path(scope))],
+            largest_files_root: Some(root),
+        }
+    }
+}
+
+fn plan_request(command: &str, args: &[String]) -> Result<RequestPlan, String> {
+    let observe = |domain| RequestPlan::new([Cap::new(Verb::SYS_OBSERVE, Scope::name(domain))]);
+    let processes = || {
+        RequestPlan::new([Cap::new(
+            Verb::PROC_OBSERVE,
+            Scope::self_ref("owner-processes"),
+        )])
+    };
+
+    Ok(match command {
+        "info" | "uptime" | "loadavg" | "cgroup" => observe("hardware"),
+        "env" => {
+            if args.iter().any(|arg| arg == "--include-secrets") {
+                RequestPlan::new([Cap::new(Verb::SYS_SECURITY, Scope::name("environment"))])
+            } else {
+                observe("environment")
+            }
+        }
+        "who" => observe("identities"),
+        "desktop" => observe("desktop"),
+        "resources" | "sensors" => observe("hardware"),
+        "proc" | "process" | "top" | "threads" => processes(),
+        "port" | "net" | "net_rate" => observe("network"),
+        "mounts" | "disk_io" => observe("storage"),
+        "largest_files" => RequestPlan::largest_files(canonical_largest_files_root(args)?),
+        "journal" | "dmesg" => {
+            RequestPlan::new([Cap::new(Verb::SYS_EVENTS, Scope::name("observe"))])
+        }
+        "services" | "failed_units" => observe("services"),
+        "coredumps" => RequestPlan::new([Cap::new(Verb::SYS_CRASH, Scope::name("system"))]),
+        "pkg_updates" => observe("packages"),
+        _ => return Err(format!("unknown command: {command}")),
+    })
+}
+
+fn canonical_largest_files_root(args: &[String]) -> Result<PathBuf, String> {
+    let mut root = None;
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        match arg.as_str() {
+            "--top" | "--min-mb" => {
+                if args.get(index + 1).is_none() {
+                    return Err(format!("{arg} requires a value"));
+                }
+                index += 2;
+            }
+            value if value.starts_with("--top=") || value.starts_with("--min-mb=") => {
+                index += 1;
+            }
+            value if value.starts_with("--") => {
+                return Err(format!("unknown largest_files flag: {value}"));
+            }
+            value if root.is_none() => {
+                root = Some(value);
+                index += 1;
+            }
+            value => {
+                return Err(format!("unexpected largest_files argument: {value}"));
+            }
+        }
+    }
+
+    let root = PathBuf::from(root.unwrap_or("/"));
+    let canonical = root.canonicalize().map_err(|error| {
+        format!(
+            "canonicalize largest_files root {}: {error}",
+            root.display()
+        )
+    })?;
+    if !canonical.is_dir() {
+        return Err(format!(
+            "largest_files root is not a directory: {}",
+            canonical.display()
+        ));
+    }
+    Ok(canonical)
+}
+
+fn subtree_scope(root: &Path) -> String {
+    let root = root.to_string_lossy().replace('\\', "/");
+    if root == "/" {
+        "/**".to_string()
+    } else {
+        format!("{}/**", root.trim_end_matches('/'))
     }
 }
 
@@ -312,11 +430,13 @@ fn cmd_uptime() -> Result<Value, String> {
 
 /// Structured process listing — agent-readable equivalent of /proc/*/stat.
 ///
-/// Returns all running processes with PID, name, state, CPU, and memory.
+/// Returns processes owned by the routed task owner with PID, name, state,
+/// CPU, and memory. A direct root invocation retains the administrative view.
 /// Use `process <pid> [pid ...]` for ownership and ancestry details.
 fn cmd_proc() -> Result<Value, String> {
     #[cfg(target_os = "linux")]
     {
+        let owner_uid = observation_owner_uid();
         let mut processes: Vec<Value> = Vec::new();
         if let Ok(entries) = std::fs::read_dir("/proc") {
             for entry in entries.flatten() {
@@ -326,6 +446,9 @@ fn cmd_proc() -> Result<Value, String> {
                     Ok(p) => p,
                     Err(_) => continue,
                 };
+                if !process_visible_to_owner(pid, owner_uid) {
+                    continue;
+                }
 
                 let stat_path = format!("/proc/{pid}/stat");
                 let stat = match std::fs::read_to_string(&stat_path) {
@@ -420,9 +543,17 @@ fn cmd_process(args: &[String]) -> Result<Value, String> {
         }
 
         let users = passwd_users();
+        let owner_uid = observation_owner_uid();
         let mut found = 0usize;
         let mut processes = Vec::with_capacity(requested.len());
         for pid in &requested {
+            if !process_visible_to_owner(*pid, owner_uid) {
+                processes.push(json!({
+                    "pid": pid,
+                    "error": "process is outside the current owner scope",
+                }));
+                continue;
+            }
             let identity = match read_process_identity(*pid, &users) {
                 Ok(identity) => identity,
                 Err(error) => {
@@ -451,6 +582,9 @@ fn cmd_process(args: &[String]) -> Result<Value, String> {
             let mut seen = std::collections::HashSet::new();
             for _ in 0..MAX_ANCESTORS {
                 if ancestor_pid == 0 || !seen.insert(ancestor_pid) {
+                    break;
+                }
+                if !process_visible_to_owner(ancestor_pid, owner_uid) {
                     break;
                 }
                 match read_process_identity(ancestor_pid, &users) {
@@ -531,10 +665,12 @@ fn cmd_mounts() -> Result<Value, String> {
 
 /// Structured network info — agent-readable equivalent of /proc/net/*.
 ///
-/// Returns network interfaces and active TCP connections.
+/// Returns network interfaces and active TCP connections owned by the routed
+/// task owner. A direct root invocation retains the administrative view.
 fn cmd_net() -> Result<Value, String> {
     #[cfg(target_os = "linux")]
     {
+        let owner_uid = observation_owner_uid();
         let mut result = json!({});
 
         // Network interfaces from /proc/net/dev
@@ -570,7 +706,11 @@ fn cmd_net() -> Result<Value, String> {
             let mut connections: Vec<Value> = Vec::new();
             for line in content.lines().skip(1) {
                 let fields: Vec<&str> = line.split_whitespace().collect();
-                if fields.len() < 4 {
+                if fields.len() < 10 {
+                    continue;
+                }
+                let socket_uid = fields.get(7).and_then(|value| value.parse::<u32>().ok());
+                if !owner_can_observe_uid(owner_uid, socket_uid) {
                     continue;
                 }
                 let state_hex = fields[3];
@@ -742,9 +882,10 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
             .and_then(|s| s.parse().ok())
             .unwrap_or(500);
 
-        let snap1 = sample_proc_stats()?;
+        let owner_uid = observation_owner_uid();
+        let snap1 = sample_proc_stats_for_owner(owner_uid)?;
         std::thread::sleep(std::time::Duration::from_millis(interval_ms));
-        let snap2 = sample_proc_stats()?;
+        let snap2 = sample_proc_stats_for_owner(owner_uid)?;
 
         let clk = clk_tck().max(1);
         let dt_secs = interval_ms as f64 / 1000.0;
@@ -785,13 +926,17 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
         // forcing the model to guess whether an OS PID is a cos session id or
         // to fall back to shell/App execution.
         let users = passwd_users();
-        for row in &mut rows {
+        let mut visible_rows = Vec::with_capacity(rows.len());
+        for mut row in rows {
             let Some(pid) = row["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok()) else {
                 continue;
             };
             let Ok(identity) = read_process_identity(pid, &users) else {
                 continue;
             };
+            if !owner_can_observe_uid(owner_uid, identity.uid) {
+                continue;
+            }
             let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
             let cwd = std::fs::read_link(proc_dir.join("cwd"))
                 .ok()
@@ -810,7 +955,9 @@ fn cmd_top(args: &[String]) -> Result<Value, String> {
                 object.insert("cwd".into(), json!(cwd));
                 object.insert("executable".into(), json!(executable));
             }
+            visible_rows.push(row);
         }
+        rows = visible_rows;
 
         Ok(json!({
             "interval_ms": interval_ms,
@@ -834,9 +981,11 @@ fn cmd_threads(args: &[String]) -> Result<Value, String> {
             .ok_or("usage: threads <pid>")?
             .parse()
             .map_err(|_| "invalid pid".to_string())?;
+        if !process_visible_to_owner(pid, observation_owner_uid()) {
+            return Err("process is outside the current owner scope".to_string());
+        }
         let task_dir = format!("/proc/{pid}/task");
-        let entries =
-            std::fs::read_dir(&task_dir).map_err(|e| format!("read {task_dir}: {e}"))?;
+        let entries = std::fs::read_dir(&task_dir).map_err(|e| format!("read {task_dir}: {e}"))?;
         let mut threads: Vec<Value> = Vec::new();
         for entry in entries.flatten() {
             let tid_name = entry.file_name().to_string_lossy().to_string();
@@ -903,7 +1052,9 @@ fn cmd_port(args: &[String]) -> Result<Value, String> {
             remote: String,
             state: &'static str,
             inode: u64,
+            uid: u32,
         }
+        let owner_uid = observation_owner_uid();
         let mut hits: Vec<SockHit> = Vec::new();
         for (path, proto) in &[
             ("/proc/net/tcp", "tcp"),
@@ -934,12 +1085,19 @@ fn cmd_port(args: &[String]) -> Result<Value, String> {
                     _ => "UNKNOWN",
                 };
                 let inode: u64 = f[9].parse().unwrap_or(0);
+                let Some(uid) = f[7].parse::<u32>().ok() else {
+                    continue;
+                };
+                if !owner_can_observe_uid(owner_uid, Some(uid)) {
+                    continue;
+                }
                 hits.push(SockHit {
                     proto,
                     local: local.to_string(),
                     remote: f[2].to_string(),
                     state,
                     inode,
+                    uid,
                 });
             }
         }
@@ -955,6 +1113,9 @@ fn cmd_port(args: &[String]) -> Result<Value, String> {
                         Ok(p) => p,
                         Err(_) => continue,
                     };
+                    if !process_visible_to_owner(pid, owner_uid) {
+                        continue;
+                    }
                     let fd_dir = format!("/proc/{pid}/fd");
                     let fds = match std::fs::read_dir(&fd_dir) {
                         Ok(d) => d,
@@ -989,6 +1150,7 @@ fn cmd_port(args: &[String]) -> Result<Value, String> {
                 "remote": hit.remote,
                 "state": hit.state,
                 "inode": hit.inode,
+                "uid": hit.uid,
                 "processes": found,
             }));
         }
@@ -1024,9 +1186,7 @@ fn cmd_sensors() -> Result<Value, String> {
                         let status = read_str_trim(&base.join("status"));
                         // Estimated runtime (only meaningful while discharging).
                         let runtime_min = match (status.as_deref(), energy_now, power_now) {
-                            (Some("Discharging"), Some(e), Some(p)) if p > 0 => {
-                                Some(e * 60 / p)
-                            }
+                            (Some("Discharging"), Some(e), Some(p)) if p > 0 => Some(e * 60 / p),
                             _ => None,
                         };
                         batteries.push(json!({
@@ -1111,8 +1271,7 @@ fn cmd_sensors() -> Result<Value, String> {
                             .and_then(|x| x.strip_suffix("_input"))
                         {
                             if let Some(milli) = read_u64(&item.path()) {
-                                let label =
-                                    read_str_trim(&base.join(format!("temp{idx}_label")));
+                                let label = read_str_trim(&base.join(format!("temp{idx}_label")));
                                 readings.push(json!({
                                     "kind": "temp",
                                     "index": idx,
@@ -1476,15 +1635,10 @@ fn cmd_net_rate(args: &[String]) -> Result<Value, String> {
     }
 }
 
-fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
+fn cmd_largest_files(root: &Path, args: &[String]) -> Result<Value, String> {
     #[cfg(target_os = "linux")]
     {
         use std::os::unix::fs::MetadataExt;
-        let path: String = args
-            .iter()
-            .find(|a| !a.starts_with("--"))
-            .cloned()
-            .unwrap_or_else(|| "/".to_string());
         let top: usize = read_arg(args, "--top")
             .and_then(|s| s.parse().ok())
             .unwrap_or(20);
@@ -1493,12 +1647,13 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
             .unwrap_or(50);
         let min_bytes = min_mb * 1024 * 1024;
 
-        let root_md = std::fs::metadata(&path).map_err(|e| format!("stat {path}: {e}"))?;
+        let root_md =
+            std::fs::metadata(root).map_err(|e| format!("stat {}: {e}", root.display()))?;
         let root_dev = root_md.dev();
 
         let mut heap: std::collections::BinaryHeap<std::cmp::Reverse<(u64, String)>> =
             std::collections::BinaryHeap::new();
-        let mut stack: Vec<std::path::PathBuf> = vec![std::path::PathBuf::from(&path)];
+        let mut stack: Vec<std::path::PathBuf> = vec![root.to_path_buf()];
         let mut scanned_dirs = 0usize;
         let mut scanned_files = 0usize;
         while let Some(dir) = stack.pop() {
@@ -1543,7 +1698,7 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
             })
             .collect();
         Ok(json!({
-            "search_root": path,
+            "search_root": root,
             "top": top,
             "min_mb": min_mb,
             "files": files,
@@ -1553,12 +1708,38 @@ fn cmd_largest_files(args: &[String]) -> Result<Value, String> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = args;
+        let _ = (root, args);
         Err("sys largest_files requires Linux".into())
     }
 }
 
 // ----- shared helpers (Linux) -----
+
+#[cfg(unix)]
+fn observation_owner_uid() -> u32 {
+    crate::paths::current_owner_uid_override().unwrap_or_else(|| unsafe { libc::geteuid() as u32 })
+}
+
+#[cfg(not(unix))]
+fn observation_owner_uid() -> u32 {
+    0
+}
+
+fn owner_can_observe_uid(owner_uid: u32, process_uid: Option<u32>) -> bool {
+    owner_uid == 0 || process_uid == Some(owner_uid)
+}
+
+#[cfg(target_os = "linux")]
+fn process_visible_to_owner(pid: u32, owner_uid: u32) -> bool {
+    use std::os::unix::fs::MetadataExt;
+
+    if owner_uid == 0 {
+        return true;
+    }
+    std::fs::metadata(format!("/proc/{pid}"))
+        .ok()
+        .is_some_and(|metadata| metadata.uid() == owner_uid)
+}
 
 /// Parse a `/proc/<pid>/stat` line into (comm, fields_after_comm).
 ///
@@ -1609,7 +1790,10 @@ fn read_process_identity(
     let (name, fields) =
         parse_proc_stat(&stat).ok_or_else(|| format!("parse {}", stat_path.display()))?;
     if fields.len() < 2 {
-        return Err(format!("parse {}: missing state or parent pid", stat_path.display()));
+        return Err(format!(
+            "parse {}: missing state or parent pid",
+            stat_path.display()
+        ));
     }
     let ppid = fields[1]
         .parse::<u32>()
@@ -1625,7 +1809,11 @@ fn read_process_identity(
                 .and_then(|line| line.split_whitespace().next())
                 .and_then(|raw| raw.parse::<u32>().ok())
         })
-        .or_else(|| std::fs::metadata(&proc_dir).ok().map(|metadata| metadata.uid()));
+        .or_else(|| {
+            std::fs::metadata(&proc_dir)
+                .ok()
+                .map(|metadata| metadata.uid())
+        });
     let user = uid.and_then(|uid| users.get(&uid).cloned());
     let command = std::fs::read(proc_dir.join("cmdline"))
         .ok()
@@ -1720,11 +1908,7 @@ fn run_cmd(cmd: &str, args: &[&str]) -> Result<String, String> {
         .map_err(|e| format!("failed to spawn {cmd}: {e}"))?;
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-        return Err(format!(
-            "{cmd} exited {}: {}",
-            out.status,
-            stderr.trim()
-        ));
+        return Err(format!("{cmd} exited {}: {}", out.status, stderr.trim()));
     }
     Ok(String::from_utf8_lossy(&out.stdout).to_string())
 }
@@ -1789,6 +1973,13 @@ struct ProcSnap {
 
 #[cfg(target_os = "linux")]
 fn sample_proc_stats() -> Result<std::collections::HashMap<u32, ProcSnap>, String> {
+    sample_proc_stats_for_owner(observation_owner_uid())
+}
+
+#[cfg(target_os = "linux")]
+fn sample_proc_stats_for_owner(
+    owner_uid: u32,
+) -> Result<std::collections::HashMap<u32, ProcSnap>, String> {
     let entries = std::fs::read_dir("/proc").map_err(|e| format!("read /proc: {e}"))?;
     let mut map = std::collections::HashMap::new();
     for entry in entries.flatten() {
@@ -1797,6 +1988,9 @@ fn sample_proc_stats() -> Result<std::collections::HashMap<u32, ProcSnap>, Strin
             Ok(p) => p,
             Err(_) => continue,
         };
+        if !process_visible_to_owner(pid, owner_uid) {
+            continue;
+        }
         let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
             Ok(s) => s,
             Err(_) => continue,
@@ -1870,8 +2064,8 @@ struct NetStat {
 
 #[cfg(target_os = "linux")]
 fn read_net_dev() -> Result<std::collections::HashMap<String, NetStat>, String> {
-    let s = std::fs::read_to_string("/proc/net/dev")
-        .map_err(|e| format!("read /proc/net/dev: {e}"))?;
+    let s =
+        std::fs::read_to_string("/proc/net/dev").map_err(|e| format!("read /proc/net/dev: {e}"))?;
     let mut map = std::collections::HashMap::new();
     for line in s.lines().skip(2) {
         let parts: Vec<&str> = line.split(':').collect();
@@ -1919,8 +2113,5 @@ fn hostname() -> String {
 
 #[cfg(test)]
 mod tests {
-    include!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/test/unit/sysinfo.rs"
-    ));
+    include!(concat!(env!("CARGO_MANIFEST_DIR"), "/test/unit/sysinfo.rs"));
 }
