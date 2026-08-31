@@ -44,8 +44,9 @@ proves process, mount, task-state, and routed-ACL residue is gone.
 `preinst` validates all name/UID/GID/NSS/shadow/systemd-homed and subordinate-ID
 collisions before provisioning, rolls back partial attempts, and `postinst`
 writes the exact root-owned runtime reservation manifest. Purge removes only
-accounts recorded as package-created and still matching policy; preexisting
-correct accounts or changed records are retained.
+accounts recorded as package-created, still matching policy, and owning no
+live process or runtime/quarantine state; preexisting correct accounts or
+changed records are retained.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the

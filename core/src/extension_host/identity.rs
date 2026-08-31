@@ -254,6 +254,20 @@ impl ExtensionIdentityLease {
     }
 
     pub fn release(mut self) -> Result<(), String> {
+        if uid_has_process(self.identity.uid) {
+            self.release_on_drop = false;
+            return Err(format!(
+                "extension uid {} still owns a process after cleanup",
+                self.identity.uid
+            ));
+        }
+        if uid_runtime_exists(self.identity.uid) {
+            self.release_on_drop = false;
+            return Err(format!(
+                "/run/user/{} still exists after extension cleanup",
+                self.identity.uid
+            ));
+        }
         if self.cleanup_record.is_some() {
             if let Some(directory) = self.pool.quarantine_dir.as_deref() {
                 if let Err(error) = remove_cleanup_record(directory, self.identity.uid) {

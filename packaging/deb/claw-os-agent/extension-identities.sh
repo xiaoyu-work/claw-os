@@ -15,6 +15,7 @@ identity_reserved_manifest=$identity_state_dir/extension-identities.reserved
 identity_owned_manifest=$identity_state_dir/extension-identities.owned
 identity_pending_manifest=$identity_state_dir/extension-identities.pending
 identity_quarantine_dir=$identity_state_dir/extension-quarantine
+identity_proc_dir=${COS_IDENTITY_PROC_DIR:-/proc}
 
 identity_name() {
     printf 'cos-ext-%02d' "$1"
@@ -466,6 +467,24 @@ identity_rollback_pending() {
     identity_rollback_file "$identity_pending_manifest"
 }
 
+identity_uid_has_process() {
+    scan_uid=$1
+    for scan_status in "$identity_proc_dir"/[0-9]*/status; do
+        [ -e "$scan_status" ] || continue
+        if ! scan_line=$(sed -n 's/^Uid:[[:space:]]*//p' "$scan_status" 2>/dev/null); then
+            return 0
+        fi
+        if [ -z "$scan_line" ]; then
+            [ ! -e "$scan_status" ] || return 0
+            continue
+        fi
+        for scan_value in $scan_line; do
+            [ "$scan_value" != "$scan_uid" ] || return 0
+        done
+    done
+    return 1
+}
+
 identity_purge_owned() {
     [ -e "$identity_state_dir" ] || return 0
     identity_prepare_state_dir || return 1
@@ -477,7 +496,8 @@ identity_purge_owned() {
         [ "$kind" = user ] || continue
         index=${name#cos-ext-}
         if [ -e "$identity_quarantine_dir/$value.state" ] ||
-            [ -e "/run/user/$value" ]; then
+            [ -e "/run/user/$value" ] ||
+            identity_uid_has_process "$value"; then
             printf '%s:%s:%s:%s\n' "$kind" "$name" "$value" "$gid" >> "$remaining"
         elif identity_group_validate >/dev/null 2>&1 &&
             identity_account_validate "$name" "$value" "$index" >/dev/null 2>&1; then

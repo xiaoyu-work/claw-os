@@ -7,10 +7,11 @@ PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 HELPER="$PROJECT_DIR/packaging/deb/claw-os-agent/extension-identities.sh"
 SCRATCH="$PROJECT_DIR/.test-extension-identities.$$"
 trap 'rm -rf "$SCRATCH"' EXIT
-mkdir -p "$SCRATCH/bin" "$SCRATCH/etc" "$SCRATCH/state"
+mkdir -p "$SCRATCH/bin" "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/state"
 
 export MOCK_ETC="$SCRATCH/etc"
 export COS_IDENTITY_ETC_DIR="$SCRATCH/etc"
+export COS_IDENTITY_PROC_DIR="$SCRATCH/proc"
 export COS_IDENTITY_STATE_DIR="$SCRATCH/state"
 export PATH="$SCRATCH/bin:$PATH"
 
@@ -163,8 +164,8 @@ fail() {
 }
 
 reset_fixture() {
-    rm -rf "$SCRATCH/etc" "$SCRATCH/state"
-    mkdir -p "$SCRATCH/etc" "$SCRATCH/state"
+    rm -rf "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/state"
+    mkdir -p "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/state"
     : > "$SCRATCH/etc/passwd"
     : > "$SCRATCH/etc/group"
     : > "$SCRATCH/etc/shadow"
@@ -279,11 +280,15 @@ identity_provision || fail "purge fixture provisioning failed"
 identity_finalize || fail "purge fixture finalize failed"
 sed -i 's#cos-ext-00:x:61000:60999:[^:]*:/nonexistent:/usr/sbin/nologin#cos-ext-00:x:61000:60999:changed:/nonexistent:/bin/sh#' \
     "$SCRATCH/etc/passwd"
+mkdir -p "$SCRATCH/proc/123"
+printf 'Name:\ttest\nUid:\t61002\t61002\t61002\t61002\n' > "$SCRATCH/proc/123/status"
 identity_purge_owned
 grep -q '^cos-ext-00:' "$SCRATCH/etc/passwd" ||
     fail "purge deleted an identity whose record no longer matched"
 ! grep -q '^cos-ext-01:' "$SCRATCH/etc/passwd" ||
     fail "purge retained a provably package-owned identity"
+grep -q '^cos-ext-02:' "$SCRATCH/etc/passwd" ||
+    fail "purge deleted an identity with a live process"
 grep -q '^cos-extension:' "$SCRATCH/etc/group" ||
     fail "purge removed a group still referenced by a retained account"
 

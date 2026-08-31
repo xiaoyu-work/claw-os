@@ -76,6 +76,38 @@ fn retained_identity_is_not_released_until_cleanup() {
 }
 
 #[test]
+fn release_refuses_an_identity_with_a_live_process() {
+    let uid = unsafe { libc::geteuid() } as u32;
+    let lock_dir = tempfile::tempdir().unwrap();
+    let lock = std::fs::File::create(lock_dir.path().join("lock")).unwrap();
+    let pool = Arc::new(ExtensionIdentityPool {
+        identities: Vec::new(),
+        in_use: Mutex::new(HashSet::from([uid])),
+        retained_locks: Mutex::new(HashMap::new()),
+        validate_on_acquire: false,
+        quarantine_dir: None,
+    });
+    let lease = ExtensionIdentityLease {
+        pool: pool.clone(),
+        identity: ExtensionIdentity {
+            uid,
+            gid: GROUP_GID,
+            username: "current-process".to_string(),
+        },
+        lock: Some(lock),
+        release_on_drop: true,
+        cleanup_record: None,
+    };
+
+    assert!(lease
+        .release()
+        .unwrap_err()
+        .contains("still owns a process"));
+    assert!(pool.in_use.lock().unwrap().contains(&uid));
+    assert!(pool.retained_locks.lock().unwrap().contains_key(&uid));
+}
+
+#[test]
 fn cleanup_records_bind_uid_owner_and_task() {
     let record = CleanupRecord {
         uid: FIRST_UID,

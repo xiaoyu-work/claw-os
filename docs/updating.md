@@ -87,9 +87,10 @@ must use brokered App/SDK operations instead.
 
 On package purge, only users listed in the package ownership marker and still
 matching the exact account policy are removed. Preexisting correct accounts,
-an older unmarked `cos-extension` group, or any identity changed after install
-is retained with a warning. No home is created, and the package does not delete
-files merely because their numeric ownership matches a reserved UID.
+an older unmarked `cos-extension` group, any identity changed after install, or
+an identity that still owns a process, runtime directory, or quarantine record
+is retained with a warning. No home is created, and the package does not
+delete files merely because their numeric ownership matches a reserved UID.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:
