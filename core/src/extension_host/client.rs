@@ -329,6 +329,7 @@ impl ExtensionHostClient {
         &self,
         server: String,
         tool: String,
+        descriptor_digest: String,
         arguments: Option<Value>,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
@@ -338,6 +339,7 @@ impl ExtensionHostClient {
                 HostAction::McpCall {
                     server: server.clone(),
                     tool,
+                    descriptor_digest,
                     arguments,
                 },
                 timeout.saturating_add(Duration::from_secs(5)),

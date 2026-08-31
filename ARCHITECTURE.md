@@ -657,13 +657,19 @@ config or discovered agent-API sidecar
   -> direct process: MCP transport/client initialization
   -> supervised task: claw-extension-host attach/ready
   -> tools/list
-  -> prefixed local or host-backed proxy registration
+  -> safe-name normalization + strict structural-schema sanitization
+  -> neutral local description + canonical descriptor-set digest
+  -> collision-free prefixed local or host-backed proxy registration
   -> normal tool registry + guardrail dispatch
+  -> relist/digest verification
   -> hosted tools/call -> extension host -> bounded untrusted result
 ```
 
 An MCP server is optional. Failure to attach one is logged and skipped rather
-than preventing the core agent from starting.
+than preventing the core agent from starting. Server-authored descriptions,
+titles, comments, examples, defaults, extensions, references, unsafe names,
+and overlarge/deep schemas never enter `ChatRequest.tools`. Structural
+descriptor drift blocks execution until a new attachment is authorized.
 
 ### Image and package publication
 

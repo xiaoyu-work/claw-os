@@ -34,12 +34,13 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 use tokio::time::timeout;
 
 use super::client::{ClientError, McpClient};
+use super::descriptor::{model_tool_name, sanitize_descriptor_set, NEUTRAL_DESCRIPTION};
 use super::protocol::{ClientCapabilities, Implementation, ToolDescriptor, PROTOCOL_VERSION};
 use super::transport::StdioTransport;
 use crate::agent::tools::exposure::{ToolExposure, ToolTransport};
@@ -102,6 +103,7 @@ pub struct McpServerHandle {
     name: String,
     tool_count: usize,
     descriptors: Vec<ToolDescriptor>,
+    descriptor_digest: String,
     timeout: Duration,
     hosted: bool,
     _proc_session: Option<crate::bridge::McpProcSession>,
@@ -118,6 +120,10 @@ impl McpServerHandle {
 
     pub(crate) fn descriptors(&self) -> &[ToolDescriptor] {
         &self.descriptors
+    }
+
+    pub(crate) fn descriptor_digest(&self) -> &str {
+        &self.descriptor_digest
     }
 
     pub(crate) fn timeout(&self) -> Duration {
@@ -178,8 +184,7 @@ impl Drop for McpServerHandle {
 pub struct McpRemoteTool {
     /// `mcp_<server>_<remote>`.
     name: String,
-    /// Description from the server. Falls back to a generated
-    /// string when the server omits one.
+    /// Neutral local description. Remote prose never enters model context.
     description: String,
     /// Cached on construction; cloned per `input_schema()` call (the
     /// trait returns by value).
@@ -192,8 +197,15 @@ pub struct McpRemoteTool {
 }
 
 enum McpToolBackend {
-    Local(Arc<McpClient>),
-    Hosted { server: String },
+    Local {
+        client: Arc<McpClient>,
+        server: String,
+        descriptor_digest: String,
+    },
+    Hosted {
+        server: String,
+        descriptor_digest: String,
+    },
 }
 
 impl McpRemoteTool {
@@ -202,8 +214,16 @@ impl McpRemoteTool {
         descriptor: ToolDescriptor,
         client: Arc<McpClient>,
         timeout: Duration,
+        descriptor_digest: String,
     ) -> Self {
-        Self::new_with_transport(prefix, descriptor, client, timeout, ToolTransport::McpStdio)
+        Self::new_with_transport(
+            prefix,
+            descriptor,
+            client,
+            timeout,
+            ToolTransport::McpStdio,
+            descriptor_digest,
+        )
     }
 
     fn new_with_transport(
@@ -212,28 +232,20 @@ impl McpRemoteTool {
         client: Arc<McpClient>,
         timeout: Duration,
         transport: ToolTransport,
+        descriptor_digest: String,
     ) -> Self {
-        let name = format!("mcp_{prefix}_{}", descriptor.name);
-        let description = descriptor.description.unwrap_or_else(|| {
-            format!(
-                "Remote MCP tool `{}` from server `{prefix}`.",
-                descriptor.name
-            )
-        });
-        // Some MCP servers report Null / missing `inputSchema`. The
-        // LLM trait expects an object schema; coerce minimally so the
-        // model doesn't see a `null` schema.
-        let schema = if descriptor.input_schema.is_object() {
-            descriptor.input_schema
-        } else {
-            json!({"type": "object", "properties": {}, "additionalProperties": true})
-        };
+        let name = model_tool_name(prefix, &descriptor.name)
+            .expect("MCP descriptors are sanitized before tool construction");
         Self {
             name,
-            description,
-            schema,
+            description: NEUTRAL_DESCRIPTION.to_string(),
+            schema: descriptor.input_schema,
             remote_name: descriptor.name,
-            backend: McpToolBackend::Local(client),
+            backend: McpToolBackend::Local {
+                client,
+                server: prefix.to_string(),
+                descriptor_digest,
+            },
             timeout,
             exposure: ToolExposure::always()
                 .requiring_transport(transport)
@@ -246,26 +258,18 @@ impl McpRemoteTool {
         descriptor: ToolDescriptor,
         timeout: Duration,
         transport: ToolTransport,
+        descriptor_digest: String,
     ) -> Self {
-        let name = format!("mcp_{prefix}_{}", descriptor.name);
-        let description = descriptor.description.unwrap_or_else(|| {
-            format!(
-                "Remote MCP tool `{}` from server `{prefix}`.",
-                descriptor.name
-            )
-        });
-        let schema = if descriptor.input_schema.is_object() {
-            descriptor.input_schema
-        } else {
-            json!({"type": "object", "properties": {}, "additionalProperties": true})
-        };
+        let name = model_tool_name(prefix, &descriptor.name)
+            .expect("MCP descriptors are sanitized before tool construction");
         Self {
             name,
-            description,
-            schema,
+            description: NEUTRAL_DESCRIPTION.to_string(),
+            schema: descriptor.input_schema,
             remote_name: descriptor.name,
             backend: McpToolBackend::Hosted {
                 server: prefix.to_string(),
+                descriptor_digest,
             },
             timeout,
             exposure: ToolExposure::always()
@@ -303,7 +307,17 @@ impl Tool for McpRemoteTool {
             other => Some(other),
         };
         let res = match &self.backend {
-            McpToolBackend::Local(client) => {
+            McpToolBackend::Local {
+                client,
+                server,
+                descriptor_digest,
+            } => {
+                if let Err(error) =
+                    verify_descriptor_stability(server, client, self.timeout, descriptor_digest)
+                        .await
+                {
+                    return ToolResult::err(error);
+                }
                 let call = client.call_tool(self.remote_name.clone(), arguments);
                 match timeout(self.timeout, call).await {
                     Ok(result) => result.map_err(render_client_err),
@@ -314,7 +328,11 @@ impl Tool for McpRemoteTool {
                     )),
                 }
             }
-            McpToolBackend::Hosted { server } => {
+
+            McpToolBackend::Hosted {
+                server,
+                descriptor_digest,
+            } => {
                 let Some(client) = crate::extension_host::client::current() else {
                     return ToolResult::err("the task extension host is unavailable");
                 };
@@ -322,6 +340,7 @@ impl Tool for McpRemoteTool {
                     .call_mcp(
                         server.clone(),
                         self.remote_name.clone(),
+                        descriptor_digest.clone(),
                         arguments,
                         self.timeout,
                     )
@@ -336,6 +355,61 @@ impl Tool for McpRemoteTool {
             )),
         }
     }
+}
+
+fn ensure_registry_names_available(
+    registry: &ToolRegistry,
+    server: &str,
+    descriptors: &[ToolDescriptor],
+) -> Result<(), String> {
+    for descriptor in descriptors {
+        let name = model_tool_name(server, &descriptor.name)?;
+        if registry.descriptor_unfiltered(&name).is_some() {
+            return Err("MCP tool name collides with an existing registered tool".to_string());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) async fn verify_descriptor_stability(
+    server: &str,
+    client: &Arc<McpClient>,
+    timeout_duration: Duration,
+    expected_digest: &str,
+) -> Result<(), String> {
+    let listed = match timeout(timeout_duration, client.list_tools()).await {
+        Ok(Ok(listed)) => listed,
+        Ok(Err(_)) => {
+            return Err(
+                "MCP descriptor verification failed; tool execution was blocked".to_string(),
+            )
+        }
+        Err(_) => {
+            return Err(
+                "MCP descriptor verification timed out; tool execution was blocked".to_string(),
+            )
+        }
+    };
+    let current = sanitize_descriptor_set(server, listed.tools).map_err(|_| {
+        "MCP descriptor verification rejected the server response; tool execution was blocked"
+            .to_string()
+    })?;
+    if current.digest != expected_digest {
+        return Err(
+                "MCP tool descriptors changed during this session; execution requires a new authorized attachment"
+                    .to_string(),
+            );
+    }
+    Ok(())
+}
+
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn sanitized_descriptor_digest_for_test(
+    server: &str,
+    descriptors: Vec<ToolDescriptor>,
+) -> Result<String, String> {
+    sanitize_descriptor_set(server, descriptors).map(|set| set.digest)
 }
 
 fn render_client_err(e: ClientError) -> String {
@@ -409,24 +483,30 @@ pub async fn attach_server(
     registry: &mut ToolRegistry,
 ) -> Result<McpServerHandle, String> {
     if let Some(host) = crate::extension_host::client::current() {
-        let descriptors = host.attach_mcp(spec.clone()).await?;
+        let attached = sanitize_descriptor_set(&spec.name, host.attach_mcp(spec.clone()).await?)?;
+        ensure_registry_names_available(registry, &spec.name, &attached.descriptors)?;
         let timeout = spec.timeout_duration();
         let transport = if spec.url.is_some() {
             ToolTransport::McpHttp
         } else {
             ToolTransport::McpStdio
         };
-        for descriptor in descriptors.iter().cloned() {
-            registry.register(Arc::new(McpRemoteTool::new_hosted(
-                &spec.name, descriptor, timeout, transport,
-            )));
+        for descriptor in attached.descriptors.iter().cloned() {
+            registry.register_unique(Arc::new(McpRemoteTool::new_hosted(
+                &spec.name,
+                descriptor,
+                timeout,
+                transport,
+                attached.digest.clone(),
+            )))?;
         }
         return Ok(McpServerHandle {
             client: None,
             child: None,
             name: spec.name.clone(),
-            tool_count: descriptors.len(),
-            descriptors,
+            tool_count: attached.descriptors.len(),
+            descriptors: attached.descriptors,
+            descriptor_digest: attached.digest,
             timeout,
             hosted: true,
             _proc_session: None,
@@ -455,11 +535,9 @@ pub(crate) async fn attach_server_local(
     if spec.url.is_some() {
         return attach_http_server(spec, registry).await;
     }
-    let proc_session =
-        crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
+    let proc_session = crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
     let mut command = if proc_session.is_some() {
-        let mut command =
-            tokio::process::Command::new(crate::bridge::app_runner_path());
+        let mut command = tokio::process::Command::new(crate::bridge::app_runner_path());
         command.arg("--").arg(&spec.command).args(&spec.args);
         command
     } else {
@@ -617,17 +695,31 @@ pub(crate) async fn attach_server_local(
         }
     };
 
+    let attached = match sanitize_descriptor_set(&spec.name, tools.tools) {
+        Ok(attached) => attached,
+        Err(error) => {
+            kill_and_reap(child);
+            return Err(error);
+        }
+    };
+    if let Err(error) = ensure_registry_names_available(registry, &spec.name, &attached.descriptors)
+    {
+        kill_and_reap(child);
+        return Err(error);
+    }
     let mut registered = 0usize;
-    let descriptors = tools.tools;
-    for descriptor in descriptors.iter().cloned() {
+    for descriptor in attached.descriptors.iter().cloned() {
         let tool = McpRemoteTool::new_with_transport(
             &spec.name,
             descriptor,
             client.clone(),
             timeout_dur,
             ToolTransport::McpStdio,
+            attached.digest.clone(),
         );
-        registry.register(Arc::new(tool));
+        registry
+            .register_unique(Arc::new(tool))
+            .map_err(|_| "MCP tool name collides with an existing registered tool".to_string())?;
         registered += 1;
     }
 
@@ -636,7 +728,8 @@ pub(crate) async fn attach_server_local(
         child: Some(child),
         name: spec.name.clone(),
         tool_count: registered,
-        descriptors,
+        descriptors: attached.descriptors,
+        descriptor_digest: attached.digest,
         timeout: timeout_dur,
         hosted: false,
         _proc_session: proc_session,
@@ -707,17 +800,21 @@ pub async fn attach_http_server(
         }
     };
 
+    let attached = sanitize_descriptor_set(&spec.name, tools.tools)?;
+    ensure_registry_names_available(registry, &spec.name, &attached.descriptors)?;
     let mut registered = 0usize;
-    let descriptors = tools.tools;
-    for descriptor in descriptors.iter().cloned() {
+    for descriptor in attached.descriptors.iter().cloned() {
         let tool = McpRemoteTool::new_with_transport(
             &spec.name,
             descriptor,
             client.clone(),
             timeout_dur,
             ToolTransport::McpHttp,
+            attached.digest.clone(),
         );
-        registry.register(Arc::new(tool));
+        registry
+            .register_unique(Arc::new(tool))
+            .map_err(|_| "MCP tool name collides with an existing registered tool".to_string())?;
         registered += 1;
     }
 
@@ -726,7 +823,8 @@ pub async fn attach_http_server(
         child: None,
         name: spec.name.clone(),
         tool_count: registered,
-        descriptors,
+        descriptors: attached.descriptors,
+        descriptor_digest: attached.digest,
         timeout: timeout_dur,
         hosted: false,
         _proc_session: None,
@@ -745,8 +843,20 @@ pub async fn attach_http_server(
 /// e.g. `COS_DATA_DIR` to be set.
 fn safe_env_allowlist() -> Vec<(String, String)> {
     const ALWAYS: &[&str] = &[
-        "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "LC_CTYPE", "LC_MESSAGES",
-        "TZ", "TERM", "TMPDIR", "TEMP", "TMP",
+        "PATH",
+        "HOME",
+        "USER",
+        "LOGNAME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+        "LC_MESSAGES",
+        "TZ",
+        "TERM",
+        "TMPDIR",
+        "TEMP",
+        "TMP",
     ];
     let mut out = Vec::with_capacity(ALWAYS.len() + 8);
     for k in ALWAYS {

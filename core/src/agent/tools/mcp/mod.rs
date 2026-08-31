@@ -21,6 +21,7 @@
 //!   `crate::credential`. Out of scope for this scaffold.
 
 pub mod client;
+pub(crate) mod descriptor;
 pub mod discover;
 mod generated;
 pub mod integration;

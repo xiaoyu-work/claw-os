@@ -49,10 +49,8 @@ impl crate::agent::tools::Tool for ContextTool {
         let Some(context) = crate::agent::tools::exposure::current() else {
             return crate::agent::tools::ToolResult::err("missing exposure context");
         };
-        let requested = crate::caps::Cap::new(
-            crate::caps::Verb::FS_READ,
-            crate::caps::Scope::path(path),
-        );
+        let requested =
+            crate::caps::Cap::new(crate::caps::Verb::FS_READ, crate::caps::Scope::path(path));
         if !context.capabilities().covers(&requested) {
             return crate::agent::tools::ToolResult::err("exact path is not authorized");
         }
@@ -170,8 +168,33 @@ fn repeated_registries_release_owned_dynamic_descriptors() {
                 description
             );
         }
+
         assert_eq!(drops.load(Ordering::SeqCst), build + 1);
     }
+}
+
+#[test]
+fn unique_registration_never_replaces_an_existing_descriptor() {
+    let drops = Arc::new(AtomicUsize::new(0));
+    let mut registry = ToolRegistry::new();
+    registry.register(Arc::new(OwnedDescriptorTool {
+        name: "dynamic".to_string(),
+        description: "trusted".to_string(),
+        drops: drops.clone(),
+    }));
+    let rejected = Arc::new(OwnedDescriptorTool {
+        name: "dynamic".to_string(),
+        description: "untrusted replacement".to_string(),
+        drops,
+    });
+    assert!(registry.register_unique(rejected).is_err());
+    assert_eq!(
+        registry
+            .descriptor_unfiltered("dynamic")
+            .unwrap()
+            .description,
+        "trusted"
+    );
 }
 
 #[test]
@@ -369,19 +392,11 @@ fn worker_does_not_advertise_unreachable_app_session_tools() {
         crate::caps::Scope::name("**"),
     )]);
     let direct = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity(
-            "direct",
-            1000,
-            crate::session::SessionSource::LocalCli,
-        )
+        .with_identity("direct", 1000, crate::session::SessionSource::LocalCli)
         .with_capabilities(caps.clone())
         .with_host(crate::agent::tools::exposure::ExecutionHost::Direct);
     let worker = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity(
-            "worker",
-            1000,
-            crate::session::SessionSource::BrokerTask,
-        )
+        .with_identity("worker", 1000, crate::session::SessionSource::BrokerTask)
         .with_capabilities(caps)
         .with_host(crate::agent::tools::exposure::ExecutionHost::AgentWorker);
 
@@ -391,27 +406,17 @@ fn worker_does_not_advertise_unreachable_app_session_tools() {
     assert!(!registry
         .names_for(&worker)
         .contains(&"cos_app_session_open"));
-    assert!(registry
-        .get_for(&worker, "cos_app_session_open")
-        .is_none());
+    assert!(registry.get_for(&worker, "cos_app_session_open").is_none());
 }
 
 #[test]
 fn oauth_schema_requires_trusted_attended_source_not_just_local_presence() {
     let registry = default_registry();
     let cli = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity(
-            "cli",
-            1000,
-            crate::session::SessionSource::LocalCli,
-        )
+        .with_identity("cli", 1000, crate::session::SessionSource::LocalCli)
         .with_presence(true, true);
     let external = ToolExposureContext::isolated(Guardrails::permissive())
-        .with_identity(
-            "mcp",
-            1000,
-            crate::session::SessionSource::ExternalMcp,
-        )
+        .with_identity("mcp", 1000, crate::session::SessionSource::ExternalMcp)
         .with_presence(true, true);
 
     assert!(registry.get_for(&cli, "cos_oauth_login").is_some());

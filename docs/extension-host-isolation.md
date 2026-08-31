@@ -138,9 +138,13 @@ task completion -> shutdown -> proxy/session revocation
 App/MCP identity, manifest/config digest, calls, outcomes, timeout/crash/cancel,
 and host attach/detach are projected into the broker audit trail. App session
 grant issuance records the exact delegated capability set. Relevant lifecycle
-events are also appended to durable session mutations. Returned descriptors,
-stdout/stderr-derived errors, and tool results are untrusted and are wrapped
-before entering model context.
+events are also appended to durable session mutations. MCP names are
+provider-safe normalized identifiers; server descriptions are replaced with
+neutral local text, and schemas retain only a bounded structural subset after
+recursive removal of annotations, extension content, and references. Calls
+carry the canonical sanitized descriptor-set digest and fail closed if a
+relist changes it. Stdout/stderr-derived errors and tool results remain
+untrusted and are wrapped before entering model context.
 
 ## Configuration
 

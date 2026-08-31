@@ -12,6 +12,9 @@ which tool calls are exposed and executed.
   never executes in the worker process.
 - Cache immutable name/description/schema descriptors separately from
   per-request visibility decisions.
+- Admit remote MCP descriptors only after safe-name normalization, recursive
+  schema annotation removal, strict structural-schema validation, and
+  collision-free registration. Remote prose never enters descriptor cache.
 - Project descriptors through trusted session owner, source, attendance,
   capabilities, host transports, enabled extensions, and guardrails.
 - Let an attended local system Agent initiate trusted account authorization
@@ -52,7 +55,8 @@ service/capability definitions and still perform exact argument-derived checks.
 Model output, client fields, process environment, and external tool results are
 untrusted; authority comes only from authenticated session/runtime facts.
 Hosted results are wrapped as untrusted model data before they enter the
-trajectory.
+trajectory. Hosted descriptor calls carry the canonical sanitized descriptor
+set digest; relist drift fails closed for the rest of that attachment.
 
 `auto_deny_tools` may block any tool early, but
 `dangerous_tools`/`auto_approve_tools` never grant capability authority. Only

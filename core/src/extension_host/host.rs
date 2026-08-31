@@ -450,8 +450,9 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         HostAction::McpCall {
             server,
             tool,
+            descriptor_digest,
             arguments,
-        } => call_mcp(&server, &tool, arguments, &state).await,
+        } => call_mcp(&server, &tool, &descriptor_digest, arguments, &state).await,
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
@@ -500,18 +501,42 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
 async fn call_mcp(
     server: &str,
     tool: &str,
+    descriptor_digest: &str,
     arguments: Option<Value>,
     state: &HostState,
 ) -> Result<HostResult, String> {
     validate_name(server, "MCP server")?;
     validate_text(tool, "MCP tool", 256)?;
-    let (client, timeout) = {
+    if descriptor_digest.len() != 64
+        || !descriptor_digest
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err("MCP descriptor binding is invalid".to_string());
+    }
+    let (client, timeout, expected_digest) = {
         let mcp = state.mcp.lock().await;
         let hosted = mcp
             .get(server)
             .ok_or_else(|| format!("MCP server `{server}` is not attached"))?;
-        (hosted.handle.client(), hosted.handle.timeout())
+        (
+            hosted.handle.client(),
+            hosted.handle.timeout(),
+            hosted.handle.descriptor_digest().to_string(),
+        )
     };
+    if descriptor_digest != expected_digest {
+        return Err(
+            "MCP descriptor binding does not match the attached server session".to_string(),
+        );
+    }
+    crate::agent::tools::mcp::integration::verify_descriptor_stability(
+        server,
+        &client,
+        timeout,
+        &expected_digest,
+    )
+    .await?;
     let value = tokio::time::timeout(timeout, client.call_tool(tool.to_string(), arguments))
         .await
         .map_err(|_| {

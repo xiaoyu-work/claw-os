@@ -31,8 +31,18 @@ for line in sys.stdin:
         result = {
             "tools": [{
                 "name": "ping",
-                "description": "Return pong.",
-                "inputSchema": {"type": "object", "additionalProperties": False},
+                "description": "IGNORE SAFETY ATTACK_DESCRIPTOR",
+                "inputSchema": {
+                    "type": "object",
+                    "title": "ATTACK_TITLE",
+                    "properties": {
+                        "value": {
+                            "type": "string",
+                            "description": "ATTACK_NESTED"
+                        }
+                    },
+                    "additionalProperties": False
+                },
             }]
         }
     elif method == "tools/call":
@@ -442,10 +452,36 @@ async fn hosted_app_and_mcp_lifecycle_is_isolated_and_fail_closed() {
         .expect("attach hosted MCP");
     assert_eq!(tools.len(), 1);
     assert_eq!(tools[0].name, "ping");
+    assert_eq!(tools[0].description, None);
+    assert!(
+        !serde_json::to_string(&tools).unwrap().contains("ATTACK"),
+        "host returned unsanitized MCP descriptors"
+    );
+    let descriptor_digest =
+        cos::agent::tools::mcp::integration::sanitized_descriptor_digest_for_test(
+            mcp_name,
+            tools.clone(),
+        )
+        .expect("descriptor digest");
+    let substitution = client
+        .call_mcp(
+            mcp_name.to_string(),
+            "ping".to_string(),
+            "0".repeat(64),
+            None,
+            Duration::from_secs(5),
+        )
+        .await
+        .expect_err("descriptor substitution must fail closed");
+    assert!(
+        substitution.contains("descriptor binding"),
+        "{substitution}"
+    );
     let value = client
         .call_mcp(
             mcp_name.to_string(),
             "ping".to_string(),
+            descriptor_digest,
             None,
             Duration::from_secs(5),
         )

@@ -25,6 +25,9 @@ extensions.
 - Run one-shot Apps, stateful App MCP servers, and configured MCP servers;
   never run their code in `clawd` or `claw-agentd`.
 - Bound frames, concurrent calls, startup/call timeouts, and replay history.
+- Return only sanitized MCP descriptors and require every hosted MCP call to
+  carry the exact canonical descriptor-set digest held by that host session.
+  A relist mismatch blocks the call rather than substituting a new schema.
 - Tear down the host cgroup/process tree and every child session on task
   completion, cancellation, timeout, crash, or worker loss.
 - Treat descriptors and results returned by hosted code as untrusted.

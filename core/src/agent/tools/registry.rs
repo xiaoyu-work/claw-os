@@ -54,6 +54,16 @@ impl ToolRegistry {
         );
     }
 
+    /// Register an untrusted/dynamic tool without allowing it to replace an
+    /// existing immutable descriptor.
+    pub fn register_unique(&mut self, tool: Arc<dyn Tool>) -> Result<(), String> {
+        if self.tools.contains_key(tool.name()) {
+            return Err("tool name is already registered".to_string());
+        }
+        self.register(tool);
+        Ok(())
+    }
+
     /// Replace the active approval gate. Call once at construction time.
     pub fn set_approval(&mut self, approval: ApprovalGate) {
         self.approval = approval;
