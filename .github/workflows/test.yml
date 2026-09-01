@@ -74,6 +74,54 @@ jobs:
         # cheapest fix; the lib test binary finishes in ~70s.
         run: cd core && cargo test -- --test-threads=1
 
+      - name: Run privileged extension boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends bubblewrap acl binutils
+          cargo build -p cos --bin claw-agentd --bin claw-extension-host
+          cargo test -p cos \
+            --test agentd_process_boundary \
+            --test extension_host_boundary \
+            --no-run
+
+          readonly root=/opt/cos-boundary-tests
+          sudo install -d -o root -g root -m 0755 "$root"
+          cleanup() {
+            sudo rm -rf -- "$root"
+          }
+          trap cleanup EXIT
+
+          agentd_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
+            -name 'agentd_process_boundary-*' -printf '%T@ %p\n' |
+            sort -nr | head -n1 | cut -d' ' -f2-)
+          extension_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
+            -name 'extension_host_boundary-*' -printf '%T@ %p\n' |
+            sort -nr | head -n1 | cut -d' ' -f2-)
+          test -n "$agentd_test"
+          test -n "$extension_test"
+
+          sudo install -o root -g root -m 0755 \
+            target/debug/claw-agentd "$root/claw-agentd"
+          sudo install -o root -g root -m 0755 \
+            target/debug/claw-extension-host "$root/claw-extension-host"
+          sudo install -o root -g root -m 0755 \
+            "$agentd_test" "$root/agentd_process_boundary"
+          sudo install -o root -g root -m 0755 \
+            "$extension_test" "$root/extension_host_boundary"
+
+          sudo env \
+            HOME=/root \
+            SUDO_UID="$(id -u)" \
+            COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
+            "$root/agentd_process_boundary" --test-threads=1
+          sudo env \
+            HOME=/root \
+            SUDO_UID="$(id -u)" \
+            COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
+            "$root/extension_host_boundary" --test-threads=1
+
       - name: Run cos-browser tests
         run: cargo test -p cos-browser
 

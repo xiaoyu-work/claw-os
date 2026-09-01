@@ -14,6 +14,7 @@ PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/../../.." && pwd)
 
 BUILD_DEBS="$PROJECT_DIR/packaging/deb/build-debs.sh"
 UNIT="$PROJECT_DIR/rootfs/features/systemd/overlay/usr/lib/systemd/system/clawd.service"
+TEST_WORKFLOW="$PROJECT_DIR/.github/workflows/test.yml"
 CARGO_TOML="$PROJECT_DIR/core/Cargo.toml"
 SYSUSERS="$PROJECT_DIR/packaging/deb/claw-os-agent/claw-os-agent.sysusers"
 PREINST="$PROJECT_DIR/packaging/deb/claw-os-agent/preinst"
@@ -133,6 +134,15 @@ grep -Eq '^Group=root$' "$UNIT" ||
     fail "clawd.service must create runtime and state roots as root:root"
 grep -Eq '^Environment=CLAWD_SOCKET_GROUP=sudo$' "$UNIT" ||
     fail "clawd.service must preserve root:sudo ownership for the primary socket"
+
+assert_contains "$TEST_WORKFLOW" 'Run privileged extension boundaries' \
+    "CI must execute the root extension boundary suites"
+assert_contains "$TEST_WORKFLOW" 'install -o root -g root -m 0755' \
+    "privileged test binaries must use root-owned non-writable fixtures"
+assert_contains "$TEST_WORKFLOW" 'COS_PRIVILEGED_EXTENSION_HOST_BIN' \
+    "installed-system tests must use the root-owned extension host fixture"
+assert_contains "$TEST_WORKFLOW" '"$root/extension_host_boundary" --test-threads=1' \
+    "CI must run the repaired extension-host lifecycle test"
 
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 
