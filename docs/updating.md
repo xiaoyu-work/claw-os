@@ -60,6 +60,8 @@ the existing `cos-extension` group, shadow locking, systemd-homed, and all
 without modifying the unrelated record; a partial attempt is rolled back.
 `postinst` revalidates everything and writes
 `/var/lib/cos/extension-identities.reserved`, which `clawd` requires.
+Subordinate-GID checks cover both the fixed UID pool and the exact retained
+GID as separate intervals, including legacy GIDs `61064..61183`.
 Each active slot also has a root-owned durable cleanup record under
 `/var/lib/cos/extension-quarantine/`. It is removed only after the host cgroup
 is empty and gone, private tmpfs mounts are unmounted, task-local state is
@@ -91,6 +93,13 @@ is read-only except for the task-local runtime tree. Bundled and
 system-installed extensions continue to work; custom MCP commands and working
 directories must be system-readable, and direct writes outside the task tree
 must use brokered App/SDK operations instead.
+
+Dynamic App and stdio MCP children now see an empty allowlisted filesystem and
+private procfs. Custom extension code/config outside `/usr` is copied into a
+bounded read-only task snapshot; symlinks, mount crossings, special files,
+group/world-writable trees, oversized snapshots, and undeclared host paths are
+rejected. Extensions that previously read arbitrary owner-home, `/var`, or
+mounted paths must use explicit SDK/broker operations instead.
 
 On package purge, only users listed in the package ownership marker and still
 matching the exact account policy are removed. Preexisting correct accounts,

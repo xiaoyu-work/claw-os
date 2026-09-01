@@ -365,11 +365,12 @@ identity_regular_root_file() {
 
 identity_subid_validate_file() {
     file=$1
-    lo=$2
+    reserved_gid=$2
     [ -e "$file" ] || return 0
     identity_regular_root_file "$file" || return 1
-    if awk -F: -v lo="$lo" \
-        -v hi="$((COS_EXT_UID_FIRST + COS_EXT_UID_COUNT - 1))" '
+    if awk -F: -v uid_lo="$COS_EXT_UID_FIRST" \
+        -v uid_hi="$((COS_EXT_UID_FIRST + COS_EXT_UID_COUNT - 1))" \
+        -v reserved_gid="$reserved_gid" '
         /^[[:space:]]*(#|$)/ { next }
         NF != 3 || $1 == "" || $2 !~ /^[0-9]+$/ ||
             $3 !~ /^[0-9]+$/ || $3 == 0 ||
@@ -380,7 +381,10 @@ identity_subid_validate_file() {
         {
             last = $2 + $3 - 1
             if (last < $2) exit 2
-            if ($2 <= hi && last >= lo) exit 1
+            if (($2 <= uid_hi && last >= uid_lo) ||
+                (reserved_gid >= 0 && $2 <= reserved_gid && last >= reserved_gid)) {
+                exit 1
+            }
         }
     ' "$file"; then
         status=0
@@ -395,7 +399,7 @@ identity_subid_validate_file() {
 }
 
 identity_subids_validate() {
-    identity_subid_validate_file "$identity_etc_dir/subuid" "$COS_EXT_UID_FIRST" &&
+    identity_subid_validate_file "$identity_etc_dir/subuid" -1 &&
         identity_subid_validate_file "$identity_etc_dir/subgid" "$identity_effective_gid"
 }
 

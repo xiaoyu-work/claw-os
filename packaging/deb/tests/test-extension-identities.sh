@@ -301,6 +301,36 @@ echo "cos-extension:x:998:" > "$SCRATCH/etc/group"
 identity_provision install &&
     fail "fresh install claimed an unproven arbitrary legacy gid"
 
+for legacy_gid in 61064 61183; do
+    reset_fixture
+    echo "cos-extension:x:$legacy_gid:" > "$SCRATCH/etc/group"
+    echo "alice:$legacy_gid:1" > "$SCRATCH/etc/subgid"
+    identity_provision upgrade 0.1.0 &&
+        fail "exact legacy gid $legacy_gid subordinate overlap was accepted"
+done
+
+reset_fixture
+echo "cos-extension:x:61100:" > "$SCRATCH/etc/group"
+echo "alice:61090:20" > "$SCRATCH/etc/subgid"
+identity_provision upgrade 0.1.0 &&
+    fail "interior legacy gid subordinate overlap was accepted"
+
+reset_fixture
+echo "cos-extension:x:61100:" > "$SCRATCH/etc/group"
+echo "alice:60000:2000" > "$SCRATCH/etc/subgid"
+identity_provision upgrade 0.1.0 &&
+    fail "covering legacy gid subordinate overlap was accepted"
+
+reset_fixture
+echo "cos-extension:x:61100:" > "$SCRATCH/etc/group"
+{
+    echo "alice:61099:1"
+    echo "bob:61101:1"
+} > "$SCRATCH/etc/subgid"
+identity_provision upgrade 0.1.0 ||
+    fail "adjacent legacy gid subordinate ranges were rejected"
+identity_rollback_pending
+
 reset_fixture
 echo "cos-extension:x:998:" > "$SCRATCH/etc/group"
 sh "$PREINST" upgrade 0.1.0 || fail "preinst legacy upgrade failed"

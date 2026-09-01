@@ -52,6 +52,9 @@ changed records are retained.
 The systemd service runs with primary group `root`, so managed runtime/state
 roots are `root:root`; `clawd.sock` is independently assigned `root:sudo`
 mode `0660`.
+Legacy subordinate-GID validation covers the union of the fixed UID pool and
+the exact retained GID, including values in `61064..61183`, with
+overflow-safe endpoint, interior, and covering-range checks.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the
