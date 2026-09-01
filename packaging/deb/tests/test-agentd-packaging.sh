@@ -72,8 +72,8 @@ assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-extension-host' \
     "claw-os-agent must install the extension host beside claw-agentd"
 assert_contains "$BUILD_DEBS" '/usr/lib/sysusers.d/claw-os-agent.conf' \
     "claw-os-agent must install its dedicated extension group definition"
-assert_contains "$SYSUSERS" 'g cos-extension 60999 -' \
-    "the extension host must have a fixed package-reserved system group"
+assert_contains "$SYSUSERS" 'g cos-extension - -' \
+    "sysusers must preserve a safely retained legacy extension gid"
 assert_contains "$POSTINST" 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf' \
     "postinst must create the extension execution group before starting clawd"
 assert_contains "$BUILD_DEBS" 'claw-os-agent/preinst' \
@@ -82,6 +82,8 @@ assert_contains "$BUILD_DEBS" 'extension-identities.sh' \
     "maintainer scripts must embed the shared identity policy"
 assert_contains "$PREINST" 'identity_provision' \
     "preinst must provision identities before unpack/restart"
+assert_contains "$PREINST" 'deb-systemd-invoke stop clawd.service' \
+    "upgrade must stop clawd before validating a legacy execution gid"
 assert_contains "$POSTINST" 'identity_finalize' \
     "postinst must validate and write the runtime reservation manifest"
 assert_contains "$POSTRM" 'identity_purge_owned' \
@@ -89,7 +91,9 @@ assert_contains "$POSTRM" 'identity_purge_owned' \
 assert_contains "$IDENTITY_HELPER" 'COS_EXT_UID_FIRST=61000' \
     "package identity range must start below systemd DynamicUser"
 assert_contains "$IDENTITY_HELPER" 'COS_EXT_GID=60999' \
-    "package identity group must use the fixed reserved gid"
+    "fresh installs must prefer the fixed reserved gid"
+assert_contains "$IDENTITY_HELPER" 'identity_select_gid' \
+    "upgrades must safely retain a provable legacy package gid"
 assert_contains "$IDENTITY_HELPER" 'COS_EXT_DYNAMIC_UID_FIRST=61184' \
     "package policy must encode systemd DynamicUser boundaries"
 assert_contains "$IDENTITY_RS" 'FIRST_UID: u32 = 61_000' \
@@ -125,8 +129,10 @@ grep -Eq '^StateDirectoryMode=0711$' "$UNIT" ||
 # group, so no route on it is reachable from a worker.
 grep -Eq '^Environment=CLAWD_SOCKET_MODE=0660$' "$UNIT" ||
     fail "clawd.sock permissions must not be widened"
-grep -Eq '^Group=sudo$' "$UNIT" ||
-    fail "clawd.service must keep its socket group"
+grep -Eq '^Group=root$' "$UNIT" ||
+    fail "clawd.service must create runtime and state roots as root:root"
+grep -Eq '^Environment=CLAWD_SOCKET_GROUP=sudo$' "$UNIT" ||
+    fail "clawd.service must preserve root:sudo ownership for the primary socket"
 
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 

@@ -31,7 +31,9 @@ packaging/
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
-It creates the fixed-GID (`60999`) system group `cos-extension`; supervised
+Fresh installs create `cos-extension` at GID `60999`; safe upgrades may retain
+the prior package's arbitrary sysusers GID only after proving it has no
+unrelated ownership, membership, user, or process semantics. Supervised
 workers keep the task uid, while hosted extensions use an exclusive
 package-created locked account from `cos-ext-00..63` (`61000..61063`) plus
 that primary gid. This blocks process injection
@@ -47,6 +49,9 @@ writes the exact root-owned runtime reservation manifest. Purge removes only
 accounts recorded as package-created, still matching policy, and owning no
 live process or runtime/quarantine state; preexisting correct accounts or
 changed records are retained.
+The systemd service runs with primary group `root`, so managed runtime/state
+roots are `root:root`; `clawd.sock` is independently assigned `root:sudo`
+mode `0660`.
 `claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the

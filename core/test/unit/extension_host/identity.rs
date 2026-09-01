@@ -21,30 +21,41 @@ fn manifest_contains_every_exact_identity() {
     assert!(manifest.contains("identity=cos-ext-00:61000:60999:/nonexistent:/usr/sbin/nologin\n"));
     assert!(manifest.contains("identity=cos-ext-63:61063:60999:/nonexistent:/usr/sbin/nologin\n"));
     assert_eq!(manifest.lines().count(), 66);
+    let retained = reservation_manifest(998);
+    assert!(retained.starts_with("version=1\ngroup=cos-extension:998\n"));
+    assert!(retained.contains("identity=cos-ext-00:61000:998:"));
 }
 
 #[test]
 fn subordinate_id_ranges_are_checked_for_overlap() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("subuid");
-    assert!(validate_subid_content(&path, "alice:100000:65536\n").is_ok());
-    assert!(validate_subid_content(&path, "alice:60990:20\n")
+    assert!(validate_subid_content(&path, "alice:100000:65536\n", GROUP_GID).is_ok());
+    assert!(validate_subid_content(&path, "alice:60990:20\n", GROUP_GID)
         .unwrap_err()
         .contains("overlaps"));
-    assert!(validate_subid_content(&path, "alice:61063:1\n")
+    assert!(validate_subid_content(&path, "alice:61063:1\n", GROUP_GID)
         .unwrap_err()
         .contains("overlaps"));
-    assert!(validate_subid_content(&path, "alice:4294967295:2\n")
-        .unwrap_err()
-        .contains("overflows"));
-    assert!(validate_subid_content(&path, ":100000:1\n")
+    assert!(
+        validate_subid_content(&path, "alice:4294967295:2\n", GROUP_GID)
+            .unwrap_err()
+            .contains("overflows")
+    );
+    assert!(validate_subid_content(&path, ":100000:1\n", GROUP_GID)
         .unwrap_err()
         .contains("empty owner"));
     let subgid = root.path().join("subgid");
-    assert!(validate_subid_content(&subgid, "alice:60999:1\n")
+    assert!(
+        validate_subid_content(&subgid, "alice:60999:1\n", GROUP_GID)
+            .unwrap_err()
+            .contains("overlaps")
+    );
+    assert!(validate_subid_content(&subgid, "alice:60998:1\n", GROUP_GID).is_ok());
+    assert!(validate_subid_content(&subgid, "alice:998:1\n", 998)
         .unwrap_err()
         .contains("overlaps"));
-    assert!(validate_subid_content(&subgid, "alice:60998:1\n").is_ok());
+    assert!(validate_execution_gid(998).is_ok());
 }
 
 #[test]
@@ -56,6 +67,7 @@ fn retained_identity_is_not_released_until_cleanup() {
         in_use: Mutex::new(HashSet::from([FIRST_UID])),
         retained_locks: Mutex::new(HashMap::new()),
         validate_on_acquire: false,
+        execution_gid: 999,
         quarantine_dir: None,
     });
     let mut lease = ExtensionIdentityLease {
@@ -85,6 +97,7 @@ fn release_refuses_an_identity_with_a_live_process() {
         in_use: Mutex::new(HashSet::from([uid])),
         retained_locks: Mutex::new(HashMap::new()),
         validate_on_acquire: false,
+        execution_gid: GROUP_GID,
         quarantine_dir: None,
     });
     let lease = ExtensionIdentityLease {

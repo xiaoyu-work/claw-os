@@ -49,8 +49,12 @@ are replaced together. Package configuration creates the dedicated
 `cos-extension` system group before restarting `clawd`; existing user
 memberships are not changed.
 The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs
-`61000..61063` and the `cos-extension` group at fixed GID `60999`, all below
-systemd DynamicUser. `preinst` checks every name, UID, and GID,
+`61000..61063`. Fresh installs use `cos-extension` GID `60999`. Upgrades from
+the prior dynamic sysusers definition stop `clawd` and retain the existing GID
+instead of rewriting it, but only when it has no unrelated group members,
+primary users, processes, subordinate-ID overlap, or group-owned files. The
+retained GID is recorded in `/var/lib/cos/extension-group.gid` and revalidated
+on every later upgrade. `preinst` checks every name, UID, and GID,
 the existing `cos-extension` group, shadow locking, systemd-homed, and all
 `/etc/subuid`/`/etc/subgid` ranges before making changes. A collision aborts
 without modifying the unrelated record; a partial attempt is rolled back.
@@ -63,7 +67,10 @@ recursively deleted, and routed ACLs are revoked. After a crash or failed
 cleanup, the slot remains unavailable across restart until recovery proves all
 residue is gone; administrators should investigate repeated
 `cleanup-failed` audit events rather than deleting these records manually.
-The service delegates its cgroup-v2 subtree and uses
+The service runs with primary group `root`, so systemd's runtime/state/log
+directories are `root:root`; `clawd` also pins and repairs those roots through
+directory descriptors before use. The primary broker socket is separately
+assigned `root:sudo` mode `0660`. The service delegates its cgroup-v2 subtree and uses
 `KillMode=control-group`. Agent tasks now fail closed unless the CPU, memory,
 and pids controllers plus a working `cgroup.kill` are available; ordinary
 non-agent `clawd` primitives remain available. On supported systemd hosts no

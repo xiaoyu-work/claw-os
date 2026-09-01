@@ -47,7 +47,7 @@ case "$1" in
 
         rm -f /etc/systemd/user/default.target.wants/clawd.service
 
-        if [ -d /run/systemd/system ]; then
+        if [ -d "$identity_systemd_dir" ]; then
             systemctl --system daemon-reload >/dev/null || true
             systemctl --global daemon-reload >/dev/null 2>&1 || true
             if [ -n "$2" ]; then
@@ -58,7 +58,12 @@ case "$1" in
             fi
         fi
         ;;
-    abort-upgrade|abort-remove|abort-deconfigure)
+    abort-upgrade)
+        if [ -d "$identity_systemd_dir" ]; then
+            deb-systemd-invoke start clawd.service >/dev/null || true
+        fi
+        ;;
+    abort-remove|abort-deconfigure)
         ;;
     *)
         echo "postinst called with unknown argument '$1'" >&2

@@ -32,6 +32,7 @@ pub struct ExtensionIdentityPool {
     in_use: Mutex<HashSet<u32>>,
     retained_locks: Mutex<HashMap<u32, std::fs::File>>,
     validate_on_acquire: bool,
+    execution_gid: u32,
     quarantine_dir: Option<PathBuf>,
 }
 
@@ -72,18 +73,23 @@ impl ExtensionIdentityPool {
         validate_on_acquire: bool,
         quarantine_dir: Option<PathBuf>,
     ) -> Arc<Self> {
+        let execution_gid = identities
+            .first()
+            .map(|identity| identity.gid)
+            .unwrap_or(GROUP_GID);
         Arc::new(Self {
             identities,
             in_use: Mutex::new(HashSet::new()),
             retained_locks: Mutex::new(HashMap::new()),
             validate_on_acquire,
+            execution_gid,
             quarantine_dir,
         })
     }
 
     pub fn acquire(self: &Arc<Self>, owner_uid: u32) -> Result<ExtensionIdentityLease, String> {
         if self.validate_on_acquire {
-            validate_runtime_reservation(GROUP_GID)?;
+            validate_runtime_reservation(self.execution_gid)?;
         }
         let mut in_use = self
             .in_use
@@ -485,17 +491,23 @@ fn validate_fixed_range() -> Result<(), String> {
 
 fn validate_runtime_reservation(gid: u32) -> Result<(), String> {
     validate_fixed_range()?;
-    if gid != GROUP_GID {
-        return Err(format!(
-            "extension execution group has gid {gid}, expected package-reserved gid {GROUP_GID}"
-        ));
-    }
+    validate_execution_gid(gid)?;
     validate_group(gid)?;
-    validate_subid_file(Path::new("/etc/subuid"))?;
-    validate_subid_file(Path::new("/etc/subgid"))?;
+    validate_subid_file(Path::new("/etc/subuid"), gid)?;
+    validate_subid_file(Path::new("/etc/subgid"), gid)?;
     validate_reservation_manifest(Path::new(RESERVATION_MANIFEST), gid)?;
     for identity in expected_identities(gid) {
         validate_account(&identity)?;
+    }
+    Ok(())
+}
+
+fn validate_execution_gid(gid: u32) -> Result<(), String> {
+    let last_uid = FIRST_UID + IDENTITY_COUNT - 1;
+    if gid == 0 || gid >= SYSTEMD_DYNAMIC_UID_MIN || (FIRST_UID..=last_uid).contains(&gid) {
+        return Err(format!(
+            "extension execution gid {gid} overlaps root, reserved UIDs, or DynamicUser space"
+        ));
     }
     Ok(())
 }
@@ -765,19 +777,15 @@ fn reservation_manifest(gid: u32) -> String {
     manifest
 }
 
-fn validate_subid_file(path: &Path) -> Result<(), String> {
+fn validate_subid_file(path: &Path, gid: u32) -> Result<(), String> {
     let Some(content) = read_root_policy_file(path, None, true)? else {
         return Ok(());
     };
-    validate_subid_content(path, &content)
+    validate_subid_content(path, &content, gid)
 }
 
-fn validate_subid_content(path: &Path, content: &str) -> Result<(), String> {
-    let reserved_start = if path.file_name().and_then(|name| name.to_str()) == Some("subgid") {
-        GROUP_GID
-    } else {
-        FIRST_UID
-    };
+fn validate_subid_content(path: &Path, content: &str, gid: u32) -> Result<(), String> {
+    let is_subgid = path.file_name().and_then(|name| name.to_str()) == Some("subgid");
     let reserved_end = FIRST_UID + IDENTITY_COUNT - 1;
     for (index, line) in content.lines().enumerate() {
         let line = line.trim();
@@ -819,7 +827,9 @@ fn validate_subid_content(path: &Path, content: &str) -> Result<(), String> {
                 index + 1
             )
         })?;
-        if start <= reserved_end && end >= reserved_start {
+        let overlaps_uids = start <= reserved_end && end >= FIRST_UID;
+        let overlaps_gid = is_subgid && start <= gid && end >= gid;
+        if overlaps_uids || overlaps_gid {
             return Err(format!(
                 "{} line {} overlaps package-reserved extension identities",
                 path.display(),

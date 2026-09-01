@@ -73,8 +73,10 @@ never followed by privileged ownership or mode changes.
 
 The package creates locked system accounts `cos-ext-00..63` with fixed UIDs
 `61000..61063`, `/nonexistent` homes, `/usr/sbin/nologin` shells, and the
-dedicated `cos-extension` primary group at fixed GID `60999`. The range is below systemd
-DynamicUser (`61184..65519`) and above the supported default login range.
+dedicated `cos-extension` primary group. Fresh installs use GID `60999`; a
+provably unused legacy package GID may be retained during upgrade rather than
+rewritten. The reserved identities remain below systemd DynamicUser
+(`61184..65519`) and above the supported default login range.
 Preinstall checks exact NSS and shadow records, systemd-homed, reverse UID/GID
 lookups, and overlapping subordinate-ID ranges. Every runtime allocation
 revalidates those records, the package reservation manifest, and `/proc`; any

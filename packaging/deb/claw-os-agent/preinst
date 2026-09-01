@@ -8,7 +8,14 @@ command -v identity_provision >/dev/null 2>&1 ||
 
 case "$1" in
     install|upgrade)
-        identity_provision
+        if [ "$1" = upgrade ] && [ -d "$identity_systemd_dir" ]; then
+            deb-systemd-invoke stop clawd.service >/dev/null
+            if systemctl --quiet is-active clawd.service; then
+                echo "claw-os-agent: clawd.service did not stop before identity migration" >&2
+                exit 1
+            fi
+        fi
+        identity_provision "$1" "${2-}"
         ;;
     abort-upgrade)
         identity_rollback_pending

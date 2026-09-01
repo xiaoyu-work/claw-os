@@ -15,7 +15,11 @@ identity_reserved_manifest=$identity_state_dir/extension-identities.reserved
 identity_owned_manifest=$identity_state_dir/extension-identities.owned
 identity_pending_manifest=$identity_state_dir/extension-identities.pending
 identity_quarantine_dir=$identity_state_dir/extension-quarantine
+identity_gid_manifest=$identity_state_dir/extension-group.gid
 identity_proc_dir=${COS_IDENTITY_PROC_DIR:-/proc}
+identity_scan_roots=${COS_IDENTITY_SCAN_ROOTS:-/ /boot /data /home /media /mnt /opt /run /srv /usr/local /var}
+identity_systemd_dir=${COS_IDENTITY_SYSTEMD_DIR:-/run/systemd/system}
+identity_effective_gid=$COS_EXT_GID
 
 identity_name() {
     printf 'cos-ext-%02d' "$1"
@@ -47,6 +51,160 @@ identity_group_line() {
     getent group "$COS_EXT_GROUP" 2>/dev/null || true
 }
 
+identity_gid_validate_value() {
+    gid=$1
+    case "$gid" in
+        *[!0-9]*|'') identity_fail "extension execution gid is invalid"; return 1 ;;
+    esac
+    last_uid=$((COS_EXT_UID_FIRST + COS_EXT_UID_COUNT - 1))
+    [ "$gid" -gt 0 ] &&
+        [ "$gid" -lt "$COS_EXT_DYNAMIC_UID_FIRST" ] &&
+        { [ "$gid" -lt "$COS_EXT_UID_FIRST" ] || [ "$gid" -gt "$last_uid" ]; } || {
+        identity_fail "extension execution gid overlaps root, reserved UIDs, or DynamicUser"
+        return 1
+    }
+}
+
+identity_load_gid_manifest() {
+    [ -f "$identity_gid_manifest" ] || return 1
+    identity_regular_root_file "$identity_gid_manifest" || return 1
+    gid=$(cat "$identity_gid_manifest") || return 1
+    identity_gid_validate_value "$gid" || return 1
+    identity_effective_gid=$gid
+}
+
+identity_write_gid_manifest() {
+    gid=$1
+    marker_new=$identity_gid_manifest.new.$$
+    printf '%s\n' "$gid" > "$marker_new" || return 1
+    chmod 0600 "$marker_new" || {
+        rm -f "$marker_new"
+        return 1
+    }
+    mv -f "$marker_new" "$identity_gid_manifest"
+    identity_effective_gid=$gid
+}
+
+identity_gid_has_process() {
+    scan_gid=$1
+    for scan_status in "$identity_proc_dir"/[0-9]*/status; do
+        [ -e "$scan_status" ] || continue
+        if ! scan_line=$(sed -n 's/^Gid:[[:space:]]*//p' "$scan_status" 2>/dev/null); then
+            return 0
+        fi
+        if [ -z "$scan_line" ]; then
+            [ ! -e "$scan_status" ] || return 0
+            continue
+        fi
+        for scan_value in $scan_line; do
+            [ "$scan_value" != "$scan_gid" ] || return 0
+        done
+    done
+    return 1
+}
+
+identity_gid_has_unrelated_users() {
+    scan_gid=$1
+    getent passwd 2>/dev/null |
+        awk -F: -v gid="$scan_gid" '
+            $4 == gid && $1 !~ /^cos-ext-[0-9][0-9]$/ { found=1 }
+            END { exit !found }
+        '
+}
+
+identity_gid_has_files() {
+    scan_gid=$1
+    for root in $identity_scan_roots; do
+        [ -e "$root" ] || continue
+        found=$(find "$root" -xdev -gid "$scan_gid" -print -quit 2>/dev/null) || return 0
+        [ -z "$found" ] || return 0
+    done
+    return 1
+}
+
+identity_select_gid() {
+    action=$1
+    old_version=${2-}
+    group_line=$(identity_group_line)
+    if [ -z "$group_line" ]; then
+        fixed_owner=$(getent group "$COS_EXT_GID" 2>/dev/null || true)
+        [ -z "$fixed_owner" ] || {
+            identity_fail "fixed extension gid $COS_EXT_GID belongs to another group"
+            return 1
+        }
+        identity_gid_has_unrelated_users "$COS_EXT_GID" && {
+            identity_fail "fixed extension gid $COS_EXT_GID has a primary user"
+            return 1
+        }
+        identity_gid_has_process "$COS_EXT_GID" && {
+            identity_fail "fixed extension gid $COS_EXT_GID owns a process"
+            return 1
+        }
+        identity_gid_has_files "$COS_EXT_GID" && {
+            identity_fail "fixed extension gid $COS_EXT_GID owns files"
+            return 1
+        }
+        identity_write_gid_manifest "$COS_EXT_GID"
+        return
+    fi
+
+    IFS=: read -r group_name group_password group_gid group_members <<EOF
+$group_line
+EOF
+    [ "$group_name" = "$COS_EXT_GROUP" ] &&
+        [ "$group_password" = x ] &&
+        [ -z "$group_members" ] || {
+        identity_fail "legacy $COS_EXT_GROUP group has ambiguous identity or members"
+        return 1
+    }
+    identity_gid_validate_value "$group_gid" || return 1
+    reverse=$(getent group "$group_gid" 2>/dev/null || true)
+    [ "$reverse" = "$group_line" ] || {
+        identity_fail "legacy extension gid $group_gid does not resolve uniquely"
+        return 1
+    }
+    if [ -f "$identity_gid_manifest" ]; then
+        identity_load_gid_manifest || return 1
+        [ "$identity_effective_gid" = "$group_gid" ] || {
+            identity_fail "recorded extension gid does not match NSS"
+            return 1
+        }
+    elif [ "$group_gid" = "$COS_EXT_GID" ]; then
+        identity_write_gid_manifest "$group_gid" || return 1
+    else
+        [ "$action" = upgrade ] && [ -n "$old_version" ] || {
+            identity_fail "legacy arbitrary extension gid requires a package upgrade context"
+            return 1
+        }
+        identity_gid_has_unrelated_users "$group_gid" && {
+            identity_fail "legacy extension gid $group_gid has unrelated primary users"
+            return 1
+        }
+        identity_gid_has_process "$group_gid" && {
+            identity_fail "legacy extension gid $group_gid still owns a process; stop clawd and retry"
+            return 1
+        }
+        identity_gid_has_files "$group_gid" && {
+            identity_fail "legacy extension gid $group_gid owns unrelated files; refusing ambiguous migration"
+            return 1
+        }
+        identity_write_gid_manifest "$group_gid" || return 1
+    fi
+    identity_gid_has_unrelated_users "$group_gid" && {
+        identity_fail "extension gid $group_gid has unrelated primary users"
+        return 1
+    }
+    identity_gid_has_process "$group_gid" && {
+        identity_fail "extension gid $group_gid still owns a process; stop clawd and retry"
+        return 1
+    }
+    identity_gid_has_files "$group_gid" && {
+        identity_fail "extension gid $group_gid owns unrelated files"
+        return 1
+    }
+    identity_effective_gid=$group_gid
+}
+
 identity_group_validate() {
     line=$(identity_group_line)
     [ -n "$line" ] || {
@@ -64,20 +222,20 @@ EOF
         identity_fail "group $COS_EXT_GROUP has an unexpected password field"
         return 1
     }
-    [ "$record_gid" = "$COS_EXT_GID" ] || {
-        identity_fail "group $COS_EXT_GROUP has gid $record_gid, expected $COS_EXT_GID"
+    [ "$record_gid" = "$identity_effective_gid" ] || {
+        identity_fail "group $COS_EXT_GROUP has gid $record_gid, expected $identity_effective_gid"
         return 1
     }
     [ -z "$record_members" ] || {
         identity_fail "group $COS_EXT_GROUP has supplementary members"
         return 1
     }
-    reverse=$(getent group "$COS_EXT_GID" 2>/dev/null || true)
+    reverse=$(getent group "$identity_effective_gid" 2>/dev/null || true)
     [ "$reverse" = "$line" ] || {
-        identity_fail "gid $COS_EXT_GID does not resolve uniquely to $COS_EXT_GROUP"
+        identity_fail "gid $identity_effective_gid does not resolve uniquely to $COS_EXT_GROUP"
         return 1
     }
-    printf '%s\n' "$COS_EXT_GID"
+    printf '%s\n' "$identity_effective_gid"
 }
 
 identity_shadow_locked() {
@@ -133,8 +291,8 @@ EOF
         identity_fail "account $name has uid $account_uid, expected $uid"
         return 1
     }
-    [ "$account_gid" = "$COS_EXT_GID" ] || {
-        identity_fail "account $name has gid $account_gid, expected $COS_EXT_GID"
+    [ "$account_gid" = "$identity_effective_gid" ] || {
+        identity_fail "account $name has gid $account_gid, expected $identity_effective_gid"
         return 1
     }
     [ "$account_gecos" = "Claw OS extension slot $index" ] || {
@@ -178,11 +336,7 @@ identity_range_validate() {
         identity_fail "extension identity range overlaps systemd DynamicUser"
         return 1
     }
-    [ "$COS_EXT_GID" -gt 60000 ] &&
-        [ "$COS_EXT_GID" -lt "$COS_EXT_DYNAMIC_UID_FIRST" ] || {
-        identity_fail "extension execution gid overlaps login or DynamicUser space"
-        return 1
-    }
+    identity_gid_validate_value "$identity_effective_gid" || return 1
 }
 
 identity_regular_root_file() {
@@ -242,17 +396,17 @@ identity_subid_validate_file() {
 
 identity_subids_validate() {
     identity_subid_validate_file "$identity_etc_dir/subuid" "$COS_EXT_UID_FIRST" &&
-        identity_subid_validate_file "$identity_etc_dir/subgid" "$COS_EXT_GID"
+        identity_subid_validate_file "$identity_etc_dir/subgid" "$identity_effective_gid"
 }
 
 identity_preflight() {
     identity_range_validate || return 1
     identity_subids_validate || return 1
     group_by_name=$(identity_group_line)
-    group_by_gid=$(getent group "$COS_EXT_GID" 2>/dev/null || true)
+    group_by_gid=$(getent group "$identity_effective_gid" 2>/dev/null || true)
     if [ -n "$group_by_name" ] || [ -n "$group_by_gid" ]; then
         [ -n "$group_by_name" ] && [ "$group_by_name" = "$group_by_gid" ] || {
-            identity_fail "group name/gid collision for $COS_EXT_GROUP/$COS_EXT_GID"
+            identity_fail "group name/gid collision for $COS_EXT_GROUP/$identity_effective_gid"
             return 1
         }
         identity_group_validate >/dev/null || return 1
@@ -357,23 +511,23 @@ identity_merge_pending() {
 }
 
 identity_provision() {
-    if [ -d "$identity_state_dir" ]; then
-        identity_prepare_state_dir || return 1
-        identity_recover_partial || return 1
-    fi
-    identity_preflight || return 1
+    action=${1-install}
+    old_version=${2-}
     identity_prepare_state_dir || return 1
+    identity_recover_partial || return 1
+    identity_select_gid "$action" "$old_version" || return 1
+    identity_preflight || return 1
     current=$identity_state_dir/.extension-identities.provision.$$
     : > "$current" || return 1
     chmod 0600 "$current" || return 1
 
     group_line=$(identity_group_line)
     if [ -z "$group_line" ]; then
-        if ! groupadd --system --gid "$COS_EXT_GID" "$COS_EXT_GROUP"; then
+        if ! groupadd --system --gid "$identity_effective_gid" "$COS_EXT_GROUP"; then
             identity_rollback_file "$current"
             return 1
         fi
-        printf 'group:%s:%s\n' "$COS_EXT_GROUP" "$COS_EXT_GID" >> "$current"
+        printf 'group:%s:%s\n' "$COS_EXT_GROUP" "$identity_effective_gid" >> "$current"
         identity_group_validate >/dev/null || {
             identity_rollback_file "$current"
             return 1
@@ -390,7 +544,7 @@ identity_provision() {
         name=$(identity_name "$index")
         uid=$((COS_EXT_UID_FIRST + index))
         if ! getent passwd "$name" >/dev/null 2>&1; then
-            if ! useradd --system --uid "$uid" --gid "$COS_EXT_GID" \
+            if ! useradd --system --uid "$uid" --gid "$identity_effective_gid" \
                 --home-dir "$COS_EXT_HOME" --no-create-home \
                 --password '!' \
                 --shell "$COS_EXT_SHELL" --comment "Claw OS extension slot $index" \
@@ -398,7 +552,7 @@ identity_provision() {
                 identity_rollback_file "$current"
                 return 1
             fi
-            printf 'user:%s:%s:%s\n' "$name" "$uid" "$COS_EXT_GID" >> "$current"
+            printf 'user:%s:%s:%s\n' "$name" "$uid" "$identity_effective_gid" >> "$current"
         fi
         if ! identity_account_validate "$name" "$uid" "$index"; then
             identity_rollback_file "$current"
@@ -432,17 +586,21 @@ identity_validate_all() {
 
 identity_finalize() {
     identity_prepare_state_dir || return 1
+    identity_load_gid_manifest || {
+        identity_fail "extension gid reservation marker is missing"
+        return 1
+    }
     identity_validate_all || return 1
     identity_group_validate >/dev/null || return 1
     manifest_new=$identity_reserved_manifest.new.$$
     {
         echo "version=1"
-        echo "group=$COS_EXT_GROUP:$COS_EXT_GID"
+        echo "group=$COS_EXT_GROUP:$identity_effective_gid"
         index=0
         while [ "$index" -lt "$COS_EXT_UID_COUNT" ]; do
             name=$(identity_name "$index")
             uid=$((COS_EXT_UID_FIRST + index))
-            echo "identity=$name:$uid:$COS_EXT_GID:$COS_EXT_HOME:$COS_EXT_SHELL"
+            echo "identity=$name:$uid:$identity_effective_gid:$COS_EXT_HOME:$COS_EXT_SHELL"
             index=$((index + 1))
         done
     } > "$manifest_new" || return 1
@@ -464,6 +622,7 @@ identity_finalize() {
 identity_rollback_pending() {
     [ -e "$identity_state_dir" ] || return 0
     identity_prepare_state_dir || return 1
+    identity_load_gid_manifest || true
     identity_rollback_file "$identity_pending_manifest"
 }
 
@@ -488,8 +647,12 @@ identity_uid_has_process() {
 identity_purge_owned() {
     [ -e "$identity_state_dir" ] || return 0
     identity_prepare_state_dir || return 1
+    identity_load_gid_manifest || true
     rm -f "$identity_reserved_manifest"
-    [ -f "$identity_owned_manifest" ] || return 0
+    if [ ! -f "$identity_owned_manifest" ]; then
+        rm -f "$identity_gid_manifest"
+        return 0
+    fi
     remaining=$identity_owned_manifest.remaining.$$
     : > "$remaining"
     while IFS=: read -r kind name value gid; do
@@ -533,5 +696,8 @@ identity_purge_owned() {
         echo "claw-os-agent: retained identities whose package ownership could not be proven" >&2
     else
         rm -f "$remaining" "$identity_owned_manifest"
+    fi
+    if [ ! -f "$identity_owned_manifest" ] && [ ! -f "$identity_pending_manifest" ]; then
+        rm -f "$identity_gid_manifest"
     fi
 }

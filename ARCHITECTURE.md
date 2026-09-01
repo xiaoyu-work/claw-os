@@ -375,8 +375,11 @@ have been verified. No privileged `chown` or `chmod` follows a pathname below
 a task-writable directory.
 
 The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
-`61000..=61063` with fixed primary GID `60999`, below systemd's `DynamicUser`
-range (`61184..=65519`) and above the supported default login allocation.
+`61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
+the prior package may retain its arbitrary sysusers-assigned
+`cos-extension` GID only after proving it has no unrelated members, primary
+users, processes, subordinate-ID overlap, or group-owned files. Both policies
+remain outside systemd's `DynamicUser` range (`61184..=65519`).
 Preinstall validation rejects
 NSS/name/UID collisions, systemd-homed records, and any overlapping
 `/etc/subuid` or `/etc/subgid` range before creating anything; partial
@@ -408,10 +411,13 @@ only from that exact worker identity. Its broker proxy uses per-message
 scheduler, permission-decision, admin, and sibling-session routes are absent.
 Accepted provider calls re-enter the normal typed route registry, global
 admission limits, capability authority, final provider checks, and audit path.
-The supervisor's retry boundary is delivery of the complete worker assignment:
-launch or assignment-delivery failures may retry, but every worker/host
-EOF, crash, or timeout after delivery is terminal because an external hosted
-side effect may already have occurred.
+The supervisor's retry boundary is a durable two-phase execution gate. The
+worker verifies PREPARE and remains blocked; `clawd` persists exact
+task/session/worker/generation/nonces as `execution_committed` before sending
+COMMIT. Recovery requeues only unprepared/prepared records. Commit persistence
+or delivery ambiguity, legacy running records, and worker/host failure after
+COMMIT become terminal indeterminate because an external side effect may have
+occurred.
 
 Consent remains inside the capability boundary.
 `core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
