@@ -25,6 +25,9 @@ surfaces.
 - Treat file and directory fsync as mandatory queue barriers. Cross-bucket
   moves sync both directories, and recovery deduplicates resurrected records
   by conservative execution-phase dominance before any mutation.
+- Durably create and fsync queue topology before accepting a submission.
+  Legacy, unsupported, or malformed Pending records become terminal
+  indeterminate instead of being upgraded into a replayable phase.
 
 ## Key Files
 
@@ -70,6 +73,8 @@ changes must preserve equivalent streaming/non-streaming text, tools, opaque
 reasoning state, usage, and error behavior. Tool schemas and calls use the same
 trusted per-request exposure context, then execute through registry
 reauthorization, guardrails, approvals, and hooks.
+Opaque MCP handles retain a non-model-visible internal policy identity; both
+catalog filtering and invocation use this same registry path.
 
 ## Tests
 

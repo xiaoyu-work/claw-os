@@ -7,9 +7,9 @@
 //! * spawn each configured server locally for direct runtimes, or attach it
 //!   through the task-owned extension host for `claw-agentd`,
 //! * run `initialize` + `tools/list`,
-//! * register every advertised tool as an [`McpRemoteTool`] in the
-//!   agent's [`ToolRegistry`] under a deterministic prefix
-//!   (`mcp_<server>_<remote>`),
+//! * register every advertised tool under a non-model-visible internal policy
+//!   identity (`mcp_<server>_<remote>`),
+//! * expose only fixed local catalogue/invocation gateway descriptors,
 //! * return a [`Vec<McpServerHandle>`] the caller must keep alive
 //!   for the duration of any agent loop that wants to call those
 //!   tools. Dropping a handle aborts the client reader task and
@@ -236,23 +236,36 @@ impl DisclosureBinding {
 
 struct DisclosureEntry {
     descriptor: ToolDescriptor,
-    tool: Arc<McpRemoteTool>,
+    internal_name: String,
 }
 
 pub(crate) struct McpDisclosureState {
     binding: DisclosureBinding,
     entries: Mutex<BTreeMap<String, DisclosureEntry>>,
+    policy_registry: Mutex<ToolRegistry>,
 }
 
 impl McpDisclosureState {
+    #[cfg(test)]
     fn new(context: &ToolExposureContext) -> Arc<Self> {
+        Self::with_policy(context, ToolRegistry::new())
+    }
+
+    fn with_policy(context: &ToolExposureContext, policy_registry: ToolRegistry) -> Arc<Self> {
         Arc::new(Self {
             binding: DisclosureBinding::from_context(context),
             entries: Mutex::new(BTreeMap::new()),
+            policy_registry: Mutex::new(policy_registry),
         })
     }
 
     fn insert(&self, descriptor: ToolDescriptor, tool: Arc<McpRemoteTool>) -> Result<(), String> {
+        let internal_name = tool.name().to_string();
+        self.policy_registry
+            .lock()
+            .map_err(|_| "MCP policy registry is poisoned".to_string())?
+            .register_unique(tool)
+            .map_err(|_| "MCP internal policy identity collision".to_string())?;
         let handle = uuid::Uuid::new_v4().simple().to_string();
         let mut entries = self
             .entries
@@ -261,7 +274,13 @@ impl McpDisclosureState {
         if entries.contains_key(&handle) {
             return Err("MCP disclosure handle collision".to_string());
         }
-        entries.insert(handle, DisclosureEntry { descriptor, tool });
+        entries.insert(
+            handle,
+            DisclosureEntry {
+                descriptor,
+                internal_name,
+            },
+        );
         Ok(())
     }
 
@@ -455,9 +474,14 @@ impl Tool for McpCatalogTool {
         if !self.state.binding.matches(&context) {
             return ToolResult::err("MCP catalog binding does not match this session");
         }
+        let policy = match self.state.policy_registry.lock() {
+            Ok(registry) => registry.clone(),
+            Err(_) => return ToolResult::err("MCP policy registry is unavailable"),
+        };
         let catalog = match self.state.entries.lock() {
             Ok(entries) => entries
                 .iter()
+                .filter(|(_, entry)| policy.policy_visible(&context, &entry.internal_name))
                 .map(|(handle, entry)| {
                     json!({
                         "handle": handle,
@@ -525,15 +549,26 @@ impl Tool for McpInvokeTool {
         {
             return ToolResult::err("invalid MCP invocation handle");
         }
-        let tool = match self.state.entries.lock() {
-            Ok(entries) => entries.get(handle).map(|entry| entry.tool.clone()),
+        let internal_name = match self.state.entries.lock() {
+            Ok(entries) => entries.get(handle).map(|entry| entry.internal_name.clone()),
             Err(_) => return ToolResult::err("MCP disclosure registry is unavailable"),
         };
-        let Some(tool) = tool else {
+        let Some(internal_name) = internal_name else {
             return ToolResult::err("unknown or expired MCP invocation handle");
         };
         let arguments = input.get("arguments").cloned().unwrap_or(Value::Null);
-        tool.exec(arguments).await
+        let policy = match self.state.policy_registry.lock() {
+            Ok(registry) => registry.clone(),
+            Err(_) => return ToolResult::err("MCP policy registry is unavailable"),
+        };
+        policy
+            .execute(
+                &context,
+                &internal_name,
+                arguments,
+                "opaque MCP capability invocation",
+            )
+            .await
     }
 }
 
@@ -644,13 +679,9 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
 /// hard failure (caller logs and skips).
 ///
 /// Process security:
-/// - **Environment** is `env_clear()`ed first, then a small,
-///   well-known allowlist is copied across (PATH, HOME, USER, SHELL,
-///   LANG, LC_*, TZ, COS_*), then the caller-supplied `spec.env`
-///   overlays on top. Without `env_clear()` the child would inherit
-///   every secret the parent has (`GITHUB_TOKEN`, `OPENAI_API_KEY`,
-///   etc.) — MCP servers are third-party code and should see only
-///   what the agent operator explicitly grants.
+/// - **Environment** for bubblewrap itself is empty. Validated configured
+///   values are installed only after namespace/root setup via `--setenv`;
+///   loader-control and internal keys are rejected.
 /// - **Stderr** is piped into a forwarder task that prefixes each
 ///   line with `[mcp:<name>] ` and emits it via `tracing::warn!`.
 ///   The previous `Stdio::inherit()` would scribble unprefixed bytes
@@ -713,7 +744,7 @@ pub async fn attach_server(
     registry: &mut ToolRegistry,
     exposure: &ToolExposureContext,
 ) -> Result<McpServerHandle, String> {
-    let disclosure = McpDisclosureState::new(exposure);
+    let disclosure = McpDisclosureState::with_policy(exposure, registry.policy_fork());
     let handle = attach_server_into(spec, Some(&disclosure)).await?;
     register_disclosure_gateways(registry, disclosure)?;
     Ok(handle)
@@ -747,35 +778,11 @@ pub(crate) async fn attach_server_local(
             spec.args.iter().map(std::ffi::OsString::from).collect(),
         )
     };
-    let launch = crate::extension_host::child_isolation::prepare(
-        program,
-        initial_args,
-        spec.cwd.as_deref().map(std::path::Path::new),
-    )?;
-    let mut command = tokio::process::Command::new(launch.program);
-    command.args(launch.args).envs(launch.env);
-    // Wipe inherited environment then re-add an explicit allowlist.
-    // The order is: env_clear → allowlist from os::env → spec.env
-    // overlay. Caller-provided values win on collision.
-    command.env_clear();
-    for (k, v) in safe_env_allowlist() {
-        command.env(k, v);
-    }
-    for (k, v) in &spec.env {
-        if !reserved_environment_key(k) {
-            command.env(k, v);
-        }
-    }
-    if let Some(session) = proc_session.as_ref() {
-        command
-            .env("COS_SESSION", session.id())
-            .env("COS_PROC_DATA_DIR", session.proc_data_dir());
-    }
-    if let Some(home) = crate::paths::current_home_override() {
+    let authorized_root = if let Some(home) = crate::paths::current_home_override() {
         let canonical_home = home
             .canonicalize()
             .map_err(|e| format!("canonicalize MCP owner home {}: {e}", home.display()))?;
-        let cwd = match &spec.cwd {
+        match &spec.cwd {
             Some(cwd) => {
                 let canonical = std::path::Path::new(cwd)
                     .canonicalize()
@@ -787,18 +794,49 @@ pub(crate) async fn attach_server_local(
                         canonical_home.display()
                     ));
                 }
-                canonical
+                Some(canonical)
             }
-            None => canonical_home,
-        };
-        command
-            .current_dir(cwd)
-            .env("HOME", &home)
-            .env("COS_HOME", &home)
-            .env("COS_DATA_DIR", crate::paths::user_data_dir())
-            .env("COS_PROC_DATA_DIR", crate::paths::proc_data_dir());
-    } else if let Some(cwd) = &spec.cwd {
-        command.current_dir(cwd);
+            None => None,
+        }
+    } else {
+        spec.cwd
+            .as_deref()
+            .map(std::path::Path::new)
+            .map(std::path::Path::canonicalize)
+            .transpose()
+            .map_err(|e| format!("canonicalize MCP cwd: {e}"))?
+    };
+    let mut inner_env = safe_env_allowlist();
+    for (key, value) in &spec.env {
+        validate_configured_environment(key, value)?;
+        inner_env.push((key.clone().into(), value.clone().into()));
+    }
+    if let Some(session) = proc_session.as_ref() {
+        inner_env.push(("COS_SESSION".into(), session.id().into()));
+        inner_env.push((
+            "COS_PROC_DATA_DIR".into(),
+            session.proc_data_dir().as_os_str().to_os_string(),
+        ));
+    } else if crate::paths::current_home_override().is_some() {
+        inner_env.push((
+            "COS_PROC_DATA_DIR".into(),
+            crate::paths::proc_data_dir().into_os_string(),
+        ));
+    }
+    let launch = crate::extension_host::child_isolation::prepare_with_clean_env(
+        program,
+        initial_args,
+        authorized_root.as_deref(),
+        inner_env,
+    )?;
+    let isolated = launch.isolated;
+    let mut command = tokio::process::Command::new(launch.program);
+    command.env_clear();
+    command.args(launch.args).envs(launch.env);
+    if !isolated {
+        if let Some(cwd) = authorized_root.as_deref() {
+            command.current_dir(cwd);
+        }
     }
     command
         .stdin(Stdio::piped())
@@ -1041,41 +1079,16 @@ pub(crate) async fn attach_http_server(
     })
 }
 
-/// Environment variables passed unconditionally to MCP child
-/// processes. These are the bare minimum a typical command-line tool
-/// needs to function (locate its libraries, render Unicode, locate
-/// its config home). Notably absent: any `*_TOKEN`, `*_KEY`,
-/// `*_SECRET`, AWS / GCP / Azure credentials, the user's
-/// `OPENAI_API_KEY`, GitHub tokens, etc.
-///
-/// `COS_*` variables are forwarded because they configure the
-/// agent's own runtime; some MCP servers shipped with cos expect
-/// e.g. `COS_DATA_DIR` to be set.
-fn safe_env_allowlist() -> Vec<(String, String)> {
-    const ALWAYS: &[&str] = &[
-        "PATH",
-        "HOME",
-        "USER",
-        "LOGNAME",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-        "LC_MESSAGES",
-        "TZ",
-        "TERM",
-        "TMPDIR",
-        "TEMP",
-        "TMP",
+/// Construct the exact environment installed *inside* the child namespace.
+/// The outer bubblewrap process always receives an empty environment.
+fn safe_env_allowlist() -> Vec<(std::ffi::OsString, std::ffi::OsString)> {
+    let mut out: Vec<(std::ffi::OsString, std::ffi::OsString)> = vec![
+        ("PATH".into(), "/usr/bin:/bin".into()),
+        ("LANG".into(), "C.UTF-8".into()),
+        ("LC_ALL".into(), "C.UTF-8".into()),
+        ("TZ".into(), "UTC".into()),
     ];
-    let mut out = Vec::with_capacity(ALWAYS.len() + 8);
-    for k in ALWAYS {
-        if let Ok(v) = std::env::var(k) {
-            out.push(((*k).to_string(), v));
-        }
-    }
     const SAFE_COS: &[&str] = &[
-        "COS_SESSION",
         "COS_TRACE_ID",
         "COS_SPAN_ID",
         "COS_BIN",
@@ -1088,27 +1101,37 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
     ];
     for key in SAFE_COS {
         if let Ok(value) = std::env::var(key) {
-            out.push(((*key).to_string(), value));
+            out.push(((*key).into(), value.into()));
         }
     }
     out
 }
 
 fn reserved_environment_key(key: &str) -> bool {
-    matches!(
-        key,
-        "COS_SESSION"
-            | "COS_APP_ID"
-            | "COS_PROC_DATA_DIR"
-            | "COS_DATA_DIR"
-            | "COS_HOME"
-            | "HOME"
-            | "USER"
-            | "LOGNAME"
-            | "PATH"
-            | "COS_EXTENSION_CHILD_ISOLATION"
-            | crate::extension_host::protocol::BROKER_SOCKET_ENV
-    )
+    key.starts_with("COS_")
+        || matches!(
+            key,
+            "HOME" | "USER" | "LOGNAME" | "PATH" | "SHELL" | "TMPDIR" | "TMP" | "TEMP"
+        )
+}
+
+fn validate_configured_environment(key: &str, value: &str) -> Result<(), String> {
+    if reserved_environment_key(key) {
+        return Err(format!(
+            "configured MCP environment may not override reserved key `{key}`"
+        ));
+    }
+    if key.starts_with("LD_") {
+        return Err(format!(
+            "configured MCP environment may not set loader-control key `{key}`"
+        ));
+    }
+    if value.as_bytes().contains(&0) {
+        return Err(format!(
+            "configured MCP environment value for `{key}` contains NUL"
+        ));
+    }
+    Ok(())
 }
 
 /// Kill the child and spawn a background reap so zombies don't
@@ -1131,7 +1154,7 @@ pub async fn attach_all(
     registry: &mut ToolRegistry,
     exposure: &ToolExposureContext,
 ) -> Vec<McpServerHandle> {
-    let disclosure = McpDisclosureState::new(exposure);
+    let disclosure = McpDisclosureState::with_policy(exposure, registry.policy_fork());
     let mut handles = Vec::with_capacity(specs.len());
     for spec in specs {
         match attach_server_into(spec, Some(&disclosure)).await {

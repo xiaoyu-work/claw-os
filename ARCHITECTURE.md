@@ -364,12 +364,15 @@ hardlinks, open descriptors, or nested mountpoints cannot produce a clean
 release while residue remains.
 
 Each App or stdio MCP process adds a second boundary through the trusted
-`claw-app-runner`/bubblewrap launch path: a new PID namespace with private
-procfs and a new mount namespace rooted at empty tmpfs. Only verified `/usr`
-runtime content, required system configuration files, exact live broker/
-session endpoints, and read-only snapshots of explicitly authorized App/MCP
-code are mounted. `/home`, `/root`, `/mnt`, `/media`, arbitrary `/var`, and
-other host mounts are absent. Each child receives private writable
+`claw-app-runner`/bubblewrap launch path: new PID and network namespaces with
+private procfs plus a mount namespace rooted at empty tmpfs. Exact pinned
+executables and ELF dependencies, filtered immutable language-runtime
+snapshots, generated minimal account files, exact live broker/session
+endpoints, and read-only snapshots of explicitly authorized App/MCP code are
+mounted. Broad live `/usr`, `/etc`, and `/usr/local`, plus `/home`, `/root`,
+`/mnt`, `/media`, arbitrary `/var`, and other host mounts are absent. Ambient network
+access is absent; native extensions use broker-mediated capabilities. Each
+child receives private writable
 home/data/cache/log/tmp trees. The cgroup remains the outer kill/reap
 authority, while private procfs prevents same-UID siblings from observing or
 signalling one another.
@@ -435,7 +438,11 @@ source directory before success is reported. Before claiming, committing,
 recovering, cancelling, or finishing, the store deduplicates identical IDs
 across pending/running/done: committed or conflicting copies dominate and
 become terminal indeterminate, while identical pre-COMMIT copies reconcile to
-one safe record.
+one safe record. Queue roots and buckets are created bottom-up only after
+directory-fsync support is preflighted, with each new directory and parent
+synced. A Pending record is claimable only at the current schema in the
+explicit unprepared phase; legacy, unsupported, malformed, or phase-conflicting
+records become terminal indeterminate.
 
 Consent remains inside the capability boundary.
 `core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
@@ -685,7 +692,7 @@ config or discovered agent-API sidecar
   -> remote catalogue returned only as wrapped untrusted data
   -> opaque owner/session/task/generation-bound handle
   -> fixed local mcp_catalog / mcp_invoke registration
-  -> normal tool registry + guardrail dispatch
+  -> internal policy identity + normal registry exposure/guardrail/approval dispatch
   -> relist/digest verification
   -> hosted tools/call -> extension host -> bounded untrusted result
 ```
@@ -694,7 +701,8 @@ An MCP server is optional. Failure to attach one is logged and skipped rather
 than preventing the core agent from starting. `ChatRequest.tools` contains no
 remote identifier, description, or property name; those values exist only in
 the wrapped `mcp_catalog` result. Structural descriptor drift, guessed handles,
-reconnect replay, or owner/session/generation mismatch blocks invocation.
+reconnect replay, owner/session/generation mismatch, hidden exposure,
+auto-deny, or missing approval blocks invocation.
 
 ### Image and package publication
 

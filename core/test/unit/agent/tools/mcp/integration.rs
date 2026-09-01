@@ -6,6 +6,41 @@ use crate::agent::tools::mcp::transport::{in_memory_pair, Transport};
 use crate::agent::tools::registry::ToolRegistry;
 use serde_json::json;
 
+fn policy_context(
+    guardrails: crate::agent::tools::guardrails::Guardrails,
+) -> crate::agent::tools::exposure::ToolExposureContext {
+    let mut context = crate::agent::tools::exposure::ToolExposureContext::isolated(guardrails)
+        .with_transport(crate::agent::tools::exposure::ToolTransport::McpStdio, true);
+    context.enable_extension("mcp:svc");
+    context
+}
+
+fn insert_policy_test_tool(state: &Arc<McpDisclosureState>) -> (String, String) {
+    let attached = sanitize_descriptor_set(
+        "svc",
+        vec![ToolDescriptor {
+            name: "say".to_string(),
+            description: Some("remote prose".to_string()),
+            input_schema: json!({"type": "object"}),
+        }],
+    )
+    .unwrap();
+    state
+        .insert(
+            attached.descriptors[0].clone(),
+            Arc::new(McpRemoteTool::new_hosted(
+                "svc",
+                attached.descriptors[0].clone(),
+                Duration::from_secs(1),
+                crate::agent::tools::exposure::ToolTransport::McpStdio,
+                attached.digest,
+            )),
+        )
+        .unwrap();
+    let handle = state.entries.lock().unwrap().keys().next().unwrap().clone();
+    (handle, "mcp_svc_say".to_string())
+}
+
 fn make_spec(name: &str) -> McpServerSpec {
     McpServerSpec {
         name: name.to_string(),
@@ -193,9 +228,11 @@ fn hostile_descriptor_text_never_reaches_chat_request_tools() {
         }),
     };
     let attached = sanitize_descriptor_set("Hostile.Server", vec![descriptor]).unwrap();
-    let exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+    let mut exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
         crate::agent::tools::guardrails::Guardrails::permissive(),
-    );
+    )
+    .with_transport(crate::agent::tools::exposure::ToolTransport::McpStdio, true);
+    exposure.enable_extension("mcp:svc");
     let state = McpDisclosureState::new(&exposure);
     state
         .insert(
@@ -372,6 +409,126 @@ async fn opaque_handles_reject_cross_session_and_reconnect_replay() {
 }
 
 #[tokio::test]
+async fn opaque_gateway_preserves_guardrails_and_auto_deny_policy() {
+    let denied_name = "mcp_svc_say";
+    for (guardrails, approval) in [
+        (
+            crate::agent::tools::guardrails::Guardrails::permissive().deny_tool(denied_name),
+            crate::agent::runtime::approval::ApprovalGate::default(),
+        ),
+        (
+            crate::agent::tools::guardrails::Guardrails::permissive(),
+            crate::agent::runtime::approval::ApprovalGate::new(
+                crate::agent::runtime::approval::ApprovalConfig::new().auto_deny(denied_name),
+            ),
+        ),
+    ] {
+        let context = policy_context(guardrails);
+        let mut registry = ToolRegistry::new();
+        registry.set_approval(approval);
+        let state = McpDisclosureState::with_policy(&context, registry.policy_fork());
+        let (handle, internal_name) = insert_policy_test_tool(&state);
+        assert_eq!(internal_name, denied_name);
+        register_disclosure_gateways(&mut registry, state).unwrap();
+
+        let catalog = registry
+            .execute(&context, "mcp_catalog", json!({}), "test")
+            .await;
+        assert!(!catalog.content.contains("\"say\""), "{}", catalog.content);
+        let invoked = registry
+            .execute(
+                &context,
+                "mcp_invoke",
+                json!({"handle": handle, "arguments": {}}),
+                "test",
+            )
+            .await;
+        assert!(invoked.is_error);
+        assert!(invoked.content.contains(denied_name), "{}", invoked.content);
+    }
+}
+
+#[tokio::test]
+async fn opaque_gateway_requires_and_reattributes_each_approval() {
+    use async_trait::async_trait;
+    use std::sync::Mutex;
+
+    struct RecordingApprover {
+        names: Arc<Mutex<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl crate::agent::runtime::approval::Approver for RecordingApprover {
+        async fn approve(
+            &self,
+            request: &crate::agent::runtime::approval::ApprovalRequest,
+        ) -> crate::agent::runtime::approval::ApprovalOutcome {
+            self.names.lock().unwrap().push(request.tool_name.clone());
+            crate::agent::runtime::approval::ApprovalOutcome::Approved { note: None }
+        }
+    }
+
+    let context = policy_context(crate::agent::tools::guardrails::Guardrails::permissive());
+    let names = Arc::new(Mutex::new(Vec::new()));
+    let approval = crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new().dangerous("mcp_svc_say"),
+    )
+    .with_approver(Arc::new(RecordingApprover {
+        names: names.clone(),
+    }));
+    let mut registry = ToolRegistry::new();
+    registry.set_approval(approval);
+    let state = McpDisclosureState::with_policy(&context, registry.policy_fork());
+    let (handle, _) = insert_policy_test_tool(&state);
+    register_disclosure_gateways(&mut registry, state).unwrap();
+
+    for _ in 0..2 {
+        let result = registry
+            .execute(
+                &context,
+                "mcp_invoke",
+                json!({"handle": handle, "arguments": {"opaque": true}}),
+                "test",
+            )
+            .await;
+        assert!(result.is_error);
+        assert!(result.content.contains("extension host is unavailable"));
+    }
+    assert_eq!(
+        names.lock().unwrap().as_slice(),
+        ["mcp_svc_say", "mcp_svc_say"]
+    );
+}
+
+#[tokio::test]
+async fn opaque_gateway_defers_dangerous_tool_without_approval() {
+    let context = policy_context(crate::agent::tools::guardrails::Guardrails::permissive());
+    let mut registry = ToolRegistry::new();
+    registry.set_approval(crate::agent::runtime::approval::ApprovalGate::new(
+        crate::agent::runtime::approval::ApprovalConfig::new().dangerous("mcp_svc_say"),
+    ));
+    let state = McpDisclosureState::with_policy(&context, registry.policy_fork());
+    let (handle, _) = insert_policy_test_tool(&state);
+    register_disclosure_gateways(&mut registry, state).unwrap();
+
+    let result = registry
+        .execute(
+            &context,
+            "mcp_invoke",
+            json!({"handle": handle, "arguments": {}}),
+            "test",
+        )
+        .await;
+    assert!(result.is_error);
+    assert!(
+        result.content.contains("approval pending"),
+        "{}",
+        result.content
+    );
+    assert!(result.content.contains("mcp_svc_say"), "{}", result.content);
+}
+
+#[tokio::test]
 async fn routed_worker_never_falls_back_to_local_mcp_execution() {
     let spec = make_spec("isolated");
     let mut registry = ToolRegistry::new();
@@ -385,6 +542,18 @@ async fn routed_worker_never_falls_back_to_local_mcp_execution() {
         Err(error) => error,
     };
     assert!(error.contains("extension host is unavailable"), "{error}");
+}
+
+#[test]
+fn configured_loader_environment_is_rejected_before_mcp_spawn() {
+    for key in ["LD_PRELOAD", "LD_AUDIT", "LD_LIBRARY_PATH", "COS_SESSION"] {
+        let error = validate_configured_environment(key, "/untrusted/payload.so").unwrap_err();
+        assert!(
+            error.contains("may not set loader-control")
+                || error.contains("may not override reserved"),
+            "{key}: {error}"
+        );
+    }
 }
 
 /// End-to-end: a fake "MCP server" running in the same task pair
@@ -462,9 +631,11 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
     assert_eq!(list.tools.len(), 1);
 
     let mut registry = ToolRegistry::new();
-    let exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+    let mut exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
         crate::agent::tools::guardrails::Guardrails::permissive(),
-    );
+    )
+    .with_transport(crate::agent::tools::exposure::ToolTransport::McpStdio, true);
+    exposure.enable_extension("mcp:svc");
     let state = McpDisclosureState::new(&exposure);
     let attached = sanitize_descriptor_set("svc", list.tools).unwrap();
     state

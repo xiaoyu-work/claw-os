@@ -10,6 +10,51 @@ fn disabled_child_isolation_preserves_the_original_command() {
 }
 
 #[test]
+fn configured_inner_environment_rejects_loader_and_malformed_keys() {
+    for key in [
+        "LD_PRELOAD",
+        "LD_AUDIT",
+        "LD_LIBRARY_PATH",
+        "bad-key",
+        "9BAD",
+    ] {
+        let error = prepare_with_clean_env(
+            "true",
+            Vec::<OsString>::new(),
+            None,
+            vec![(key.into(), "value".into())],
+        )
+        .unwrap_err();
+        assert!(error.contains("environment"), "{key}: {error}");
+    }
+}
+
+#[test]
+fn isolated_clean_environment_is_installed_after_bwrap_starts() {
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let launch = prepare_with_clean_env(
+        "true",
+        Vec::<OsString>::new(),
+        None,
+        vec![("SAFE_VALUE".into(), "inside".into())],
+    )
+    .unwrap();
+    assert!(launch.env.is_empty());
+    let rendered = launch
+        .args
+        .iter()
+        .map(|value| value.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(rendered.contains("--clearenv --setenv SAFE_VALUE inside"));
+}
+
+#[test]
 fn isolated_child_gets_private_proc_and_an_empty_allowlisted_root() {
     let _lock = crate::test_env::lock_env();
     let home = tempfile::tempdir().unwrap();
@@ -35,12 +80,14 @@ fn isolated_child_gets_private_proc_and_an_empty_allowlisted_root() {
         .join(" ");
     for required in [
         "--unshare-pid",
+        "--unshare-net",
         "--proc /proc",
         "--tmpfs /",
-        "--ro-bind /usr /usr",
+        "--dir /usr",
     ] {
         assert!(rendered.contains(required), "{rendered}");
     }
+    assert!(!rendered.contains("--ro-bind /usr /usr"), "{rendered}");
     for hidden in [
         " --ro-bind /home /home",
         " --ro-bind /mnt /mnt",
@@ -217,7 +264,11 @@ fn authorized_snapshot_script_still_executes() {
     let home = tempfile::tempdir().unwrap();
     let source = tempfile::tempdir().unwrap();
     let script = source.path().join("tool.py");
-    fs::write(&script, b"print('snapshot-ok')\n").unwrap();
+    fs::write(
+        &script,
+        b"import os\nprint('snapshot-ok')\nprint(os.getcwd())\n",
+    )
+    .unwrap();
     let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
@@ -238,7 +289,239 @@ fn authorized_snapshot_script_still_executes() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stdout, b"snapshot-ok\n");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.starts_with("snapshot-ok\n"));
+    assert!(stdout.contains(source.path().to_string_lossy().as_ref()));
+}
+
+#[test]
+fn verified_private_script_executes_with_pinned_interpreter() {
+    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let script = source.path().join("tool");
+    fs::write(&script, b"#!/usr/bin/python3\nprint('direct-ok')\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o500)).unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let launch = prepare(&script, Vec::<OsString>::new(), Some(source.path())).unwrap();
+    let output = std::process::Command::new(launch.program)
+        .env_clear()
+        .args(launch.args)
+        .envs(launch.env)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"direct-ok\n");
+}
+
+#[test]
+fn authorized_sdk_snapshot_remains_importable() {
+    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let sdk = tempfile::tempdir().unwrap();
+    fs::write(sdk.path().join("isolated_sdk_probe.py"), b"VALUE='sdk-ok'\n").unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _sdk = crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", sdk.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let launch = prepare(
+        "python3",
+        vec![
+            "-c".into(),
+            "import isolated_sdk_probe; print(isolated_sdk_probe.VALUE)".into(),
+        ],
+        None,
+    )
+    .unwrap();
+    let output = std::process::Command::new(launch.program)
+        .env_clear()
+        .args(launch.args)
+        .envs(launch.env)
+        .env("PYTHONPATH", sdk.path())
+        .env("COS_SDK_PYTHON_DIR", sdk.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"sdk-ok\n");
+}
+
+#[test]
+fn missing_custom_script_interpreter_fails_closed() {
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let source = tempfile::tempdir().unwrap();
+    let script = source.path().join("tool");
+    fs::write(&script, b"#!/missing/interpreter\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o500)).unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    assert!(
+        prepare(&script, Vec::<OsString>::new(), Some(source.path()))
+            .unwrap_err()
+            .contains("interpreter")
+    );
+}
+
+#[test]
+fn private_network_blocks_host_loopback() {
+    use std::net::TcpListener;
+    use std::os::linux::net::SocketAddrExt;
+    use std::os::unix::net::{SocketAddr, UnixListener};
+
+    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let abstract_name = format!("cos-isolation-{}", uuid::Uuid::new_v4().simple());
+    let abstract_address = SocketAddr::from_abstract_name(abstract_name.as_bytes()).unwrap();
+    let _abstract_listener = UnixListener::bind_addr(&abstract_address).unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let script = format!(
+        r#"import json,socket
+def blocked(family, address):
+    try:
+        s=socket.socket(family, socket.SOCK_STREAM)
+        s.settimeout(0.2)
+        s.connect(address)
+        return False
+    except OSError:
+        return True
+print(json.dumps({{
+  "loopback": blocked(socket.AF_INET, ("127.0.0.1", {port})),
+  "internet": blocked(socket.AF_INET, ("1.1.1.1", 53)),
+  "abstract": blocked(socket.AF_UNIX, "\0{abstract_name}"),
+}}))
+"#
+    );
+    let launch = prepare("python3", vec!["-c".into(), script.into()], None).unwrap();
+    let output = std::process::Command::new(launch.program)
+        .env_clear()
+        .args(launch.args)
+        .envs(launch.env)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["loopback"], true);
+    assert_eq!(result["internet"], true);
+    assert_eq!(result["abstract"], true);
+}
+
+#[test]
+fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
+    use std::os::unix::ffi::OsStrExt;
+
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    let source = tempfile::tempdir().unwrap();
+    let output = tempfile::tempdir().unwrap();
+    let unsafe_file = source.path().join("unsafe");
+    fs::write(&unsafe_file, b"x").unwrap();
+    let raw = std::ffi::CString::new(unsafe_file.as_os_str().as_bytes()).unwrap();
+    assert_eq!(
+        unsafe { libc::chown(raw.as_ptr(), EXTENSION_UID_START, 0) },
+        0
+    );
+    let mut args = Vec::new();
+    assert!(snapshot_runtime_tree(
+        source.path(),
+        &output.path().join("reserved"),
+        Path::new("/usr/share/test-runtime"),
+        &mut args,
+    )
+    .unwrap_err()
+    .contains("unsafe ownership"));
+
+    assert_eq!(unsafe { libc::chown(raw.as_ptr(), 0, 0) }, 0);
+    fs::set_permissions(&unsafe_file, fs::Permissions::from_mode(0o666)).unwrap();
+    assert!(snapshot_runtime_tree(
+        source.path(),
+        &output.path().join("writable"),
+        Path::new("/usr/share/test-runtime"),
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .contains("unsafe ownership"));
+
+    fs::set_permissions(&unsafe_file, fs::Permissions::from_mode(0o400)).unwrap();
+    let mountpoint = source.path().join("mounted");
+    fs::create_dir(&mountpoint).unwrap();
+    let mount_raw = std::ffi::CString::new(mountpoint.as_os_str().as_bytes()).unwrap();
+    assert_eq!(
+        unsafe {
+            libc::mount(
+                c"tmpfs".as_ptr(),
+                mount_raw.as_ptr(),
+                c"tmpfs".as_ptr(),
+                0,
+                c"size=4096".as_ptr().cast(),
+            )
+        },
+        0
+    );
+    let error = snapshot_runtime_tree(
+        source.path(),
+        &output.path().join("mount"),
+        Path::new("/usr/share/test-runtime"),
+        &mut Vec::new(),
+    )
+    .unwrap_err();
+    assert!(error.contains("crosses a mount"), "{error}");
+    assert_eq!(unsafe { libc::umount2(mount_raw.as_ptr(), 0) }, 0);
+
+    std::os::unix::fs::symlink("/etc/passwd", source.path().join("escape")).unwrap();
+    fs::hard_link(&unsafe_file, source.path().join("hardlink")).unwrap();
+    let filtered = output.path().join("filtered");
+    snapshot_runtime_tree(
+        source.path(),
+        &filtered,
+        Path::new("/usr/share/test-runtime"),
+        &mut Vec::new(),
+    )
+    .unwrap();
+    assert!(!filtered.join("escape").exists());
+    assert_ne!(
+        fs::metadata(&unsafe_file).unwrap().ino(),
+        fs::metadata(filtered.join("hardlink")).unwrap().ino()
+    );
+
+    assert!(snapshot_runtime_tree(
+        Path::new("/usr/local"),
+        &output.path().join("local"),
+        Path::new("/usr/local"),
+        &mut Vec::new(),
+    )
+    .unwrap_err()
+    .contains("forbidden"));
 }
 
 #[test]

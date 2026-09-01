@@ -312,12 +312,9 @@ impl Store {
     }
 
     pub fn with_root(root: PathBuf) -> io::Result<Self> {
-        // The bucket dirs (pending/running/done) and a sibling
-        // `locks/` dir hold the per-job flock sentinels. Pre-creating
-        // them keeps the hot path (claim_one / cancel_pending /
-        // submit) lock-free at start-up.
+        crate::agent::util::ensure_durable_private_dir(&root)?;
         for sub in ["pending", "running", "done", "locks", "streams"] {
-            crate::storage::ensure_private_dir(&root.join(sub))?;
+            crate::agent::util::ensure_durable_private_dir(&root.join(sub))?;
         }
         Ok(Self { root })
     }
@@ -638,30 +635,57 @@ impl Store {
             // is atomic but not mutually exclusive across different
             // destinations), letting a cancelled job still receive
             // a real response from a worker that won the race.
-            let _lock = match self.lock_for_id(&id) {
-                Ok(l) => l,
-                Err(_) => continue, // best-effort: never block forever on lock failure
-            };
+            let _lock = self.lock_for_id(&id)?;
             // Re-check existence after taking the lock — cancel may have
             // already moved the file while we were waiting.
             if !src.exists() {
                 continue;
             }
+            let raw = match fs::read_to_string(&src) {
+                Ok(raw) => raw,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let mut job: Job = match serde_json::from_str(&raw) {
+                Ok(job) => job,
+                Err(_) => {
+                    self.finish_indeterminate(
+                        &src,
+                        &id,
+                        corrupt_job(&id),
+                        "pending queue record is malformed; execution history cannot be proven and replay is refused",
+                    )?;
+                    continue;
+                }
+            };
+            if job.id != id {
+                self.finish_indeterminate(
+                    &src,
+                    &id,
+                    corrupt_job(&id),
+                    "pending queue record identity conflicts with its filename; replay is refused",
+                )?;
+                continue;
+            }
+            if job.schema_version != JOB_SCHEMA_VERSION
+                || job.status != JobStatus::Pending
+                || job.execution_phase != ExecutionPhase::Unprepared
+            {
+                self.finish_indeterminate(
+                    &src,
+                    &id,
+                    job,
+                    "pending queue record lacks current durable pre-execution proof; legacy or unsupported jobs are not replayed",
+                )?;
+                continue;
+            }
             let dst = self.path_for(JobStatus::Running, &id);
             match durable_rename(&src, &dst) {
                 Ok(()) => {
-                    // We won — load, mutate, rewrite atomically.
-                    let s = fs::read_to_string(&dst)?;
-                    let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
-                    validate_job_id(&job.id)?;
-                    if job.id != id {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("job id `{}` does not match queue filename `{id}`", job.id),
-                        ));
-                    }
+                    // We won — mutate the record already validated before
+                    // the move. Legacy/unsupported Pending records never
+                    // reach this phase transition.
                     job.status = JobStatus::Running;
-                    job.schema_version = JOB_SCHEMA_VERSION;
                     job.started_at = Some(now_iso());
                     let worker_pid = std::process::id();
                     job.worker_pid = Some(worker_pid);
@@ -702,8 +726,8 @@ impl Store {
     ///     of being requeued forever.
     ///
     /// Intended to run once at worker start-up, before the claim loop.
-    /// Returns `(requeued, failed)` counts for logging. Best-effort: a
-    /// single malformed job file is skipped, not fatal.
+    /// Returns `(requeued, failed)` counts for logging. Malformed running
+    /// records are terminalized because their execution history is unknown.
     pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
         self.reconcile_duplicate_job_ids()?;
         let running = self.bucket_dir(JobStatus::Running);
@@ -727,10 +751,7 @@ impl Store {
             };
             // Serialise against claim_one/cancel for this id so we can't
             // requeue a job another worker is mid-claim on.
-            let _lock = match self.lock_for_id(&id) {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
+            let _lock = self.lock_for_id(&id)?;
             // Re-read under the lock; it may have moved since the listing.
             let raw = match fs::read_to_string(&path) {
                 Ok(s) => s,
@@ -739,11 +760,30 @@ impl Store {
             };
             let mut job: Job = match serde_json::from_str(&raw) {
                 Ok(j) => j,
-                Err(e) => {
-                    tracing::warn!("agent recovery: skipping malformed running job {path:?}: {e}");
+                Err(_) => {
+                    self.finish_indeterminate(
+                        &path,
+                        &id,
+                        corrupt_job(&id),
+                        "running queue record is malformed; execution history is indeterminate and replay is refused",
+                    )?;
+                    failed += 1;
                     continue;
                 }
             };
+
+            if job.schema_version != JOB_SCHEMA_VERSION
+                || !job.execution_phase.replay_is_proven_safe()
+            {
+                self.finish_indeterminate(
+                    &path,
+                    &id,
+                    job,
+                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
+                )?;
+                failed += 1;
+                continue;
+            }
 
             let mut unverifiable_identity = false;
             // Owner still alive with the exact same process identity ⇒ not
@@ -781,17 +821,6 @@ impl Store {
                     "clawd.task.worker_identity_unverifiable",
                     &job,
                 );
-                failed += 1;
-                continue;
-            }
-
-            if !job.execution_phase.replay_is_proven_safe() {
-                self.finish_indeterminate(
-                    &path,
-                    &id,
-                    job,
-                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
-                )?;
                 failed += 1;
                 continue;
             }
@@ -902,6 +931,7 @@ impl Store {
             });
             let unsafe_copy = records.iter().any(|(bucket, _, job)| {
                 *bucket == JobStatus::Ok
+                    || job.schema_version != JOB_SCHEMA_VERSION
                     || !job.execution_phase.replay_is_proven_safe()
                     || matches!(
                         job.status,
@@ -980,10 +1010,14 @@ impl Store {
         let raw = fs::read_to_string(&path)?;
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
-        if job.id != id {
+        if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
+            || job.status != JobStatus::Running
+            || job.execution_phase != ExecutionPhase::Preparing
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("job id `{}` does not match queue filename `{id}`", job.id),
+                "worker bind requires a current preparing queue record",
             ));
         }
         job.worker_pid = Some(worker_pid);
@@ -1011,6 +1045,7 @@ impl Store {
         let raw = fs::read_to_string(&path)?;
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
             || job.worker_pid != Some(worker_pid)
             || job.worker_start_time_ticks != worker_start_time_ticks
             || job.execution_phase != ExecutionPhase::Preparing
@@ -1048,6 +1083,7 @@ impl Store {
         let raw = fs::read_to_string(&path)?;
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
             || job.worker_pid != Some(worker_pid)
             || job.worker_start_time_ticks != worker_start_time_ticks
             || job.execution_phase != ExecutionPhase::Prepared
@@ -1104,7 +1140,8 @@ impl Store {
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
 
-        if !job.execution_phase.replay_is_proven_safe() {
+        if job.schema_version != JOB_SCHEMA_VERSION || !job.execution_phase.replay_is_proven_safe()
+        {
             return self
                 .finish_indeterminate(
                     &path,
@@ -1583,7 +1620,7 @@ impl Store {
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
         validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
-        crate::storage::ensure_private_dir(&lock_dir)?;
+        crate::agent::util::ensure_durable_private_dir(&lock_dir)?;
         let lock_path = self.job_lock_path(id);
         let mut options = fs::OpenOptions::new();
         options.create(true).write(true).truncate(false);
@@ -1834,14 +1871,17 @@ fn durable_rename(source: &Path, destination: &Path) -> io::Result<()> {
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
     crate::agent::util::persistence_barrier("cross_rename")?;
     fs::rename(source, destination)?;
-    crate::agent::util::persistence_barrier("after_cross_rename")?;
-    crate::agent::util::sync_dir(destination_dir)?;
-    crate::agent::util::persistence_barrier("after_destination_dir_fsync")?;
-    if source_dir != destination_dir {
-        crate::agent::util::persistence_barrier("before_source_dir_fsync")?;
-        crate::agent::util::sync_dir(source_dir)?;
-    }
-    Ok(())
+    let result = (|| {
+        crate::agent::util::persistence_barrier("after_cross_rename")?;
+        crate::agent::util::sync_dir(destination_dir)?;
+        crate::agent::util::persistence_barrier("after_destination_dir_fsync")?;
+        if source_dir != destination_dir {
+            crate::agent::util::persistence_barrier("before_source_dir_fsync")?;
+            crate::agent::util::sync_dir(source_dir)?;
+        }
+        Ok(())
+    })();
+    result.map_err(queue_visible_mutation_error)
 }
 
 fn durable_remove(path: &Path) -> io::Result<bool> {
@@ -1849,13 +1889,22 @@ fn durable_remove(path: &Path) -> io::Result<bool> {
         .parent()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
     match fs::remove_file(path) {
-        Ok(()) => {
-            crate::agent::util::sync_dir(parent)?;
-            Ok(true)
-        }
+        Ok(()) => crate::agent::util::sync_dir(parent)
+            .map_err(queue_visible_mutation_error)
+            .map(|()| true),
+
         Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+fn queue_visible_mutation_error(error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!(
+            "queue durability is indeterminate after a visible mutation; do not retry until reconciliation: {error}"
+        ),
+    )
 }
 
 fn io_other<E: std::fmt::Display>(e: E) -> io::Error {

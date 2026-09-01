@@ -19,13 +19,14 @@ use super::{Tool, ToolResult};
 use crate::agent::llm;
 use crate::agent::runtime::approval::ApprovalGate;
 
+#[derive(Clone)]
 struct ToolEntry {
     tool: Arc<dyn Tool>,
     descriptor: llm::Tool,
     exposure: ToolExposure,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
     approval: ApprovalGate,
@@ -67,6 +68,17 @@ impl ToolRegistry {
     /// Replace the active approval gate. Call once at construction time.
     pub fn set_approval(&mut self, approval: ApprovalGate) {
         self.approval = approval;
+    }
+
+    pub(crate) fn policy_fork(&self) -> Self {
+        Self {
+            tools: HashMap::new(),
+            approval: self.approval.clone(),
+        }
+    }
+
+    pub(crate) fn policy_visible(&self, context: &ToolExposureContext, name: &str) -> bool {
+        self.exposure_decision(context, name).is_visible() && !self.approval.is_auto_denied(name)
     }
 
     /// Returns the exposure decision for a registered tool.

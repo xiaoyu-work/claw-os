@@ -60,12 +60,17 @@ The host launch applies:
   and `pidfd_getfd`;
 - `PR_SET_DUMPABLE=0` at the first worker/host application entry point.
 
-Every App and stdio MCP child then enters its own bubblewrap PID/mount
-namespaces. `/proc` contains only that child namespace, the root is an empty
-tmpfs, and only verified read-only system runtime files, a read-only snapshot
-of explicitly authorized extension code, exact broker/session endpoints, and
-private writable state/tmp paths are mounted. Host homes, arbitrary `/var`,
-`/mnt`, `/media`, extra mounts, and numeric-UID orphan files are unreachable.
+Every App and stdio MCP child then enters its own bubblewrap PID, network, and
+mount namespaces. Loopback starts down, ambient TCP/UDP and abstract Unix
+sockets are unreachable, `/proc` contains only that child namespace, and the
+root is an empty tmpfs. The runtime view contains exact pinned executables and
+ELF dependencies, filtered immutable language-runtime snapshots, generated
+minimal account files, a read-only snapshot of explicitly authorized
+extension code, exact broker/session endpoints, and private writable
+state/tmp paths. Broad live `/usr`, `/etc`, and `/usr/local`, host homes,
+arbitrary `/var`, `/mnt`, `/media`, extra mounts, and numeric-UID orphan files are
+absent. Native stdio MCP networking is unsupported until a scoped authenticated
+broker proxy exists; Apps use SDK/broker capabilities instead.
 The trusted app runner waits for the root-maintained session bind and reapplies
 non-dumpability immediately before final exec; isolation does not rely on
 dumpability surviving exec.
@@ -100,8 +105,13 @@ that processes, `/run/user/<uid>`, task state, and routed ACLs are gone before
 removing the record. The proxy authenticates the actual extension uid but
 projects only the already-bound task-owner principal through normal
 capability/approval enforcement. Home, data, cache, and log locations are
-task-local controlled directories; owner-private custom MCP executables must
-be explicitly made readable or installed system-wide.
+task-local controlled directories. A custom MCP command is resolved before the
+wrapper is built: system-wide `/opt` commands must be root-owned and
+non-writable, while owner-private commands must live below the explicitly
+authorized package root. Code is copied with no-follow inode/time rechecks;
+the command, trusted script interpreter, and exact ELF dependency closure are
+the only executable runtime inputs. Missing interpreters or libraries fail
+before spawn.
 
 Before spawning a host, `clawd` establishes a delegated cgroup-v2 subtree with
 the CPU, memory, and pids controllers. The host writes its own pid through a
@@ -123,12 +133,14 @@ contained after `setsid`, double-forking, host-first exit, or clearing
 `PDEATHSIG`; cleanup failure is terminal, logged, audited, and quarantined
 rather than reported as a clean task completion.
 
-The retry boundary is the complete worker assignment frame. Launch failures or
-an assignment write that cannot deliver a full frame are pre-execution and may
-use the queue's bounded retry budget. After delivery, the worker can begin
-execution and a hosted action may already have committed an external side
-effect. Any subsequent worker/host EOF, crash, handshake or lease timeout is
-terminal; Claw OS does not replay the task without durable idempotency proof.
+The retry boundary is the authenticated PREPARE/COMMIT gate. PREPARE leaves the
+worker blocked. Only after the current queue schema and exact lease/nonces are
+durably committed may the broker send COMMIT. Legacy, unsupported, malformed,
+or ambiguous Pending records are terminal indeterminate; queue directories are
+created bottom-up with each new directory and parent fsynced before submissions
+are accepted. Any COMMIT persistence/delivery ambiguity or subsequent
+worker/host EOF, crash, handshake, or lease timeout is terminal; Claw OS does
+not replay without operation-specific durable idempotency proof.
 
 ## Lifecycle
 
@@ -154,7 +166,11 @@ events are also appended to durable session mutations. The model sees only
 fixed local `mcp_catalog` and `mcp_invoke` descriptors. Remote names and
 argument-property names are disclosed inside wrapped untrusted data with
 opaque owner/session/task/generation-bound handles; calls carry the canonical
-sanitized descriptor-set digest and fail closed on drift or replay.
+sanitized descriptor-set digest and fail closed on drift or replay. Each handle
+also binds the original internal MCP policy identity, transport, extension,
+and exposure requirements. Catalogue output omits guardrail-hidden and
+auto-denied entries, and invocation re-enters the shared registry
+guardrail/approval path before remote execution.
 Stdout/stderr-derived errors and tool results remain untrusted and wrapped.
 
 ## Configuration

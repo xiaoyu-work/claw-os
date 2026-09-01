@@ -448,7 +448,7 @@ fn build_command(runtime: Runtime, entry: &Path, app_dir: &Path) -> Result<Comma
     }
     let launch = crate::extension_host::child_isolation::prepare(&runner, args, Some(app_dir))?;
     let mut command = Command::new(launch.program);
-    command.args(launch.args).envs(launch.env);
+    command.env_clear().args(launch.args).envs(launch.env);
     Ok(command)
 }
 

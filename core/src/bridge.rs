@@ -36,7 +36,7 @@ fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<C
         Some(app_dir),
     )?;
     let mut command = Command::new(launch.program);
-    command.args(launch.args).envs(launch.env);
+    command.env_clear().args(launch.args).envs(launch.env);
     Ok(command)
 }
 
@@ -600,7 +600,7 @@ pub fn run_native_app_host(
         Some(&app_dir),
     )?;
     let mut command = Command::new(launch.program);
-    command.args(launch.args).envs(launch.env);
+    command.env_clear().args(launch.args).envs(launch.env);
     reset_app_environment(&mut command, false);
     command
         .args(args)

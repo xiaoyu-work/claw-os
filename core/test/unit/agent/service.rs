@@ -462,6 +462,22 @@ fn committed_worker_death_is_terminal_indeterminate() {
 }
 
 #[test]
+fn committed_live_worker_is_terminal_after_broker_recovery() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit("committed live".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
+    let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+}
+
+#[test]
 fn legacy_running_job_is_never_replayed() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
@@ -484,6 +500,66 @@ fn legacy_running_job_is_never_replayed() {
     assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
     let (_, recovered) = store.locate(&claimed.id).unwrap().unwrap();
     assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+}
+
+#[test]
+fn legacy_or_unsupported_pending_job_is_never_claimed() {
+    for schema_version in [1, JOB_SCHEMA_VERSION + 1] {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store
+            .submit("legacy pending".into(), None, None, None, None)
+            .unwrap();
+        let pending = store.path_for(JobStatus::Pending, &job.id);
+        let mut value: Value =
+            serde_json::from_str(&std::fs::read_to_string(&pending).unwrap()).unwrap();
+        value["schema_version"] = json!(schema_version);
+        if schema_version == 1 {
+            value.as_object_mut().unwrap().remove("execution_phase");
+        }
+        write_json_atomic(&pending, &value).unwrap();
+
+        assert!(store.claim_one().unwrap().is_none());
+        let (bucket, terminal) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Ok);
+        assert_eq!(terminal.status, JobStatus::Error);
+        assert_eq!(terminal.execution_phase, ExecutionPhase::Indeterminate);
+        assert!(terminal.error.unwrap().contains("not replayed"));
+    }
+}
+
+#[test]
+fn malformed_pending_job_becomes_terminal_instead_of_replayed() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let id = "malformed-pending";
+    std::fs::write(
+        store.path_for(JobStatus::Pending, id),
+        b"{\"prompt\":\"missing durable fields\"}",
+    )
+    .unwrap();
+
+    assert!(store.claim_one().unwrap().is_none());
+    let (bucket, terminal) = store.locate(id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(terminal.execution_phase, ExecutionPhase::Indeterminate);
+}
+
+#[test]
+fn malformed_running_job_becomes_terminal_instead_of_skipped() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let id = "malformed-running";
+    std::fs::write(
+        store.path_for(JobStatus::Running, id),
+        b"{\"execution_phase\":\"committed\"",
+    )
+    .unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
+    let (bucket, terminal) = store.locate(id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(terminal.execution_phase, ExecutionPhase::Indeterminate);
 }
 
 #[test]
@@ -637,7 +713,16 @@ fn cross_bucket_rename_barrier_failures_never_commit_execution() {
         {
             let _guard =
                 crate::test_env::TestEnvVarGuard::set("COS_TEST_PERSISTENCE_FAILPOINT", point);
-            assert!(store.claim_one().is_err(), "{point} was accepted");
+            let error = store.claim_one().unwrap_err();
+            if matches!(
+                point,
+                "after_cross_rename" | "after_destination_dir_fsync" | "before_source_dir_fsync"
+            ) {
+                assert!(
+                    error.to_string().contains("do not retry"),
+                    "{point}: {error}"
+                );
+            }
         }
         let _ = store.recover_orphaned_jobs().unwrap();
         let (_, recovered) = store.locate(&job.id).unwrap().unwrap();

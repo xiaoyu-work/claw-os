@@ -33,6 +33,33 @@ fn atomic_write_creates_parent_dir() {
 }
 
 #[test]
+fn durable_directory_preflight_fails_before_mutation() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("one").join("two");
+    let _guard =
+        crate::test_env::TestEnvVarGuard::set("COS_TEST_PERSISTENCE_FAILPOINT", "dir_fsync");
+    assert!(ensure_durable_private_dir(&target).is_err());
+    assert!(!dir.path().join("one").exists());
+}
+
+#[test]
+fn visible_directory_creation_error_is_recoverable_only_after_revalidation() {
+    let _lock = crate::test_env::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let target = dir.path().join("one");
+    {
+        let _guard = crate::test_env::TestEnvVarGuard::set(
+            "COS_TEST_PERSISTENCE_FAILPOINT",
+            "after_dir_create",
+        );
+        assert!(ensure_durable_private_dir(&target).is_err());
+    }
+    assert!(target.is_dir());
+    ensure_durable_private_dir(&target).unwrap();
+}
+
+#[test]
 fn atomic_write_propagates_every_durability_barrier_failure() {
     let _lock = crate::test_env::lock_env();
     for point in [
@@ -49,6 +76,19 @@ fn atomic_write_propagates_every_durability_barrier_failure() {
         let _guard = crate::test_env::TestEnvVarGuard::set("COS_TEST_PERSISTENCE_FAILPOINT", point);
         let error = atomic_write_with_fsync(&path, b"value").unwrap_err();
         assert!(error.to_string().contains("failpoint"), "{point}: {error}");
+        if matches!(point, "file_open" | "file_write" | "file_fsync") {
+            assert!(
+                std::fs::read_dir(dir.path()).unwrap().all(|entry| !entry
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".tmp")),
+                "{point} left a staging file"
+            );
+        }
+        if point == "after_rename" {
+            assert!(error.to_string().contains("do not retry"), "{error}");
+        }
     }
 }
 
