@@ -113,6 +113,17 @@ jobs:
           test -n "$agentd_test"
           test -n "$extension_test"
           test -n "$lib_test"
+          mapfile -t privileged_child_tests < <(
+            "$lib_test" --list |
+              sed -n 's/^\(extension_host::child_isolation::tests::[^:]*\): test$/\1/p'
+          )
+          readonly expected_privileged_child_tests=19
+          if [ "${#privileged_child_tests[@]}" -ne "$expected_privileged_child_tests" ]; then
+            printf 'expected %s privileged child tests, found %s\n' \
+              "$expected_privileged_child_tests" "${#privileged_child_tests[@]}" >&2
+            printf '%s\n' "${privileged_child_tests[@]}" >&2
+            exit 1
+          fi
 
           sudo install -o root -g root -m 0755 \
             target/debug/claw-agentd "$root/claw-agentd"
@@ -124,6 +135,12 @@ jobs:
             "$extension_test" "$root/extension_host_boundary"
           sudo install -o root -g root -m 0755 \
             "$lib_test" "$root/cos_lib_tests"
+          sudo install -o root -g root -m 0755 \
+            packaging/deb/claw-os-agent/extension-gid-scan.py \
+            "$root/extension-gid-scan.py"
+          sudo install -o root -g root -m 0755 \
+            packaging/deb/tests/test-extension-gid-scan.py \
+            "$root/test-extension-gid-scan.py"
 
           sudo env \
             HOME=/root \
@@ -141,6 +158,10 @@ jobs:
             COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1 \
             "$root/cos_lib_tests" extension_host::child_isolation::tests \
             --test-threads=1
+          sudo env \
+            HOME=/root \
+            COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py" \
+            /usr/bin/python3 "$root/test-extension-gid-scan.py"
 
       - name: Run cos-browser tests
         run: cargo test -p cos-browser

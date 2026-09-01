@@ -17,6 +17,8 @@ export COS_IDENTITY_ETC_DIR="$SCRATCH/etc"
 export COS_IDENTITY_PROC_DIR="$SCRATCH/proc"
 export COS_IDENTITY_MOUNTINFO="$SCRATCH/mountinfo"
 export COS_IDENTITY_SCAN_TIMEOUT=5
+export COS_IDENTITY_GID_SCAN_HELPER="$SCRATCH/bin/gid-scan"
+export COS_IDENTITY_GID_SCAN_PYTHON=/bin/sh
 export COS_IDENTITY_SYSTEMD_DIR="$SCRATCH/systemd"
 export COS_IDENTITY_STATE_DIR="$SCRATCH/state"
 export PATH="$SCRATCH/bin:$PATH"
@@ -201,6 +203,27 @@ if [ -n "${MOCK_GID_ACL-}" ]; then
 fi
 EOF
 
+cat > "$SCRATCH/bin/gid-scan" <<'EOF'
+#!/bin/sh
+gid=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --gid) gid=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+if [ -n "${MOCK_GID_FILE-}" ] && [ "$MOCK_GID_FILE" = "$gid" ]; then
+    exit 1
+fi
+if [ -n "${MOCK_GID_ACL-}" ] && [ "$MOCK_GID_ACL" = "$gid" ]; then
+    exit 1
+fi
+if [ "${MOCK_SCAN_FAIL-0}" = 1 ]; then
+    exit 1
+fi
+exit 0
+EOF
+
 cat > "$SCRATCH/bin/deb-systemd-invoke" <<'EOF'
 #!/bin/sh
 echo "$*" >> "$MOCK_ETC/systemd-invoke.log"
@@ -249,6 +272,7 @@ reset_fixture() {
     unset MOCK_FAIL_USER MOCK_PARTIAL_USERADD MOCK_HOMED_IDENTITY MOCK_GID_FILE
     unset MOCK_GID_FILE_ROOT MOCK_GID_ACL MOCK_ACL_KIND MOCK_FIND_FAIL_ROOT
     unset MOCK_GETFACL_FAIL_ROOT MOCK_MOUNTINFO_MUTATE
+    unset MOCK_SCAN_FAIL
     printf '10 1 0:1 / %s rw,relatime - ext4 /dev/mock rw\n' "$SCRATCH/scan" \
         > "$COS_IDENTITY_MOUNTINFO"
     identity_effective_gid=$COS_EXT_GID
@@ -277,29 +301,9 @@ identity_finalize || fail "safe upgrade finalize failed"
 [ "$(wc -l < "$SCRATCH/etc/passwd")" -eq 4 ] || fail "upgrade duplicated users"
 
 reset_fixture
-mkdir -p "$SCRATCH/scan/nested"
-append_mount 11 0:2 "$SCRATCH/scan/nested" tmpfs
 export MOCK_GID_FILE=60999
-export MOCK_GID_FILE_ROOT="$SCRATCH/scan/nested"
 identity_provision &&
-    fail "nested mounted filesystem gid ownership was missed"
-
-reset_fixture
-mkdir -p "$SCRATCH/scan/bind"
-append_mount 11 0:1 "$SCRATCH/scan/bind" ext4
-export MOCK_GID_FILE=60999
-export MOCK_GID_FILE_ROOT="$SCRATCH/scan/bind"
-identity_provision &&
-    fail "separate bind mount gid ownership was missed"
-
-reset_fixture
-space_mount="$SCRATCH/scan/space dir"
-mkdir -p "$space_mount"
-append_mount 11 0:3 "$space_mount" tmpfs
-identity_provision || fail "escaped-space mount path was rejected"
-grep -Fxq "$space_mount" "$SCRATCH/etc/find.log" ||
-    fail "escaped-space mount path was not decoded exactly"
-identity_rollback_pending
+    fail "gid scan helper ownership collision was ignored"
 
 for acl_kind in access default; do
     reset_fixture
@@ -318,42 +322,9 @@ for legacy_gid in 61064 61183; do
 done
 
 reset_fixture
-mkdir -p "$SCRATCH/scan/network"
-append_mount 11 0:4 "$SCRATCH/scan/network" nfs
-export MOCK_GETFACL_FAIL_ROOT="$SCRATCH/scan/network"
+export MOCK_SCAN_FAIL=1
 identity_provision &&
-    fail "inaccessible network-like mount was accepted"
-
-reset_fixture
-mkdir -p "$SCRATCH/scan/unreadable"
-append_mount 11 0:4 "$SCRATCH/scan/unreadable" ext4
-export MOCK_FIND_FAIL_ROOT="$SCRATCH/scan/unreadable"
-identity_provision &&
-    fail "incomplete ownership traversal was accepted"
-
-reset_fixture
-export MOCK_MOUNTINFO_MUTATE=1
-identity_provision &&
-    fail "mountinfo mutation during gid scan was accepted"
-
-reset_fixture
-echo "malformed mountinfo" > "$COS_IDENTITY_MOUNTINFO"
-identity_provision &&
-    fail "malformed mountinfo was accepted"
-
-reset_fixture
-append_mount 11 0:1 "$SCRATCH/scan" ext4
-identity_provision || fail "duplicate mount record was rejected"
-[ "$(grep -Fxc "$SCRATCH/scan" "$SCRATCH/etc/find.log")" -eq 1 ] ||
-    fail "duplicate mount record was scanned more than once"
-identity_rollback_pending
-
-reset_fixture
-append_mount 11 0:5 /proc proc
-identity_provision || fail "documented kernel virtual mount rule failed"
-! grep -Fxq /proc "$SCRATCH/etc/find.log" ||
-    fail "kernel virtual mount was traversed"
-identity_rollback_pending
+    fail "gid scan helper failure was accepted"
 
 reset_fixture
 echo "cos-extension:x:998:" > "$SCRATCH/etc/group"
@@ -461,11 +432,15 @@ echo "cos-extension:x:998:" > "$SCRATCH/etc/group"
 sh "$PREINST" upgrade 0.1.0 || fail "preinst legacy upgrade failed"
 grep -q '^stop clawd.service$' "$SCRATCH/etc/systemd-invoke.log" ||
     fail "preinst did not stop clawd before migration"
+[ ! -e "$identity_gid_manifest" ] ||
+    fail "preinst ran identity provisioning before dependencies were configured"
 sh "$POSTRM" abort-upgrade || fail "postrm abort-upgrade rollback failed"
 sh "$POSTINST" abort-upgrade || fail "postinst abort-upgrade recovery failed"
 grep -q '^start clawd.service$' "$SCRATCH/etc/systemd-invoke.log" ||
     fail "abort-upgrade did not restart the previous service"
 sh "$PREINST" upgrade 0.1.0 || fail "preinst retry after abort failed"
+identity_provision upgrade 0.1.0 ||
+    fail "post-unpack identity provisioning retry failed"
 identity_load_gid_manifest || fail "retry lost retained legacy gid"
 identity_finalize || fail "retry after dpkg abort did not finalize"
 

@@ -19,6 +19,11 @@ enable_if_previously_enabled() {
 
 case "$1" in
     configure)
+        if [ -n "$2" ]; then
+            identity_provision upgrade "$2"
+        else
+            identity_provision install
+        fi
         if command -v systemd-sysusers >/dev/null 2>&1; then
             systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
         elif ! getent group cos-extension >/dev/null 2>&1; then

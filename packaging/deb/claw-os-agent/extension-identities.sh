@@ -19,6 +19,8 @@ identity_gid_manifest=$identity_state_dir/extension-group.gid
 identity_proc_dir=${COS_IDENTITY_PROC_DIR:-/proc}
 identity_mountinfo_file=${COS_IDENTITY_MOUNTINFO:-/proc/self/mountinfo}
 identity_scan_timeout=${COS_IDENTITY_SCAN_TIMEOUT:-300}
+identity_gid_scan_helper=${COS_IDENTITY_GID_SCAN_HELPER:-/usr/lib/cos/extension-gid-scan.py}
+identity_gid_scan_python=${COS_IDENTITY_GID_SCAN_PYTHON:-/usr/bin/python3}
 identity_systemd_dir=${COS_IDENTITY_SYSTEMD_DIR:-/run/systemd/system}
 identity_effective_gid=$COS_EXT_GID
 
@@ -115,135 +117,14 @@ identity_gid_has_unrelated_users() {
 
 identity_gid_has_files() {
     scan_gid=$1
-    case "$identity_scan_timeout" in
-        *[!0-9]*|'') identity_fail "extension gid scan timeout is invalid"; return 0 ;;
-    esac
-    [ "$identity_scan_timeout" -gt 0 ] || {
-        identity_fail "extension gid scan timeout must be positive"
-        return 0
-    }
-    for tool in find getfacl timeout awk cmp; do
-        command -v "$tool" >/dev/null 2>&1 || {
-            identity_fail "required extension gid scan tool is missing: $tool"
-            return 0
-        }
-    done
-    [ -f "$identity_mountinfo_file" ] && [ -r "$identity_mountinfo_file" ] || {
-        identity_fail "mountinfo is unavailable: $identity_mountinfo_file"
-        return 0
-    }
-
-    scan_snapshot=$identity_state_dir/.extension-mountinfo.$$
-    scan_mounts=$scan_snapshot.mounts
-    scan_result=$scan_snapshot.result
-    scan_acl=$scan_snapshot.acl
-    rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-    if ! cat "$identity_mountinfo_file" > "$scan_snapshot"; then
-        identity_fail "could not snapshot mountinfo"
-        return 0
+    identity_regular_root_file "$identity_gid_scan_helper" || return 0
+    if LC_ALL=C "$identity_gid_scan_python" "$identity_gid_scan_helper" \
+        --gid "$scan_gid" \
+        --mountinfo "$identity_mountinfo_file" \
+        --timeout "$identity_scan_timeout"; then
+        return 1
     fi
-    if ! awk '
-        function decode_mount(value, out, i, char, escape) {
-            out = ""
-            for (i = 1; i <= length(value); i++) {
-                char = substr(value, i, 1)
-                if (char != "\\") {
-                    out = out char
-                    continue
-                }
-                escape = substr(value, i + 1, 3)
-                if (escape == "040") {
-                    out = out " "
-                } else if (escape == "134") {
-                    out = out "\\"
-                } else {
-                    exit 3
-                }
-                i += 3
-            }
-            return out
-        }
-        {
-            separator = 0
-            for (i = 7; i <= NF; i++) {
-                if ($i == "-") {
-                    separator = i
-                    break
-                }
-            }
-            if (NF < 10 || separator == 0 || $1 !~ /^[0-9]+$/ ||
-                $2 !~ /^[0-9]+$/ || $3 !~ /^[0-9]+:[0-9]+$/ ||
-                substr($5, 1, 1) != "/" || separator + 3 > NF) {
-                exit 2
-            }
-            mountpoint = decode_mount($5)
-            key = $3 SUBSEP mountpoint
-            if (!seen[key]++) {
-                print $1 "\t" $3 "\t" mountpoint "\t" $(separator + 1)
-            }
-        }
-    ' "$scan_snapshot" > "$scan_mounts"; then
-        rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-        identity_fail "mountinfo contains malformed or unsupported escaped paths"
-        return 0
-    fi
-
-    scan_tab=$(printf '\t')
-    while IFS="$scan_tab" read -r scan_id scan_device scan_root scan_fstype; do
-        [ -n "$scan_id" ] && [ -n "$scan_device" ] &&
-            [ -n "$scan_root" ] && [ -n "$scan_fstype" ] || {
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            identity_fail "parsed mountinfo record is incomplete"
-            return 0
-        }
-        case "$scan_fstype" in
-            proc|sysfs|cgroup|cgroup2|devpts|mqueue|securityfs|debugfs|tracefs|pstore|configfs|fusectl|binfmt_misc|bpf|nsfs)
-                # Kernel-generated virtual trees do not persist discretionary
-                # ownership or POSIX ACLs across mount recreation.
-                continue
-                ;;
-        esac
-        [ -e "$scan_root" ] || {
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            identity_fail "mounted path became inaccessible during gid scan: $scan_root"
-            return 0
-        }
-        if ! timeout "$identity_scan_timeout" \
-            find "$scan_root" -xdev -gid "$scan_gid" -print -quit > "$scan_result"; then
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            identity_fail "ownership scan failed or timed out for mount: $scan_root"
-            return 0
-        fi
-        if [ -s "$scan_result" ]; then
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            return 0
-        fi
-        if ! timeout "$identity_scan_timeout" \
-            getfacl -R -P -n -p -s -x -- "$scan_root" > "$scan_acl"; then
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            identity_fail "ACL scan failed or timed out for mount: $scan_root"
-            return 0
-        fi
-        if awk -F: -v gid="$scan_gid" '
-            ($1 == "group" && $2 == gid) ||
-            ($1 == "default" && $2 == "group" && $3 == gid) { exit 1 }
-        ' "$scan_acl"; then
-            :
-        else
-            status=$?
-            rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-            [ "$status" -eq 1 ] || identity_fail "ACL output was not parseable"
-            return 0
-        fi
-    done < "$scan_mounts"
-
-    if ! cmp -s "$scan_snapshot" "$identity_mountinfo_file"; then
-        rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-        identity_fail "mount topology changed during extension gid scan"
-        return 0
-    fi
-    rm -f "$scan_snapshot" "$scan_mounts" "$scan_result" "$scan_acl"
-    return 1
+    return 0
 }
 
 identity_select_gid() {

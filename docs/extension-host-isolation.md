@@ -98,8 +98,10 @@ dedicated `cos-extension` primary group. Fresh installs use GID `60999`; a
 provably unused legacy package GID may be retained during upgrade rather than
 rewritten. The reserved identities remain below systemd DynamicUser
 (`61184..65519`) and above the supported default login range.
-Preinstall checks exact NSS and shadow records, systemd-homed, reverse UID/GID
-lookups, and overlapping subordinate-ID ranges. Every runtime allocation
+Upgrade preinstall stops `clawd`; postinstall performs exact NSS and shadow
+checks, systemd-homed and reverse UID/GID lookups, subordinate-ID validation,
+and descriptor-pinned per-mount ownership/ACL proof using the newly unpacked
+root-owned helper and configured dependencies. Every runtime allocation
 revalidates those records, the package reservation manifest, and `/proc`; any
 collision or live process fails closed.
 The uid remains reserved until cgroup cleanup, private filesystem unmount,
@@ -223,5 +225,7 @@ The two process-boundary suites and the root-gated
 `sudo` CI step. It copies the test and host binaries into a root-owned,
 non-world-writable
 fixture, requires every privileged network/mount/FD test to execute rather
-than skip, runs the root broker with a dropped-uid worker child, and removes
+than skip, asserts the enumerated module contains exactly 19 tests, runs the
+real root-owned GID-scan helper integration, runs the root broker with a
+dropped-uid worker child, and removes
 only that exact fixture on exit.

@@ -43,14 +43,19 @@ extension execution fails closed unless per-task CPU, memory, pids, and
 `cgroup.kill` containment plus private tmpfs mounts can be verified. Cleanup
 failures retain a durable per-uid quarantine record until restart recovery
 proves process, mount, task-state, and routed-ACL residue is gone.
-`preinst` validates all name/UID/GID/NSS/shadow/systemd-homed and subordinate-ID
-collisions before provisioning. It snapshots `/proc/self/mountinfo`, safely
-decodes mount paths, and scans every non-kernel-virtual mount independently
-with `find -xdev` plus numeric POSIX access/default ACL inspection. Nested,
-bind, tmpfs, persistent, and network mounts remain separate scan roots;
-malformed or changed mount topology, inaccessible mounts, traversal errors,
-timeouts, ownership matches, or ACL qualifiers fail closed. The Agent package
-depends explicitly on `acl`, `findutils`, and `coreutils` for this proof.
+`preinst` stops `clawd` for upgrades but does not run dependency-backed scans.
+After the new package and its ordinary dependencies are unpacked/configured,
+`postinst` invokes the single-link root-owned
+`/usr/lib/cos/extension-gid-scan.py`. The helper snapshots mountinfo, rejects
+stacked/duplicate mountpoints, opens each non-kernel-virtual mount, verifies
+its `mnt_id`, device, inode, mode, and ownership before and after scanning,
+then runs `find -xdev` and real numeric `getfacl` inspection through the pinned
+descriptor. Nested, bind, tmpfs, persistent, and network mounts remain
+separate roots. Each scan has a dedicated process group with bounded
+TERM/SIGKILL escalation and residue verification. Malformed or changed
+topology, inaccessible mounts, traversal errors, timeouts, ownership matches,
+or access/default ACL qualifiers fail closed. The Agent package depends
+explicitly on `acl`, `findutils`, `coreutils`, and Python for this proof.
 Partial attempts are rolled back, and `postinst` writes the exact root-owned
 runtime reservation manifest. Purge removes only
 accounts recorded as package-created, still matching policy, and owning no

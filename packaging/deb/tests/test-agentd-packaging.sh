@@ -85,8 +85,16 @@ assert_contains "$BUILD_DEBS" 'claw-os-agent/preinst' \
     "claw-os-agent must ship an identity-provisioning preinst"
 assert_contains "$BUILD_DEBS" 'extension-identities.sh' \
     "maintainer scripts must embed the shared identity policy"
-assert_contains "$PREINST" 'identity_provision' \
-    "preinst must provision identities before unpack/restart"
+assert_contains "$POSTINST" 'identity_provision upgrade "$2"' \
+    "postinst must provision identities after dependencies and helper are unpacked"
+if grep -Fq 'identity_provision "$1"' "$PREINST"; then
+    fail "preinst must not run dependency-backed identity scans before unpack"
+fi
+provision_line=$(grep -n 'identity_provision upgrade "$2"' "$POSTINST" | cut -d: -f1)
+sysusers_line=$(grep -n 'systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf' "$POSTINST" |
+    cut -d: -f1)
+[ "$provision_line" -lt "$sysusers_line" ] ||
+    fail "postinst must reserve the exact gid before sysusers observes it"
 assert_contains "$PREINST" 'deb-systemd-invoke stop clawd.service' \
     "upgrade must stop clawd before validating a legacy execution gid"
 assert_contains "$POSTINST" 'identity_finalize' \
@@ -103,8 +111,13 @@ assert_contains "$IDENTITY_HELPER" 'COS_EXT_DYNAMIC_UID_FIRST=61184' \
     "package policy must encode systemd DynamicUser boundaries"
 assert_contains "$IDENTITY_HELPER" '/proc/self/mountinfo' \
     "execution-gid validation must enumerate the live mount topology"
-assert_contains "$IDENTITY_HELPER" 'getfacl -R -P -n -p -s -x' \
-    "execution-gid validation must inspect named access and default ACLs"
+assert_contains "$IDENTITY_HELPER" '/usr/lib/cos/extension-gid-scan.py' \
+    "identity provisioning must invoke the unpacked root-owned scan helper"
+assert_contains "$BUILD_DEBS" 'extension-gid-scan.py' \
+    "claw-os-agent must install its mount-pinning gid scan helper"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/extension-gid-scan.py" \
+    '"/usr/bin/getfacl",' \
+    "the gid scan helper must use the real numeric getfacl interface"
 assert_contains "$IDENTITY_RS" 'FIRST_UID: u32 = 61_000' \
     "runtime and packaged uid-range start must agree"
 assert_contains "$IDENTITY_RS" 'GROUP_GID: u32 = 60_999' \
@@ -155,8 +168,14 @@ assert_contains "$TEST_WORKFLOW" 'COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1' \
     "CI must fail when a root-gated child-isolation test skips"
 assert_contains "$TEST_WORKFLOW" 'extension_host::child_isolation::tests' \
     "CI must run the root-gated child-isolation library tests"
+assert_contains "$TEST_WORKFLOW" 'expected_privileged_child_tests=19' \
+    "CI must explicitly account for every privileged child-isolation test"
 assert_contains "$TEST_WORKFLOW" '"$lib_test" "$root/cos_lib_tests"' \
     "CI must copy the lib test binary into the root-owned fixture"
+assert_contains "$TEST_WORKFLOW" 'COS_GID_SCAN_HELPER_SOURCE="$root/extension-gid-scan.py"' \
+    "CI must run the real gid helper from the root-owned fixture"
+assert_contains "$TEST_WORKFLOW" '/usr/bin/python3 "$root/test-extension-gid-scan.py"' \
+    "CI must execute real getfacl, mount pin, and timeout integration tests"
 
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 

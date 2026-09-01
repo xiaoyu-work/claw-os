@@ -402,12 +402,17 @@ The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
 `61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
 the prior package may retain its arbitrary sysusers-assigned
 `cos-extension` GID only after proving it has no unrelated members, primary
-users, processes, subordinate-ID overlap, or group-owned files. Both policies
-remain outside systemd's `DynamicUser` range (`61184..=65519`).
-Preinstall validation rejects
-NSS/name/UID collisions, systemd-homed records, and any overlapping
-`/etc/subuid` or `/etc/subgid` range before creating anything; partial
-provisioning rolls back only records created in that attempt. `clawd` requires
+users, processes, subordinate-ID overlap, group-owned files, or named access/
+default ACLs. Upgrade preinstall stops `clawd`; postinstall uses the newly
+unpacked root-owned helper and configured dependencies to reject stacked
+mountpoints, pin each visible mount by descriptor/mount ID/device/inode, scan
+without crossing mounts, and recompare mountinfo. Timed scans own a dedicated
+process group and escalate TERM to SIGKILL before residue verification. Both
+identity policies remain outside systemd's `DynamicUser` range
+(`61184..=65519`). Postinstall also rejects NSS/name/UID collisions,
+systemd-homed records, and overlapping `/etc/subuid` or `/etc/subgid` ranges
+before creating anything; partial provisioning rolls back only records created
+in that attempt. `clawd` requires
 the exact name/uid/gid/home/shell/locked-shadow records plus a root-owned
 package reservation manifest on every start. It never reuses an identity until
 cgroup, private-mount, task-state, and routed-ACL cleanup succeed. A durable

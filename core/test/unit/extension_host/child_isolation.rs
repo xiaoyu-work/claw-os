@@ -143,12 +143,22 @@ fn typed_authority_is_mandatory_and_identity_environment_is_ignored() {
 }
 
 #[test]
-fn arbitrary_srv_is_not_an_approved_extension_root() {
-    if !Path::new("/srv").is_dir() {
-        return;
+fn controlled_unapproved_root_is_not_an_extension_root() {
+    let parent = if unsafe { libc::geteuid() } == 0 {
+        PathBuf::from("/run")
+    } else {
+        std::env::temp_dir()
+    };
+    let fixture = tempfile::Builder::new()
+        .prefix("cos-unapproved-")
+        .tempdir_in(parent)
+        .unwrap();
+    if std::env::var("COS_REQUIRE_PRIVILEGED_CHILD_TESTS").as_deref() == Ok("1") {
+        assert_eq!(unsafe { libc::geteuid() }, 0);
+        assert_eq!(fs::metadata(fixture.path()).unwrap().uid(), 0);
     }
     let authority = test_authority(&[]);
-    let error = authority.authorize_root(Path::new("/srv")).unwrap_err();
+    let error = authority.authorize_root(fixture.path()).unwrap_err();
     assert!(error.contains("outside broker-approved"), "{error}");
 }
 

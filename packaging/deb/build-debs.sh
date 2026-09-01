@@ -293,6 +293,8 @@ chmod 0755 "$AGENT_STAGE/DEBIAN/postrm"
 install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
     "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
+install -m 755 "$SCRIPT_DIR/claw-os-agent/extension-gid-scan.py" \
+    "$AGENT_STAGE/usr/lib/cos/extension-gid-scan.py"
 
 COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
