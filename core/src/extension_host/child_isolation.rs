@@ -6,7 +6,10 @@ use std::fs;
 use std::io::{self, Read};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+
+use super::protocol::{ApprovedPath, ExtensionBinding};
 
 const ENABLE_ENV: &str = "COS_EXTENSION_CHILD_ISOLATION";
 const MAX_SNAPSHOT_FILES: usize = 4_096;
@@ -28,12 +31,143 @@ pub(crate) struct IsolatedLaunch {
     pub isolated: bool,
 }
 
+pub(crate) fn close_unallowlisted_fds(command: &mut std::process::Command) {
+    unsafe {
+        command.pre_exec(|| {
+            crate::agentd::spawn::mark_inherited_descriptors_cloexec(3);
+            Ok(())
+        });
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct IsolationAuthority {
+    task_id: String,
+    session_id: Option<String>,
+    capability_generation: String,
+    owner_uid: u32,
+    extension_uid: u32,
+    execution_gid: u32,
+    approved_paths: Vec<ApprovedPath>,
+}
+
+impl IsolationAuthority {
+    pub(crate) fn from_binding(binding: &ExtensionBinding) -> Result<Self, String> {
+        binding.validate_host(std::process::id(), binding.host_start_time_ticks)?;
+        let authority = Self {
+            task_id: binding.task_id.clone(),
+            session_id: binding.session_id.clone(),
+            capability_generation: binding.capability_generation.clone(),
+            owner_uid: binding.owner_uid,
+            extension_uid: binding.extension_uid,
+            execution_gid: binding.owner_gid,
+            approved_paths: binding.approved_paths.clone(),
+        };
+        authority.validate_current()?;
+        Ok(authority)
+    }
+
+    fn validate_current(&self) -> Result<(), String> {
+        if self.task_id.is_empty()
+            || self.capability_generation.len() != 16
+            || self.owner_uid == 0
+            || (cfg!(not(test)) && self.extension_uid == 0)
+            || self.execution_gid == 0
+            || (cfg!(not(test)) && self.owner_uid == self.extension_uid)
+            || (cfg!(not(test)) && unsafe { libc::geteuid() as u32 } != self.extension_uid)
+            || (cfg!(not(test)) && unsafe { libc::getegid() as u32 } != self.execution_gid)
+        {
+            return Err("extension child isolation authority is invalid".to_string());
+        }
+        let _ = &self.session_id;
+        Ok(())
+    }
+
+    fn authorize_root(&self, path: &Path) -> Result<PathBuf, String> {
+        self.validate_current()?;
+        let canonical = path
+            .canonicalize()
+            .map_err(|error| format!("canonicalize authorized extension root: {error}"))?;
+        if is_root_owned_system_extension_root(&canonical)? {
+            return Ok(canonical);
+        }
+        for approved in &self.approved_paths {
+            let approved_path = Path::new(&approved.path);
+            let metadata = fs::symlink_metadata(approved_path).map_err(|error| {
+                format!("revalidate broker-approved path {}: {error}", approved.path)
+            })?;
+            if metadata.file_type().is_symlink()
+                || metadata.dev() != approved.device
+                || metadata.ino() != approved.inode
+                || metadata.uid() != approved.owner_uid
+                || metadata.mode() != approved.mode
+            {
+                return Err(format!(
+                    "broker-approved path identity changed: {}",
+                    approved.path
+                ));
+            }
+            if canonical.starts_with(approved_path) {
+                return Ok(canonical);
+            }
+
+        }
+        Err(format!(
+            "extension root {} is outside broker-approved owner/package paths",
+            canonical.display()
+        ))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn for_test(
+        owner_uid: u32,
+        execution_gid: u32,
+        approved_paths: Vec<ApprovedPath>,
+    ) -> Self {
+        Self {
+            task_id: "test-task".to_string(),
+            session_id: Some("test-session".to_string()),
+            capability_generation: "a".repeat(16),
+            owner_uid,
+            extension_uid: unsafe { libc::geteuid() as u32 },
+            execution_gid,
+            approved_paths,
+        }
+    }
+}
+
+fn is_root_owned_system_extension_root(path: &Path) -> Result<bool, String> {
+    if !path.starts_with("/opt")
+        && !path.starts_with("/usr/lib/cos")
+        && !path.starts_with("/usr/share/cos")
+    {
+        return Ok(false);
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect system extension path {}: {error}", path.display()))?;
+    if metadata.file_type().is_symlink() || metadata.uid() != 0 || metadata.mode() & 0o022 != 0 {
+        return Err(format!(
+            "system extension path {} has unsafe ownership or mode",
+            path.display()
+        ));
+    }
+    Ok(true)
+}
+
 pub(crate) fn prepare(
     program: impl AsRef<OsStr>,
     initial_args: impl IntoIterator<Item = OsString>,
     authorized_root: Option<&Path>,
+    authority: Option<&IsolationAuthority>,
 ) -> Result<IsolatedLaunch, String> {
-    prepare_impl(program, initial_args, authorized_root, Vec::new(), false)
+    prepare_impl(
+        program,
+        initial_args,
+        authorized_root,
+        Vec::new(),
+        false,
+        authority,
+    )
 }
 
 pub(crate) fn prepare_with_clean_env(
@@ -41,9 +175,17 @@ pub(crate) fn prepare_with_clean_env(
     initial_args: impl IntoIterator<Item = OsString>,
     authorized_root: Option<&Path>,
     inner_env: Vec<(OsString, OsString)>,
+    authority: Option<&IsolationAuthority>,
 ) -> Result<IsolatedLaunch, String> {
     validate_inner_environment(&inner_env)?;
-    prepare_impl(program, initial_args, authorized_root, inner_env, true)
+    prepare_impl(
+        program,
+        initial_args,
+        authorized_root,
+        inner_env,
+        true,
+        authority,
+    )
 }
 
 fn prepare_impl(
@@ -52,6 +194,7 @@ fn prepare_impl(
     authorized_root: Option<&Path>,
     inner_env: Vec<(OsString, OsString)>,
     clear_inner_environment: bool,
+    authority: Option<&IsolationAuthority>,
 ) -> Result<IsolatedLaunch, String> {
     let program = program.as_ref().to_os_string();
     let mut initial_args = initial_args.into_iter().collect::<Vec<_>>();
@@ -63,6 +206,9 @@ fn prepare_impl(
             isolated: false,
         });
     }
+    let authority = authority
+        .ok_or_else(|| "extension child isolation requires typed runtime authority".to_string())?;
+    authority.validate_current()?;
     let control = std::env::var_os("HOME")
         .map(PathBuf::from)
         .ok_or_else(|| "extension child isolation requires a task-local HOME".to_string())?;
@@ -76,16 +222,24 @@ fn prepare_impl(
         fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
             .map_err(|error| format!("protect isolated child state: {error}"))?;
     }
-    let resolved_program = resolve_runtime_program(Path::new(&program), authorized_root)?;
+    let authorized_root = authorized_root
+        .map(|root| authority.authorize_root(root))
+        .transpose()?;
+    let resolved_program =
+        resolve_runtime_program(Path::new(&program), authorized_root.as_deref(), authority)?;
     let mut runtime_programs = vec![resolved_program.clone()];
     if initial_args.first().is_some_and(|value| value == "--") && initial_args.len() >= 2 {
-        let inner = resolve_runtime_program(Path::new(&initial_args[1]), authorized_root)?;
+        let inner = resolve_runtime_program(
+            Path::new(&initial_args[1]),
+            authorized_root.as_deref(),
+            authority,
+        )?;
         initial_args[1] = inner.as_os_str().to_os_string();
         runtime_programs.push(inner);
     }
     if let Some(cos_bin) = std::env::var_os("COS_BIN").map(PathBuf::from) {
         if cos_bin.starts_with("/usr/local/bin") {
-            runtime_programs.push(resolve_runtime_program(&cos_bin, None)?);
+            runtime_programs.push(resolve_runtime_program(&cos_bin, None, authority)?);
         }
     }
 
@@ -150,7 +304,12 @@ fn prepare_impl(
             args.extend(["--setenv".into(), key, value]);
         }
     }
-    add_minimal_runtime(&runtime_programs, &child_root.join("runtime"), &mut args)?;
+    add_minimal_runtime(
+        &runtime_programs,
+        &child_root.join("runtime"),
+        &mut args,
+        authority,
+    )?;
     for child in ["home", "data", "cache", "log"] {
         args.extend([
             "--bind".into(),
@@ -165,7 +324,7 @@ fn prepare_impl(
     if program_path.is_absolute() && !program_path.starts_with("/usr") {
         roots.push(program_path);
     }
-    if let Some(root) = authorized_root {
+    if let Some(root) = authorized_root.as_deref() {
         roots.push(root.to_path_buf());
     }
     for key in ["COS_SDK_PYTHON_DIR"] {
@@ -188,11 +347,9 @@ fn prepare_impl(
         {
             return Err("authorized extension root must not be a symlink".to_string());
         }
-        let canonical = root
-            .canonicalize()
-            .map_err(|error| format!("canonicalize authorized extension path: {error}"))?;
+        let canonical = authority.authorize_root(root)?;
         let snapshot = child_root.join("snapshot").join(index.to_string());
-        snapshot_path(&canonical, &snapshot, 0, &mut budget)?;
+        snapshot_path(&canonical, &snapshot, 0, &mut budget, authority)?;
         args.extend([
             "--ro-bind".into(),
             snapshot.as_os_str().to_os_string(),
@@ -212,6 +369,7 @@ fn prepare_impl(
         ("COS_DATA_DIR", "/state/data"),
         ("COS_CACHE_DIR", "/state/cache"),
         ("COS_LOG_DIR", "/state/log"),
+        ("COS_EXTENSION_CHILD_ISOLATION", "1"),
         ("TMPDIR", "/tmp"),
         ("TMP", "/tmp"),
         ("TEMP", "/tmp"),
@@ -219,9 +377,7 @@ fn prepare_impl(
         args.extend(["--setenv".into(), key.into(), value.into()]);
     }
     let inner_cwd = match authorized_root {
-        Some(root) => root
-            .canonicalize()
-            .map_err(|error| format!("canonicalize isolated child cwd: {error}"))?,
+        Some(root) => root,
         None => PathBuf::from("/state"),
     };
     args.extend([
@@ -286,6 +442,7 @@ fn validate_inner_environment(environment: &[(OsString, OsString)]) -> Result<()
 fn resolve_runtime_program(
     command: &Path,
     authorized_root: Option<&Path>,
+    authority: &IsolationAuthority,
 ) -> Result<PathBuf, String> {
     let candidate = if command.is_absolute() {
         command.to_path_buf()
@@ -321,22 +478,9 @@ fn resolve_runtime_program(
         )
     })?;
     let authorized = authorized_root
-        .and_then(|root| root.canonicalize().ok())
         .is_some_and(|root| canonical.starts_with(root));
-    if !authorized
-        && !canonical.starts_with("/usr/bin")
-        && !canonical.starts_with("/usr/sbin")
-        && !canonical.starts_with("/usr/lib")
-        && !matches!(
-            canonical.to_str(),
-            Some("/usr/local/bin/claw-app-runner" | "/usr/local/bin/cos")
-        )
-        && !candidate.starts_with("/opt")
-    {
-        return Err(format!(
-            "extension executable {} is outside the verified runtime view",
-            canonical.display()
-        ));
+    if !authorized && !is_system_runtime_path(&canonical) {
+        authority.authorize_root(&canonical)?;
     }
     if !canonical.is_file() {
         return Err(format!(
@@ -368,10 +512,11 @@ fn add_minimal_runtime(
     programs: &[PathBuf],
     runtime_snapshot: &Path,
     args: &mut Vec<OsString>,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     let mut system_programs = Vec::new();
     for program in programs {
-        collect_script_interpreters(program, &mut system_programs)?;
+        collect_script_interpreters(program, &mut system_programs, authority)?;
         if is_system_runtime_path(program) {
             system_programs.push(program.clone());
         }
@@ -380,7 +525,7 @@ fn add_minimal_runtime(
     system_programs.dedup();
     let mut runtime_files = BTreeMap::<PathBuf, PathBuf>::new();
     for program in &system_programs {
-        validate_runtime_file(program)?;
+        validate_runtime_file(program, authority)?;
         runtime_files.insert(program.clone(), program.clone());
         if program
             .file_name()
@@ -412,6 +557,7 @@ fn add_minimal_runtime(
                 &runtime_snapshot.join(format!("python{version}")),
                 &stdlib,
                 args,
+                authority,
             )?;
             collect_tree_elf_dependencies(&stdlib, &mut runtime_files)?;
         }
@@ -427,6 +573,7 @@ fn add_minimal_runtime(
                 &runtime_snapshot.join("nodejs"),
                 node_modules,
                 args,
+                authority,
             )?;
             collect_tree_elf_dependencies(node_modules, &mut runtime_files)?;
         }
@@ -439,7 +586,7 @@ fn add_minimal_runtime(
         }
     }
     for (destination, source) in runtime_files {
-        validate_runtime_file(&source)?;
+        validate_runtime_file(&source, authority)?;
         args.extend([
             "--ro-bind".into(),
             source.into_os_string(),
@@ -561,7 +708,11 @@ fn resolve_runtime_library(name: &str) -> Result<Option<(PathBuf, PathBuf)>, Str
     Ok(None)
 }
 
-fn collect_script_interpreters(program: &Path, out: &mut Vec<PathBuf>) -> Result<(), String> {
+fn collect_script_interpreters(
+    program: &Path,
+    out: &mut Vec<PathBuf>,
+    authority: &IsolationAuthority,
+) -> Result<(), String> {
     let mut file = fs::OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_CLOEXEC | libc::O_NOFOLLOW)
@@ -591,7 +742,7 @@ fn collect_script_interpreters(program: &Path, out: &mut Vec<PathBuf>) -> Result
             "extension scripts using `/usr/bin/env` are not supported in isolation".to_string(),
         );
     }
-    let resolved = resolve_runtime_program(Path::new(interpreter), None)?;
+    let resolved = resolve_runtime_program(Path::new(interpreter), None, authority)?;
     if !is_system_runtime_path(&resolved) {
         return Err("extension script interpreter is outside the trusted runtime".to_string());
     }
@@ -609,7 +760,7 @@ fn is_system_runtime_path(path: &Path) -> bool {
         )
 }
 
-fn validate_runtime_file(path: &Path) -> Result<(), String> {
+fn validate_runtime_file(path: &Path, authority: &IsolationAuthority) -> Result<(), String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|error| format!("inspect runtime file {}: {error}", path.display()))?;
     if !metadata.is_file()
@@ -617,7 +768,7 @@ fn validate_runtime_file(path: &Path) -> Result<(), String> {
         || metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
         || (EXTENSION_UID_START..=EXTENSION_UID_END).contains(&metadata.uid())
-        || execution_gid().is_some_and(|gid| metadata.gid() == gid)
+        || metadata.gid() == authority.execution_gid
     {
         return Err(format!(
             "runtime file {} has unsafe type, ownership, or mode",
@@ -632,6 +783,7 @@ fn snapshot_runtime_tree(
     snapshot: &Path,
     destination: &Path,
     args: &mut Vec<OsString>,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     let canonical = source
         .canonicalize()
@@ -652,7 +804,13 @@ fn snapshot_runtime_tree(
         ));
     }
     let mut budget = RuntimeSnapshotBudget { files: 0, bytes: 0 };
-    snapshot_runtime_entry(&canonical, snapshot, root.dev(), &mut budget)?;
+    snapshot_runtime_entry(
+        &canonical,
+        snapshot,
+        root.dev(),
+        &mut budget,
+        authority,
+    )?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {
@@ -679,6 +837,7 @@ fn snapshot_runtime_entry(
     destination: &Path,
     device: u64,
     budget: &mut RuntimeSnapshotBudget,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     let metadata = fs::symlink_metadata(source)
         .map_err(|error| format!("inspect runtime object {}: {error}", source.display()))?;
@@ -696,7 +855,7 @@ fn snapshot_runtime_entry(
     if metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
         || (EXTENSION_UID_START..=EXTENSION_UID_END).contains(&metadata.uid())
-        || execution_gid().is_some_and(|gid| metadata.gid() == gid)
+        || metadata.gid() == authority.execution_gid
     {
         return Err(format!(
             "runtime object {} has unsafe ownership or mode",
@@ -715,6 +874,7 @@ fn snapshot_runtime_entry(
                 &destination.join(entry.file_name()),
                 device,
                 budget,
+                authority,
             )?;
         }
         fs::set_permissions(destination, fs::Permissions::from_mode(0o500))
@@ -774,6 +934,7 @@ fn validate_and_bind_runtime_tree(
     source: &Path,
     destination: &Path,
     args: &mut Vec<OsString>,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     let canonical = source
         .canonicalize()
@@ -794,7 +955,13 @@ fn validate_and_bind_runtime_tree(
         ));
     }
     let mut count = 0usize;
-    validate_runtime_tree_entry(&canonical, &canonical, root.dev(), &mut count)?;
+    validate_runtime_tree_entry(
+        &canonical,
+        &canonical,
+        root.dev(),
+        &mut count,
+        authority,
+    )?;
     let after = fs::symlink_metadata(&canonical)
         .map_err(|error| format!("recheck runtime tree {}: {error}", canonical.display()))?;
     if after.dev() != root.dev() || after.ino() != root.ino() {
@@ -816,6 +983,7 @@ fn validate_runtime_tree_entry(
     path: &Path,
     device: u64,
     count: &mut usize,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     *count = count.saturating_add(1);
     if *count > 100_000 {
@@ -844,7 +1012,7 @@ fn validate_runtime_tree_entry(
     if metadata.uid() != 0
         || metadata.mode() & 0o022 != 0
         || (EXTENSION_UID_START..=EXTENSION_UID_END).contains(&metadata.uid())
-        || execution_gid().is_some_and(|gid| metadata.gid() == gid)
+        || metadata.gid() == authority.execution_gid
     {
         return Err(format!(
             "runtime object {} has unsafe ownership or mode",
@@ -856,7 +1024,7 @@ fn validate_runtime_tree_entry(
             .map_err(|error| format!("list runtime tree {}: {error}", path.display()))?
         {
             let entry = entry.map_err(|error| format!("read runtime tree: {error}"))?;
-            validate_runtime_tree_entry(root, &entry.path(), device, count)?;
+            validate_runtime_tree_entry(root, &entry.path(), device, count, authority)?;
         }
         return Ok(());
     }
@@ -867,12 +1035,6 @@ fn validate_runtime_tree_entry(
         ));
     }
     Ok(())
-}
-
-fn execution_gid() -> Option<u32> {
-    std::env::var("COS_EXTENSION_EXECUTION_GID")
-        .ok()
-        .and_then(|value| value.parse().ok())
 }
 
 fn create_minimal_etc(child_root: &Path, args: &mut Vec<OsString>) -> Result<(), String> {
@@ -928,6 +1090,7 @@ fn snapshot_path(
     destination: &Path,
     depth: usize,
     budget: &mut SnapshotBudget,
+    authority: &IsolationAuthority,
 ) -> Result<(), String> {
     if depth > MAX_SNAPSHOT_DEPTH {
         return Err("authorized extension snapshot is too deep".to_string());
@@ -937,11 +1100,11 @@ fn snapshot_path(
     if metadata.file_type().is_symlink() {
         return Err("authorized extension path contains a symlink".to_string());
     }
-    let owner_uid = std::env::var("COS_EXTENSION_WORKER_UID")
-        .ok()
-        .and_then(|value| value.parse::<u32>().ok())
-        .unwrap_or_else(|| unsafe { libc::geteuid() as u32 });
-    if !matches!(metadata.uid(), 0) && metadata.uid() != owner_uid || metadata.mode() & 0o022 != 0 {
+    if (metadata.uid() != 0 && metadata.uid() != authority.owner_uid)
+        || (EXTENSION_UID_START..=EXTENSION_UID_END).contains(&metadata.uid())
+        || metadata.gid() == authority.execution_gid
+        || metadata.mode() & 0o022 != 0
+    {
         return Err("authorized extension path has unsafe ownership or mode".to_string());
     }
     match budget.root_dev {
@@ -964,6 +1127,7 @@ fn snapshot_path(
                 &destination.join(entry.file_name()),
                 depth + 1,
                 budget,
+                authority,
             )?;
         }
         fs::set_permissions(destination, fs::Permissions::from_mode(0o500))

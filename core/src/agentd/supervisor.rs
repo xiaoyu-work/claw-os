@@ -551,6 +551,13 @@ async fn supervise(
         tracing::warn!(task = %job.id, error = %error, "failed to bind agent worker to task");
     }
 
+    let capability_generation = session
+        .as_ref()
+        .and_then(|session| session.caps.as_ref())
+        .map(crate::agent::tools::exposure::capability_generation)
+        .unwrap_or_else(|| {
+            crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
+        });
     let mut extension = match start_extension_host(
         &identity,
         &isolation,
@@ -560,6 +567,7 @@ async fn supervise(
         pid,
         start_time_ticks,
         config.lease,
+        &capability_generation,
         broker,
     )
     .await
@@ -592,13 +600,7 @@ async fn supervise(
         execution_gid: isolation.execution_gid(),
         client: effective_client,
         presence,
-        capability_generation: session
-            .as_ref()
-            .and_then(|session| session.caps.as_ref())
-            .map(crate::agent::tools::exposure::capability_generation)
-            .unwrap_or_else(|| {
-                crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
-            }),
+        capability_generation,
         prepare_nonce: uuid::Uuid::new_v4().simple().to_string(),
         commit_nonce: uuid::Uuid::new_v4().simple().to_string(),
         extension: Some(extension.host.binding.clone()),
@@ -768,6 +770,7 @@ async fn start_extension_host(
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     lease_duration: Duration,
+    capability_generation: &str,
     broker: BrokerContext,
 ) -> Result<ExtensionRuntime, String> {
     let mut execution_identity = broker.extension_identity_pool()?.acquire(identity.uid)?;
@@ -829,6 +832,7 @@ async fn start_extension_host(
     let host_session_id = session.map(|_| format!("extension-{}", uuid::Uuid::new_v4().simple()));
     let lease_nonce = uuid::Uuid::new_v4().simple().to_string();
     let expires_at_ms = super::grant::now_ms().saturating_add(lease_duration.as_millis() as u64);
+    let approved_paths = extension_approved_paths(identity, session)?;
     let cleanup_paths = paths.clone();
     let mut host = match crate::extension_host::spawn::spawn_host(
         identity,
@@ -842,6 +846,8 @@ async fn start_extension_host(
         worker_start_time_ticks,
         &lease_nonce,
         expires_at_ms,
+        capability_generation,
+        approved_paths,
         paths,
     ) {
         Ok(host) => host,
@@ -937,6 +943,52 @@ async fn start_extension_host(
         broker_task,
         host_session_id,
     })
+}
+
+fn extension_approved_paths(
+    identity: &spawn::WorkerIdentity,
+    session: Option<&crate::proc::SessionInfo>,
+) -> Result<Vec<crate::extension_host::protocol::ApprovedPath>, String> {
+    let mut candidates = vec![identity.home.clone()];
+    for path in ["/usr/lib/cos/apps", "/usr/lib/cos/python"] {
+        let path = std::path::PathBuf::from(path);
+        if path.exists() {
+            candidates.push(path);
+        }
+    }
+    for key in ["COS_APPS_DIR", "COS_SDK_PYTHON_DIR"] {
+        if let Some(path) = std::env::var_os(key).map(std::path::PathBuf::from) {
+            if path.exists() {
+                candidates.push(path);
+            }
+        }
+    }
+    if let Some(caps) = session.and_then(|session| session.caps.as_ref()) {
+        for cap in caps.iter() {
+            if !matches!(cap.verb, crate::caps::Verb::FS_READ | crate::caps::Verb::FS_EXEC) {
+                continue;
+            }
+            let crate::caps::Scope::Path(path) = &cap.scope else {
+                continue;
+            };
+            if path.contains('*') || path.contains('?') {
+                continue;
+            }
+            let path = std::path::PathBuf::from(path);
+            if path.is_absolute() && path.exists() {
+                candidates.push(path);
+            }
+        }
+    }
+    candidates.sort();
+    candidates.dedup();
+    if candidates.len() > 64 {
+        return Err("extension runtime has more than 64 exact approved paths".to_string());
+    }
+    candidates
+        .iter()
+        .map(|path| crate::extension_host::spawn::approve_runtime_path(path, identity.uid))
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1688,6 +1740,37 @@ fn record_worker_audit(lease: &Lease, record: &RuntimeAuditRecord) {
             "discarding agent worker audit record for an unleased session"
         );
         return;
+    }
+    if let RuntimeAuditRecord::ExtensionLifecycle {
+        binding_digest,
+        lease_digest,
+        mcp,
+        ..
+    } = record
+    {
+        let Some(binding) = lease.extension.as_ref() else {
+            tracing::warn!(task = %lease.task_id, "discarding extension audit without a leased host");
+            return;
+        };
+        let expected_binding = match binding.digest() {
+            Ok(digest) => digest,
+            Err(error) => {
+                tracing::error!(task = %lease.task_id, %error, "leased extension binding is not auditable");
+                return;
+            }
+        };
+        let expected_lease = crate::crypto::sha256_hex(binding.lease_nonce.as_bytes());
+        if binding_digest != &expected_binding || lease_digest != &expected_lease {
+            tracing::warn!(task = %lease.task_id, "discarding extension audit for a substituted lease");
+            return;
+        }
+        if mcp.as_ref().is_some_and(|mcp| {
+            mcp.validate().is_err()
+                || mcp.capability_generation != lease.capability_generation
+        }) {
+            tracing::warn!(task = %lease.task_id, "discarding MCP audit for a substituted capability generation");
+            return;
+        }
     }
     crate::clawd::audit::record_worker_runtime(&lease.task_id, lease.owner_uid, record);
 }

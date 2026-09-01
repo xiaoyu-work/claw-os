@@ -214,6 +214,25 @@ impl ToolRegistry {
         input: Value,
         approval_reason: &str,
     ) -> ToolResult {
+        let approval_input = input.clone();
+        self.execute_with_approval_input(
+            context,
+            name,
+            input,
+            approval_input,
+            approval_reason,
+        )
+        .await
+    }
+
+    pub(crate) async fn execute_with_approval_input(
+        &self,
+        context: &ToolExposureContext,
+        name: &str,
+        input: Value,
+        approval_input: Value,
+        approval_reason: &str,
+    ) -> ToolResult {
         let Some(tool) = self.get_for(context, name) else {
             let reason = self
                 .exposure_decision(context, name)
@@ -226,7 +245,12 @@ impl ToolRegistry {
         if self.approval.is_classified(name) {
             match self
                 .approval
-                .evaluate_for(name, &input, approval_reason, tool.approval_boundary())
+                .evaluate_for(
+                    name,
+                    &approval_input,
+                    approval_reason,
+                    tool.approval_boundary(),
+                )
                 .await
             {
                 crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {}

@@ -725,10 +725,22 @@ for line in sys.stdin:
         url: None,
         bearer_env: None,
     };
+    let source_metadata = std::fs::metadata(&source).unwrap();
+    let authority = crate::extension_host::child_isolation::IsolationAuthority::for_test(
+        unsafe { libc::geteuid() as u32 },
+        60_999,
+        vec![crate::extension_host::protocol::ApprovedPath {
+            path: source.canonicalize().unwrap().to_string_lossy().into_owned(),
+            device: std::os::unix::fs::MetadataExt::dev(&source_metadata),
+            inode: std::os::unix::fs::MetadataExt::ino(&source_metadata),
+            owner_uid: std::os::unix::fs::MetadataExt::uid(&source_metadata),
+            mode: std::os::unix::fs::MetadataExt::mode(&source_metadata),
+        }],
+    );
     let handle = crate::paths::with_user_override(
         unsafe { libc::geteuid() as u32 },
         control.path().to_path_buf(),
-        attach_server_local(&spec, None),
+        attach_server_local(&spec, None, Some(&authority)),
     )
     .await
     .unwrap();

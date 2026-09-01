@@ -24,6 +24,8 @@ fn slot() -> &'static RwLock<Option<Arc<ExtensionHostClient>>> {
 #[derive(Debug)]
 pub struct ExtensionHostClient {
     binding: ExtensionBinding,
+    binding_digest: String,
+    lease_digest: String,
     audit: Option<UnboundedSender<crate::agentd::protocol::WorkerFrame>>,
 }
 
@@ -88,7 +90,14 @@ async fn install_with_audit(
         std::process::id(),
         crate::proc::read_start_time_ticks_pub(std::process::id()),
     )?;
-    let client = Arc::new(ExtensionHostClient { binding, audit });
+    let binding_digest = binding.digest()?;
+    let lease_digest = crate::crypto::sha256_hex(binding.lease_nonce.as_bytes());
+    let client = Arc::new(ExtensionHostClient {
+        binding,
+        binding_digest,
+        lease_digest,
+        audit,
+    });
     client.wait_ready().await?;
     client.emit(
         super::protocol::ExtensionKind::Host,
@@ -332,6 +341,7 @@ impl ExtensionHostClient {
         descriptor_digest: String,
         arguments: Option<Value>,
         timeout: Duration,
+        audit: super::protocol::McpInvocationAudit,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
         let started = std::time::Instant::now();
         let result = self
@@ -340,6 +350,7 @@ impl ExtensionHostClient {
                     server: server.clone(),
                     tool,
                     descriptor_digest,
+                    audit: audit.clone(),
                     arguments,
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
@@ -350,11 +361,11 @@ impl ExtensionHostClient {
                 HostResult::McpCall { value } => Ok(value),
                 _ => Err("extension host returned the wrong MCP-call result".to_string()),
             });
-        self.emit_result(
-            super::protocol::ExtensionKind::Mcp,
+        self.emit_mcp_result(
             action_for_result(&result),
             &server,
-            None,
+            super::protocol::AuditStage::Host,
+            &audit,
             started.elapsed(),
             &result,
         );
@@ -511,6 +522,10 @@ impl ExtensionHostClient {
                     kind,
                     action,
                     extension_id: super::protocol::clamp_text(extension_id, 128),
+                    binding_digest: self.binding_digest.clone(),
+                    lease_digest: self.lease_digest.clone(),
+                    stage: None,
+                    mcp: None,
                     manifest_digest: manifest_digest.map(str::to_string),
                     success,
                     latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
@@ -518,6 +533,80 @@ impl ExtensionHostClient {
                 },
             ),
         });
+    }
+
+    pub(crate) fn emit_mcp_gateway(
+        &self,
+        audit: &super::protocol::McpInvocationAudit,
+        success: bool,
+        error: Option<&str>,
+    ) {
+        self.emit_mcp(
+            super::protocol::LifecycleAction::Call,
+            &audit.server_identity,
+            super::protocol::AuditStage::Gateway,
+            audit,
+            success,
+            Duration::ZERO,
+            error,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn emit_mcp(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        stage: super::protocol::AuditStage,
+        mcp: &super::protocol::McpInvocationAudit,
+        success: bool,
+        latency: Duration,
+        error: Option<&str>,
+    ) {
+        let (Some(audit), Some(session_id)) =
+            (self.audit.as_ref(), self.binding.session_id.as_ref())
+        else {
+            return;
+        };
+        let _ = audit.send(crate::agentd::protocol::WorkerFrame::Audit {
+            task_id: self.binding.task_id.clone(),
+            record: Box::new(
+                crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+                    session_id: session_id.clone(),
+                    kind: super::protocol::ExtensionKind::Mcp,
+                    action,
+                    extension_id: super::protocol::clamp_text(extension_id, 128),
+                    binding_digest: self.binding_digest.clone(),
+                    lease_digest: self.lease_digest.clone(),
+                    stage: Some(stage),
+                    mcp: Some(mcp.clone()),
+                    manifest_digest: Some(mcp.descriptor_digest.clone()),
+                    success,
+                    latency_ms: latency.as_millis().min(u128::from(u64::MAX)) as u64,
+                    error: crate::audit_policy::optional_text_digest(error),
+                },
+            ),
+        });
+    }
+
+    fn emit_mcp_result<T>(
+        &self,
+        action: super::protocol::LifecycleAction,
+        extension_id: &str,
+        stage: super::protocol::AuditStage,
+        mcp: &super::protocol::McpInvocationAudit,
+        latency: Duration,
+        result: &Result<T, String>,
+    ) {
+        self.emit_mcp(
+            action,
+            extension_id,
+            stage,
+            mcp,
+            result.is_ok(),
+            latency,
+            result.as_ref().err().map(String::as_str),
+        );
     }
 
     fn emit_result<T>(

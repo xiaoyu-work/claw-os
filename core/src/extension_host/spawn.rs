@@ -4,6 +4,7 @@ use std::ffi::{CStr, CString};
 use std::io::Write;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -14,21 +15,12 @@ use std::time::{Duration, Instant};
 use crate::agentd::spawn::{ExecutionIsolation, WorkerIdentity};
 use crate::extension_host::identity::ExtensionIdentity;
 
-use super::protocol::{self, ExtensionBinding};
+use super::protocol::{self, ApprovedPath, ExtensionBinding, HostBootstrap};
 
 pub const HOST_BINARY_ENV: &str = "COS_EXTENSION_HOST_BIN";
-pub const TASK_ENV: &str = "COS_EXTENSION_TASK_ID";
-pub const TASK_SESSION_ENV: &str = "COS_EXTENSION_TASK_SESSION";
+pub const TASK_DIAGNOSTIC_ENV: &str = "COS_EXTENSION_TASK_ID";
+pub const CONTROL_SOCKET_DIAGNOSTIC_ENV: &str = "COS_EXTENSION_CONTROL_SOCKET";
 pub const HOST_SESSION_ENV: &str = "COS_EXTENSION_HOST_SESSION";
-pub const WORKER_UID_ENV: &str = "COS_EXTENSION_WORKER_UID";
-pub const WORKER_PID_ENV: &str = "COS_EXTENSION_WORKER_PID";
-pub const WORKER_START_ENV: &str = "COS_EXTENSION_WORKER_START";
-pub const LEASE_NONCE_ENV: &str = "COS_EXTENSION_LEASE_NONCE";
-pub const LEASE_EXPIRES_ENV: &str = "COS_EXTENSION_LEASE_EXPIRES_MS";
-pub const CONTROL_SOCKET_ENV: &str = "COS_EXTENSION_CONTROL_SOCKET";
-pub const ENFORCE_GROUPS_ENV: &str = "COS_EXTENSION_ENFORCE_GROUPS";
-pub const EXECUTION_GID_ENV: &str = "COS_EXTENSION_EXECUTION_GID";
-pub const EXTENSION_UID_ENV: &str = "COS_EXTENSION_EXECUTION_UID";
 pub const CGROUP_ROOT_ENV: &str = "CLAWD_EXTENSION_CGROUP_ROOT";
 
 const HOST_PATH: &str = "/usr/local/bin/claw-extension-host";
@@ -588,6 +580,74 @@ pub fn host_binary_path() -> PathBuf {
     PathBuf::from(HOST_PATH)
 }
 
+pub fn approve_runtime_path(path: &Path, owner_uid: u32) -> Result<ApprovedPath, String> {
+    let initial = std::fs::symlink_metadata(path)
+        .map_err(|error| format!("inspect approved runtime path {}: {error}", path.display()))?;
+    if initial.file_type().is_symlink() {
+        return Err(format!(
+            "approved runtime path must not be a symlink: {}",
+            path.display()
+        ));
+    }
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("canonicalize approved runtime path: {error}"))?;
+    let metadata = std::fs::symlink_metadata(&canonical)
+        .map_err(|error| format!("pin approved runtime path: {error}"))?;
+    if (!metadata.is_dir() && !metadata.is_file())
+        || (metadata.uid() != 0 && metadata.uid() != owner_uid)
+        || metadata.mode() & 0o022 != 0
+    {
+        return Err(format!(
+            "approved runtime path {} has unsafe type, ownership, or mode",
+            canonical.display()
+        ));
+    }
+    Ok(ApprovedPath {
+        path: canonical.to_string_lossy().into_owned(),
+        device: metadata.dev(),
+        inode: metadata.ino(),
+        owner_uid: metadata.uid(),
+        mode: metadata.mode(),
+    })
+}
+
+fn create_bootstrap_pipe(bootstrap: &HostBootstrap) -> Result<OwnedFd, String> {
+    let bytes = serde_json::to_vec(bootstrap)
+        .map_err(|error| format!("encode extension-host bootstrap: {error}"))?;
+    if bytes.len() > 64 * 1024 {
+        return Err("extension-host bootstrap exceeds its size limit".to_string());
+    }
+    let mut descriptors = [-1; 2];
+    if unsafe { libc::pipe2(descriptors.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+        return Err(format!(
+            "create extension-host bootstrap pipe: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    let read = unsafe { OwnedFd::from_raw_fd(descriptors[0]) };
+    let write = unsafe { OwnedFd::from_raw_fd(descriptors[1]) };
+    let mut file = std::fs::File::from(write);
+    file.write_all(&bytes)
+        .map_err(|error| format!("write extension-host bootstrap: {error}"))?;
+    drop(file);
+    let duplicated = unsafe { libc::fcntl(read.as_raw_fd(), libc::F_DUPFD_CLOEXEC, 64) };
+    if duplicated < 0 {
+        return Err(format!(
+            "reserve extension-host bootstrap descriptor: {}",
+            std::io::Error::last_os_error()
+        ));
+    }
+    Ok(unsafe { OwnedFd::from_raw_fd(duplicated) })
+}
+
+fn place_bootstrap_fd(source: RawFd) -> std::io::Result<()> {
+    if unsafe { libc::fcntl(source, libc::F_SETFD, 0) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_host(
     owner: &WorkerIdentity,
@@ -601,6 +661,8 @@ pub fn spawn_host(
     worker_start_time_ticks: Option<u64>,
     lease_nonce: &str,
     expires_at_ms: u64,
+    capability_generation: &str,
+    approved_paths: Vec<ApprovedPath>,
     paths: HostPaths,
 ) -> Result<SpawnedExtensionHost, String> {
     if extension.uid == 0
@@ -645,9 +707,30 @@ pub fn spawn_host(
         }
     }
     let enforce_groups = crate::agentd::spawn::broker_is_root();
+    let bootstrap = HostBootstrap {
+        protocol: protocol::PROTOCOL_VERSION,
+        task_id: task_id.to_string(),
+        session_id: task_session_id.map(ToOwned::to_owned),
+        owner_uid: owner.uid,
+        extension_uid: extension.uid,
+        execution_gid: isolation.execution_gid(),
+        enforce_groups,
+        worker_pid,
+        worker_start_time_ticks,
+        lease_nonce: lease_nonce.to_string(),
+        expires_at_ms,
+        capability_generation: capability_generation.to_string(),
+        control_socket: paths.control_socket.to_string_lossy().into_owned(),
+        broker_socket: paths.broker_socket.to_string_lossy().into_owned(),
+        approved_paths,
+    };
+    let bootstrap_fd = create_bootstrap_pipe(&bootstrap)?;
 
     let mut command = std::process::Command::new(&binary);
-    command.arg("--host");
+    command
+        .arg("--host")
+        .arg("--bootstrap-fd")
+        .arg(bootstrap_fd.as_raw_fd().to_string());
     command.stdin(Stdio::null());
     command.stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -673,25 +756,11 @@ pub fn spawn_host(
     command.env("COS_DATA_DIR", paths.control_dir.join("data"));
     command.env("COS_CACHE_DIR", paths.control_dir.join("cache"));
     command.env("COS_LOG_DIR", paths.control_dir.join("log"));
-    command.env(TASK_ENV, task_id);
-    command.env(WORKER_UID_ENV, owner.uid.to_string());
-    command.env(WORKER_PID_ENV, worker_pid.to_string());
-    command.env(
-        WORKER_START_ENV,
-        worker_start_time_ticks
-            .map(|value| value.to_string())
-            .unwrap_or_default(),
-    );
-    command.env(LEASE_NONCE_ENV, lease_nonce);
-    command.env(LEASE_EXPIRES_ENV, expires_at_ms.to_string());
-    command.env(CONTROL_SOCKET_ENV, &paths.control_socket);
-    command.env(ENFORCE_GROUPS_ENV, if enforce_groups { "1" } else { "0" });
-    command.env(EXECUTION_GID_ENV, isolation.execution_gid().to_string());
-    command.env(EXTENSION_UID_ENV, extension.uid.to_string());
+    // Diagnostics only. Host authority comes exclusively from the private
+    // bootstrap descriptor and never reads these values.
+    command.env(TASK_DIAGNOSTIC_ENV, task_id);
+    command.env(CONTROL_SOCKET_DIAGNOSTIC_ENV, &paths.control_socket);
     command.env(protocol::BROKER_SOCKET_ENV, &paths.broker_socket);
-    if let Some(task_session_id) = task_session_id {
-        command.env(TASK_SESSION_ENV, task_session_id);
-    }
     if let Some(host_session_id) = host_session_id {
         command.env(HOST_SESSION_ENV, host_session_id);
         command.env("COS_SESSION", host_session_id);
@@ -707,6 +776,7 @@ pub fn spawn_host(
     let gid = isolation.execution_gid();
     let child_isolation = isolation.clone();
     let cgroup_procs_fd = cgroup.procs_fd();
+    let bootstrap_raw_fd = bootstrap_fd.as_raw_fd();
     let writable_task_path = CString::new(paths.dir.as_os_str().as_bytes())
         .map_err(|_| "extension task path contains NUL".to_string())?;
     let try_namespaces = std::env::var("CLAWD_EXTENSION_HOST_NAMESPACES")
@@ -716,7 +786,11 @@ pub fn spawn_host(
         command.pre_exec(move || {
             attach_current_process(cgroup_procs_fd)?;
             libc::umask(0o077);
-            crate::agentd::spawn::mark_inherited_descriptors_cloexec(3);
+            place_bootstrap_fd(bootstrap_raw_fd)?;
+            crate::agentd::spawn::mark_inherited_descriptors_cloexec_except(
+                3,
+                bootstrap_raw_fd,
+            );
             setup_private_mount_namespace(&writable_task_path)?;
             if try_namespaces {
                 // IPC and UTS isolation do not change filesystem or network
@@ -748,6 +822,7 @@ pub fn spawn_host(
                 paths.cleanup(),
             )
         })?;
+    drop(bootstrap_fd);
     let Some(pid) = child.id() else {
         let _ = child.start_kill();
         let cleanup = cgroup.cleanup_blocking();
@@ -786,6 +861,8 @@ pub fn spawn_host(
         owner_uid: owner.uid,
         extension_uid: extension.uid,
         owner_gid: gid,
+        capability_generation: capability_generation.to_string(),
+        approved_paths: bootstrap.approved_paths,
         worker_pid,
         worker_start_time_ticks,
         host_pid: pid,
@@ -898,8 +975,21 @@ fn setup_private_mount_namespace(writable_task_path: &CStr) -> std::io::Result<(
     {
         return Err(std::io::Error::last_os_error());
     }
+    if unsafe {
+        libc::mount(
+            c"/proc".as_ptr(),
+            c"/proc".as_ptr(),
+            std::ptr::null(),
+            libc::MS_BIND | libc::MS_REC,
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Err(std::io::Error::last_os_error());
+    }
     set_mount_read_only(c"/", true)?;
     set_mount_read_only(writable_task_path, false)?;
+    set_mount_read_only(c"/proc", false)?;
     for path in PRIVATE_TMP_PATHS {
         if unsafe {
             libc::mount(

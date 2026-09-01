@@ -388,6 +388,16 @@ bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
 have been verified. No privileged `chown` or `chmod` follows a pathname below
 a task-writable directory.
 
+Host bootstrap authority crosses the root-to-extension boundary only through a
+private inherited descriptor carrying a typed versioned record. The worker
+grant signs the resulting exact binding, including owner/leased uid, isolated
+gid, capability generation, socket identities, and device/inode/mode-pinned
+approved roots. Child launch APIs require that typed authority; they never
+recover it from environment variables, effective ids, NSS, or fallback path
+resolution. Approved snapshots accept only root or the exact task owner and
+always reject reserved extension uid and execution-gid objects. Arbitrary
+`/srv` paths are absent unless an exact broker-pinned path capability exists.
+
 The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
 `61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
 the prior package may retain its arbitrary sysusers-assigned
@@ -703,6 +713,10 @@ remote identifier, description, or property name; those values exist only in
 the wrapped `mcp_catalog` result. Structural descriptor drift, guessed handles,
 reconnect replay, owner/session/generation mismatch, hidden exposure,
 auto-deny, or missing approval blocks invocation.
+Every resolved hosted invocation emits correlated gateway and host lifecycle
+records containing the internal policy identity, server, handle/descriptor
+digests, capability generation, and signed binding/lease references. Remote
+display text is represented only by an untrusted keyed digest.
 
 ### Image and package publication
 

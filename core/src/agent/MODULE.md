@@ -75,6 +75,9 @@ trusted per-request exposure context, then execute through registry
 reauthorization, guardrails, approvals, and hooks.
 Opaque MCP handles retain a non-model-visible internal policy identity; both
 catalog filtering and invocation use this same registry path.
+Hosted invocation audit records bind that identity to the server,
+handle/descriptor digest, capability generation, and signed extension lease at
+both gateway and host execution stages.
 
 ## Tests
 

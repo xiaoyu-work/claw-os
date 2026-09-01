@@ -11,6 +11,20 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
+thread_local! {
+    static APP_ISOLATION_AUTHORITY:
+        std::cell::RefCell<Option<crate::extension_host::child_isolation::IsolationAuthority>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct AppIsolationGuard;
+
+impl Drop for AppIsolationGuard {
+    fn drop(&mut self) {
+        APP_ISOLATION_AUTHORITY.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
 pub(crate) fn app_runner_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("CLAW_APP_RUNNER_BIN") {
         return path.into();
@@ -27,15 +41,20 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
 }
 
 fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<Command, String> {
-    let launch = crate::extension_host::child_isolation::prepare(
-        app_runner_path(),
-        vec![
-            std::ffi::OsString::from("--"),
-            program.as_ref().to_os_string(),
-        ],
-        Some(app_dir),
-    )?;
+    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
+        let authority = authority.borrow();
+        crate::extension_host::child_isolation::prepare(
+            app_runner_path(),
+            vec![
+                std::ffi::OsString::from("--"),
+                program.as_ref().to_os_string(),
+            ],
+            Some(app_dir),
+            authority.as_ref(),
+        )
+    })?;
     let mut command = Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
     command.env_clear().args(launch.args).envs(launch.env);
     Ok(command)
 }
@@ -591,15 +610,20 @@ pub fn run_native_app_host(
         ));
     }
     let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    let launch = crate::extension_host::child_isolation::prepare(
-        &runner,
-        vec![
-            std::ffi::OsString::from("--"),
-            program_path.as_os_str().to_os_string(),
-        ],
-        Some(&app_dir),
-    )?;
+    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
+        let authority = authority.borrow();
+        crate::extension_host::child_isolation::prepare(
+            &runner,
+            vec![
+                std::ffi::OsString::from("--"),
+                program_path.as_os_str().to_os_string(),
+            ],
+            Some(&app_dir),
+            authority.as_ref(),
+        )
+    })?;
     let mut command = Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
     command.env_clear().args(launch.args).envs(launch.env);
     reset_app_environment(&mut command, false);
     command
@@ -1762,6 +1786,24 @@ pub fn run_app(
     apps_dir: &str,
 ) -> Result<Option<String>, String> {
     run_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
+}
+
+pub(crate) fn run_app_with_isolation(
+    app_dir: &Path,
+    command: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    authority: crate::extension_host::child_isolation::IsolationAuthority,
+) -> Result<Option<String>, String> {
+    APP_ISOLATION_AUTHORITY.with(|slot| {
+        if slot.borrow().is_some() {
+            return Err("nested App isolation authority is not permitted".to_string());
+        }
+        *slot.borrow_mut() = Some(authority);
+        let _guard = AppIsolationGuard;
+        run_app(app_dir, command, args, data_dir, apps_dir)
+    })
 }
 
 pub fn run_app_with_stdin(

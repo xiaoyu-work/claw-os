@@ -70,8 +70,16 @@ fn extension(
         task_id: task.to_string(),
         session_id: Some(session.to_string()),
         owner_uid: 1000,
-        extension_uid: 61_184,
+        extension_uid: 61_000,
         owner_gid: 1000,
+        capability_generation: "a".repeat(16),
+        approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
+            path: "/home/test".to_string(),
+            device: 1,
+            inode: 2,
+            owner_uid: 1000,
+            mode: 0o40755,
+        }],
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
         host_pid,
@@ -133,7 +141,7 @@ fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
         Err(GrantError::Signature)
     );
 
-    let mut substituted_uid = grant;
+    let mut substituted_uid = grant.clone();
     substituted_uid
         .claims
         .extension
@@ -144,6 +152,28 @@ fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
         signer.verify(&substituted_uid, &expectation("hello"), 2_000),
         Err(GrantError::Signature)
     );
+
+    for mutate in [
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.owner_uid += 1;
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.owner_gid += 1;
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.capability_generation = "b".repeat(16);
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.approved_paths[0].inode += 1;
+        },
+    ] {
+        let mut substituted = grant.clone();
+        mutate(substituted.claims.extension.as_mut().unwrap());
+        assert_eq!(
+            signer.verify(&substituted, &expectation("hello"), 2_000),
+            Err(GrantError::Signature)
+        );
+    }
 }
 
 #[test]

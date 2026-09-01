@@ -12,16 +12,20 @@ For each daemon-backed task:
 2. `clawd` leases a package-created locked uid that no other active task may use, creates a
    private runtime directory and route-filtered broker socket, then spawns
    `claw-extension-host` with that uid and the dedicated gid.
-3. `clawd` registers the exact host pid/start-time as a child of the task
-   session and signs the host identity, worker identity, socket paths, nonce,
-   protocol version, and lease deadline into the worker grant.
+3. `clawd` writes a typed bootstrap record through a private inherited
+   descriptor. The record binds the task/session, owner uid, leased uid,
+   isolated gid, worker pid/start-time, capability generation, socket paths,
+   nonce, deadline, and descriptor-pinned approved roots. Identity environment
+   variables are not authority. The resulting exact host binding is signed
+   into the worker grant.
 4. `claw-agentd` verifies that binding and uses the host control socket for
    one-shot Apps, stateful App sessions, and configured MCP servers.
 5. Hosted children use `COS_EXTENSION_BROKER_SOCKET`; they never receive or
    open `/run/cos/clawd.sock`.
 
 The worker-control socket accepts only the exact worker pid/start-time and an
-unused request id bound to the task/session/nonce. The broker proxy verifies
+unused request id bound to the task/session/nonce plus the immutable binding
+digest. The broker proxy verifies
 Linux `SCM_CREDENTIALS` on every frame:
 
 - the exact host may call only App/MCP registration, bind, transient-scope,
@@ -71,6 +75,8 @@ state/tmp paths. Broad live `/usr`, `/etc`, and `/usr/local`, host homes,
 arbitrary `/var`, `/mnt`, `/media`, extra mounts, and numeric-UID orphan files are
 absent. Native stdio MCP networking is unsupported until a scoped authenticated
 broker proxy exists; Apps use SDK/broker capabilities instead.
+Every unallowlisted descriptor is marked close-on-exec before bubblewrap, so a
+connected or listening socket cannot bypass the network namespace.
 The trusted app runner waits for the root-maintained session bind and reapplies
 non-dumpability immediately before final exec; isolation does not rely on
 dumpability surviving exec.
@@ -107,8 +113,12 @@ projects only the already-bound task-owner principal through normal
 capability/approval enforcement. Home, data, cache, and log locations are
 task-local controlled directories. A custom MCP command is resolved before the
 wrapper is built: system-wide `/opt` commands must be root-owned and
-non-writable, while owner-private commands must live below the explicitly
-authorized package root. Code is copied with no-follow inode/time rechecks;
+non-writable, while owner paths must be contained by a broker-approved,
+device/inode/mode-pinned root derived from the exact task owner or an exact
+filesystem capability. Arbitrary `/srv` and ambient paths are denied. Code is
+copied with no-follow inode/time rechecks; objects owned by any reserved
+extension uid, the isolated execution gid, or an identity other than root/the
+exact task owner are rejected even if the currently leased uid could read them.
 the command, trusted script interpreter, and exact ELF dependency closure are
 the only executable runtime inputs. Missing interpreters or libraries fail
 before spawn.
@@ -171,6 +181,10 @@ also binds the original internal MCP policy identity, transport, extension,
 and exposure requirements. Catalogue output omits guardrail-hidden and
 auto-denied entries, and invocation re-enters the shared registry
 guardrail/approval path before remote execution.
+Gateway and host invocation audit records share the internal policy identity,
+server identity, opaque-handle digest, descriptor digest, capability
+generation, binding digest, and lease digest. Remote display names are stored
+only as keyed untrusted-text digests; arguments and secrets are not logged.
 Stdout/stderr-derived errors and tool results remain untrusted and wrapped.
 
 ## Configuration
@@ -198,3 +212,8 @@ cargo clippy -- -D warnings
 cd ..
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
+
+The two process-boundary suites run through a dedicated `sudo` CI step. It
+copies the test and host binaries into a root-owned, non-world-writable
+fixture, runs the root broker with a dropped-uid worker child, and removes only
+that exact fixture on exit.

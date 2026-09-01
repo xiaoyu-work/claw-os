@@ -234,7 +234,7 @@ async fn pilot_kv_e2e_call_chain() {
     // Make sure no stale entry from a previous test run survives.
     let _ = close_session("kv").await;
 
-    let opened = open_session("kv").await.expect("open kv");
+    let opened = open_session("kv", None).await.expect("open kv");
     assert!(
         opened.1 >= 5,
         "kv should advertise ≥5 tools, got {}",
@@ -263,7 +263,7 @@ async fn pilot_kv_e2e_call_chain() {
 
     let closed = close_session("kv").await;
     assert!(closed);
-    let opened2 = open_session("kv").await.expect("re-open kv");
+    let opened2 = open_session("kv", None).await.expect("re-open kv");
     let r = opened2
         .0
         .call_tool("kv.get", Some(serde_json::json!({"key":"x"})))
@@ -344,8 +344,8 @@ async fn open_race_single_child() {
     // would race past the manager probe and each spawn its own
     // server. With the per-app lock, the second blocks until the
     // first finishes, then short-circuits.
-    let t1 = tokio::spawn(async { open_session("kv").await });
-    let t2 = tokio::spawn(async { open_session("kv").await });
+    let t1 = tokio::spawn(async { open_session("kv", None).await });
+    let t2 = tokio::spawn(async { open_session("kv", None).await });
     let (r1, r2) = (t1.await.unwrap(), t2.await.unwrap());
     let (c1, _) = r1.expect("first open");
     let (c2, _) = r2.expect("second open");

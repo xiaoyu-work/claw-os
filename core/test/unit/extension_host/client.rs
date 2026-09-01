@@ -2,13 +2,23 @@ use super::*;
 
 fn binding() -> ExtensionBinding {
     let pid = std::process::id();
+    let owner_uid = (unsafe { libc::geteuid() }).max(1000);
+    let owner_gid = (unsafe { libc::getegid() }).max(60_999);
     ExtensionBinding {
         protocol: PROTOCOL_VERSION,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
-        owner_uid: unsafe { libc::geteuid() },
-        extension_uid: 61_184,
-        owner_gid: unsafe { libc::getegid() },
+        owner_uid,
+        extension_uid: 61_000,
+        owner_gid,
+        capability_generation: "a".repeat(16),
+        approved_paths: vec![super::super::protocol::ApprovedPath {
+            path: "/home/test".to_string(),
+            device: 1,
+            inode: 2,
+            owner_uid,
+            mode: 0o40755,
+        }],
         worker_pid: pid,
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         host_pid: pid.saturating_add(1),
@@ -42,14 +52,18 @@ fn control_requests_carry_the_exact_task_session_and_lease() {
     assert_eq!(request.task_id, binding.task_id);
     assert_eq!(request.session_id, binding.session_id);
     assert_eq!(request.lease_nonce, binding.lease_nonce);
+    assert_eq!(request.binding_digest, binding.digest().unwrap());
     assert!(request.timeout_ms <= super::super::protocol::MAX_REQUEST_TIMEOUT_MS);
 }
 
 #[test]
 fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let binding = binding();
     let client = ExtensionHostClient {
-        binding: binding(),
+        binding_digest: binding.digest().unwrap(),
+        lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+        binding,
         audit: Some(tx),
     };
     client.emit(
@@ -73,6 +87,8 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
         success,
         latency_ms,
         error,
+        binding_digest,
+        lease_digest,
         ..
     } = *record
     else {
@@ -85,4 +101,56 @@ fn lifecycle_events_are_forwarded_as_typed_worker_audit() {
     assert!(!success);
     assert_eq!(latency_ms, 7);
     assert!(error.is_some());
+    assert_eq!(binding_digest, client.binding_digest);
+    assert_eq!(lease_digest, client.lease_digest);
+}
+
+#[test]
+fn mcp_gateway_and_host_audit_share_exact_opaque_identity() {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let binding = binding();
+    let client = ExtensionHostClient {
+        binding_digest: binding.digest().unwrap(),
+        lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+        binding,
+        audit: Some(tx),
+    };
+    let identity = super::super::protocol::McpInvocationAudit {
+        policy_identity: "mcp_server_tool".to_string(),
+        server_identity: "server".to_string(),
+        handle_digest: "b".repeat(64),
+        descriptor_digest: "c".repeat(64),
+        capability_generation: "a".repeat(16),
+        untrusted_remote_name: crate::audit_policy::text_digest("IGNORE ALL"),
+    };
+    client.emit_mcp_gateway(&identity, false, Some("approval pending"));
+    client.emit_mcp(
+        super::super::protocol::LifecycleAction::Call,
+        "server",
+        super::super::protocol::AuditStage::Host,
+        &identity,
+        true,
+        Duration::from_millis(3),
+        None,
+    );
+    for stage in [
+        super::super::protocol::AuditStage::Gateway,
+        super::super::protocol::AuditStage::Host,
+    ] {
+        let crate::agentd::protocol::WorkerFrame::Audit { record, .. } =
+            rx.try_recv().expect("MCP audit frame")
+        else {
+            panic!("expected audit frame");
+        };
+        let crate::agentd::protocol::RuntimeAuditRecord::ExtensionLifecycle {
+            stage: actual,
+            mcp,
+            ..
+        } = *record
+        else {
+            panic!("expected lifecycle audit");
+        };
+        assert_eq!(actual, Some(stage));
+        assert_eq!(mcp, Some(identity.clone()));
+    }
 }

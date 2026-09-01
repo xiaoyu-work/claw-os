@@ -461,6 +461,12 @@ pub enum RuntimeAuditRecord {
         kind: crate::extension_host::protocol::ExtensionKind,
         action: crate::extension_host::protocol::LifecycleAction,
         extension_id: String,
+        binding_digest: String,
+        lease_digest: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        stage: Option<crate::extension_host::protocol::AuditStage>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mcp: Option<crate::extension_host::protocol::McpInvocationAudit>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         manifest_digest: Option<String>,
         success: bool,

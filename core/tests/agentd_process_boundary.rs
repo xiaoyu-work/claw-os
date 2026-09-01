@@ -37,6 +37,14 @@ const EXTENSION_HOST_BIN: &str = env!("CARGO_BIN_EXE_claw-extension-host");
 const LEAK_MARKER: &str = "COS_AGENTD_TEST_BROKER_SECRET";
 const CGROUP_PROBE_GATE: &str = "COS_TEST_CGROUP_PROBE_GATE";
 const CGROUP_PROBE_ROOT: &str = "COS_TEST_CGROUP_PROBE_ROOT";
+const TEST_CAPABILITY_GENERATION: &str = "aaaaaaaaaaaaaaaa";
+
+fn approved_paths(identity: &WorkerIdentity) -> Vec<cos::extension_host::protocol::ApprovedPath> {
+    vec![
+        cos::extension_host::spawn::approve_runtime_path(&identity.home, identity.uid)
+            .expect("approve worker home"),
+    ]
+}
 
 struct Harness {
     _home: tempfile::TempDir,
@@ -1113,6 +1121,8 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         },
         "0123456789abcdef0123456789abcdef",
         expires,
+        TEST_CAPABILITY_GENERATION,
+        approved_paths(&harness.identity),
         paths,
     )
     .expect("spawn host");
@@ -1242,6 +1252,8 @@ async fn service_owned_roots_are_hardened_before_an_extension_task() {
         process_start(std::process::id()),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
+        TEST_CAPABILITY_GENERATION,
+        approved_paths(&harness.identity),
         paths,
     )
     .expect("launch extension task after service root hardening");
@@ -1300,6 +1312,8 @@ async fn same_uid_hosts_receive_distinct_private_tmp_mounts() {
             start_time,
             "0123456789abcdef0123456789abcdef",
             cos::agentd::grant::now_ms() + 60_000,
+            TEST_CAPABILITY_GENERATION,
+            approved_paths(&harness.identity),
             paths,
         )
         .expect("spawn private tmp probe");
@@ -1418,6 +1432,8 @@ async fn extension_uid_and_seccomp_block_process_injection_and_cgroup_escape() {
         process_start(std::process::id()),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
+        TEST_CAPABILITY_GENERATION,
+        approved_paths(&harness.identity),
         paths,
     )
     .expect("spawn process isolation probe");
@@ -1819,6 +1835,8 @@ async fn mandatory_cgroup_kills_host_first_double_fork_setsid_and_cleared_pdeath
         process_start(std::process::id()),
         "0123456789abcdef0123456789abcdef",
         expires,
+        TEST_CAPABILITY_GENERATION,
+        approved_paths(&harness.identity),
         paths,
     )
     .expect("spawn daemonizing host");
@@ -1890,6 +1908,8 @@ async fn mandatory_cgroup_kill_covers_active_cancellation_and_descendants() {
         process_start(std::process::id()),
         "0123456789abcdef0123456789abcdef",
         cos::agentd::grant::now_ms() + 60_000,
+        TEST_CAPABILITY_GENERATION,
+        approved_paths(&harness.identity),
         paths,
     )
     .expect("spawn cancellation probe");

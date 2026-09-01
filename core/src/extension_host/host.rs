@@ -1,6 +1,8 @@
 //! `claw-extension-host` process implementation.
 
 use std::collections::{HashMap, VecDeque};
+use std::io::Read;
+use std::os::fd::FromRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -18,13 +20,8 @@ use crate::clawd::transport::peer;
 use crate::clawd::wire::RequestId;
 
 use super::protocol::{
-    ControlRequest, ControlResponse, HostAction, HostResult, MAX_CONTROL_CONNECTIONS,
-    MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
-};
-use super::spawn::{
-    CONTROL_SOCKET_ENV, ENFORCE_GROUPS_ENV, EXECUTION_GID_ENV, EXTENSION_UID_ENV,
-    LEASE_EXPIRES_ENV, LEASE_NONCE_ENV, TASK_ENV, TASK_SESSION_ENV, WORKER_PID_ENV,
-    WORKER_START_ENV, WORKER_UID_ENV,
+    ControlRequest, ControlResponse, HostAction, HostBootstrap, HostResult,
+    MAX_CONTROL_CONNECTIONS, MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
 };
 
 const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
@@ -38,6 +35,8 @@ struct HostedMcp {
 }
 
 struct HostState {
+    binding: super::protocol::ExtensionBinding,
+    isolation: super::child_isolation::IsolationAuthority,
     task_id: String,
     session_id: Option<String>,
     worker_uid: u32,
@@ -76,61 +75,16 @@ fn run() -> Result<(), String> {
         }
     }
 
-    let control_socket = required_path(CONTROL_SOCKET_ENV)?;
-    let task_id = required_env(TASK_ENV)?;
-    let session_id = optional_env(TASK_SESSION_ENV);
-    let worker_uid = required_env(WORKER_UID_ENV)?
-        .parse::<u32>()
-        .map_err(|error| format!("invalid extension worker uid: {error}"))?;
-    let worker_pid = required_env(WORKER_PID_ENV)?
-        .parse::<u32>()
-        .map_err(|error| format!("invalid extension worker pid: {error}"))?;
-    let worker_start_time_ticks = optional_env(WORKER_START_ENV)
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| format!("invalid extension worker start time: {error}"))
-        })
-        .transpose()?;
-    let lease_nonce = required_env(LEASE_NONCE_ENV)?;
-    let initial_expires_at_ms = required_env(LEASE_EXPIRES_ENV)?
-        .parse::<u64>()
-        .map_err(|error| format!("invalid extension lease deadline: {error}"))?;
-    if crate::agentd::grant::now_ms() > initial_expires_at_ms {
-        return Err("extension-host task lease expired before startup".to_string());
-    }
-    let extension_uid = required_env(EXTENSION_UID_ENV)?
-        .parse::<u32>()
-        .map_err(|error| format!("invalid extension execution uid: {error}"))?;
-    if extension_uid == 0
-        || extension_uid == worker_uid
-        || unsafe { libc::geteuid() } as u32 != extension_uid
-    {
-        return Err("extension host must run as its distinct leased uid".to_string());
-    }
-    let owner_gid = required_env(EXECUTION_GID_ENV)?
-        .parse::<u32>()
-        .map_err(|error| format!("invalid extension execution gid: {error}"))?;
+    let bootstrap = read_bootstrap()?;
+    let enforce_groups = bootstrap.enforce_groups;
+    let binding = bootstrap.into_current_binding()?;
     require_hardened_identity(
-        extension_uid,
-        owner_gid,
-        std::env::var(ENFORCE_GROUPS_ENV).as_deref() == Ok("1"),
+        binding.extension_uid,
+        binding.owner_gid,
+        enforce_groups,
     )?;
-    for key in [
-        TASK_ENV,
-        TASK_SESSION_ENV,
-        WORKER_UID_ENV,
-        WORKER_PID_ENV,
-        WORKER_START_ENV,
-        LEASE_NONCE_ENV,
-        LEASE_EXPIRES_ENV,
-        CONTROL_SOCKET_ENV,
-        ENFORCE_GROUPS_ENV,
-        EXECUTION_GID_ENV,
-        EXTENSION_UID_ENV,
-    ] {
-        std::env::remove_var(key);
-    }
+    let isolation = super::child_isolation::IsolationAuthority::from_binding(&binding)?;
+    let control_socket = PathBuf::from(&binding.control_socket);
 
     if let Some(parent) = control_socket.parent() {
         std::fs::create_dir_all(parent)
@@ -151,13 +105,15 @@ fn run() -> Result<(), String> {
             .map_err(|error| format!("protect extension control socket: {error}"))?;
 
         let state = Arc::new(HostState {
-            task_id,
-            session_id,
-            worker_uid,
-            owner_gid,
-            worker_pid,
-            worker_start_time_ticks,
-            lease_nonce,
+            task_id: binding.task_id.clone(),
+            session_id: binding.session_id.clone(),
+            worker_uid: binding.owner_uid,
+            owner_gid: binding.owner_gid,
+            worker_pid: binding.worker_pid,
+            worker_start_time_ticks: binding.worker_start_time_ticks,
+            lease_nonce: binding.lease_nonce.clone(),
+            binding,
+            isolation,
             recent: Mutex::new(VecDeque::new()),
             active: Mutex::new(HashMap::new()),
             mcp: tokio::sync::Mutex::new(HashMap::new()),
@@ -343,6 +299,7 @@ fn validate_request(
     if request.task_id != state.task_id
         || request.session_id != state.session_id
         || request.lease_nonce != state.lease_nonce
+        || request.binding_digest != state.binding.digest()?
     {
         return Err("extension-host request does not match this task lease".to_string());
     }
@@ -402,8 +359,16 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
                 .ok_or_else(|| format!("App `{app_id}` is not installed"))?;
             let data = crate::paths::user_data_dir().to_string_lossy().into_owned();
             let apps = apps_root.to_string_lossy().into_owned();
+            let isolation = state.isolation.clone();
             let output = tokio::task::spawn_blocking(move || {
-                crate::bridge::run_app(&app_dir, &command, &args, &data, &apps)
+                crate::bridge::run_app_with_isolation(
+                    &app_dir,
+                    &command,
+                    &args,
+                    &data,
+                    &apps,
+                    isolation,
+                )
             })
             .await
             .map_err(|error| format!("App host task failed: {error}"))??;
@@ -417,8 +382,11 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
         }
         HostAction::AppOpen { app_id } => {
             validate_name(&app_id, "App id")?;
-            let tool_count =
-                crate::agent::tools::cos_apps_session::host_open_session(&app_id).await?;
+            let tool_count = crate::agent::tools::cos_apps_session::host_open_session(
+                &app_id,
+                &state.isolation,
+            )
+            .await?;
             Ok(HostResult::AppOpened { tool_count })
         }
         HostAction::AppCall {
@@ -450,8 +418,17 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             server,
             tool,
             descriptor_digest,
+            audit,
             arguments,
-        } => call_mcp(&server, &tool, &descriptor_digest, arguments, &state).await,
+        } => call_mcp(
+            &server,
+            &tool,
+            &descriptor_digest,
+            &audit,
+            arguments,
+            &state,
+        )
+        .await,
         HostAction::McpDetach { server } => {
             validate_name(&server, "MCP server")?;
             let detached = state.mcp.lock().await.remove(&server).is_some();
@@ -485,7 +462,12 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
         }
     }
 
-    let handle = crate::agent::tools::mcp::integration::attach_server_local(&spec, None).await?;
+    let handle = crate::agent::tools::mcp::integration::attach_server_local(
+        &spec,
+        None,
+        Some(&state.isolation),
+    )
+    .await?;
     let tools = handle.descriptors().to_vec();
     state
         .mcp
@@ -499,6 +481,7 @@ async fn call_mcp(
     server: &str,
     tool: &str,
     descriptor_digest: &str,
+    audit: &super::protocol::McpInvocationAudit,
     arguments: Option<Value>,
     state: &HostState,
 ) -> Result<HostResult, String> {
@@ -510,6 +493,16 @@ async fn call_mcp(
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
     {
         return Err("MCP descriptor binding is invalid".to_string());
+    }
+    audit.validate()?;
+    let expected_policy_identity =
+        crate::agent::tools::mcp::descriptor::model_tool_name(server, tool)?;
+    if audit.server_identity != server
+        || audit.policy_identity != expected_policy_identity
+        || audit.descriptor_digest != descriptor_digest
+        || audit.capability_generation != state.binding.capability_generation
+    {
+        return Err("MCP invocation audit identity does not match the host lease".to_string());
     }
     let (client, timeout, expected_digest) = {
         let mcp = state.mcp.lock().await;
@@ -576,19 +569,29 @@ fn validate_args(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-fn required_env(key: &str) -> Result<String, String> {
-    std::env::var(key)
-        .ok()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| format!("{key} is required"))
-}
-
-fn optional_env(key: &str) -> Option<String> {
-    std::env::var(key).ok().filter(|value| !value.is_empty())
-}
-
-fn required_path(key: &str) -> Result<PathBuf, String> {
-    required_env(key).map(PathBuf::from)
+fn read_bootstrap() -> Result<HostBootstrap, String> {
+    let mut args = std::env::args();
+    let mut bootstrap_fd = None;
+    while let Some(arg) = args.next() {
+        if arg == "--bootstrap-fd" {
+            bootstrap_fd = args.next().and_then(|value| value.parse::<i32>().ok());
+            break;
+        }
+    }
+    let bootstrap_fd = bootstrap_fd
+        .filter(|fd| *fd >= 3)
+        .ok_or_else(|| "extension-host bootstrap descriptor argument is missing".to_string())?;
+    let mut file = unsafe { std::fs::File::from_raw_fd(bootstrap_fd) };
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(64 * 1024 + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read extension-host bootstrap: {error}"))?;
+    if bytes.is_empty() || bytes.len() > 64 * 1024 {
+        return Err("extension-host bootstrap is missing or oversized".to_string());
+    }
+    serde_json::from_slice(&bytes)
+        .map_err(|_| "extension-host bootstrap is not a valid typed record".to_string())
 }
 
 fn require_hardened_identity(uid: u32, gid: u32, enforce_groups: bool) -> Result<(), String> {

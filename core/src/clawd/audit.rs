@@ -216,7 +216,18 @@ pub fn record_extension_host_event(
         tracing::error!(%error, "failed to write extension-host audit record");
     }
     if let Some(session_id) = session_id {
-        record_extension_mutation(session_id, "host", action, "task-host", None, success);
+        record_extension_mutation(
+            session_id,
+            "host",
+            action,
+            "task-host",
+            None,
+            None,
+            None,
+            None,
+            None,
+            success,
+        );
     }
 }
 
@@ -322,6 +333,10 @@ pub fn record_worker_runtime(
             kind,
             action,
             extension_id,
+            binding_digest,
+            lease_digest,
+            stage,
+            mcp,
             manifest_digest,
             success,
             latency_ms,
@@ -336,6 +351,27 @@ pub fn record_worker_runtime(
                 kind: kind.as_str(),
                 action: action.as_str(),
                 extension_id: audit_policy::safe_identity(extension_id),
+                binding_digest: audit_policy::safe_reference(binding_digest),
+                lease_digest: audit_policy::safe_reference(lease_digest),
+                stage: stage.map(|stage| stage.as_str()),
+                policy_identity: mcp
+                    .as_ref()
+                    .map(|mcp| audit_policy::safe_identity(&mcp.policy_identity)),
+                server_identity: mcp
+                    .as_ref()
+                    .map(|mcp| audit_policy::safe_identity(&mcp.server_identity)),
+                handle_digest: mcp
+                    .as_ref()
+                    .map(|mcp| audit_policy::safe_reference(&mcp.handle_digest)),
+                descriptor_digest: mcp
+                    .as_ref()
+                    .map(|mcp| audit_policy::safe_reference(&mcp.descriptor_digest)),
+                capability_generation: mcp
+                    .as_ref()
+                    .map(|mcp| audit_policy::safe_reference(&mcp.capability_generation)),
+                untrusted_remote_name: mcp
+                    .as_ref()
+                    .map(|mcp| mcp.untrusted_remote_name.clone()),
                 manifest_digest: manifest_digest.as_deref().map(audit_policy::safe_reference),
                 success: *success,
                 latency_ms: *latency_ms,
@@ -347,6 +383,10 @@ pub fn record_worker_runtime(
                 kind.as_str(),
                 action.as_str(),
                 extension_id,
+                Some(binding_digest),
+                Some(lease_digest),
+                *stage,
+                mcp.as_ref(),
                 manifest_digest.as_deref(),
                 *success,
             );
@@ -522,6 +562,22 @@ struct WorkerExtensionAudit<'a> {
     kind: &'static str,
     action: &'static str,
     extension_id: String,
+    binding_digest: String,
+    lease_digest: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stage: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    server_identity: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    handle_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    descriptor_digest: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capability_generation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    untrusted_remote_name: Option<TextDigest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     manifest_digest: Option<String>,
     success: bool,
@@ -535,6 +591,10 @@ fn record_extension_mutation(
     kind: &str,
     action: &str,
     extension_id: &str,
+    binding_digest: Option<&str>,
+    lease_digest: Option<&str>,
+    stage: Option<crate::extension_host::protocol::AuditStage>,
+    mcp: Option<&crate::extension_host::protocol::McpInvocationAudit>,
     manifest_digest: Option<&str>,
     success: bool,
 ) {
@@ -549,6 +609,15 @@ fn record_extension_mutation(
         forward: json!({
             "kind": kind,
             "extension": audit_policy::safe_identity(extension_id),
+            "binding_digest": binding_digest.map(audit_policy::safe_reference),
+            "lease_digest": lease_digest.map(audit_policy::safe_reference),
+            "stage": stage.map(|stage| stage.as_str()),
+            "policy_identity": mcp.map(|mcp| audit_policy::safe_identity(&mcp.policy_identity)),
+            "server_identity": mcp.map(|mcp| audit_policy::safe_identity(&mcp.server_identity)),
+            "handle_digest": mcp.map(|mcp| audit_policy::safe_reference(&mcp.handle_digest)),
+            "descriptor_digest": mcp.map(|mcp| audit_policy::safe_reference(&mcp.descriptor_digest)),
+            "capability_generation": mcp.map(|mcp| audit_policy::safe_reference(&mcp.capability_generation)),
+            "untrusted_remote_name": mcp.map(|mcp| mcp.untrusted_remote_name.clone()),
             "manifest_digest": manifest_digest.map(audit_policy::safe_reference),
             "success": success,
         }),

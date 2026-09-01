@@ -189,6 +189,7 @@ async fn bring_up_app(
     app_dir: &Path,
     manifest: &Manifest,
     timeout_dur: Duration,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
 ) -> Result<
     (
         Arc<McpClient>,
@@ -269,7 +270,7 @@ async fn bring_up_app(
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
-    let mut command = build_command(manifest.runtime, &entry_abs, app_dir)?;
+    let mut command = build_command(manifest.runtime, &entry_abs, app_dir, isolation)?;
     let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
@@ -417,7 +418,12 @@ fn kill_and_reap_child(mut child: Child) {
     }
 }
 
-fn build_command(runtime: Runtime, entry: &Path, app_dir: &Path) -> Result<Command, String> {
+fn build_command(
+    runtime: Runtime,
+    entry: &Path,
+    app_dir: &Path,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+) -> Result<Command, String> {
     let runner = crate::bridge::app_runner_path();
     let mut args = vec![std::ffi::OsString::from("--")];
     match runtime {
@@ -446,8 +452,10 @@ fn build_command(runtime: Runtime, entry: &Path, app_dir: &Path) -> Result<Comma
         }
         Runtime::Binary => args.push(entry.as_os_str().to_os_string()),
     }
-    let launch = crate::extension_host::child_isolation::prepare(&runner, args, Some(app_dir))?;
+    let launch =
+        crate::extension_host::child_isolation::prepare(&runner, args, Some(app_dir), isolation)?;
     let mut command = Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(command.as_std_mut());
     command.env_clear().args(launch.args).envs(launch.env);
     Ok(command)
 }
@@ -478,7 +486,7 @@ async fn get_or_open(app_id: &str) -> Result<Arc<McpClient>, String> {
         table.remove(&key)
     };
     drop(stale);
-    open_session(app_id).await.map(|(c, _)| c)
+    open_session(app_id, None).await.map(|(c, _)| c)
 }
 
 struct ActiveCallGuard {
@@ -572,7 +580,10 @@ async fn begin_active_session_call(
 /// dropped immediately. We now take a *per-app* mutex across the
 /// whole probe-then-spawn-then-insert sequence so exactly one child
 /// is created per app per process.
-async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
+async fn open_session(
+    app_id: &str,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
+) -> Result<(Arc<McpClient>, usize), String> {
     if crate::paths::is_routed_job() {
         return Err(
             "App session execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
@@ -604,7 +615,7 @@ async fn open_session(app_id: &str) -> Result<(Arc<McpClient>, usize), String> {
     let manifest = Manifest::from_json(&manifest_text)
         .map_err(|e| format!("parse manifest for `{app_id}`: {e}"))?;
     let (client, child, listed, identity) =
-        bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT).await?;
+        bring_up_app(app_id, &app_dir, &manifest, DEFAULT_TIMEOUT, isolation).await?;
     let child_pid = child
         .id()
         .ok_or_else(|| format!("App session `{app_id}` lost its pid"))?;
@@ -1244,7 +1255,7 @@ impl Tool for CosAppSessionOpen {
         }
         let opened = match crate::extension_host::client::current() {
             Some(host) => host.open_app(app_id.clone()).await,
-            None => open_session(&app_id).await.map(|(_, count)| count),
+            None => open_session(&app_id, None).await.map(|(_, count)| count),
         };
         match opened {
             Ok(count) => {
@@ -1333,8 +1344,13 @@ impl Tool for CosAppSessionClose {
 
 /// Host-side entry point. The worker-facing tool never calls this in-process;
 /// `claw-extension-host` owns the dynamic server and invokes it here.
-pub(crate) async fn host_open_session(app_id: &str) -> Result<usize, String> {
-    open_session(app_id).await.map(|(_, count)| count)
+pub(crate) async fn host_open_session(
+    app_id: &str,
+    isolation: &crate::extension_host::child_isolation::IsolationAuthority,
+) -> Result<usize, String> {
+    open_session(app_id, Some(isolation))
+        .await
+        .map(|(_, count)| count)
 }
 
 /// Host-side call path. Arguments are revalidated against the installed

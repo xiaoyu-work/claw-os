@@ -34,7 +34,11 @@ fn main() {
         }
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
-    fail("process session was not bound before launch timeout");
+    fail(&format!(
+        "process session was not bound before launch timeout (session={}, proc_data={})",
+        isolated_session.as_deref().unwrap_or("<none>"),
+        std::env::var("COS_PROC_DATA_DIR").unwrap_or_else(|_| "<none>".to_string())
+    ));
 }
 
 #[cfg(not(unix))]

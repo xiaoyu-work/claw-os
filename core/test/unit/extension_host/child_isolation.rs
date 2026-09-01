@@ -1,10 +1,70 @@
 use super::*;
 
+fn test_authority(roots: &[&Path]) -> IsolationAuthority {
+    let approved_paths = roots
+        .iter()
+        .map(|root| {
+            let canonical = root.canonicalize().unwrap();
+            let metadata = fs::symlink_metadata(&canonical).unwrap();
+            ApprovedPath {
+                path: canonical.to_string_lossy().into_owned(),
+                device: metadata.dev(),
+                inode: metadata.ino(),
+                owner_uid: metadata.uid(),
+                mode: metadata.mode(),
+            }
+        })
+        .collect();
+    IsolationAuthority {
+        task_id: "test-task".to_string(),
+        session_id: Some("test-session".to_string()),
+        capability_generation: "a".repeat(16),
+        owner_uid: std::env::var("SUDO_UID")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| unsafe { libc::geteuid() as u32 }),
+        extension_uid: unsafe { libc::geteuid() as u32 },
+        execution_gid: 60_999,
+        approved_paths,
+    }
+}
+
+fn isolated_prepare(
+    program: impl AsRef<OsStr>,
+    initial_args: impl IntoIterator<Item = OsString>,
+    authorized_root: Option<&Path>,
+) -> Result<IsolatedLaunch, String> {
+    let mut roots = authorized_root.into_iter().collect::<Vec<_>>();
+    let sdk = std::env::var_os("COS_SDK_PYTHON_DIR").map(PathBuf::from);
+    if let Some(sdk) = sdk.as_deref() {
+        roots.push(sdk);
+    }
+    let authority = test_authority(&roots);
+    prepare(program, initial_args, authorized_root, Some(&authority))
+}
+
+fn isolated_prepare_clean(
+    program: impl AsRef<OsStr>,
+    initial_args: impl IntoIterator<Item = OsString>,
+    authorized_root: Option<&Path>,
+    inner_env: Vec<(OsString, OsString)>,
+) -> Result<IsolatedLaunch, String> {
+    let roots = authorized_root.into_iter().collect::<Vec<_>>();
+    let authority = test_authority(&roots);
+    prepare_with_clean_env(
+        program,
+        initial_args,
+        authorized_root,
+        inner_env,
+        Some(&authority),
+    )
+}
+
 #[test]
 fn disabled_child_isolation_preserves_the_original_command() {
     let _lock = crate::test_env::lock_env();
     let _guard = crate::test_env::TestEnvVarGuard::remove(ENABLE_ENV);
-    let launch = prepare("python3", vec![OsString::from("-V")], None).unwrap();
+    let launch = isolated_prepare("python3", vec![OsString::from("-V")], None).unwrap();
     assert_eq!(launch.program, "python3");
     assert_eq!(launch.args, vec![OsString::from("-V")]);
 }
@@ -18,7 +78,7 @@ fn configured_inner_environment_rejects_loader_and_malformed_keys() {
         "bad-key",
         "9BAD",
     ] {
-        let error = prepare_with_clean_env(
+        let error = isolated_prepare_clean(
             "true",
             Vec::<OsString>::new(),
             None,
@@ -37,7 +97,7 @@ fn isolated_clean_environment_is_installed_after_bwrap_starts() {
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let launch = prepare_with_clean_env(
+    let launch = isolated_prepare_clean(
         "true",
         Vec::<OsString>::new(),
         None,
@@ -55,6 +115,72 @@ fn isolated_clean_environment_is_installed_after_bwrap_starts() {
 }
 
 #[test]
+fn typed_authority_is_mandatory_and_identity_environment_is_ignored() {
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _spoofed_uid =
+        crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_WORKER_UID", "61000");
+    let _spoofed_gid =
+        crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_EXECUTION_GID", "1");
+    let error = prepare("true", Vec::<OsString>::new(), None, None).unwrap_err();
+    assert!(error.contains("typed runtime authority"), "{error}");
+}
+
+#[test]
+fn arbitrary_srv_is_not_an_approved_extension_root() {
+    if !Path::new("/srv").is_dir() {
+        return;
+    }
+    let authority = test_authority(&[]);
+    let error = authority.authorize_root(Path::new("/srv")).unwrap_err();
+    assert!(error.contains("outside broker-approved"), "{error}");
+}
+
+#[test]
+fn reserved_uid_and_execution_gid_objects_are_rejected_from_owner_snapshots() {
+    use std::os::unix::ffi::OsStrExt;
+
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    for (uid, gid) in [(EXTENSION_UID_START, 0), (0, 60_999)] {
+        let _lock = crate::test_env::lock_env();
+        let home = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let sentinel = source.path().join("sentinel");
+        fs::write(&sentinel, b"secret").unwrap();
+        let raw = std::ffi::CString::new(sentinel.as_os_str().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::chown(raw.as_ptr(), uid, gid) }, 0);
+        let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+        let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+        let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+        let _broker =
+            crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+        let error = isolated_prepare(
+            "python3",
+            vec!["-c".into(), "print('should-not-run')".into()],
+            Some(source.path()),
+        )
+        .unwrap_err();
+        assert!(error.contains("unsafe ownership or mode"), "{uid}:{gid}: {error}");
+    }
+}
+
+#[test]
+fn broker_approved_path_inode_substitution_is_rejected() {
+    let parent = tempfile::tempdir().unwrap();
+    let approved = parent.path().join("approved");
+    fs::create_dir(&approved).unwrap();
+    let authority = test_authority(&[&approved]);
+    fs::rename(&approved, parent.path().join("old")).unwrap();
+    fs::create_dir(&approved).unwrap();
+    let error = authority.authorize_root(&approved).unwrap_err();
+    assert!(error.contains("identity changed"), "{error}");
+}
+
+#[test]
 fn isolated_child_gets_private_proc_and_an_empty_allowlisted_root() {
     let _lock = crate::test_env::lock_env();
     let home = tempfile::tempdir().unwrap();
@@ -65,7 +191,7 @@ fn isolated_child_gets_private_proc_and_an_empty_allowlisted_root() {
         crate::test_env::TestEnvVarGuard::set("HOME", home.path().to_string_lossy().as_ref());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let launch = prepare(
+    let launch = isolated_prepare(
         "python3",
         vec![OsString::from(source.path().join("tool.py"))],
         Some(source.path()),
@@ -111,7 +237,7 @@ fn authorized_snapshot_rejects_symlinks() {
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
     assert!(
-        prepare("python3", Vec::<OsString>::new(), Some(source.path()))
+        isolated_prepare("python3", Vec::<OsString>::new(), Some(source.path()))
             .unwrap_err()
             .contains("symlink")
     );
@@ -168,7 +294,7 @@ fn hostile_siblings_get_private_proc_and_cannot_see_host_mounts() {
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
     let first_script = "import os,time; print(os.getpid(), flush=True); time.sleep(30)";
-    let first_launch = prepare(
+    let first_launch = isolated_prepare(
         "python3",
         vec![OsString::from("-c"), OsString::from(first_script)],
         None,
@@ -217,7 +343,7 @@ print(json.dumps({{'seen':seen,'signalled':signalled,'root':readable({root:?}),'
         root = sentinel.to_string_lossy(),
         mounted = mounted_sentinel.to_string_lossy(),
     );
-    let second_launch = prepare(
+    let second_launch = isolated_prepare(
         "python3",
         vec![OsString::from("-c"), OsString::from(probe)],
         None,
@@ -273,7 +399,7 @@ fn authorized_snapshot_script_still_executes() {
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let launch = prepare(
+    let launch = isolated_prepare(
         "python3",
         vec![script.as_os_str().to_os_string()],
         Some(source.path()),
@@ -309,7 +435,8 @@ fn verified_private_script_executes_with_pinned_interpreter() {
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let launch = prepare(&script, Vec::<OsString>::new(), Some(source.path())).unwrap();
+    let launch =
+        isolated_prepare(&script, Vec::<OsString>::new(), Some(source.path())).unwrap();
     let output = std::process::Command::new(launch.program)
         .env_clear()
         .args(launch.args)
@@ -338,7 +465,7 @@ fn authorized_sdk_snapshot_remains_importable() {
     let _sdk = crate::test_env::TestEnvVarGuard::set("COS_SDK_PYTHON_DIR", sdk.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
-    let launch = prepare(
+    let launch = isolated_prepare(
         "python3",
         vec![
             "-c".into(),
@@ -374,15 +501,15 @@ fn missing_custom_script_interpreter_fails_closed() {
     let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     assert!(
-        prepare(&script, Vec::<OsString>::new(), Some(source.path()))
+        isolated_prepare(&script, Vec::<OsString>::new(), Some(source.path()))
             .unwrap_err()
             .contains("interpreter")
     );
 }
 
 #[test]
-fn private_network_blocks_host_loopback() {
-    use std::net::TcpListener;
+fn private_network_blocks_host_and_sibling_endpoints() {
+    use std::net::{TcpListener, UdpSocket};
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::net::{SocketAddr, UnixListener};
 
@@ -393,9 +520,22 @@ fn private_network_blocks_host_loopback() {
     let home = tempfile::tempdir().unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
+    let ipv6 = TcpListener::bind("[::1]:0").ok();
+    let ipv6_port = ipv6
+        .as_ref()
+        .map(|listener| listener.local_addr().unwrap().port())
+        .unwrap_or(0);
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    udp.set_read_timeout(Some(std::time::Duration::from_millis(250)))
+        .unwrap();
+    let udp_port = udp.local_addr().unwrap().port();
     let abstract_name = format!("cos-isolation-{}", uuid::Uuid::new_v4().simple());
     let abstract_address = SocketAddr::from_abstract_name(abstract_name.as_bytes()).unwrap();
     let _abstract_listener = UnixListener::bind_addr(&abstract_address).unwrap();
+    let unix_dir = tempfile::tempdir().unwrap();
+    let unix_path = unix_dir.path().join("sibling.sock");
+    let _unix_listener = UnixListener::bind(&unix_path).unwrap();
+    let host_namespace = fs::read_link("/proc/self/ns/net").unwrap();
     let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
     let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
@@ -410,14 +550,39 @@ def blocked(family, address):
         return False
     except OSError:
         return True
+def udp_blocked(address):
+    try:
+        s=socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(address)
+        s.send(b"x")
+        return False
+    except OSError:
+        return True
+try:
+    netlink=socket.socket(socket.AF_NETLINK, socket.SOCK_RAW, 0)
+    netlink.bind((0,0))
+    netlink_pid=netlink.getsockname()[0]
+except OSError:
+    netlink_pid=-1
+interfaces=[]
+with open("/proc/net/dev") as f:
+    for line in f.readlines()[2:]:
+        interfaces.append(line.split(":",1)[0].strip())
 print(json.dumps({{
   "loopback": blocked(socket.AF_INET, ("127.0.0.1", {port})),
   "internet": blocked(socket.AF_INET, ("1.1.1.1", 53)),
+  "ipv6_loopback": blocked(socket.AF_INET6, ("::1", {ipv6_port})) if {ipv6_port} else True,
+  "ipv6_internet": blocked(socket.AF_INET6, ("2606:4700:4700::1111", 53)),
+  "udp": udp_blocked(("127.0.0.1", {udp_port})),
+  "unix": blocked(socket.AF_UNIX, {unix_path:?}),
   "abstract": blocked(socket.AF_UNIX, "\0{abstract_name}"),
+  "netlink_pid": netlink_pid,
+  "interfaces": interfaces,
+  "namespace": __import__("os").readlink("/proc/self/ns/net"),
 }}))
 "#
     );
-    let launch = prepare("python3", vec!["-c".into(), script.into()], None).unwrap();
+    let launch = isolated_prepare("python3", vec!["-c".into(), script.into()], None).unwrap();
     let output = std::process::Command::new(launch.program)
         .env_clear()
         .args(launch.args)
@@ -432,7 +597,154 @@ print(json.dumps({{
     let result: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["loopback"], true);
     assert_eq!(result["internet"], true);
+    assert_eq!(result["ipv6_loopback"], true);
+    assert_eq!(result["ipv6_internet"], true);
+    assert_eq!(result["unix"], true);
     assert_eq!(result["abstract"], true);
+    assert!(result["netlink_pid"].as_i64().unwrap_or(-1) >= 0);
+    assert_eq!(result["interfaces"], serde_json::json!(["lo"]));
+    assert_ne!(
+        result["namespace"].as_str().unwrap(),
+        host_namespace.to_string_lossy()
+    );
+    let mut datagram = [0u8; 1];
+    assert!(udp.recv(&mut datagram).is_err());
+}
+
+#[test]
+fn inherited_connected_socket_is_closed_before_bwrap_exec() {
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::os::fd::AsRawFd;
+    use std::time::Duration;
+
+    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let mut inherited = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut peer, _) = listener.accept().unwrap();
+    inherited.set_nonblocking(false).unwrap();
+    peer.set_read_timeout(Some(Duration::from_millis(250))).unwrap();
+    let fd = inherited.as_raw_fd();
+    let listener_fd = listener.as_raw_fd();
+    assert_eq!(unsafe { libc::fcntl(fd, libc::F_SETFD, 0) }, 0);
+    assert_eq!(unsafe { libc::fcntl(listener_fd, libc::F_SETFD, 0) }, 0);
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let script = format!(
+        "import json,os\nresult=[]\nfor fd in [{fd},{listener_fd}]:\n try:\n  os.fstat(fd); result.append('open')\n except OSError:\n  result.append('closed')\nprint(json.dumps(result))"
+    );
+    let launch = isolated_prepare("python3", vec!["-c".into(), script.into()], None).unwrap();
+    let mut command = std::process::Command::new(launch.program);
+    close_unallowlisted_fds(&mut command);
+    let output = command
+        .env_clear()
+        .args(launch.args)
+        .envs(launch.env)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap(),
+        serde_json::json!(["closed", "closed"])
+    );
+    let mut byte = [0u8; 1];
+    assert!(peer.read(&mut byte).is_err());
+    inherited.write_all(b"x").unwrap();
+}
+
+#[test]
+fn isolated_siblings_cannot_reach_each_others_network_endpoints() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let abstract_name = format!("cos-sibling-{}", uuid::Uuid::new_v4().simple());
+    let _enabled = crate::test_env::TestEnvVarGuard::set(ENABLE_ENV, "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let first_script = format!(
+        r#"import json,socket,time
+t=socket.socket(); t.bind(("0.0.0.0",0)); t.listen()
+u=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); u.bind(("0.0.0.0",0))
+a=socket.socket(socket.AF_UNIX); a.bind("\0{abstract_name}"); a.listen()
+print(json.dumps({{"tcp":t.getsockname()[1],"udp":u.getsockname()[1]}}),flush=True)
+u.settimeout(3)
+try:
+ u.recv(1); received=True
+except OSError:
+ received=False
+print(json.dumps({{"udp_received":received}}),flush=True)
+time.sleep(30)
+"#
+    );
+    let first_launch =
+        isolated_prepare("python3", vec!["-c".into(), first_script.into()], None).unwrap();
+    let mut first_command = std::process::Command::new(first_launch.program);
+    close_unallowlisted_fds(&mut first_command);
+    let mut first = first_command
+        .env_clear()
+        .args(first_launch.args)
+        .envs(first_launch.env)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut first_stdout = BufReader::new(first.stdout.take().unwrap());
+    let mut line = String::new();
+    first_stdout.read_line(&mut line).unwrap();
+    let endpoints: serde_json::Value = serde_json::from_str(&line).unwrap();
+    let second_script = format!(
+        r#"import json,socket
+def tcp():
+ try:
+  s=socket.socket(); s.settimeout(.2); s.connect(("127.0.0.1",{tcp})); return False
+ except OSError: return True
+def udp():
+ try:
+  s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM); s.connect(("127.0.0.1",{udp})); s.send(b"x"); return False
+ except OSError: return True
+def abstract():
+ try:
+  s=socket.socket(socket.AF_UNIX); s.connect("\0{abstract_name}"); return False
+ except OSError: return True
+print(json.dumps({{"tcp":tcp(),"udp":udp(),"abstract":abstract()}}))
+"#,
+        tcp = endpoints["tcp"].as_u64().unwrap(),
+        udp = endpoints["udp"].as_u64().unwrap(),
+    );
+    let second_launch =
+        isolated_prepare("python3", vec!["-c".into(), second_script.into()], None).unwrap();
+    let mut second_command = std::process::Command::new(second_launch.program);
+    close_unallowlisted_fds(&mut second_command);
+    let output = second_command
+        .env_clear()
+        .args(second_launch.args)
+        .envs(second_launch.env)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let result = serde_json::from_slice::<serde_json::Value>(&output.stdout).unwrap();
+    assert_eq!(result["tcp"], true);
+    assert_eq!(result["abstract"], true);
+    let mut udp_result = String::new();
+    first_stdout.read_line(&mut udp_result).unwrap();
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&udp_result).unwrap()["udp_received"],
+        false
+    );
+    let _ = first.kill();
+    let _ = first.wait();
 }
 
 #[test]
@@ -444,6 +756,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
     }
     let source = tempfile::tempdir().unwrap();
     let output = tempfile::tempdir().unwrap();
+    let authority = test_authority(&[source.path()]);
     let unsafe_file = source.path().join("unsafe");
     fs::write(&unsafe_file, b"x").unwrap();
     let raw = std::ffi::CString::new(unsafe_file.as_os_str().as_bytes()).unwrap();
@@ -457,6 +770,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
         &output.path().join("reserved"),
         Path::new("/usr/share/test-runtime"),
         &mut args,
+        &authority,
     )
     .unwrap_err()
     .contains("unsafe ownership"));
@@ -468,6 +782,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
         &output.path().join("writable"),
         Path::new("/usr/share/test-runtime"),
         &mut Vec::new(),
+        &authority,
     )
     .unwrap_err()
     .contains("unsafe ownership"));
@@ -493,6 +808,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
         &output.path().join("mount"),
         Path::new("/usr/share/test-runtime"),
         &mut Vec::new(),
+        &authority,
     )
     .unwrap_err();
     assert!(error.contains("crosses a mount"), "{error}");
@@ -506,6 +822,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
         &filtered,
         Path::new("/usr/share/test-runtime"),
         &mut Vec::new(),
+        &authority,
     )
     .unwrap();
     assert!(!filtered.join("escape").exists());
@@ -519,6 +836,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
         &output.path().join("local"),
         Path::new("/usr/local"),
         &mut Vec::new(),
+        &authority,
     )
     .unwrap_err()
     .contains("forbidden"));
@@ -540,7 +858,7 @@ fn exact_broker_socket_remains_reachable_inside_the_empty_root() {
     let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
     let _broker = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_BROKER_SOCKET", &socket);
     let script = "import os,socket; s=socket.socket(socket.AF_UNIX); s.connect(os.environ['COS_EXTENSION_BROKER_SOCKET']); s.send(b'ok')";
-    let launch = prepare(
+    let launch = isolated_prepare(
         "python3",
         vec![OsString::from("-c"), OsString::from(script)],
         None,

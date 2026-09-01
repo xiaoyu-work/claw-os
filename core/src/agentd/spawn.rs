@@ -670,6 +670,7 @@ pub(crate) fn mark_inherited_descriptors_cloexec(first: RawFd) {
         if rc == 0 {
             return;
         }
+
     }
     let mut fd = first;
     while fd < 4096 {
@@ -677,6 +678,21 @@ pub(crate) fn mark_inherited_descriptors_cloexec(first: RawFd) {
         if flags >= 0 {
             unsafe {
                 libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+            }
+        }
+        fd += 1;
+    }
+}
+
+pub(crate) fn mark_inherited_descriptors_cloexec_except(first: RawFd, preserve: RawFd) {
+    let mut fd = first;
+    while fd < 4096 {
+        if fd != preserve {
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags >= 0 {
+                unsafe {
+                    libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC);
+                }
             }
         }
         fd += 1;

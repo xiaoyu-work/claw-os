@@ -47,6 +47,10 @@ use crate::agent::tools::exposure::{ToolExposure, ToolExposureContext, ToolTrans
 use crate::agent::tools::registry::ToolRegistry;
 use crate::agent::tools::{Tool, ToolResult};
 
+tokio::task_local! {
+    static MCP_INVOCATION_AUDIT: crate::extension_host::protocol::McpInvocationAudit;
+}
+
 /// Configuration for one MCP server the agent should attach to.
 ///
 /// The lifetime of this struct is the agent's config lifetime — it is
@@ -237,6 +241,7 @@ impl DisclosureBinding {
 struct DisclosureEntry {
     descriptor: ToolDescriptor,
     internal_name: String,
+    audit: crate::extension_host::protocol::McpInvocationAudit,
 }
 
 pub(crate) struct McpDisclosureState {
@@ -264,9 +269,14 @@ impl McpDisclosureState {
         self.policy_registry
             .lock()
             .map_err(|_| "MCP policy registry is poisoned".to_string())?
-            .register_unique(tool)
+            .register_unique(tool.clone())
             .map_err(|_| "MCP internal policy identity collision".to_string())?;
         let handle = uuid::Uuid::new_v4().simple().to_string();
+        let audit = tool.audit_identity(
+            &handle,
+            &descriptor.name,
+            &self.binding.capability_generation,
+        )?;
         let mut entries = self
             .entries
             .lock()
@@ -279,6 +289,7 @@ impl McpDisclosureState {
             DisclosureEntry {
                 descriptor,
                 internal_name,
+                audit,
             },
         );
         Ok(())
@@ -301,6 +312,35 @@ struct McpInvokeTool {
 }
 
 impl McpRemoteTool {
+    fn audit_identity(
+        &self,
+        handle: &str,
+        remote_name: &str,
+        capability_generation: &str,
+    ) -> Result<crate::extension_host::protocol::McpInvocationAudit, String> {
+        let (server_identity, descriptor_digest) = match &self.backend {
+            McpToolBackend::Local {
+                server,
+                descriptor_digest,
+                ..
+            }
+            | McpToolBackend::Hosted {
+                server,
+                descriptor_digest,
+            } => (server.clone(), descriptor_digest.clone()),
+        };
+        let audit = crate::extension_host::protocol::McpInvocationAudit {
+            policy_identity: self.name.clone(),
+            server_identity,
+            handle_digest: crate::crypto::sha256_hex(handle.as_bytes()),
+            descriptor_digest,
+            capability_generation: capability_generation.to_string(),
+            untrusted_remote_name: crate::audit_policy::text_digest(remote_name),
+        };
+        audit.validate()?;
+        Ok(audit)
+    }
+
     fn new(
         prefix: &str,
         descriptor: ToolDescriptor,
@@ -425,6 +465,14 @@ impl Tool for McpRemoteTool {
                 server,
                 descriptor_digest,
             } => {
+                let audit = match MCP_INVOCATION_AUDIT.try_with(Clone::clone) {
+                    Ok(audit) => audit,
+                    Err(_) => {
+                        return ToolResult::err(
+                            "hosted MCP invocation omitted its immutable audit identity",
+                        )
+                    }
+                };
                 let Some(client) = crate::extension_host::client::current() else {
                     return ToolResult::err("the task extension host is unavailable");
                 };
@@ -435,6 +483,7 @@ impl Tool for McpRemoteTool {
                         descriptor_digest.clone(),
                         arguments,
                         self.timeout,
+                        audit,
                     )
                     .await
             }
@@ -549,11 +598,13 @@ impl Tool for McpInvokeTool {
         {
             return ToolResult::err("invalid MCP invocation handle");
         }
-        let internal_name = match self.state.entries.lock() {
-            Ok(entries) => entries.get(handle).map(|entry| entry.internal_name.clone()),
+        let resolved = match self.state.entries.lock() {
+            Ok(entries) => entries
+                .get(handle)
+                .map(|entry| (entry.internal_name.clone(), entry.audit.clone())),
             Err(_) => return ToolResult::err("MCP disclosure registry is unavailable"),
         };
-        let Some(internal_name) = internal_name else {
+        let Some((internal_name, audit)) = resolved else {
             return ToolResult::err("unknown or expired MCP invocation handle");
         };
         let arguments = input.get("arguments").cloned().unwrap_or(Value::Null);
@@ -561,14 +612,30 @@ impl Tool for McpInvokeTool {
             Ok(registry) => registry.clone(),
             Err(_) => return ToolResult::err("MCP policy registry is unavailable"),
         };
-        policy
-            .execute(
-                &context,
-                &internal_name,
-                arguments,
-                "opaque MCP capability invocation",
+        let result = MCP_INVOCATION_AUDIT
+            .scope(
+                audit.clone(),
+                policy.execute_with_approval_input(
+                    &context,
+                    &internal_name,
+                    arguments,
+                    json!({
+                        "opaque_handle_digest": audit.handle_digest.clone(),
+                        "descriptor_digest": audit.descriptor_digest.clone(),
+                        "capability_generation": audit.capability_generation.clone(),
+                    }),
+                    "opaque MCP capability invocation",
+                ),
             )
-            .await
+            .await;
+        if let Some(client) = crate::extension_host::client::current() {
+            client.emit_mcp_gateway(
+                &audit,
+                !result.is_error,
+                result.is_error.then_some(result.content.as_str()),
+            );
+        }
+        result
     }
 }
 
@@ -736,7 +803,7 @@ async fn attach_server_into(
                 .to_string(),
         );
     }
-    attach_server_local(spec, disclosure).await
+    attach_server_local(spec, disclosure, None).await
 }
 
 pub async fn attach_server(
@@ -753,6 +820,7 @@ pub async fn attach_server(
 pub(crate) async fn attach_server_local(
     spec: &McpServerSpec,
     disclosure: Option<&Arc<McpDisclosureState>>,
+    isolation: Option<&crate::extension_host::child_isolation::IsolationAuthority>,
 ) -> Result<McpServerHandle, String> {
     if crate::paths::is_routed_job() {
         return Err(
@@ -828,9 +896,11 @@ pub(crate) async fn attach_server_local(
         initial_args,
         authorized_root.as_deref(),
         inner_env,
+        isolation,
     )?;
     let isolated = launch.isolated;
     let mut command = tokio::process::Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(command.as_std_mut());
     command.env_clear();
     command.args(launch.args).envs(launch.env);
     if !isolated {
