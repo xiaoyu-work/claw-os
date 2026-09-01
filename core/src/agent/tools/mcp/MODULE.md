@@ -11,11 +11,12 @@ transports, discovery, and tool-registry integration.
 - Attach configured or discovered stdio/remote servers.
 - Route attachment and calls through `claw-extension-host` for supervised
   tasks; direct CLI/web processes retain the local client path.
-- Prefix and register remote tools in the guarded registry.
-- Normalize remote names to bounded provider-safe identifiers, replace remote
-  descriptions with neutral local text, and recursively strip descriptions,
-  titles, comments, examples, defaults, extension annotations, references, and
-  every non-allowlisted JSON Schema field before model projection.
+- Register only the fixed locally-authored `mcp_catalog` and `mcp_invoke`
+  progressive-disclosure gateways. Remote names and argument-property names
+  are never `llm::Tool` names or schema keys.
+- Return remote names and sanitized structural schemas only inside the
+  standard untrusted-data envelope, paired with opaque random invocation
+  handles.
 - Bind calls to a canonical digest of the sanitized descriptor set and relist
   before execution; structural drift requires a new authorized attachment.
 - Expose only the external client's session-projected local tools and repeat
@@ -39,6 +40,9 @@ transports, discovery, and tool-registry integration.
 MCP attachment is optional and must not prevent the agent from starting.
 Remote tool descriptors/results remain untrusted and pass through the normal
 registry, session exposure, capability, and prompt-injection boundaries.
+Handles are bound to owner, authority session, task, capability generation,
+server, and descriptor digest; reconnect, guessing, drift, and cross-session
+replay fail closed.
 Descriptor schemas are size/depth/node bounded and retain only structural
 object/property/required/item/combinator/cardinality constraints. `$ref` and
 logical reference cycles fail closed.

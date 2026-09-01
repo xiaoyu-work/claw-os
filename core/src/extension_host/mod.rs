@@ -8,6 +8,7 @@
 
 #[cfg(unix)]
 pub mod broker;
+pub(crate) mod child_isolation;
 #[cfg(unix)]
 pub mod client;
 #[cfg(unix)]

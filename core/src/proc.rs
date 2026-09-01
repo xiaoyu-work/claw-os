@@ -263,6 +263,13 @@ pub(crate) fn session_info_by_id(session_id: &str) -> Option<SessionInfo> {
         .find(|session| session.session_id == session_id)
 }
 
+#[doc(hidden)]
+pub fn session_id_is_bound_for_app(session_id: &str, expected_app_id: Option<&str>) -> bool {
+    session_info_by_id(session_id).is_some_and(|session| {
+        !session.pending_bind && session.app_id.as_deref() == expected_app_id
+    })
+}
+
 /// Snapshot every row in the registry resolved for the currently
 /// active owner/home override.
 ///

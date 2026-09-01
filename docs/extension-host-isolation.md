@@ -60,6 +60,16 @@ The host launch applies:
   and `pidfd_getfd`;
 - `PR_SET_DUMPABLE=0` at the first worker/host application entry point.
 
+Every App and stdio MCP child then enters its own bubblewrap PID/mount
+namespaces. `/proc` contains only that child namespace, the root is an empty
+tmpfs, and only verified read-only system runtime files, a read-only snapshot
+of explicitly authorized extension code, exact broker/session endpoints, and
+private writable state/tmp paths are mounted. Host homes, arbitrary `/var`,
+`/mnt`, `/media`, extra mounts, and numeric-UID orphan files are unreachable.
+The trusted app runner waits for the root-maintained session bind and reapplies
+non-dumpability immediately before final exec; isolation does not rely on
+dumpability surviving exec.
+
 Runtime path setup is descriptor-relative. The runtime, per-owner, and task
 directories stay root-owned and non-writable. `openat2` rejects symlinks,
 magic links, and path escape; creation, metadata changes, stale-tree removal,
@@ -140,13 +150,12 @@ task completion -> shutdown -> proxy/session revocation
 App/MCP identity, manifest/config digest, calls, outcomes, timeout/crash/cancel,
 and host attach/detach are projected into the broker audit trail. App session
 grant issuance records the exact delegated capability set. Relevant lifecycle
-events are also appended to durable session mutations. MCP names are
-provider-safe normalized identifiers; server descriptions are replaced with
-neutral local text, and schemas retain only a bounded structural subset after
-recursive removal of annotations, extension content, and references. Calls
-carry the canonical sanitized descriptor-set digest and fail closed if a
-relist changes it. Stdout/stderr-derived errors and tool results remain
-untrusted and are wrapped before entering model context.
+events are also appended to durable session mutations. The model sees only
+fixed local `mcp_catalog` and `mcp_invoke` descriptors. Remote names and
+argument-property names are disclosed inside wrapped untrusted data with
+opaque owner/session/task/generation-bound handles; calls carry the canonical
+sanitized descriptor-set digest and fail closed on drift or replay.
+Stdout/stderr-derived errors and tool results remain untrusted and wrapped.
 
 ## Configuration
 

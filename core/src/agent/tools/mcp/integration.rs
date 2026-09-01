@@ -27,14 +27,14 @@
 //! struct fields in declaration order, so the field ordering in
 //! [`McpServerHandle`] is load-bearing.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Child;
 use tokio::time::timeout;
@@ -43,7 +43,7 @@ use super::client::{ClientError, McpClient};
 use super::descriptor::{model_tool_name, sanitize_descriptor_set, NEUTRAL_DESCRIPTION};
 use super::protocol::{ClientCapabilities, Implementation, ToolDescriptor, PROTOCOL_VERSION};
 use super::transport::StdioTransport;
-use crate::agent::tools::exposure::{ToolExposure, ToolTransport};
+use crate::agent::tools::exposure::{ToolExposure, ToolExposureContext, ToolTransport};
 use crate::agent::tools::registry::ToolRegistry;
 use crate::agent::tools::{Tool, ToolResult};
 
@@ -208,6 +208,79 @@ enum McpToolBackend {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DisclosureBinding {
+    owner_uid: u32,
+    authority_session_id: String,
+    task_id: Option<String>,
+    capability_generation: String,
+}
+
+impl DisclosureBinding {
+    fn from_context(context: &ToolExposureContext) -> Self {
+        Self {
+            owner_uid: context.owner_uid(),
+            authority_session_id: context.authority_session_id().to_string(),
+            task_id: context.task_id().map(str::to_string),
+            capability_generation: context.capability_generation().to_string(),
+        }
+    }
+
+    fn matches(&self, context: &ToolExposureContext) -> bool {
+        self.owner_uid == context.owner_uid()
+            && self.authority_session_id == context.authority_session_id()
+            && self.task_id.as_deref() == context.task_id()
+            && self.capability_generation == context.capability_generation()
+    }
+}
+
+struct DisclosureEntry {
+    descriptor: ToolDescriptor,
+    tool: Arc<McpRemoteTool>,
+}
+
+pub(crate) struct McpDisclosureState {
+    binding: DisclosureBinding,
+    entries: Mutex<BTreeMap<String, DisclosureEntry>>,
+}
+
+impl McpDisclosureState {
+    fn new(context: &ToolExposureContext) -> Arc<Self> {
+        Arc::new(Self {
+            binding: DisclosureBinding::from_context(context),
+            entries: Mutex::new(BTreeMap::new()),
+        })
+    }
+
+    fn insert(&self, descriptor: ToolDescriptor, tool: Arc<McpRemoteTool>) -> Result<(), String> {
+        let handle = uuid::Uuid::new_v4().simple().to_string();
+        let mut entries = self
+            .entries
+            .lock()
+            .map_err(|_| "MCP disclosure registry is poisoned".to_string())?;
+        if entries.contains_key(&handle) {
+            return Err("MCP disclosure handle collision".to_string());
+        }
+        entries.insert(handle, DisclosureEntry { descriptor, tool });
+        Ok(())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.entries
+            .lock()
+            .map(|entries| entries.is_empty())
+            .unwrap_or(true)
+    }
+}
+
+struct McpCatalogTool {
+    state: Arc<McpDisclosureState>,
+}
+
+struct McpInvokeTool {
+    state: Arc<McpDisclosureState>,
+}
+
 impl McpRemoteTool {
     fn new(
         prefix: &str,
@@ -357,18 +430,128 @@ impl Tool for McpRemoteTool {
     }
 }
 
-fn ensure_registry_names_available(
-    registry: &ToolRegistry,
-    server: &str,
-    descriptors: &[ToolDescriptor],
-) -> Result<(), String> {
-    for descriptor in descriptors {
-        let name = model_tool_name(server, &descriptor.name)?;
-        if registry.descriptor_unfiltered(&name).is_some() {
-            return Err("MCP tool name collides with an existing registered tool".to_string());
-        }
+#[async_trait]
+impl Tool for McpCatalogTool {
+    fn name(&self) -> &str {
+        "mcp_catalog"
     }
-    Ok(())
+
+    fn description(&self) -> &str {
+        "List configured MCP capabilities as untrusted data with opaque invocation handles."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+
+    async fn exec(&self, _input: Value) -> ToolResult {
+        let Some(context) = crate::agent::tools::exposure::current() else {
+            return ToolResult::err("MCP catalog requires an execution context");
+        };
+        if !self.state.binding.matches(&context) {
+            return ToolResult::err("MCP catalog binding does not match this session");
+        }
+        let catalog = match self.state.entries.lock() {
+            Ok(entries) => entries
+                .iter()
+                .map(|(handle, entry)| {
+                    json!({
+                        "handle": handle,
+                        "name": entry.descriptor.name,
+                        "input_schema": entry.descriptor.input_schema,
+                    })
+                })
+                .collect::<Vec<_>>(),
+            Err(_) => return ToolResult::err("MCP disclosure registry is unavailable"),
+        };
+        let payload = match serde_json::to_string(&json!({"tools": catalog})) {
+            Ok(payload) => payload,
+            Err(_) => return ToolResult::err("MCP catalog encoding failed"),
+        };
+        ToolResult::ok(crate::agent::safety::untrusted::wrap_untrusted(
+            crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+            &payload,
+        ))
+    }
+}
+
+#[async_trait]
+impl Tool for McpInvokeTool {
+    fn name(&self) -> &str {
+        "mcp_invoke"
+    }
+
+    fn description(&self) -> &str {
+        "Invoke one previously disclosed MCP capability using its opaque handle."
+    }
+
+    fn input_schema(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "handle": {
+                    "type": "string",
+                    "minLength": 32,
+                    "maxLength": 32
+                },
+                "arguments": {
+                    "type": ["object", "null"],
+                    "additionalProperties": true
+                }
+            },
+            "required": ["handle"],
+            "additionalProperties": false
+        })
+    }
+
+    async fn exec(&self, input: Value) -> ToolResult {
+        let Some(context) = crate::agent::tools::exposure::current() else {
+            return ToolResult::err("MCP invocation requires an execution context");
+        };
+        if !self.state.binding.matches(&context) {
+            return ToolResult::err("MCP invocation handle is not valid for this session");
+        }
+        let Some(handle) = input.get("handle").and_then(Value::as_str) else {
+            return ToolResult::err("missing `handle` field");
+        };
+        if handle.len() != 32
+            || !handle
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return ToolResult::err("invalid MCP invocation handle");
+        }
+        let tool = match self.state.entries.lock() {
+            Ok(entries) => entries.get(handle).map(|entry| entry.tool.clone()),
+            Err(_) => return ToolResult::err("MCP disclosure registry is unavailable"),
+        };
+        let Some(tool) = tool else {
+            return ToolResult::err("unknown or expired MCP invocation handle");
+        };
+        let arguments = input.get("arguments").cloned().unwrap_or(Value::Null);
+        tool.exec(arguments).await
+    }
+}
+
+fn register_disclosure_gateways(
+    registry: &mut ToolRegistry,
+    state: Arc<McpDisclosureState>,
+) -> Result<(), String> {
+    if state.is_empty() {
+        return Ok(());
+    }
+    registry
+        .register_unique(Arc::new(McpCatalogTool {
+            state: state.clone(),
+        }))
+        .map_err(|_| "MCP catalog gateway name is already registered".to_string())?;
+    registry
+        .register_unique(Arc::new(McpInvokeTool { state }))
+        .map_err(|_| "MCP invoke gateway name is already registered".to_string())
 }
 
 pub(crate) async fn verify_descriptor_stability(
@@ -478,27 +661,31 @@ fn render_call_result(tool_name: &str, res: super::protocol::CallToolResult) -> 
 ///   the wait, a long-lived agent process accumulates zombies — a
 ///   real problem when the agent re-attaches servers on config
 ///   reload.
-pub async fn attach_server(
+async fn attach_server_into(
     spec: &McpServerSpec,
-    registry: &mut ToolRegistry,
+    disclosure: Option<&Arc<McpDisclosureState>>,
 ) -> Result<McpServerHandle, String> {
     if let Some(host) = crate::extension_host::client::current() {
         let attached = sanitize_descriptor_set(&spec.name, host.attach_mcp(spec.clone()).await?)?;
-        ensure_registry_names_available(registry, &spec.name, &attached.descriptors)?;
         let timeout = spec.timeout_duration();
         let transport = if spec.url.is_some() {
             ToolTransport::McpHttp
         } else {
             ToolTransport::McpStdio
         };
-        for descriptor in attached.descriptors.iter().cloned() {
-            registry.register_unique(Arc::new(McpRemoteTool::new_hosted(
-                &spec.name,
-                descriptor,
-                timeout,
-                transport,
-                attached.digest.clone(),
-            )))?;
+        if let Some(disclosure) = disclosure {
+            for descriptor in attached.descriptors.iter().cloned() {
+                disclosure.insert(
+                    descriptor.clone(),
+                    Arc::new(McpRemoteTool::new_hosted(
+                        &spec.name,
+                        descriptor,
+                        timeout,
+                        transport,
+                        attached.digest.clone(),
+                    )),
+                )?;
+            }
         }
         return Ok(McpServerHandle {
             client: None,
@@ -518,12 +705,23 @@ pub async fn attach_server(
                 .to_string(),
         );
     }
-    attach_server_local(spec, registry).await
+    attach_server_local(spec, disclosure).await
+}
+
+pub async fn attach_server(
+    spec: &McpServerSpec,
+    registry: &mut ToolRegistry,
+    exposure: &ToolExposureContext,
+) -> Result<McpServerHandle, String> {
+    let disclosure = McpDisclosureState::new(exposure);
+    let handle = attach_server_into(spec, Some(&disclosure)).await?;
+    register_disclosure_gateways(registry, disclosure)?;
+    Ok(handle)
 }
 
 pub(crate) async fn attach_server_local(
     spec: &McpServerSpec,
-    registry: &mut ToolRegistry,
+    disclosure: Option<&Arc<McpDisclosureState>>,
 ) -> Result<McpServerHandle, String> {
     if crate::paths::is_routed_job() {
         return Err(
@@ -533,18 +731,29 @@ pub(crate) async fn attach_server_local(
     }
     // Remote (HTTP/SSE) servers take a separate, child-less path.
     if spec.url.is_some() {
-        return attach_http_server(spec, registry).await;
+        return attach_http_server(spec, disclosure).await;
     }
     let proc_session = crate::bridge::McpProcSession::for_current_parent(&spec.command)?;
-    let mut command = if proc_session.is_some() {
-        let mut command = tokio::process::Command::new(crate::bridge::app_runner_path());
-        command.arg("--").arg(&spec.command).args(&spec.args);
-        command
+    let (program, initial_args) = if proc_session.is_some() {
+        let mut args = vec![
+            std::ffi::OsString::from("--"),
+            std::ffi::OsString::from(&spec.command),
+        ];
+        args.extend(spec.args.iter().map(std::ffi::OsString::from));
+        (crate::bridge::app_runner_path().into_os_string(), args)
     } else {
-        let mut command = tokio::process::Command::new(&spec.command);
-        command.args(&spec.args);
-        command
+        (
+            std::ffi::OsString::from(&spec.command),
+            spec.args.iter().map(std::ffi::OsString::from).collect(),
+        )
     };
+    let launch = crate::extension_host::child_isolation::prepare(
+        program,
+        initial_args,
+        spec.cwd.as_deref().map(std::path::Path::new),
+    )?;
+    let mut command = tokio::process::Command::new(launch.program);
+    command.args(launch.args).envs(launch.env);
     // Wipe inherited environment then re-add an explicit allowlist.
     // The order is: env_clear → allowlist from os::env → spec.env
     // overlay. Caller-provided values win on collision.
@@ -702,24 +911,24 @@ pub(crate) async fn attach_server_local(
             return Err(error);
         }
     };
-    if let Err(error) = ensure_registry_names_available(registry, &spec.name, &attached.descriptors)
-    {
-        kill_and_reap(child);
-        return Err(error);
-    }
     let mut registered = 0usize;
     for descriptor in attached.descriptors.iter().cloned() {
-        let tool = McpRemoteTool::new_with_transport(
-            &spec.name,
-            descriptor,
-            client.clone(),
-            timeout_dur,
-            ToolTransport::McpStdio,
-            attached.digest.clone(),
-        );
-        registry
-            .register_unique(Arc::new(tool))
-            .map_err(|_| "MCP tool name collides with an existing registered tool".to_string())?;
+        if let Some(disclosure) = disclosure {
+            if let Err(error) = disclosure.insert(
+                descriptor.clone(),
+                Arc::new(McpRemoteTool::new_with_transport(
+                    &spec.name,
+                    descriptor,
+                    client.clone(),
+                    timeout_dur,
+                    ToolTransport::McpStdio,
+                    attached.digest.clone(),
+                )),
+            ) {
+                kill_and_reap(child);
+                return Err(error);
+            }
+        }
         registered += 1;
     }
 
@@ -742,9 +951,9 @@ pub(crate) async fn attach_server_local(
 /// hosted MCP servers, not just local subprocesses. Optional bearer
 /// auth is read from the env var named by `spec.bearer_env`, so tokens
 /// never sit in an on-disk manifest.
-pub async fn attach_http_server(
+pub(crate) async fn attach_http_server(
     spec: &McpServerSpec,
-    registry: &mut ToolRegistry,
+    disclosure: Option<&Arc<McpDisclosureState>>,
 ) -> Result<McpServerHandle, String> {
     let url_str = spec
         .url
@@ -801,20 +1010,21 @@ pub async fn attach_http_server(
     };
 
     let attached = sanitize_descriptor_set(&spec.name, tools.tools)?;
-    ensure_registry_names_available(registry, &spec.name, &attached.descriptors)?;
     let mut registered = 0usize;
     for descriptor in attached.descriptors.iter().cloned() {
-        let tool = McpRemoteTool::new_with_transport(
-            &spec.name,
-            descriptor,
-            client.clone(),
-            timeout_dur,
-            ToolTransport::McpHttp,
-            attached.digest.clone(),
-        );
-        registry
-            .register_unique(Arc::new(tool))
-            .map_err(|_| "MCP tool name collides with an existing registered tool".to_string())?;
+        if let Some(disclosure) = disclosure {
+            disclosure.insert(
+                descriptor.clone(),
+                Arc::new(McpRemoteTool::new_with_transport(
+                    &spec.name,
+                    descriptor,
+                    client.clone(),
+                    timeout_dur,
+                    ToolTransport::McpHttp,
+                    attached.digest.clone(),
+                )),
+            )?;
+        }
         registered += 1;
     }
 
@@ -873,6 +1083,7 @@ fn safe_env_allowlist() -> Vec<(String, String)> {
         "COS_SDK_PYTHON_DIR",
         "COS_SNAPSHOT",
         "COS_PERMS_MODE",
+        "COS_EXTENSION_CHILD_ISOLATION",
         crate::extension_host::protocol::BROKER_SOCKET_ENV,
     ];
     for key in SAFE_COS {
@@ -895,6 +1106,7 @@ fn reserved_environment_key(key: &str) -> bool {
             | "USER"
             | "LOGNAME"
             | "PATH"
+            | "COS_EXTENSION_CHILD_ISOLATION"
             | crate::extension_host::protocol::BROKER_SOCKET_ENV
     )
 }
@@ -917,13 +1129,15 @@ fn kill_and_reap(mut child: Child) {
 pub async fn attach_all(
     specs: &[McpServerSpec],
     registry: &mut ToolRegistry,
+    exposure: &ToolExposureContext,
 ) -> Vec<McpServerHandle> {
+    let disclosure = McpDisclosureState::new(exposure);
     let mut handles = Vec::with_capacity(specs.len());
     for spec in specs {
-        match attach_server(spec, registry).await {
+        match attach_server_into(spec, Some(&disclosure)).await {
             Ok(handle) => {
                 tracing::info!(
-                    "mcp `{}`: attached, registered {} tool(s)",
+                    "mcp `{}`: attached, disclosed {} capability handle(s)",
                     handle.name(),
                     handle.tool_count()
                 );
@@ -933,6 +1147,10 @@ pub async fn attach_all(
                 tracing::warn!("mcp `{}`: attach failed: {e}", spec.name);
             }
         }
+    }
+    if let Err(error) = register_disclosure_gateways(registry, disclosure) {
+        tracing::error!(error = %error, "MCP disclosure gateways could not be registered");
+        return Vec::new();
     }
     handles
 }

@@ -269,7 +269,7 @@ async fn bring_up_app(
     path_parts.push(apps_dir_str.clone());
     let pythonpath = path_parts.join(pathsep());
 
-    let mut command = build_command(manifest.runtime, &entry_abs);
+    let mut command = build_command(manifest.runtime, &entry_abs, app_dir)?;
     let mut app_session = crate::bridge::AppIdentitySession::for_mcp(app_id, manifest)?;
     // Wipe inherited env then reinstate the bare minimum + the
     // `COS_*` configuration variables. App-internal env from
@@ -417,37 +417,39 @@ fn kill_and_reap_child(mut child: Child) {
     }
 }
 
-fn build_command(runtime: Runtime, entry: &Path) -> Command {
+fn build_command(runtime: Runtime, entry: &Path, app_dir: &Path) -> Result<Command, String> {
     let runner = crate::bridge::app_runner_path();
+    let mut args = vec![std::ffi::OsString::from("--")];
     match runtime {
         Runtime::Python => {
-            let bin = if cfg!(windows) { "python" } else { "python3" };
-            let mut c = Command::new(&runner);
-            c.arg("--").arg(bin).arg(entry);
-            c
+            args.push(if cfg!(windows) {
+                "python".into()
+            } else {
+                "python3".into()
+            });
+            args.push(entry.as_os_str().to_os_string());
         }
         Runtime::Node => {
-            let mut c = Command::new(&runner);
-            c.arg("--").arg("node").arg(entry);
-            c
+            args.push("node".into());
+            args.push(entry.as_os_str().to_os_string());
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = Command::new(&runner);
-                c.arg("--").arg("cmd").arg("/c").arg(entry);
-                c
+                args.extend([
+                    std::ffi::OsString::from("cmd"),
+                    std::ffi::OsString::from("/c"),
+                ]);
             } else {
-                let mut c = Command::new(&runner);
-                c.arg("--").arg("bash").arg(entry);
-                c
+                args.push("bash".into());
             }
+            args.push(entry.as_os_str().to_os_string());
         }
-        Runtime::Binary => {
-            let mut c = Command::new(&runner);
-            c.arg("--").arg(entry);
-            c
-        }
+        Runtime::Binary => args.push(entry.as_os_str().to_os_string()),
     }
+    let launch = crate::extension_host::child_isolation::prepare(&runner, args, Some(app_dir))?;
+    let mut command = Command::new(launch.program);
+    command.args(launch.args).envs(launch.env);
+    Ok(command)
 }
 
 // ---------------------------------------------------------------------------
@@ -679,6 +681,7 @@ fn safe_session_env_allowlist() -> Vec<(String, String)> {
         "TMPDIR",
         "TEMP",
         "TMP",
+        "COS_EXTENSION_CHILD_ISOLATION",
         crate::extension_host::protocol::BROKER_SOCKET_ENV,
     ];
     let mut out = Vec::with_capacity(ALWAYS.len());
@@ -901,10 +904,11 @@ impl Tool for AppSessionTool {
             Ok(paths) => paths,
             Err(error) => return ToolResult::err(format!("resolve App paths: {error}")),
         };
-        let effective = match self
-            .manifest
-            .resolve_session_tool_call(&self.manifest_tool_name, &supplied_args, &paths)
-        {
+        let effective = match self.manifest.resolve_session_tool_call(
+            &self.manifest_tool_name,
+            &supplied_args,
+            &paths,
+        ) {
             Ok(effective) => effective,
             Err(error) => {
                 let message = format!("argument resolution failed: {error}");

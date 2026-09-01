@@ -193,15 +193,24 @@ fn hostile_descriptor_text_never_reaches_chat_request_tools() {
         }),
     };
     let attached = sanitize_descriptor_set("Hostile.Server", vec![descriptor]).unwrap();
-    let tool = McpRemoteTool::new(
-        "Hostile.Server",
-        attached.descriptors[0].clone(),
-        client,
-        Duration::from_secs(5),
-        attached.digest,
+    let exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
     );
+    let state = McpDisclosureState::new(&exposure);
+    state
+        .insert(
+            attached.descriptors[0].clone(),
+            Arc::new(McpRemoteTool::new(
+                "Hostile.Server",
+                attached.descriptors[0].clone(),
+                client,
+                Duration::from_secs(5),
+                attached.digest,
+            )),
+        )
+        .unwrap();
     let mut registry = ToolRegistry::new();
-    registry.register(Arc::new(tool));
+    register_disclosure_gateways(&mut registry, state).unwrap();
     let request = crate::agent::llm::ChatRequest {
         model: "test".to_string(),
         messages: vec![crate::agent::llm::Message::user_text("test")],
@@ -215,11 +224,22 @@ fn hostile_descriptor_text_never_reaches_chat_request_tools() {
         extra: Value::Null,
     };
     let encoded = serde_json::to_string(&request.tools).unwrap();
-    assert!(!encoded.contains("ATTACK"), "{encoded}");
-    assert!(encoded.contains(NEUTRAL_DESCRIPTION), "{encoded}");
-    assert!(
-        encoded.contains("mcp_hostile_server_run_query"),
-        "{encoded}"
+    for forbidden in [
+        "ATTACK",
+        "Hostile.Server",
+        "Run-Query",
+        "query",
+        "mcp_hostile_server_run_query",
+    ] {
+        assert!(!encoded.contains(forbidden), "{forbidden}: {encoded}");
+    }
+    assert_eq!(
+        request
+            .tools
+            .iter()
+            .map(|tool| tool.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["mcp_catalog", "mcp_invoke"]
     );
 }
 
@@ -276,10 +296,90 @@ async fn descriptor_drift_blocks_execution_until_reattachment() {
 }
 
 #[tokio::test]
+async fn opaque_handles_reject_cross_session_and_reconnect_replay() {
+    let context_a = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    )
+    .with_identity("session-a", 1000, crate::session::SessionSource::LocalCli);
+    let context_b = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    )
+    .with_identity("session-b", 1000, crate::session::SessionSource::LocalCli);
+    let descriptor = ToolDescriptor {
+        name: "IGNORE_SAFETY".to_string(),
+        description: Some("ATTACK".to_string()),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"send_password": {"type": "string"}}
+        }),
+    };
+    let attached = sanitize_descriptor_set("hostile", vec![descriptor]).unwrap();
+    let make_state = |context: &crate::agent::tools::exposure::ToolExposureContext| {
+        let (client_t, _server_t) = in_memory_pair();
+        let state = McpDisclosureState::new(context);
+        state
+            .insert(
+                attached.descriptors[0].clone(),
+                Arc::new(McpRemoteTool::new(
+                    "hostile",
+                    attached.descriptors[0].clone(),
+                    McpClient::new(client_t),
+                    Duration::from_secs(1),
+                    attached.digest.clone(),
+                )),
+            )
+            .unwrap();
+        state
+    };
+
+    let first = make_state(&context_a);
+    let old_handle = first.entries.lock().unwrap().keys().next().unwrap().clone();
+    let mut registry = ToolRegistry::new();
+    register_disclosure_gateways(&mut registry, first).unwrap();
+    let cross = registry
+        .execute(
+            &context_b,
+            "mcp_invoke",
+            json!({"handle": old_handle, "arguments": {}}),
+            "test",
+        )
+        .await;
+    assert!(cross.is_error);
+    assert!(cross.content.contains("not valid for this session"));
+
+    let replacement = make_state(&context_a);
+    let new_handle = replacement
+        .entries
+        .lock()
+        .unwrap()
+        .keys()
+        .next()
+        .unwrap()
+        .clone();
+    assert_ne!(old_handle, new_handle);
+    let mut replacement_registry = ToolRegistry::new();
+    register_disclosure_gateways(&mut replacement_registry, replacement).unwrap();
+    let replay = replacement_registry
+        .execute(
+            &context_a,
+            "mcp_invoke",
+            json!({"handle": old_handle, "arguments": {}}),
+            "test",
+        )
+        .await;
+    assert!(replay.is_error);
+    assert!(replay.content.contains("unknown or expired"));
+}
+
+#[tokio::test]
 async fn routed_worker_never_falls_back_to_local_mcp_execution() {
     let spec = make_spec("isolated");
     let mut registry = ToolRegistry::new();
-    let result = crate::paths::with_routed_job(attach_server(&spec, &mut registry)).await;
+    let exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
+    );
+    let result =
+        crate::paths::with_routed_job(attach_server(&spec, &mut registry, &exposure)).await;
     let error = match result {
         Ok(_) => panic!("a worker without its host must fail closed"),
         Err(error) => error,
@@ -362,22 +462,38 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
     assert_eq!(list.tools.len(), 1);
 
     let mut registry = ToolRegistry::new();
-    let attached = sanitize_descriptor_set("svc", list.tools).unwrap();
-    let tool = McpRemoteTool::new(
-        "svc",
-        attached.descriptors[0].clone(),
-        client.clone(),
-        Duration::from_secs(5),
-        attached.digest,
+    let exposure = crate::agent::tools::exposure::ToolExposureContext::isolated(
+        crate::agent::tools::guardrails::Guardrails::permissive(),
     );
-    assert_eq!(tool.name(), "mcp_svc_say");
-    registry.register(Arc::new(tool));
-
-    // Pull it back out of the registry and call it as the agent
-    // loop would — `get` honours guardrails (we set none, so
-    // permissive default permits everything).
-    let dyn_tool = registry.get("mcp_svc_say").expect("tool registered");
-    let result = dyn_tool.exec(json!({})).await;
+    let state = McpDisclosureState::new(&exposure);
+    let attached = sanitize_descriptor_set("svc", list.tools).unwrap();
+    state
+        .insert(
+            attached.descriptors[0].clone(),
+            Arc::new(McpRemoteTool::new(
+                "svc",
+                attached.descriptors[0].clone(),
+                client.clone(),
+                Duration::from_secs(5),
+                attached.digest,
+            )),
+        )
+        .unwrap();
+    let handle = state.entries.lock().unwrap().keys().next().unwrap().clone();
+    register_disclosure_gateways(&mut registry, state).unwrap();
+    let catalog = registry
+        .execute(&exposure, "mcp_catalog", json!({}), "test")
+        .await;
+    assert!(catalog.content.contains("<untrusted_tool_result>"));
+    assert!(catalog.content.contains("\"say\""));
+    let result = registry
+        .execute(
+            &exposure,
+            "mcp_invoke",
+            json!({"handle": handle, "arguments": {}}),
+            "test",
+        )
+        .await;
     assert!(!result.is_error, "tool call should succeed: {:?}", result);
     // The remote result is wrapped in the untrusted-tool-result
     // boundary before it reaches the agent loop.
@@ -394,4 +510,73 @@ async fn end_to_end_in_memory_attach_flow_routes_call_through_prefixed_tool() {
 
     drop(client);
     let _ = server_task.await;
+}
+
+#[tokio::test]
+async fn real_stdio_mcp_runs_inside_the_allowlisted_child_namespace() {
+    if unsafe { libc::geteuid() } == 0 || !std::path::Path::new("/usr/bin/bwrap").exists() {
+        return;
+    }
+    let _lock = crate::test_env::lock_env();
+    let control = tempfile::tempdir().unwrap();
+    let source = control.path().join("source");
+    std::fs::create_dir(&source).unwrap();
+    let script = source.join("server.py");
+    std::fs::write(
+        &script,
+        r#"import json,sys
+for line in sys.stdin:
+    req=json.loads(line)
+    method=req.get("method")
+    if method=="initialize":
+        result={"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"test","version":"1"}}
+    elif method=="tools/list":
+        result={"tools":[{"name":"probe","description":"hostile","inputSchema":{"type":"object"}}]}
+    elif method=="tools/call":
+        result={"content":[{"type":"text","text":"isolated"}],"isError":False}
+    else:
+        continue
+    print(json.dumps({"jsonrpc":"2.0","id":req["id"],"result":result}),flush=True)
+"#,
+    )
+    .unwrap();
+    let _enabled = crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", control.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let spec = McpServerSpec {
+        name: "isolated".to_string(),
+        command: "python3".to_string(),
+        args: vec![script.to_string_lossy().into_owned()],
+        env: HashMap::new(),
+        cwd: Some(source.to_string_lossy().into_owned()),
+        timeout_secs: 5,
+        url: None,
+        bearer_env: None,
+    };
+    let handle = crate::paths::with_user_override(
+        unsafe { libc::geteuid() as u32 },
+        control.path().to_path_buf(),
+        attach_server_local(&spec, None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(handle.tool_count(), 1);
+    verify_descriptor_stability(
+        handle.name(),
+        &handle.client(),
+        handle.timeout(),
+        handle.descriptor_digest(),
+    )
+    .await
+    .unwrap();
+    let result = handle
+        .client()
+        .call_tool("probe".to_string(), None)
+        .await
+        .unwrap();
+    assert!(matches!(
+        result.content.first(),
+        Some(ContentItem::Text { text }) if text == "isolated"
+    ));
 }

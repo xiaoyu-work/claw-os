@@ -26,10 +26,18 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
     "/usr/local/bin/claw-app-runner".into()
 }
 
-fn app_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(app_runner_path());
-    command.arg("--").arg(program);
-    command
+fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<Command, String> {
+    let launch = crate::extension_host::child_isolation::prepare(
+        app_runner_path(),
+        vec![
+            std::ffi::OsString::from("--"),
+            program.as_ref().to_os_string(),
+        ],
+        Some(app_dir),
+    )?;
+    let mut command = Command::new(launch.program);
+    command.args(launch.args).envs(launch.env);
+    Ok(command)
 }
 
 fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
@@ -583,8 +591,16 @@ pub fn run_native_app_host(
         ));
     }
     let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    let mut command = Command::new(&runner);
-    command.arg("--").arg(&program_path);
+    let launch = crate::extension_host::child_isolation::prepare(
+        &runner,
+        vec![
+            std::ffi::OsString::from("--"),
+            program_path.as_os_str().to_os_string(),
+        ],
+        Some(&app_dir),
+    )?;
+    let mut command = Command::new(launch.program);
+    command.args(launch.args).envs(launch.env);
     reset_app_environment(&mut command, false);
     command
         .args(args)
@@ -1323,6 +1339,7 @@ const SAFE_APP_ENV_KEYS: &[&str] = &[
     "COS_SDK_PYTHON_DIR",
     "COS_SNAPSHOT",
     "COS_PERMS_MODE",
+    "COS_EXTENSION_CHILD_ISOLATION",
     crate::extension_host::protocol::BROKER_SOCKET_ENV,
 ];
 
@@ -1586,7 +1603,7 @@ pub fn run_python_app_with_stdin(
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
 
-    let mut command = app_command(python);
+    let mut command = app_command(python, app_dir)?;
     reset_app_environment(&mut command, false);
     command
         .arg("-c")
@@ -1816,22 +1833,22 @@ pub fn run_app_with_stdin(
 
     let mut cmd = match runtime {
         Runtime::Node => {
-            let mut c = app_command("node");
+            let mut c = app_command("node", app_dir)?;
             c.arg(&entry_path);
             c
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = app_command("cmd");
+                let mut c = app_command("cmd", app_dir)?;
                 c.arg("/c").arg(&entry_path);
                 c
             } else {
-                let mut c = app_command("bash");
+                let mut c = app_command("bash", app_dir)?;
                 c.arg(&entry_path);
                 c
             }
         }
-        Runtime::Binary => app_command(&entry_path),
+        Runtime::Binary => app_command(&entry_path, app_dir)?,
         Runtime::Python => unreachable!("python handled above"),
     };
     let app_id = manifest_app_id(app_dir)?;
@@ -1964,7 +1981,7 @@ pub fn launch_gui(
         }
         let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
         let python = if cfg!(windows) { "python" } else { "python3" };
-        let mut c = app_command(python);
+        let mut c = app_command(python, app_dir)?;
         c.arg("-c").arg(wrapper);
         c
     } else {
@@ -1974,22 +1991,22 @@ pub fn launch_gui(
         }
         match runtime {
             Runtime::Node => {
-                let mut c = app_command("node");
+                let mut c = app_command("node", app_dir)?;
                 c.arg(&entry_path);
                 c
             }
             Runtime::Shell => {
                 if cfg!(windows) {
-                    let mut c = app_command("cmd");
+                    let mut c = app_command("cmd", app_dir)?;
                     c.arg("/c").arg(&entry_path);
                     c
                 } else {
-                    let mut c = app_command("bash");
+                    let mut c = app_command("bash", app_dir)?;
                     c.arg(&entry_path);
                     c
                 }
             }
-            Runtime::Binary => app_command(&entry_path),
+            Runtime::Binary => app_command(&entry_path, app_dir)?,
             Runtime::Python => unreachable!("python handled above"),
         }
     };

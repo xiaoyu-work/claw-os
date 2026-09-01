@@ -10,6 +10,29 @@ fn default_entries_are_runtime_aware() {
 }
 
 #[test]
+fn hosted_app_commands_use_the_fixed_child_isolation_wrapper() {
+    let _lock = crate::test_env::lock_env();
+    let home = tempfile::tempdir().unwrap();
+    let app = tempfile::tempdir().unwrap();
+    std::fs::write(app.path().join("main.py"), b"print('ok')").unwrap();
+    let _enabled =
+        crate::test_env::TestEnvVarGuard::set("COS_EXTENSION_CHILD_ISOLATION", "1");
+    let _home = crate::test_env::TestEnvVarGuard::set("HOME", home.path());
+    let _proc = crate::test_env::TestEnvVarGuard::remove("COS_PROC_DATA_DIR");
+    let _broker = crate::test_env::TestEnvVarGuard::remove("COS_EXTENSION_BROKER_SOCKET");
+    let command = app_command("python3", app.path()).unwrap();
+    assert_eq!(command.get_program(), "/usr/bin/bwrap");
+    let args = command
+        .get_args()
+        .map(|value| value.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(args.contains("--unshare-pid"), "{args}");
+    assert!(args.contains("--proc /proc"), "{args}");
+    assert!(!args.contains("--ro-bind /home /home"), "{args}");
+}
+
+#[test]
 fn panel_environment_requires_explicit_manifest_opt_in() {
     let filter = |panel_applet| {
         preserved_app_environment(panel_applet, |key| Some(key.to_string()))

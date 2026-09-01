@@ -1673,7 +1673,7 @@ async fn attach_mcp_servers(
     if specs.is_empty() {
         return Vec::new();
     }
-    let handles = attach_all(&specs, tools).await;
+    let handles = attach_all(&specs, tools, exposure).await;
     for handle in &handles {
         exposure.enable_extension(format!("mcp:{}", handle.name()));
     }

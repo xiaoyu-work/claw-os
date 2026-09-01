@@ -663,6 +663,7 @@ pub fn spawn_host(
     command.env("TMP", "/tmp");
     command.env("TEMP", "/tmp");
     command.env("COS_PERMS_MODE", "strict");
+    command.env("COS_EXTENSION_CHILD_ISOLATION", "1");
     command.env(
         "COS_PROC_DATA_DIR",
         std::env::var_os("COS_PROC_DATA_DIR")

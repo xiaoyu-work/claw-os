@@ -13,7 +13,6 @@ use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{Notify, Semaphore};
 
 use crate::agent::tools::mcp::integration::{McpServerHandle, McpServerSpec};
-use crate::agent::tools::registry::ToolRegistry;
 use crate::clawd::transport::frame::{PeerStream, ReadOutcome};
 use crate::clawd::transport::peer;
 use crate::clawd::wire::RequestId;
@@ -486,9 +485,7 @@ async fn attach_mcp(spec: McpServerSpec, state: &HostState) -> Result<HostResult
         }
     }
 
-    let mut registry = ToolRegistry::new();
-    let handle =
-        crate::agent::tools::mcp::integration::attach_server_local(&spec, &mut registry).await?;
+    let handle = crate::agent::tools::mcp::integration::attach_server_local(&spec, None).await?;
     let tools = handle.descriptors().to_vec();
     state
         .mcp

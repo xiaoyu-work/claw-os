@@ -3436,8 +3436,7 @@ async fn chat_cmd_async(
                     *mlock(&self.last_finish) = Some(*finish);
                 }
                 StreamEvent::Warning { message } => {
-                    mlock(&self.terminal)
-                        .write_line(&mut e, &format!("[warning] {message}"));
+                    mlock(&self.terminal).write_line(&mut e, &format!("[warning] {message}"));
                     mlock(&self.warnings).push(message.clone());
                 }
             }
@@ -7167,11 +7166,7 @@ fn merge_mcp_overrides(
         out.tool_allow = Some(a);
     }
     out.tool_deny.extend(deny);
-    if !out
-        .tool_deny
-        .iter()
-        .any(|name| name == "cos_oauth_login")
-    {
+    if !out.tool_deny.iter().any(|name| name == "cos_oauth_login") {
         out.tool_deny.push("cos_oauth_login".to_string());
     }
     out
@@ -7297,9 +7292,17 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                     };
                     let mut throwaway_registry =
                         crate::agent::tools::registry::ToolRegistry::new();
-                    match attach_server(&spec, &mut throwaway_registry).await {
+                    let exposure =
+                        crate::agent::tools::exposure::ToolExposureContext::isolated(
+                            crate::agent::tools::guardrails::Guardrails::permissive(),
+                        );
+                    match attach_server(&spec, &mut throwaway_registry, &exposure).await {
                         Ok(handle) => {
-                            let tools = throwaway_registry.names_unfiltered();
+                            let tools = handle
+                                .descriptors()
+                                .iter()
+                                .map(|descriptor| descriptor.name.as_str())
+                                .collect::<Vec<_>>();
                             out.push(json!({
                                 "name": s.name,
                                 "enabled": true,

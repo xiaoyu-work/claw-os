@@ -24,6 +24,10 @@ extensions.
   App/MCP session.
 - Run one-shot Apps, stateful App MCP servers, and configured MCP servers;
   never run their code in `clawd` or `claw-agentd`.
+- Launch every dynamic child through the trusted isolation wrapper in its own
+  PID and mount namespaces with private procfs. The child sees an empty
+  filesystem root, a verified read-only runtime/snapshot allowlist, and
+  private writable state/tmpfs only.
 - Bound frames, concurrent calls, startup/call timeouts, and replay history.
 - Return only sanitized MCP descriptors and require every hosted MCP call to
   carry the exact canonical descriptor-set digest held by that host session.
@@ -42,6 +46,7 @@ extensions.
 | `protocol.rs` | Versioned worker-control contract and signed binding fields |
 | `identity.rs` | Exact package-created account/manifest/subid validation, exclusive leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
+| `child_isolation.rs` | Per-App/MCP bubblewrap PID/proc/empty-root isolation and verified snapshots |
 | `client.rs` | `claw-agentd` client used by App and MCP registry adapters |
 | `host.rs` | Host process, control admission, App/MCP lifecycle and cancellation |
 | `broker.rs` | Per-task broker proxy socket, SCM credential verification, route/session allowlists |
@@ -105,8 +110,12 @@ startup recovery keeps the uid unavailable until residue is safely purged.
 The proxy preserves task-owner
 authority as a separate principal field while recording the actual execution
 uid. Host/child seccomp denies ptrace, process-vm access, `kcmp`, and
-`pidfd_getfd`, and task-local home/data/cache/log paths avoid exposing the
-owner's home. The worker and host both become non-dumpable at process entry.
+`pidfd_getfd`. Each final App/MCP child has a private PID namespace and procfs,
+so same-UID sibling processes cannot enumerate, signal, or read one another.
+The empty child root exposes `/usr` as verified read-only runtime content,
+copies explicitly authorized non-system code into a read-only snapshot, binds
+only the exact broker/session endpoints, and supplies private home/data/cache/
+log/tmp paths. Pre-pivot descriptors and cwd do not survive.
 
 The supervisor sends a blocked PREPARE, persists the queue's execution COMMIT,
 and only then releases the worker. Failures proven pre-COMMIT may retry;
