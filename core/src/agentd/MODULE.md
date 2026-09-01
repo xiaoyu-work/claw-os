@@ -80,6 +80,14 @@ control requests only from the exact worker credentials. Its broker proxy
 accepts lifecycle routes only from the exact host and provider routes only
 from a descendant's nearest registered App/MCP session.
 
+Assignment is a durable two-phase gate. `clawd` sends PREPARE with distinct
+grant-signed prepare/commit nonces; the worker verifies it, reports the exact
+prepared binding, and remains blocked. The broker then synchronously persists
+the queue's prepared phase and `execution_committed` phase before sending an
+authenticated COMMIT carrying the same task, session, worker identity,
+capability generation, grant, and nonces. Only a matching COMMIT releases the
+worker into provider/tool execution.
+
 `SO_PEERCRED` is deliberately *not* used on this channel: the socket pair is
 created before the fork, so the kernel stamps it with the broker's own uid and
 pid. Checking it would prove nothing about the worker.
@@ -210,12 +218,13 @@ across broker restart. There is no `/proc`-ancestry fallback. Unavailable
 containment or unverifiable cleanup is a terminal task error; `clawd`
 continues serving non-agent primitives.
 
-Retry is limited to failures before a complete assignment reaches the worker,
-such as worker/host launch failure or a broken assignment channel. Once the
-assignment is delivered, execution may have crossed an external side-effect
-boundary. Worker EOF, handshake/lease timeout, or unexpected worker/extension
-host exit is therefore terminal; the queue never replays the whole task
-without durable idempotency evidence.
+Retry is limited to phases that durably prove execution was not committed:
+launch failure, PREPARE delivery/validation failure, or a dead prepared worker.
+Any failure while recording COMMIT, delivering COMMIT, or after the worker
+accepts COMMIT is terminal `indeterminate`; restart recovery never returns it
+to pending without operation-specific durable idempotency evidence. Legacy
+running records without phase metadata are also indeterminate rather than
+replayed.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
 report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
@@ -262,6 +271,7 @@ bash packaging/deb/tests/test-agentd-packaging.sh
 `core/tests/agentd_process_boundary.rs` spawns a real worker and asserts the
 kernel's view of it (`/proc/<pid>/status`, `/proc/<pid>/fd`,
 `/proc/<pid>/environ`), and drives `supervisor::run_with_store` end to end —
-claim, spawn, handshake, assignment, result, finish — against a temporary
-queue, including the root-owner refusal, which must resolve the task without
-ever executing a worker image.
+claim, spawn, PREPARE, durable COMMIT, handshake, result, finish — against a
+temporary queue, including crash failpoints on every assignment boundary and
+the root-owner refusal, which must resolve the task without ever executing a
+worker image.

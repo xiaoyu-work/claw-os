@@ -12,9 +12,36 @@ fn lock_sentinel_path(path: &Path) -> PathBuf {
     PathBuf::from(lock_path)
 }
 
+fn commit_claimed(store: &Store, job: &Job) {
+    let prepare = "0123456789abcdef0123456789abcdef";
+    let commit = "fedcba9876543210fedcba9876543210";
+    let generation = "a".repeat(64);
+    store
+        .record_execution_prepared(
+            &job.id,
+            job.worker_pid.unwrap(),
+            job.worker_start_time_ticks,
+            prepare,
+            commit,
+            &generation,
+        )
+        .unwrap();
+    store
+        .commit_execution(
+            &job.id,
+            job.worker_pid.unwrap(),
+            job.worker_start_time_ticks,
+            prepare,
+            commit,
+            &generation,
+        )
+        .unwrap();
+}
+
 fn finished_job_with_stream(store: &Store) -> Job {
     let _ = store.submit("p".into(), None, None, None, None).unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(store, &claimed);
     store
         .append_stream_progress(&claimed.id, json!({ "kind": "test" }))
         .unwrap();
@@ -247,11 +274,8 @@ fn submit_round_trips_owner_uid_and_home() {
 fn submit_snapshots_trusted_client_metadata() {
     let dir = fresh_root();
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
-    let client = crate::session::SessionClient::new(
-        crate::session::SessionSource::BrokerTask,
-        true,
-        true,
-    );
+    let client =
+        crate::session::SessionClient::new(crate::session::SessionSource::BrokerTask, true, true);
     let job = store
         .submit_with_context_and_client(
             "hi".into(),
@@ -378,6 +402,134 @@ fn recover_requeues_job_whose_worker_is_dead() {
     );
 }
 
+#[test]
+fn prepared_worker_death_is_safely_requeued() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit("prepared".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let prepare = "0123456789abcdef0123456789abcdef";
+    let commit = "fedcba9876543210fedcba9876543210";
+    let generation = "b".repeat(64);
+    store
+        .record_execution_prepared(
+            &claimed.id,
+            claimed.worker_pid.unwrap(),
+            claimed.worker_start_time_ticks,
+            prepare,
+            commit,
+            &generation,
+        )
+        .unwrap();
+    let running = store.path_for(JobStatus::Running, &job.id);
+    let mut prepared: Job =
+        serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+    prepared.worker_pid = Some(0);
+    write_json_atomic(&running, &prepared).unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (1, 0));
+    let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Pending);
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Unprepared);
+    assert!(recovered.execution_prepare_nonce.is_none());
+    assert!(recovered.execution_commit_nonce.is_none());
+}
+
+#[test]
+fn committed_worker_death_is_terminal_indeterminate() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit("committed".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
+    let running = store.path_for(JobStatus::Running, &job.id);
+    let mut committed: Job =
+        serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+    committed.worker_pid = Some(0);
+    write_json_atomic(&running, &committed).unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
+    let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(recovered.status, JobStatus::Error);
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+    assert!(recovered.error.unwrap().contains("replay is refused"));
+    assert!(store.claim_one().unwrap().is_none());
+}
+
+#[test]
+fn legacy_running_job_is_never_replayed() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit("legacy".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let running = store.path_for(JobStatus::Running, &job.id);
+    let mut value: Value =
+        serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+    let object = value.as_object_mut().unwrap();
+    object.remove("schema_version");
+    object.remove("execution_phase");
+    object.remove("execution_prepare_nonce");
+    object.remove("execution_commit_nonce");
+    object.remove("execution_generation");
+    object.insert("worker_pid".to_string(), json!(0));
+    write_json_atomic(&running, &value).unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 1));
+    let (_, recovered) = store.locate(&claimed.id).unwrap().unwrap();
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+}
+
+#[test]
+fn committed_release_for_retry_becomes_terminal() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store
+        .submit("commit".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
+    let released = store
+        .release_for_retry(&job.id, "ambiguous commit delivery")
+        .unwrap()
+        .unwrap();
+    assert_eq!(released.status, JobStatus::Error);
+    assert_eq!(released.execution_phase, ExecutionPhase::Indeterminate);
+    assert!(store.claim_one().unwrap().is_none());
+}
+
+#[test]
+fn success_without_commit_is_rejected() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let _ = store
+        .submit("unsafe".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let finished = store
+        .finish(
+            claimed,
+            FinishOutcome::Ok {
+                response: "must not escape".into(),
+                turns_used: 1,
+                provider: "mock".into(),
+                model: "mock".into(),
+                evidence: Box::new(None),
+                fallback: Box::new(None),
+            },
+        )
+        .unwrap();
+    assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(finished.execution_phase, ExecutionPhase::Indeterminate);
+    assert!(finished.response.is_none());
+}
+
 /// A job whose worker is still alive must NOT be touched by recovery.
 #[test]
 fn recover_leaves_job_with_live_worker_alone() {
@@ -462,6 +614,7 @@ fn finish_ok_moves_running_to_done_with_response() {
     let store = Store::with_root(dir.path().to_path_buf()).unwrap();
     let job = store.submit("p".into(), None, None, None, None).unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
     let finished = store
         .finish(
             claimed,
@@ -642,6 +795,7 @@ fn counts_reflect_per_bucket_state() {
     let _a = store.submit("a".into(), None, None, None, None).unwrap();
     let _b = store.submit("b".into(), None, None, None, None).unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
     let _ = store
         .finish(
             claimed,
@@ -926,6 +1080,7 @@ fn cmd_result_returns_done_job() {
     let store = Store::open_default().unwrap();
     let job = store.submit("p".into(), None, None, None, None).unwrap();
     let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
     let _ = store
         .finish(
             claimed,

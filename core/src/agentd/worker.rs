@@ -48,8 +48,9 @@ use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
 use crate::caps::{ConsentContext, Scope, Verb};
 
 use super::protocol::{
-    self, ApprovalAsk, ApprovalExchange, ApprovalReply, Assignment, BrokerFrame, FrameReader,
-    ProgressRecord, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
+    self, ApprovalAsk, ApprovalExchange, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit,
+    FrameReader, ProgressRecord, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
+    WorkerPrepared,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -443,6 +444,41 @@ async fn io_main(
         }
     };
 
+    let prepared = WorkerFrame::Prepared(Box::new(WorkerPrepared {
+        protocol: protocol::PROTOCOL_VERSION,
+        grant: assignment.grant.clone(),
+        prepare_nonce: assignment.grant.claims.prepare_nonce.clone(),
+        commit_nonce: assignment.grant.claims.commit_nonce.clone(),
+        pid: identity.pid,
+        start_time_ticks: identity.start_time_ticks,
+        uid: identity.uid,
+        gid: identity.gid,
+    }));
+    let encoded = match protocol::encode(&prepared) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            let _ = handshake.send(Err(error));
+            return;
+        }
+    };
+    if let Err(error) = writer.write_all(encoded.as_bytes()).await {
+        let _ = handshake.send(Err(format!("write agentd prepared frame: {error}")));
+        return;
+    }
+    if let Err(error) = receive_commit(&mut frames, &identity, &assignment).await {
+        let _ = handshake.send(Err(error));
+        return;
+    }
+    #[cfg(debug_assertions)]
+    if let Some(path) = std::env::var_os("COS_AGENTD_TEST_COMMIT_MARKER") {
+        use std::io::Write;
+        std::env::remove_var("COS_AGENTD_TEST_COMMIT_MARKER");
+        if let Ok(mut marker) = std::fs::OpenOptions::new().append(true).open(path) {
+            let _ = marker.write_all(b"committed\n");
+            let _ = marker.sync_all();
+        }
+    }
+
     let hello = WorkerFrame::Hello(Box::new(WorkerHello {
         protocol: protocol::PROTOCOL_VERSION,
         grant: assignment.grant.clone(),
@@ -506,8 +542,8 @@ where
     R: tokio::io::AsyncBufRead + Unpin,
 {
     let assignment = match frames.next_frame::<BrokerFrame>().await? {
-        Some(BrokerFrame::Assign(assignment)) => assignment,
-        Some(_) | None => return Err("expected an assignment from clawd".to_string()),
+        Some(BrokerFrame::Prepare(assignment)) => assignment,
+        Some(_) | None => return Err("expected an assignment prepare from clawd".to_string()),
     };
     if assignment.protocol != protocol::PROTOCOL_VERSION {
         return Err(format!(
@@ -586,7 +622,69 @@ where
     }
     identity
         .require_expected_identity(assignment.job.owner_uid, assignment.grant.claims.owner_gid)?;
+    validate_execution_nonce(&assignment.grant.claims.prepare_nonce)?;
+    validate_execution_nonce(&assignment.grant.claims.commit_nonce)?;
+    if assignment.grant.claims.prepare_nonce == assignment.grant.claims.commit_nonce {
+        return Err("agentd prepare and commit nonces must differ".to_string());
+    }
     Ok(assignment)
+}
+
+async fn receive_commit<R>(
+    frames: &mut FrameReader<R>,
+    identity: &LocalIdentity,
+    assignment: &Assignment,
+) -> Result<ExecutionCommit, String>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+{
+    let commit = match frames.next_frame::<BrokerFrame>().await? {
+        Some(BrokerFrame::Commit(commit)) => *commit,
+        Some(BrokerFrame::Cancel { task_id }) if task_id == assignment.job.id => {
+            return Err("agent task was cancelled before execution commit".to_string())
+        }
+        Some(BrokerFrame::Shutdown) | None => {
+            return Err("clawd closed the task before execution commit".to_string())
+        }
+        Some(_) => return Err("expected an authenticated execution commit".to_string()),
+    };
+    if commit.protocol != protocol::PROTOCOL_VERSION {
+        return Err("agentd execution commit protocol mismatch".to_string());
+    }
+    commit
+        .grant
+        .validate_for_self(
+            super::grant::now_ms(),
+            identity.uid,
+            identity.gid,
+            identity.pid,
+            identity.start_time_ticks,
+        )
+        .map_err(|error| error.to_string())?;
+    if commit.grant != assignment.grant
+        || commit.task_id != assignment.job.id
+        || commit.session_id != assignment.job.session_id
+        || commit.worker_pid != identity.pid
+        || commit.worker_start_time_ticks != identity.start_time_ticks
+        || commit.capability_generation != assignment.grant.claims.capability_generation
+        || commit.prepare_nonce != assignment.grant.claims.prepare_nonce
+        || commit.commit_nonce != assignment.grant.claims.commit_nonce
+    {
+        return Err("execution commit does not match the prepared assignment".to_string());
+    }
+    Ok(commit)
+}
+
+fn validate_execution_nonce(value: &str) -> Result<(), String> {
+    if value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        Ok(())
+    } else {
+        Err("agentd execution nonce is invalid".to_string())
+    }
 }
 
 /// Broker frames arriving mid-run. Cancellation is cooperative: the
@@ -806,6 +904,7 @@ async fn execute(
             fallback: *fallback,
         })),
         FinishOutcome::Error(message) => WorkerOutcome::Error { message },
+        FinishOutcome::Indeterminate(message) => WorkerOutcome::Error { message },
         FinishOutcome::Cancelled => WorkerOutcome::Cancelled,
     }
 }

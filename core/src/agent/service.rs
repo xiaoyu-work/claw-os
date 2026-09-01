@@ -54,6 +54,7 @@ use crate::paths::agent_jobs_dir;
 /// [`Store::recover_orphaned_jobs`]). Stops a job that crashes every
 /// worker from looping forever and starving the queue.
 const MAX_RECOVERIES: u32 = 3;
+const JOB_SCHEMA_VERSION: u32 = 2;
 const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +72,42 @@ pub enum JobStatus {
     Ok,
     Error,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPhase {
+    Unprepared,
+    Preparing,
+    Prepared,
+    Committed,
+    Indeterminate,
+    LegacyUnknown,
+}
+
+impl ExecutionPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unprepared => "unprepared",
+            Self::Preparing => "preparing",
+            Self::Prepared => "prepared",
+            Self::Committed => "committed",
+            Self::Indeterminate => "indeterminate",
+            Self::LegacyUnknown => "legacy_unknown",
+        }
+    }
+
+    fn replay_is_proven_safe(self) -> bool {
+        matches!(self, Self::Unprepared | Self::Preparing | Self::Prepared)
+    }
+}
+
+fn legacy_execution_phase() -> ExecutionPhase {
+    ExecutionPhase::LegacyUnknown
+}
+
+fn legacy_job_schema_version() -> u32 {
+    1
 }
 
 impl JobStatus {
@@ -96,6 +133,8 @@ impl JobStatus {
 /// Persistent representation of a single agent job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
+    #[serde(default = "legacy_job_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +198,14 @@ pub struct Job {
     /// [`MAX_RECOVERIES`]. Defaults to 0; absent in old on-disk files.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub recovery_count: u32,
+    #[serde(default = "legacy_execution_phase")]
+    pub execution_phase: ExecutionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_prepare_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_commit_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_generation: Option<String>,
 }
 
 /// serde skip predicate for the common `recovery_count == 0` case so
@@ -202,6 +249,7 @@ impl Job {
     ) -> Self {
         client.attended = false;
         Self {
+            schema_version: JOB_SCHEMA_VERSION,
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
             context,
@@ -226,6 +274,10 @@ impl Job {
             owner_home,
             client,
             recovery_count: 0,
+            execution_phase: ExecutionPhase::Unprepared,
+            execution_prepare_nonce: None,
+            execution_commit_nonce: None,
+            execution_generation: None,
         }
     }
 
@@ -607,11 +659,16 @@ impl Store {
                         ));
                     }
                     job.status = JobStatus::Running;
+                    job.schema_version = JOB_SCHEMA_VERSION;
                     job.started_at = Some(now_iso());
                     let worker_pid = std::process::id();
                     job.worker_pid = Some(worker_pid);
                     job.worker_start_time_ticks =
                         crate::proc::read_start_time_ticks_pub(worker_pid);
+                    job.execution_phase = ExecutionPhase::Preparing;
+                    job.execution_prepare_nonce = None;
+                    job.execution_commit_nonce = None;
+                    job.execution_generation = None;
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     return Ok(Some(job));
@@ -706,6 +763,7 @@ impl Store {
             }
             if unverifiable_identity {
                 job.status = JobStatus::Error;
+                job.execution_phase = ExecutionPhase::Indeterminate;
                 job.error = Some(
                     "worker PID is alive but its start-time identity is unavailable; \
                      refusing to retry a potentially active job"
@@ -720,6 +778,17 @@ impl Store {
                     "clawd.task.worker_identity_unverifiable",
                     &job,
                 );
+                failed += 1;
+                continue;
+            }
+
+            if !job.execution_phase.replay_is_proven_safe() {
+                self.finish_indeterminate(
+                    &path,
+                    &id,
+                    job,
+                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
+                )?;
                 failed += 1;
                 continue;
             }
@@ -764,6 +833,10 @@ impl Store {
             job.worker_start_time_ticks = None;
             job.started_at = None;
             job.cancel_requested_at = None;
+            job.execution_phase = ExecutionPhase::Unprepared;
+            job.execution_prepare_nonce = None;
+            job.execution_commit_nonce = None;
+            job.execution_generation = None;
             write_json_atomic(&path, &job)?;
             let pending = self.path_for(JobStatus::Pending, &id);
             fs::rename(&path, &pending)?;
@@ -802,6 +875,95 @@ impl Store {
         Ok(job)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_execution_prepared(
+        &self,
+        id: &str,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+        prepare_nonce: &str,
+        commit_nonce: &str,
+        generation: &str,
+    ) -> io::Result<Job> {
+        validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
+        validate_job_id(id)?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        if job.id != id
+            || job.worker_pid != Some(worker_pid)
+            || job.worker_start_time_ticks != worker_start_time_ticks
+            || job.execution_phase != ExecutionPhase::Preparing
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "job preparation does not match the running worker lease",
+            ));
+        }
+        job.schema_version = JOB_SCHEMA_VERSION;
+        job.execution_phase = ExecutionPhase::Prepared;
+        job.execution_prepare_nonce = Some(prepare_nonce.to_string());
+        job.execution_commit_nonce = Some(commit_nonce.to_string());
+        job.execution_generation = Some(generation.to_string());
+        write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_prepared", &job);
+        Ok(job)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn commit_execution(
+        &self,
+        id: &str,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+        prepare_nonce: &str,
+        commit_nonce: &str,
+        generation: &str,
+    ) -> io::Result<Job> {
+        validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
+        validate_job_id(id)?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        if job.id != id
+            || job.worker_pid != Some(worker_pid)
+            || job.worker_start_time_ticks != worker_start_time_ticks
+            || job.execution_phase != ExecutionPhase::Prepared
+            || job.execution_prepare_nonce.as_deref() != Some(prepare_nonce)
+            || job.execution_commit_nonce.as_deref() != Some(commit_nonce)
+            || job.execution_generation.as_deref() != Some(generation)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "job commit does not match the prepared worker lease",
+            ));
+        }
+        job.execution_phase = ExecutionPhase::Committed;
+        write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_committed", &job);
+        Ok(job)
+    }
+
+    fn finish_indeterminate(
+        &self,
+        path: &Path,
+        id: &str,
+        mut job: Job,
+        reason: &str,
+    ) -> io::Result<Job> {
+        job.status = JobStatus::Error;
+        job.execution_phase = ExecutionPhase::Indeterminate;
+        job.error = Some(reason.to_string());
+        job.finished_at = Some(now_iso());
+        write_json_atomic(path, &job)?;
+        fs::rename(path, self.path_for(JobStatus::Ok, id))?;
+        finish_durable_session(&job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_indeterminate", &job);
+        Ok(job)
+    }
+
     /// Hand a running job back to the queue after its worker failed
     /// without reporting an outcome. Shares the recovery budget with
     /// [`Store::recover_orphaned_jobs`], so a task that keeps killing
@@ -820,6 +982,17 @@ impl Store {
         };
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
+
+        if !job.execution_phase.replay_is_proven_safe() {
+            return self
+                .finish_indeterminate(
+                    &path,
+                    id,
+                    job,
+                    "worker outcome is unknown after durable execution commit; refusing replay",
+                )
+                .map(Some);
+        }
 
         if job.cancel_requested_at.is_some() {
             job.status = JobStatus::Cancelled;
@@ -851,6 +1024,10 @@ impl Store {
         job.worker_pid = None;
         job.worker_start_time_ticks = None;
         job.started_at = None;
+        job.execution_phase = ExecutionPhase::Unprepared;
+        job.execution_prepare_nonce = None;
+        job.execution_commit_nonce = None;
+        job.execution_generation = None;
         write_json_atomic(&path, &job)?;
         fs::rename(&path, self.path_for(JobStatus::Pending, id))?;
         crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
@@ -878,16 +1055,30 @@ impl Store {
                 evidence,
                 fallback,
             } => {
-                job.status = JobStatus::Ok;
-                job.response = Some(response);
-                job.turns_used = Some(turns_used);
-                job.provider = Some(provider);
-                job.model = Some(model);
-                job.evidence = *evidence;
-                job.fallback = *fallback;
+                if job.execution_phase != ExecutionPhase::Committed {
+                    job.status = JobStatus::Error;
+                    job.execution_phase = ExecutionPhase::Indeterminate;
+                    job.error = Some(
+                        "worker reported success without a durable execution commit; result rejected"
+                            .to_string(),
+                    );
+                } else {
+                    job.status = JobStatus::Ok;
+                    job.response = Some(response);
+                    job.turns_used = Some(turns_used);
+                    job.provider = Some(provider);
+                    job.model = Some(model);
+                    job.evidence = *evidence;
+                    job.fallback = *fallback;
+                }
             }
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
+                job.error = Some(msg);
+            }
+            FinishOutcome::Indeterminate(msg) => {
+                job.status = JobStatus::Error;
+                job.execution_phase = ExecutionPhase::Indeterminate;
                 job.error = Some(msg);
             }
             FinishOutcome::Cancelled => {
@@ -900,7 +1091,14 @@ impl Store {
         let done_path = self.path_for(JobStatus::Ok, &job.id);
         fs::rename(&running_path, &done_path)?;
         finish_durable_session(&job)?;
-        crate::clawd::audit::record_task_event("clawd.task.finished", &job);
+        crate::clawd::audit::record_task_event(
+            if job.execution_phase == ExecutionPhase::Indeterminate {
+                "clawd.task.execution_indeterminate"
+            } else {
+                "clawd.task.finished"
+            },
+            &job,
+        );
         Ok(job)
     }
 
@@ -1313,6 +1511,34 @@ fn validate_job_id(id: &str) -> io::Result<()> {
     Ok(())
 }
 
+fn validate_execution_binding(
+    prepare_nonce: &str,
+    commit_nonce: &str,
+    generation: &str,
+) -> io::Result<()> {
+    let nonce_is_valid = |value: &str| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    if !nonce_is_valid(prepare_nonce)
+        || !nonce_is_valid(commit_nonce)
+        || prepare_nonce == commit_nonce
+        || generation.is_empty()
+        || generation.len() > 128
+        || !generation
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid durable execution binding",
+        ));
+    }
+    Ok(())
+}
+
 /// RAII guard for per-job flock taken by `Store::lock_for_id`.
 struct JobLock {
     file: fs::File,
@@ -1341,6 +1567,7 @@ pub enum FinishOutcome {
         fallback: Box<Option<crate::agent::llm::ProviderFallbackState>>,
     },
     Error(String),
+    Indeterminate(String),
     Cancelled,
 }
 
@@ -1487,6 +1714,8 @@ fn job_to_summary(job: &Job) -> Value {
     json!({
         "id": job.id,
         "status": job.status.as_str(),
+        "schema_version": job.schema_version,
+        "execution_phase": job.execution_phase.as_str(),
         "created_at": job.created_at,
         "cancel_requested": job.cancel_requested_at.is_some(),
         "preview": job.preview(80),
@@ -1846,7 +2075,33 @@ fn run_worker_loop_inner(
         }
         match store.claim_one().map_err(|e| e.to_string())? {
             Some(job) => {
-                let mut outcome = runtime.block_on(run_one_job(&job));
+                let prepare_nonce = uuid::Uuid::new_v4().simple().to_string();
+                let commit_nonce = uuid::Uuid::new_v4().simple().to_string();
+                let generation = crate::crypto::sha256_hex(b"cos.agent.service.direct-worker.v1");
+                let prepared = store.record_execution_prepared(
+                    &job.id,
+                    job.worker_pid.unwrap_or_default(),
+                    job.worker_start_time_ticks,
+                    &prepare_nonce,
+                    &commit_nonce,
+                    &generation,
+                );
+                let committed = prepared.and_then(|_| {
+                    store.commit_execution(
+                        &job.id,
+                        job.worker_pid.unwrap_or_default(),
+                        job.worker_start_time_ticks,
+                        &prepare_nonce,
+                        &commit_nonce,
+                        &generation,
+                    )
+                });
+                let mut outcome = match committed {
+                    Ok(_) => runtime.block_on(run_one_job(&job)),
+                    Err(error) => FinishOutcome::Indeterminate(format!(
+                        "direct worker could not durably commit execution: {error}"
+                    )),
+                };
                 if store.cancellation_requested(&job.id).unwrap_or(false) {
                     outcome = FinishOutcome::Cancelled;
                 }

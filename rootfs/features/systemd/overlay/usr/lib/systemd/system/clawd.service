@@ -5,7 +5,7 @@ After=basic.target
 
 [Service]
 Type=simple
-Group=sudo
+Group=root
 UMask=0077
 ExecStart=/usr/local/bin/clawd --socket /run/cos/clawd.sock
 Restart=on-failure
@@ -17,6 +17,7 @@ Environment=COS_RUNTIME_DIR=/run/cos
 Environment=COS_LOG_DIR=/var/log/cos
 Environment=CLAWD_SOCKET=/run/cos/clawd.sock
 Environment=CLAWD_SOCKET_MODE=0660
+Environment=CLAWD_SOCKET_GROUP=sudo
 # Agent runtime isolation: the model/tool loop never runs in this
 # process. clawd spawns /usr/local/bin/claw-agentd per task, dropped to
 # the task owner with supplementary groups cleared, NoNewPrivs set, its

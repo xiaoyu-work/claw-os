@@ -520,6 +520,10 @@ pub fn spawn_worker(
             command.env(key, value);
         }
     }
+    #[cfg(debug_assertions)]
+    if let Some(value) = std::env::var_os("COS_AGENTD_TEST_COMMIT_MARKER") {
+        command.env("COS_AGENTD_TEST_COMMIT_MARKER", value);
+    }
 
     let channel_fd = worker_end.as_raw_fd();
     let expected_parent = unsafe { libc::getpid() };

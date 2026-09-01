@@ -28,8 +28,8 @@ use crate::clawd::transport::limits::{Admission, Limits};
 
 use super::grant::{GrantClaims, GrantExpectation, GrantSigner, GRANT_AUDIENCE, GRANT_VERSION};
 use super::protocol::{
-    self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, FrameReader, JobSpec,
-    RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
+    self, ApprovalAsk, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit, FrameReader,
+    JobSpec, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome, WorkerPrepared,
 };
 use super::spawn;
 
@@ -397,6 +397,8 @@ struct Lease {
     client: crate::session::SessionClient,
     presence: Option<crate::session::SessionPresence>,
     capability_generation: String,
+    prepare_nonce: String,
+    commit_nonce: String,
     extension: Option<crate::extension_host::protocol::ExtensionBinding>,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
@@ -597,6 +599,8 @@ async fn supervise(
             .unwrap_or_else(|| {
                 crate::agent::tools::exposure::capability_generation(&crate::caps::CapSet::new())
             }),
+        prepare_nonce: uuid::Uuid::new_v4().simple().to_string(),
+        commit_nonce: uuid::Uuid::new_v4().simple().to_string(),
         extension: Some(extension.host.binding.clone()),
         worker_pid: pid,
         worker_start_time_ticks: start_time_ticks,
@@ -703,6 +707,11 @@ fn finish_task_outcome(store: &Store, job: &Job, outcome: TaskOutcome) {
                 tracing::warn!(task = %job.id, error = %error, "failed to persist agent task failure");
             }
         }
+        TaskOutcome::Indeterminate(message) => {
+            if let Err(error) = store.finish(job.clone(), FinishOutcome::Indeterminate(message)) {
+                tracing::warn!(task = %job.id, error = %error, "failed to persist indeterminate agent task");
+            }
+        }
         TaskOutcome::Retry(reason) => release_or_fail(store, job, &reason),
     }
 }
@@ -711,15 +720,21 @@ enum TaskOutcome {
     Reported(Box<WorkerOutcome>),
     Cancelled,
     Failed(String),
+    Indeterminate(String),
     Retry(String),
 }
 
 fn apply_containment_cleanup(outcome: TaskOutcome, cleanup: Result<(), String>) -> TaskOutcome {
     match cleanup {
         Ok(()) => outcome,
-        Err(error) => TaskOutcome::Failed(format!(
-            "extension containment cleanup failed; descendants may remain: {error}"
-        )),
+        Err(error) => match outcome {
+            TaskOutcome::Indeterminate(detail) => TaskOutcome::Indeterminate(format!(
+                "{detail}; extension containment cleanup also failed: {error}"
+            )),
+            _ => TaskOutcome::Failed(format!(
+                "extension containment cleanup failed; descendants may remain: {error}"
+            )),
+        },
     }
 }
 
@@ -730,7 +745,7 @@ fn post_assignment_interruption(detail: String, cancel_sent: bool) -> TaskOutcom
         // Once a complete assignment reached the worker, the protocol permits
         // execution to begin. No later crash/EOF/timeout can prove that an
         // external side effect did not happen, so replaying the task is unsafe.
-        TaskOutcome::Failed(detail)
+        TaskOutcome::Indeterminate(detail)
     }
 }
 
@@ -967,8 +982,107 @@ async fn pump(
         presence: lease.presence,
         extension: lease.extension.clone(),
     };
-    if let Err(error) = send_assignment(&mut writer, assignment).await {
-        return TaskOutcome::Retry(format!("failed to assign task to worker: {error}"));
+    if assignment_failpoint("before_prepare") {
+        return TaskOutcome::Retry("assignment stopped before prepare delivery".to_string());
+    }
+    if let Err(error) = send_prepare(&mut writer, &assignment).await {
+        return TaskOutcome::Retry(format!("failed to prepare task worker: {error}"));
+    }
+    if assignment_failpoint("after_prepare") {
+        return TaskOutcome::Retry("assignment stopped after prepare delivery".to_string());
+    }
+
+    let prepared = tokio::select! {
+        frame = frames.next_frame::<WorkerFrame>() => match frame {
+            Ok(Some(WorkerFrame::Prepared(prepared))) => *prepared,
+            Ok(Some(_)) => return TaskOutcome::Retry(
+                "worker sent a non-prepared frame before execution commit".to_string()
+            ),
+            Ok(None) => return TaskOutcome::Retry(
+                "worker closed before execution commit".to_string()
+            ),
+            Err(error) => return TaskOutcome::Retry(format!(
+                "worker preparation protocol fault: {error}"
+            )),
+        },
+        status = child.wait() => {
+            return TaskOutcome::Retry(match status {
+                Ok(status) => format!("agent worker exited before execution commit ({status})"),
+                Err(error) => format!("agent worker could not be reaped before execution commit: {error}"),
+            });
+        },
+        status = extension_child.wait() => {
+            return TaskOutcome::Retry(match status {
+                Ok(status) => format!("extension host exited before execution commit ({status})"),
+                Err(error) => format!("extension host could not be reaped before execution commit: {error}"),
+            });
+        },
+        _ = tokio::time::sleep(config.heartbeat_grace) => {
+            return TaskOutcome::Retry(
+                "worker did not acknowledge assignment prepare before the deadline".to_string()
+            );
+        },
+    };
+    if let Err(error) = check_prepared(signer, broker_pid, &lease, &prepared) {
+        return TaskOutcome::Retry(format!("agent worker preparation rejected: {error}"));
+    }
+    if let Err(error) = store.record_execution_prepared(
+        &job.id,
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
+        &lease.prepare_nonce,
+        &lease.commit_nonce,
+        &lease.capability_generation,
+    ) {
+        return TaskOutcome::Retry(format!(
+            "failed to durably record worker preparation: {error}"
+        ));
+    }
+    if assignment_failpoint("after_prepared") {
+        return TaskOutcome::Retry("assignment stopped after durable prepare".to_string());
+    }
+    if let Err(error) = store.commit_execution(
+        &job.id,
+        lease.worker_pid,
+        lease.worker_start_time_ticks,
+        &lease.prepare_nonce,
+        &lease.commit_nonce,
+        &lease.capability_generation,
+    ) {
+        return TaskOutcome::Indeterminate(format!(
+            "execution commit persistence was ambiguous; refusing replay: {error}"
+        ));
+    }
+    if assignment_failpoint("after_commit_record") {
+        return TaskOutcome::Indeterminate(
+            "broker stopped after durable execution commit; outcome is indeterminate".to_string(),
+        );
+    }
+    let commit = ExecutionCommit {
+        protocol: protocol::PROTOCOL_VERSION,
+        grant: assignment.grant.clone(),
+        task_id: job.id.clone(),
+        session_id: job.session_id.clone(),
+        worker_pid: lease.worker_pid,
+        worker_start_time_ticks: lease.worker_start_time_ticks,
+        capability_generation: lease.capability_generation.clone(),
+        prepare_nonce: lease.prepare_nonce.clone(),
+        commit_nonce: lease.commit_nonce.clone(),
+    };
+    let commit_result = if assignment_failpoint("during_commit") {
+        send_commit_partial(&mut writer, &commit).await
+    } else {
+        send(&mut writer, &BrokerFrame::Commit(Box::new(commit))).await
+    };
+    if let Err(error) = commit_result {
+        return TaskOutcome::Indeterminate(format!(
+            "execution commit delivery was ambiguous; refusing replay: {error}"
+        ));
+    }
+    if assignment_failpoint("after_commit_send") {
+        return TaskOutcome::Indeterminate(
+            "broker stopped after execution commit delivery; outcome is indeterminate".to_string(),
+        );
     }
 
     let mut hello_seen = false;
@@ -987,15 +1101,27 @@ async fn pump(
                     match accept(signer, broker_pid, &mut lease, &frame, hello_seen) {
                         Ok(()) => {}
                         Err(error) => {
-                            return TaskOutcome::Failed(format!(
+                            return TaskOutcome::Indeterminate(format!(
                                 "agent worker frame rejected: {error}"
                             ));
                         }
                     }
                     match frame {
+                        WorkerFrame::Prepared(_) => {
+                            return TaskOutcome::Indeterminate(
+                                "agent worker repeated assignment preparation after commit"
+                                    .to_string(),
+                            );
+                        }
                         WorkerFrame::Hello(hello) => {
                             if let Err(error) = check_hello(&hello, &lease) {
-                                return TaskOutcome::Failed(error);
+                                return TaskOutcome::Indeterminate(error);
+                            }
+                            if assignment_failpoint("after_worker_commit") {
+                                return TaskOutcome::Indeterminate(
+                                    "broker stopped after worker accepted execution commit; outcome is indeterminate"
+                                        .to_string(),
+                                );
                             }
                             hello_seen = true;
                         }
@@ -1048,7 +1174,7 @@ async fn pump(
                     );
                 }
                 Err(error) => {
-                    return TaskOutcome::Failed(format!("agent worker protocol fault: {error}"));
+                    return TaskOutcome::Indeterminate(format!("agent worker protocol fault: {error}"));
                 }
             },
             status = child.wait() => {
@@ -1106,13 +1232,13 @@ async fn pump(
                         spawn::terminate_worker_group(lease.worker_pid, libc::SIGKILL);
                     }
                     if let Err(error) = extension_cgroup.kill_all() {
-                        return TaskOutcome::Failed(format!(
+                        return TaskOutcome::Indeterminate(format!(
                             "failed to terminate extension containment after cancellation: {error}"
                         ));
                     }
                 }
                 if !hello_seen && last_progress.elapsed() > config.heartbeat_grace {
-                    return TaskOutcome::Failed(
+                    return TaskOutcome::Indeterminate(
                         "agent worker never completed the protocol handshake".to_string(),
                     );
                 }
@@ -1131,11 +1257,11 @@ async fn pump(
                         );
                     }
                     if let Err(error) = extension_cgroup.kill_all() {
-                        return TaskOutcome::Failed(format!(
+                        return TaskOutcome::Indeterminate(format!(
                             "failed to terminate timed-out extension containment: {error}"
                         ));
                     }
-                    return TaskOutcome::Failed(
+                    return TaskOutcome::Indeterminate(
                         "agent worker lease expired without a heartbeat".to_string(),
                     );
                 }
@@ -1157,6 +1283,8 @@ fn claims_for(broker_pid: u32, lease: &Lease, ttl: Duration) -> GrantClaims {
         client: lease.client,
         presence: lease.presence,
         capability_generation: lease.capability_generation.clone(),
+        prepare_nonce: lease.prepare_nonce.clone(),
+        commit_nonce: lease.commit_nonce.clone(),
         extension: lease.extension.clone(),
         worker_pid: lease.worker_pid,
         worker_start_time_ticks: lease.worker_start_time_ticks,
@@ -1174,6 +1302,50 @@ fn approval_deadline(ttl: Duration) -> u64 {
         .saturating_add(ttl.as_secs())
 }
 
+fn grant_expectation(broker_pid: u32, lease: &Lease, route: &str) -> GrantExpectation {
+    GrantExpectation {
+        broker_pid,
+        task_id: lease.task_id.clone(),
+        session_id: lease.session_id.clone(),
+        owner_uid: lease.owner_uid,
+        owner_gid: lease.execution_gid,
+        client: lease.client,
+        presence: lease.presence,
+        capability_generation: lease.capability_generation.clone(),
+        prepare_nonce: lease.prepare_nonce.clone(),
+        commit_nonce: lease.commit_nonce.clone(),
+        extension: lease.extension.clone(),
+        worker_pid: lease.worker_pid,
+        worker_start_time_ticks: lease.worker_start_time_ticks,
+        route: route.to_string(),
+    }
+}
+
+fn check_prepared(
+    signer: &GrantSigner,
+    broker_pid: u32,
+    lease: &Lease,
+    prepared: &WorkerPrepared,
+) -> Result<(), String> {
+    if prepared.protocol != protocol::PROTOCOL_VERSION
+        || prepared.prepare_nonce != lease.prepare_nonce
+        || prepared.commit_nonce != lease.commit_nonce
+        || prepared.pid != lease.worker_pid
+        || prepared.start_time_ticks != lease.worker_start_time_ticks
+        || prepared.uid != lease.owner_uid
+        || prepared.gid != lease.execution_gid
+    {
+        return Err("worker prepare acknowledgement does not match its lease".to_string());
+    }
+    signer
+        .verify(
+            &prepared.grant,
+            &grant_expectation(broker_pid, lease, protocol::ROUTE_PREPARED),
+            super::grant::now_ms(),
+        )
+        .map_err(|error| error.to_string())
+}
+
 /// Route and binding check applied to every frame, not just the
 /// handshake: task, owner, worker identity and lease are all re-checked
 /// before the frame is allowed to touch broker state.
@@ -1189,26 +1361,19 @@ fn accept(
         return Err(format!("route `{route}` is not on the worker channel"));
     }
     match frame {
+        WorkerFrame::Prepared(_) => {
+            return Err("duplicate worker prepare acknowledgement".to_string());
+        }
         WorkerFrame::Hello(hello) => {
             if hello_seen {
                 return Err("duplicate handshake".to_string());
             }
-            let expect = GrantExpectation {
-                broker_pid,
-                task_id: lease.task_id.clone(),
-                session_id: lease.session_id.clone(),
-                owner_uid: lease.owner_uid,
-                owner_gid: lease.execution_gid,
-                client: lease.client,
-                presence: lease.presence,
-                capability_generation: lease.capability_generation.clone(),
-                extension: lease.extension.clone(),
-                worker_pid: lease.worker_pid,
-                worker_start_time_ticks: lease.worker_start_time_ticks,
-                route: route.to_string(),
-            };
             signer
-                .verify(&hello.grant, &expect, super::grant::now_ms())
+                .verify(
+                    &hello.grant,
+                    &grant_expectation(broker_pid, lease, route),
+                    super::grant::now_ms(),
+                )
                 .map_err(|error| error.to_string())?;
         }
         _ => {
@@ -1556,17 +1721,43 @@ async fn send(
         .map_err(|error| format!("flush agentd frame: {error}"))
 }
 
-async fn send_assignment(
+async fn send_prepare(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
-    assignment: Assignment,
+    assignment: &Assignment,
 ) -> Result<(), String> {
-    let encoded = protocol::encode(&BrokerFrame::Assign(Box::new(assignment)))?;
-    // UnixStream is unbuffered. Once write_all succeeds, the complete framed
-    // assignment is deliverable and every later failure is terminal.
+    let encoded = protocol::encode(&BrokerFrame::Prepare(Box::new(assignment.clone())))?;
     writer
         .write_all(encoded.as_bytes())
         .await
-        .map_err(|error| format!("write agentd assignment: {error}"))
+        .map_err(|error| format!("write agentd assignment prepare: {error}"))
+}
+
+async fn send_commit_partial(
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+    commit: &ExecutionCommit,
+) -> Result<(), String> {
+    let encoded = protocol::encode(&BrokerFrame::Commit(Box::new(commit.clone())))?;
+    let partial = encoded.len().saturating_sub(1).max(1) / 2;
+    writer
+        .write_all(&encoded.as_bytes()[..partial])
+        .await
+        .map_err(|error| format!("write partial agentd execution commit: {error}"))?;
+    Err("test failpoint interrupted the execution commit frame".to_string())
+}
+
+#[cfg(debug_assertions)]
+fn assignment_failpoint(point: &str) -> bool {
+    if std::env::var("COS_AGENTD_TEST_ASSIGNMENT_FAILPOINT").as_deref() == Ok(point) {
+        std::env::remove_var("COS_AGENTD_TEST_ASSIGNMENT_FAILPOINT");
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn assignment_failpoint(_point: &str) -> bool {
+    false
 }
 
 async fn reap(child: &mut tokio::process::Child, pid: u32) {

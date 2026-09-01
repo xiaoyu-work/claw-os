@@ -33,12 +33,20 @@ pub fn set_private_file(path: &Path) -> io::Result<()> {
     }
 }
 
+pub fn harden_clawd_runtime() -> io::Result<()> {
+    let runtime = crate::paths::runtime_dir();
+    validate_clawd_root(&runtime)?;
+    harden_trusted_root(&runtime, 0o751)
+}
+
 pub fn harden_clawd_state() -> io::Result<()> {
     let data = crate::paths::data_dir();
     let logs = crate::paths::log_dir();
 
     validate_clawd_root(&data)?;
     validate_clawd_root(&logs)?;
+    harden_trusted_root(&data, 0o711)?;
+    harden_trusted_root(&logs, 0o700)?;
     // Traversable, never listable. The per-owner agent state each
     // `claw-agentd` worker runs against lives at `<data>/users/<uid>`
     // and is owned by that account, so both the daemon root and the
@@ -51,6 +59,7 @@ pub fn harden_clawd_state() -> io::Result<()> {
     if users.exists() {
         harden_owner_partitioned_tree(&users)?;
     }
+
     for root in [
         data.join("agent"),
         data.join("approvals"),
@@ -63,6 +72,58 @@ pub fn harden_clawd_state() -> io::Result<()> {
         }
     }
     harden_private_tree(&logs)
+}
+
+fn harden_trusted_root(path: &Path, mode: u32) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let directory = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "trusted daemon root is not a directory",
+            ));
+        }
+        if unsafe { libc::geteuid() } == 0 && unsafe { libc::fchown(fd, 0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::fchmod(fd, mode) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let metadata = directory.metadata()?;
+        let euid = unsafe { libc::geteuid() as u32 };
+        if metadata.uid() != euid
+            || euid == 0 && metadata.gid() != 0
+            || metadata.mode() & 0o7777 != mode
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "trusted daemon root ownership or mode did not apply",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+    }
+    Ok(())
 }
 
 /// Prepare the per-owner agent state root an unprivileged worker writes

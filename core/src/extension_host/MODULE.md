@@ -108,10 +108,10 @@ uid. Host/child seccomp denies ptrace, process-vm access, `kcmp`, and
 `pidfd_getfd`, and task-local home/data/cache/log paths avoid exposing the
 owner's home. The worker and host both become non-dumpable at process entry.
 
-The supervisor retries only failures proven to precede delivery of the worker
-assignment. After delivery, an extension call may already have produced an
-external side effect, so unexpected host/worker exit, EOF, or timeout is a
-terminal task error rather than a queue replay.
+The supervisor sends a blocked PREPARE, persists the queue's execution COMMIT,
+and only then releases the worker. Failures proven pre-COMMIT may retry;
+commit persistence/delivery ambiguity, unexpected host/worker exit, EOF, or
+timeout after COMMIT is terminal indeterminate rather than a queue replay.
 
 ## Tests
 

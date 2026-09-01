@@ -46,6 +46,10 @@ struct TaskAudit<'a> {
     event: &'static str,
     job_id: String,
     status: &'a str,
+    schema_version: u32,
+    execution_phase: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    execution_generation: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     session_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -149,6 +153,12 @@ pub fn record_task_event(event: &'static str, job: &crate::agent::service::Job) 
         event,
         job_id: audit_policy::safe_identity(&job.id),
         status: job.status.as_str(),
+        schema_version: job.schema_version,
+        execution_phase: job.execution_phase.as_str(),
+        execution_generation: job
+            .execution_generation
+            .as_deref()
+            .map(audit_policy::safe_identity),
         session_id: job.session_id.as_deref().map(audit_policy::safe_identity),
         owner_uid: job.owner_uid,
         source: job.client.source.as_str(),

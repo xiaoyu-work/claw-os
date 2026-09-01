@@ -28,7 +28,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -50,6 +50,7 @@ pub const MAX_FRAME_BYTES: usize = 8 * 1024 * 1024;
 const MAX_PROGRESS_FIELD_CHARS: usize = 128;
 
 pub const ROUTE_HELLO: &str = "hello";
+pub const ROUTE_PREPARED: &str = "prepared";
 pub const ROUTE_STREAM: &str = "stream";
 pub const ROUTE_PROGRESS: &str = "progress";
 pub const ROUTE_AUDIT: &str = "audit";
@@ -65,6 +66,7 @@ pub const ROUTE_APPROVAL: &str = "approval";
 /// exists on this channel, so a leaked descriptor is still only an
 /// authority to report on one task.
 pub const WORKER_ROUTES: &[&str] = &[
+    ROUTE_PREPARED,
     ROUTE_HELLO,
     ROUTE_STREAM,
     ROUTE_PROGRESS,
@@ -92,7 +94,8 @@ pub fn worker_routes() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum BrokerFrame {
-    Assign(Box<Assignment>),
+    Prepare(Box<Assignment>),
+    Commit(Box<ExecutionCommit>),
     /// Cooperative cancellation. The supervisor still escalates to
     /// `SIGKILL` across the worker's process group if it does not wind
     /// down.
@@ -231,6 +234,21 @@ pub struct Assignment {
     pub extension: Option<crate::extension_host::protocol::ExtensionBinding>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionCommit {
+    pub protocol: u32,
+    pub grant: SignedGrant,
+    pub task_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    pub worker_pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_start_time_ticks: Option<u64>,
+    pub capability_generation: String,
+    pub prepare_nonce: String,
+    pub commit_nonce: String,
+}
+
 fn unattended_consent() -> ConsentContext {
     ConsentContext::Unattended
 }
@@ -258,6 +276,7 @@ pub struct JobSpec {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WorkerFrame {
+    Prepared(Box<WorkerPrepared>),
     Hello(Box<WorkerHello>),
     Stream {
         task_id: String,
@@ -289,6 +308,7 @@ pub enum WorkerFrame {
 impl WorkerFrame {
     pub fn route(&self) -> &'static str {
         match self {
+            WorkerFrame::Prepared(_) => ROUTE_PREPARED,
             WorkerFrame::Hello(_) => ROUTE_HELLO,
             WorkerFrame::Stream { .. } => ROUTE_STREAM,
             WorkerFrame::Progress { .. } => ROUTE_PROGRESS,
@@ -303,6 +323,7 @@ impl WorkerFrame {
     /// grant instead, which the broker authenticates separately.
     pub fn task_id(&self) -> Option<&str> {
         match self {
+            WorkerFrame::Prepared(prepared) => Some(prepared.grant.claims.task_id.as_str()),
             WorkerFrame::Hello(hello) => Some(hello.grant.claims.task_id.as_str()),
             WorkerFrame::Stream { task_id, .. }
             | WorkerFrame::Progress { task_id, .. }
@@ -312,6 +333,19 @@ impl WorkerFrame {
             | WorkerFrame::Result { task_id, .. } => Some(task_id.as_str()),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkerPrepared {
+    pub protocol: u32,
+    pub grant: SignedGrant,
+    pub prepare_nonce: String,
+    pub commit_nonce: String,
+    pub pid: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_time_ticks: Option<u64>,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 /// Self-report the worker makes once it has verified the assignment.

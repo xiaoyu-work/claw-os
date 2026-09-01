@@ -23,7 +23,8 @@ use std::time::Duration;
 
 use cos::agentd::grant::{GrantClaims, GrantSigner, SignedGrant, GRANT_AUDIENCE, GRANT_VERSION};
 use cos::agentd::protocol::{
-    self, Assignment, BrokerFrame, FrameReader, JobSpec, WorkerFrame, WorkerOutcome,
+    self, Assignment, BrokerFrame, ExecutionCommit, FrameReader, JobSpec, WorkerFrame,
+    WorkerOutcome,
 };
 use cos::agentd::spawn::{self, ExecutionIsolation, SpawnedWorker, WorkerIdentity};
 use tokio::io::{AsyncWriteExt, BufReader};
@@ -62,6 +63,8 @@ impl Drop for Harness {
         std::env::remove_var("COS_RUNTIME_DIR");
         std::env::remove_var(spawn::ISOLATED_GROUP_ENV);
         std::env::remove_var(cos::extension_host::spawn::CGROUP_ROOT_ENV);
+        std::env::remove_var("COS_AGENTD_TEST_ASSIGNMENT_FAILPOINT");
+        std::env::remove_var("COS_AGENTD_TEST_COMMIT_MARKER");
         let _ = std::fs::remove_dir_all(&self.runtime_dir);
         let _ = std::fs::remove_dir(&self.cgroup_root);
     }
@@ -308,6 +311,8 @@ fn grant_for(
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
         owner_gid: execution_gid,
         worker_pid,
@@ -326,6 +331,42 @@ async fn send(worker: &mut SpawnedWorker, frame: &BrokerFrame) {
         .await
         .expect("write frame");
     worker.channel.flush().await.expect("flush");
+}
+
+async fn prepare_and_commit(worker: &mut SpawnedWorker, assignment: Assignment) {
+    send(worker, &BrokerFrame::Prepare(Box::new(assignment.clone()))).await;
+    {
+        let mut frames = FrameReader::new(BufReader::new(&mut worker.channel));
+        let prepared =
+            tokio::time::timeout(Duration::from_secs(30), frames.next_frame::<WorkerFrame>())
+                .await
+                .expect("prepare acknowledgement timed out")
+                .expect("read prepare acknowledgement")
+                .expect("prepare acknowledgement frame");
+        let WorkerFrame::Prepared(prepared) = prepared else {
+            panic!("worker executed before commit: {prepared:?}");
+        };
+        assert_eq!(
+            prepared.prepare_nonce,
+            assignment.grant.claims.prepare_nonce
+        );
+        assert_eq!(prepared.commit_nonce, assignment.grant.claims.commit_nonce);
+    }
+    send(
+        worker,
+        &BrokerFrame::Commit(Box::new(ExecutionCommit {
+            protocol: protocol::PROTOCOL_VERSION,
+            grant: assignment.grant.clone(),
+            task_id: assignment.job.id.clone(),
+            session_id: assignment.job.session_id.clone(),
+            worker_pid: worker.pid,
+            worker_start_time_ticks: worker.start_time_ticks,
+            capability_generation: assignment.grant.claims.capability_generation.clone(),
+            prepare_nonce: assignment.grant.claims.prepare_nonce.clone(),
+            commit_nonce: assignment.grant.claims.commit_nonce.clone(),
+        })),
+    )
+    .await;
 }
 
 fn proc_field(pid: u32, field: &str) -> Option<String> {
@@ -806,15 +847,15 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         worker.pid,
         worker.start_time_ticks,
     );
-    send(
+    prepare_and_commit(
         &mut worker,
-        &BrokerFrame::Assign(Box::new(assignment(
+        assignment(
             grant,
             protocol::PROTOCOL_VERSION,
             "task-boundary",
             harness.identity.uid,
             &harness.identity.home,
-        ))),
+        ),
     )
     .await;
 
@@ -932,6 +973,7 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
                 ));
                 break;
             }
+
             Some(WorkerFrame::Audit { task_id, .. }) => {
                 assert_eq!(task_id, "task-boundary");
                 saw_audit = true;
@@ -954,6 +996,87 @@ async fn a_worker_inherits_no_broker_descriptor_environment_or_privilege() {
         .expect("worker did not exit")
         .expect("wait");
     assert!(status.success(), "worker exited with {status}");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_commit_for_another_worker_cannot_release_execution() {
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable unprivileged account for the worker harness");
+        return;
+    };
+    let signer = GrantSigner::generate().expect("signer");
+    let mut first =
+        spawn::spawn_worker(&harness.identity, &harness.isolation, "commit-first").expect("first");
+    let mut second = spawn::spawn_worker(&harness.identity, &harness.isolation, "commit-second")
+        .expect("second");
+    let first_assignment = assignment(
+        grant_for(
+            &signer,
+            "commit-first",
+            &harness.identity,
+            harness.isolation.execution_gid(),
+            first.pid,
+            first.start_time_ticks,
+        ),
+        protocol::PROTOCOL_VERSION,
+        "commit-first",
+        harness.identity.uid,
+        &harness.identity.home,
+    );
+    let second_assignment = assignment(
+        grant_for(
+            &signer,
+            "commit-second",
+            &harness.identity,
+            harness.isolation.execution_gid(),
+            second.pid,
+            second.start_time_ticks,
+        ),
+        protocol::PROTOCOL_VERSION,
+        "commit-second",
+        harness.identity.uid,
+        &harness.identity.home,
+    );
+    send(
+        &mut first,
+        &BrokerFrame::Prepare(Box::new(first_assignment.clone())),
+    )
+    .await;
+    send(
+        &mut second,
+        &BrokerFrame::Prepare(Box::new(second_assignment)),
+    )
+    .await;
+    for worker in [&mut first, &mut second] {
+        let mut frames = FrameReader::new(BufReader::new(&mut worker.channel));
+        let frame = frames.next_frame::<WorkerFrame>().await.unwrap().unwrap();
+        assert!(matches!(frame, WorkerFrame::Prepared(_)));
+    }
+    send(
+        &mut second,
+        &BrokerFrame::Commit(Box::new(ExecutionCommit {
+            protocol: protocol::PROTOCOL_VERSION,
+            grant: first_assignment.grant.clone(),
+            task_id: first_assignment.job.id.clone(),
+            session_id: first_assignment.job.session_id.clone(),
+            worker_pid: first.pid,
+            worker_start_time_ticks: first.start_time_ticks,
+            capability_generation: first_assignment.grant.claims.capability_generation.clone(),
+            prepare_nonce: first_assignment.grant.claims.prepare_nonce.clone(),
+            commit_nonce: first_assignment.grant.claims.commit_nonce.clone(),
+        })),
+    )
+    .await;
+    let status = tokio::time::timeout(Duration::from_secs(30), second.child.wait())
+        .await
+        .expect("cross-worker commit did not terminate")
+        .expect("wait for second worker");
+    assert!(!status.success(), "cross-worker commit was accepted");
+    let _ = first.child.start_kill();
+    unsafe {
+        spawn::terminate_worker_group(first.pid, libc::SIGKILL);
+    }
+    let _ = first.child.wait().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1066,6 +1189,73 @@ async fn extension_host_uses_dedicated_gid_and_cannot_open_primary_broker() {
         "task completion left its containment cgroup behind"
     );
     host.paths.cleanup().expect("clean host paths");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn service_owned_roots_are_hardened_before_an_extension_task() {
+    use std::os::unix::fs::MetadataExt;
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    let logs = harness.runtime_dir.join("service-logs");
+    std::fs::create_dir(&logs).expect("create service logs");
+    for path in [&harness.runtime_dir, harness._data.path(), &logs] {
+        let raw = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).expect("root path");
+        assert_eq!(
+            unsafe { libc::chown(raw.as_ptr(), 0, harness.identity.gid) },
+            0,
+            "model systemd root group"
+        );
+    }
+    let previous_log = std::env::var_os("COS_LOG_DIR");
+    std::env::set_var("COS_LOG_DIR", &logs);
+    cos::storage::harden_clawd_runtime().expect("harden runtime root");
+    cos::storage::harden_clawd_state().expect("harden state roots");
+    assert_eq!(std::fs::metadata(&harness.runtime_dir).unwrap().gid(), 0);
+    assert_eq!(std::fs::metadata(harness._data.path()).unwrap().gid(), 0);
+    assert_eq!(std::fs::metadata(&logs).unwrap().gid(), 0);
+    assert_eq!(
+        std::fs::metadata(&harness.primary_path).unwrap().gid(),
+        harness.identity.gid,
+        "hardening roots must not change primary socket access"
+    );
+
+    let paths =
+        cos::extension_host::spawn::HostPaths::create(&harness.identity).expect("host paths");
+    let _listener = cos::extension_host::broker::bind_listener(
+        &paths,
+        harness.extension_identity.uid,
+        harness.isolation.execution_gid(),
+    )
+    .expect("private broker listener");
+    let mut host = cos::extension_host::spawn::spawn_host(
+        &harness.identity,
+        &harness.extension_identity,
+        &harness.isolation,
+        &harness.containment,
+        "service-root-task",
+        None,
+        None,
+        std::process::id(),
+        process_start(std::process::id()),
+        "0123456789abcdef0123456789abcdef",
+        cos::agentd::grant::now_ms() + 60_000,
+        paths,
+    )
+    .expect("launch extension task after service root hardening");
+    assert!(host.child.try_wait().expect("host status").is_none());
+    host.cgroup.cleanup().await.expect("clean host cgroup");
+    let _ = host.child.wait().await;
+    host.cleanup_private_mounts()
+        .expect("clean private tmp mounts");
+    host.paths.cleanup().expect("clean host paths");
+
+    match previous_log {
+        Some(value) => std::env::set_var("COS_LOG_DIR", value),
+        None => std::env::remove_var("COS_LOG_DIR"),
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -1881,15 +2071,15 @@ async fn a_cancelled_task_is_reported_as_cancelled_by_the_worker() {
         worker.pid,
         worker.start_time_ticks,
     );
-    send(
+    prepare_and_commit(
         &mut worker,
-        &BrokerFrame::Assign(Box::new(assignment(
+        assignment(
             grant,
             protocol::PROTOCOL_VERSION,
             "task-cancel",
             harness.identity.uid,
             &harness.identity.home,
-        ))),
+        ),
     )
     .await;
     // Queued behind the assignment, so the worker observes it as soon
@@ -2048,8 +2238,141 @@ async fn the_supervisor_runs_a_task_end_to_end_through_a_real_worker() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn assignment_crash_boundaries_requeue_only_before_durable_commit() {
+    use cos::agent::service::{ExecutionPhase, JobStatus, Store};
+    use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+
+    let Some(harness) = harness() else {
+        eprintln!("skipping: no usable root isolation harness");
+        return;
+    };
+    for (point, replay_safe) in [
+        ("before_prepare", true),
+        ("after_prepare", true),
+        ("after_prepared", true),
+        ("after_commit_record", false),
+        ("during_commit", false),
+        ("after_commit_send", false),
+        ("after_worker_commit", false),
+    ] {
+        let queue = tempfile::tempdir().expect("queue");
+        let store = Store::with_root(queue.path().to_path_buf()).expect("store");
+        let job = store
+            .submit(
+                format!("assignment failpoint {point}"),
+                None,
+                Some(1),
+                Some(harness.identity.uid),
+                Some(harness.identity.home.to_string_lossy().into_owned()),
+            )
+            .expect("submit");
+        std::env::set_var("COS_AGENTD_TEST_ASSIGNMENT_FAILPOINT", point);
+
+        let marker = harness.runtime_dir.join(format!("commit-{point}.marker"));
+        std::fs::write(&marker, b"").expect("create commit marker");
+        let raw =
+            std::ffi::CString::new(marker.as_os_str().as_encoded_bytes()).expect("marker path");
+        assert_eq!(
+            unsafe { libc::chown(raw.as_ptr(), harness.identity.uid, harness.identity.gid,) },
+            0,
+            "chown commit marker"
+        );
+        std::env::set_var("COS_AGENTD_TEST_COMMIT_MARKER", &marker);
+
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let config = SupervisorConfig {
+            poll: Duration::from_millis(25),
+            max_workers: 1,
+            lease: Duration::from_secs(120),
+            heartbeat_grace: Duration::from_secs(30),
+            ..SupervisorConfig::default()
+        };
+        let supervisor = tokio::spawn(run_with_store_and_broker(
+            config,
+            shutdown.clone(),
+            store.clone(),
+            test_broker_context(&harness),
+        ));
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(120);
+        let finished = loop {
+            if let Some((_, current)) = store.locate(&job.id).expect("locate") {
+                if matches!(
+                    current.status,
+                    JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+                ) {
+                    break current;
+                }
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "failpoint {point} did not resolve"
+            );
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        };
+        shutdown.store(true, Ordering::SeqCst);
+        let _ = tokio::time::timeout(Duration::from_secs(10), supervisor).await;
+
+        if replay_safe {
+            assert_eq!(
+                finished.recovery_count, 1,
+                "{point} did not perform exactly one safe retry: {:?}",
+                finished.error
+            );
+            assert_ne!(
+                finished.execution_phase,
+                ExecutionPhase::Indeterminate,
+                "{point} was incorrectly treated as an ambiguous execution"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&marker)
+                    .expect("read commit marker")
+                    .lines()
+                    .count(),
+                1,
+                "{point} allowed execution before commit or retried more than once"
+            );
+        } else {
+            assert_eq!(finished.recovery_count, 0, "{point} was replayed");
+            assert_eq!(
+                finished.execution_phase,
+                ExecutionPhase::Indeterminate,
+                "{point} was not terminal indeterminate"
+            );
+            assert!(
+                finished.error.as_deref().is_some_and(
+                    |error| error.contains("indeterminate") || error.contains("ambiguous")
+                ),
+                "{point}: {:?}",
+                finished.error
+            );
+            assert!(
+                store.claim_one().expect("requeue probe").is_none(),
+                "{point} re-entered the pending queue"
+            );
+            let commits = std::fs::read_to_string(&marker)
+                .expect("read commit marker")
+                .lines()
+                .count();
+            if matches!(point, "after_commit_record" | "during_commit") {
+                assert_eq!(commits, 0, "{point} delivered a commit unexpectedly");
+            } else {
+                assert!(
+                    commits <= 1,
+                    "{point} delivered or replayed multiple commits"
+                );
+            }
+            if point == "after_worker_commit" {
+                assert_eq!(commits, 1, "worker did not observe exactly one commit");
+            }
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
-    use cos::agent::service::{JobStatus, Store};
+    use cos::agent::service::{ExecutionPhase, JobStatus, Store};
     use cos::agentd::supervisor::{run_with_store_and_broker, SupervisorConfig};
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -2138,6 +2461,7 @@ async fn host_crash_after_control_side_effect_is_terminal_without_requeue() {
     let _ = tokio::time::timeout(Duration::from_secs(10), supervisor).await;
 
     assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(finished.execution_phase, ExecutionPhase::Indeterminate);
     assert_eq!(finished.recovery_count, 0);
     let error = finished.error.unwrap_or_default();
     assert!(
@@ -2357,6 +2681,8 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
         capability_generation: cos::agent::tools::exposure::capability_generation(
             &cos::caps::CapSet::new(),
         ),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
         owner_gid: harness.isolation.execution_gid(),
         worker_pid: worker.pid,
@@ -2367,7 +2693,7 @@ async fn a_grant_without_the_approval_route_refuses_to_start() {
     });
     send(
         &mut worker,
-        &BrokerFrame::Assign(Box::new(assignment(
+        &BrokerFrame::Prepare(Box::new(assignment(
             grant,
             protocol::PROTOCOL_VERSION,
             "task-noapproval",
@@ -2431,7 +2757,7 @@ async fn a_worker_refuses_a_grant_minted_for_another_process() {
     );
     send(
         &mut worker,
-        &BrokerFrame::Assign(Box::new(assignment(
+        &BrokerFrame::Prepare(Box::new(assignment(
             grant,
             protocol::PROTOCOL_VERSION,
             "task-stolen",
@@ -2470,7 +2796,7 @@ async fn a_protocol_version_mismatch_fails_closed() {
     );
     send(
         &mut worker,
-        &BrokerFrame::Assign(Box::new(assignment(
+        &BrokerFrame::Prepare(Box::new(assignment(
             grant,
             protocol::PROTOCOL_VERSION + 1,
             "task-mixed",

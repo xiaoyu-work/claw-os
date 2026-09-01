@@ -19,6 +19,9 @@ surfaces.
 - Expose CLI, task-queue, and authenticated local web surfaces. The queue's
   execution side runs in `claw-agentd`, never in the `clawd` broker — see
   [`../agentd/MODULE.md`](../agentd/MODULE.md).
+- Persist a versioned execution phase for every queued task. Workers acknowledge
+  PREPARE while blocked; only a durable COMMIT record permits execution.
+  Recovery requeues only phases that prove COMMIT was never issued.
 
 ## Key Files
 

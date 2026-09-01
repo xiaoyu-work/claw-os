@@ -21,7 +21,7 @@ use sha2::Sha256;
 
 /// Wire format version. Bumped whenever the claim set changes shape so
 /// a mixed old/new install fails closed instead of mis-parsing.
-pub const GRANT_VERSION: u32 = 6;
+pub const GRANT_VERSION: u32 = 7;
 
 /// Intended recipient of the grant. A token issued for the worker
 /// channel is meaningless anywhere else because every verifier requires
@@ -41,6 +41,7 @@ pub enum GrantError {
     Client,
     Presence,
     CapabilityGeneration,
+    ExecutionNonce,
     Extension,
     Owner { expected: u32, actual: u32 },
     OwnerGid { expected: u32, actual: u32 },
@@ -77,6 +78,9 @@ impl std::fmt::Display for GrantError {
             }
             GrantError::CapabilityGeneration => {
                 f.write_str("agentd grant is bound to a different capability generation")
+            }
+            GrantError::ExecutionNonce => {
+                f.write_str("agentd grant is bound to a different execution commit nonce")
             }
             GrantError::Extension => {
                 f.write_str("agentd grant is bound to a different extension host")
@@ -128,6 +132,8 @@ pub struct GrantClaims {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
+    pub prepare_nonce: String,
+    pub commit_nonce: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<crate::extension_host::protocol::ExtensionBinding>,
     pub worker_pid: u32,
@@ -178,6 +184,8 @@ impl GrantClaims {
             None => push_u64(&mut buf, 0),
         }
         push_bytes(&mut buf, self.capability_generation.as_bytes());
+        push_bytes(&mut buf, self.prepare_nonce.as_bytes());
+        push_bytes(&mut buf, self.commit_nonce.as_bytes());
         match &self.extension {
             Some(extension) => {
                 push_u64(&mut buf, 1);
@@ -258,6 +266,8 @@ pub struct GrantExpectation {
     pub client: crate::session::SessionClient,
     pub presence: Option<crate::session::SessionPresence>,
     pub capability_generation: String,
+    pub prepare_nonce: String,
+    pub commit_nonce: String,
     pub extension: Option<crate::extension_host::protocol::ExtensionBinding>,
     pub worker_pid: u32,
     pub worker_start_time_ticks: Option<u64>,
@@ -364,6 +374,11 @@ impl GrantSigner {
         }
         if grant.claims.capability_generation != expect.capability_generation {
             return Err(GrantError::CapabilityGeneration);
+        }
+        if grant.claims.prepare_nonce != expect.prepare_nonce
+            || grant.claims.commit_nonce != expect.commit_nonce
+        {
+            return Err(GrantError::ExecutionNonce);
         }
         if grant.claims.extension != expect.extension {
             return Err(GrantError::Extension);

@@ -16,6 +16,8 @@ fn new_lease() -> Lease {
         ),
         presence: None,
         capability_generation: "caps-a".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),

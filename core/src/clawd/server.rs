@@ -54,6 +54,7 @@ use super::{audit, context, event_center, firewall, system_journal, usb_guard};
 pub struct ServerOptions {
     pub socket_path: PathBuf,
     pub socket_mode: u32,
+    pub socket_group: Option<String>,
 }
 
 pub async fn run(options: ServerOptions) -> Result<(), String> {
@@ -63,7 +64,11 @@ pub async fn run(options: ServerOptions) -> Result<(), String> {
     // Before the first `accept`, so no connection is ever served
     // without the kernel stamping credentials onto its messages.
     enable_credential_passing(&listener)?;
-    set_socket_permissions(&options.socket_path, options.socket_mode)?;
+    set_socket_permissions(
+        &options.socket_path,
+        options.socket_mode,
+        options.socket_group.as_deref(),
+    )?;
     let state = DaemonState::try_new()?;
     let _event_center = event_center::start();
     if let Err(error) = firewall::reconcile_on_start().await {
@@ -593,16 +598,92 @@ fn enable_credential_passing(_listener: &UnixListener) -> Result<(), String> {
 }
 
 #[cfg(unix)]
-fn set_socket_permissions(socket_path: &PathBuf, mode: u32) -> Result<(), String> {
-    use std::os::unix::fs::PermissionsExt;
+fn set_socket_permissions(
+    socket_path: &PathBuf,
+    mode: u32,
+    group: Option<&str>,
+) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 
+    let before = std::fs::symlink_metadata(socket_path)
+        .map_err(|error| format!("inspect broker socket: {error}"))?;
+    let euid = unsafe { libc::geteuid() as u32 };
+    if before.file_type().is_symlink()
+        || !before.file_type().is_socket()
+        || before.uid() != euid
+    {
+        return Err("broker socket has unsafe identity".to_string());
+    }
+    let expected_gid = match group {
+        Some(group) => Some(resolve_group_gid(group)?),
+        None => None,
+    };
+    if let Some(gid) = expected_gid {
+        if euid != 0 {
+            return Err("broker socket group override requires root".to_string());
+        }
+        let path = std::ffi::CString::new(socket_path.as_os_str().as_bytes())
+            .map_err(|_| "broker socket path contains NUL".to_string())?;
+        if unsafe { libc::lchown(path.as_ptr(), 0, gid) } != 0 {
+            return Err(format!(
+                "failed to chown {}: {}",
+                socket_path.display(),
+                std::io::Error::last_os_error()
+            ));
+        }
+    }
     std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(mode))
-        .map_err(|err| format!("failed to chmod {}: {err}", socket_path.display()))
+        .map_err(|err| format!("failed to chmod {}: {err}", socket_path.display()))?;
+    let after = std::fs::symlink_metadata(socket_path)
+        .map_err(|error| format!("verify broker socket: {error}"))?;
+    if !after.file_type().is_socket()
+        || after.dev() != before.dev()
+        || after.ino() != before.ino()
+        || after.uid() != euid
+        || after.mode() & 0o7777 != mode
+        || expected_gid.is_some_and(|gid| after.gid() != gid)
+    {
+        return Err("broker socket changed while permissions were applied".to_string());
+    }
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn set_socket_permissions(_socket_path: &PathBuf, _mode: u32) -> Result<(), String> {
+fn set_socket_permissions(
+    _socket_path: &PathBuf,
+    _mode: u32,
+    _group: Option<&str>,
+) -> Result<(), String> {
     Ok(())
+}
+
+#[cfg(unix)]
+fn resolve_group_gid(name: &str) -> Result<u32, String> {
+    let name =
+        std::ffi::CString::new(name).map_err(|_| "broker socket group contains NUL".to_string())?;
+    let mut group: libc::group = unsafe { std::mem::zeroed() };
+    let mut buffer = vec![0 as libc::c_char; 16 * 1024];
+    let mut result = std::ptr::null_mut();
+    let rc = unsafe {
+        libc::getgrnam_r(
+            name.as_ptr(),
+            &mut group,
+            buffer.as_mut_ptr(),
+            buffer.len(),
+            &mut result,
+        )
+    };
+    if rc != 0 {
+        return Err(format!(
+            "resolve broker socket group: {}",
+            std::io::Error::from_raw_os_error(rc)
+        ));
+    }
+    if result.is_null() {
+        return Err("broker socket group does not exist".to_string());
+    }
+    Ok(group.gr_gid)
 }
 
 #[cfg(test)]

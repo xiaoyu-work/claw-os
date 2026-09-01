@@ -21,6 +21,8 @@ fn claims(worker_pid: u32) -> GrantClaims {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
         worker_pid,
         worker_start_time_ticks: Some(99),
@@ -49,6 +51,8 @@ fn expectation(route: &str) -> GrantExpectation {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
@@ -180,6 +184,13 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
     assert_eq!(
         signer.verify(&grant, &other_generation, 2_000),
         Err(GrantError::CapabilityGeneration)
+    );
+
+    let mut other_commit = expectation("hello");
+    other_commit.commit_nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    assert_eq!(
+        signer.verify(&grant, &other_commit, 2_000),
+        Err(GrantError::ExecutionNonce)
     );
 
     let mut other_presence = expectation("hello");
