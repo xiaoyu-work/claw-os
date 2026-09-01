@@ -154,3 +154,105 @@ fn mcp_gateway_and_host_audit_share_exact_opaque_identity() {
         assert_eq!(mcp, Some(identity.clone()));
     }
 }
+
+#[test]
+fn remote_error_text_cannot_spoof_lifecycle_classification() {
+        for message in [
+            "timed out",
+            "connect extension host",
+            "different process",
+            "closed",
+            "protocol crash timeout connect",
+        ] {
+            let result: ClientResult<()> = Err(ClientFault::new(
+                ExtensionErrorCategory::RemoteCallFailure,
+                message,
+            ));
+            assert_eq!(
+                action_for_result(&result),
+                super::super::protocol::LifecycleAction::RemoteCallFailure
+            );
+        }
+}
+
+#[test]
+fn trusted_client_fault_categories_map_to_exact_lifecycle_actions() {
+        for (category, action) in [
+            (
+                ExtensionErrorCategory::Connect,
+                super::super::protocol::LifecycleAction::Connect,
+            ),
+            (
+                ExtensionErrorCategory::Timeout,
+                super::super::protocol::LifecycleAction::Timeout,
+            ),
+            (
+                ExtensionErrorCategory::Crash,
+                super::super::protocol::LifecycleAction::Crash,
+            ),
+            (
+                ExtensionErrorCategory::Protocol,
+                super::super::protocol::LifecycleAction::Protocol,
+            ),
+        ] {
+            let result: ClientResult<()> = Err(ClientFault::new(category, "remote says timed out"));
+            assert_eq!(action_for_result(&result), action);
+        }
+}
+
+#[test]
+fn categorized_response_serialization_rejects_old_spoofing_semantics() {
+        let response = ControlResponse::error(
+            crate::clawd::wire::RequestId::unknown(),
+            ExtensionErrorCategory::RemoteCallFailure,
+            "connect extension host timed out and closed",
+        );
+        let encoded = serde_json::to_value(&response).unwrap();
+        assert_eq!(encoded["error_category"], "remote-call-failure");
+
+        let legacy = serde_json::json!({
+            "protocol": PROTOCOL_VERSION,
+            "id": crate::clawd::wire::RequestId::unknown(),
+            "ok": false,
+            "error": "timed out"
+        });
+        let decoded: ControlResponse = serde_json::from_value(legacy).unwrap();
+        assert_eq!(decoded.error_category, None);
+}
+
+fn transport_test_client(path: &std::path::Path) -> ExtensionHostClient {
+        let mut binding = binding();
+        binding.control_socket = path.to_string_lossy().into_owned();
+        binding.host_pid = std::process::id();
+        binding.host_start_time_ticks =
+            crate::proc::read_start_time_ticks_pub(std::process::id());
+        ExtensionHostClient {
+            binding_digest: binding.digest().unwrap(),
+            lease_digest: crate::crypto::sha256_hex(binding.lease_nonce.as_bytes()),
+            binding,
+            audit: None,
+        }
+}
+
+#[tokio::test]
+async fn transport_observers_assign_connect_and_frame_categories() {
+        let root = tempfile::tempdir().unwrap();
+        let missing = root.path().join("missing.sock");
+        let connect = transport_test_client(&missing)
+            .request_with_timeout(HostAction::Ping, Duration::from_millis(50), false)
+            .await
+            .unwrap_err();
+        assert_eq!(connect.category, ExtensionErrorCategory::Connect);
+        assert_eq!(
+            response_fault_category(crate::clawd::wire::Fault::ReadTimeout),
+            ExtensionErrorCategory::Timeout,
+        );
+        assert_eq!(
+            response_fault_category(crate::clawd::wire::Fault::TruncatedFrame),
+            ExtensionErrorCategory::Crash,
+        );
+        assert_eq!(
+            response_fault_category(crate::clawd::wire::Fault::MalformedBody),
+            ExtensionErrorCategory::Protocol,
+        );
+}

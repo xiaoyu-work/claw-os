@@ -85,6 +85,7 @@ jobs:
             --test agentd_process_boundary \
             --test extension_host_boundary \
             --no-run
+          cargo test -p cos --lib --no-run
 
           readonly root=/opt/cos-boundary-tests
           sudo install -d -o root -g root -m 0755 "$root"
@@ -94,13 +95,24 @@ jobs:
           trap cleanup EXIT
 
           agentd_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-            -name 'agentd_process_boundary-*' -printf '%T@ %p\n' |
+            -name 'agentd_process_boundary-*' ! -name '*.d' -printf '%T@ %p\n' |
             sort -nr | head -n1 | cut -d' ' -f2-)
           extension_test=$(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
-            -name 'extension_host_boundary-*' -printf '%T@ %p\n' |
+            -name 'extension_host_boundary-*' ! -name '*.d' -printf '%T@ %p\n' |
             sort -nr | head -n1 | cut -d' ' -f2-)
+          lib_test=
+          while IFS= read -r candidate; do
+            if "$candidate" --list 2>/dev/null |
+              grep '^extension_host::child_isolation::tests::' >/dev/null; then
+              lib_test=$candidate
+              break
+            fi
+          done < <(find target/debug/deps -maxdepth 1 -type f -perm -u+x \
+            -name 'cos-*' ! -name '*.d' ! -name '*.rlib' ! -name '*.rmeta' \
+            -printf '%T@ %p\n' | sort -nr | cut -d' ' -f2-)
           test -n "$agentd_test"
           test -n "$extension_test"
+          test -n "$lib_test"
 
           sudo install -o root -g root -m 0755 \
             target/debug/claw-agentd "$root/claw-agentd"
@@ -110,6 +122,8 @@ jobs:
             "$agentd_test" "$root/agentd_process_boundary"
           sudo install -o root -g root -m 0755 \
             "$extension_test" "$root/extension_host_boundary"
+          sudo install -o root -g root -m 0755 \
+            "$lib_test" "$root/cos_lib_tests"
 
           sudo env \
             HOME=/root \
@@ -121,6 +135,12 @@ jobs:
             SUDO_UID="$(id -u)" \
             COS_PRIVILEGED_EXTENSION_HOST_BIN="$root/claw-extension-host" \
             "$root/extension_host_boundary" --test-threads=1
+          sudo env \
+            HOME=/root \
+            SUDO_UID="$(id -u)" \
+            COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1 \
+            "$root/cos_lib_tests" extension_host::child_isolation::tests \
+            --test-threads=1
 
       - name: Run cos-browser tests
         run: cargo test -p cos-browser

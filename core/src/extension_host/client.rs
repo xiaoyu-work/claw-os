@@ -11,9 +11,37 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::clawd::wire::RequestId;
 
 use super::protocol::{
-    ControlRequest, ControlResponse, ExtensionBinding, HostAction, HostResult,
+    ControlRequest, ControlResponse, ExtensionBinding, ExtensionErrorCategory, HostAction,
+    HostResult,
     DEFAULT_REQUEST_TIMEOUT_MS, MAX_CONTROL_FRAME_BYTES, PROTOCOL_VERSION, READY_TIMEOUT_MS,
 };
+
+#[derive(Debug, Clone)]
+struct ClientFault {
+    category: ExtensionErrorCategory,
+    message: String,
+}
+
+impl ClientFault {
+    fn new(category: ExtensionErrorCategory, message: impl Into<String>) -> Self {
+        Self {
+            category,
+            message: message.into(),
+        }
+    }
+
+    fn protocol(message: impl Into<String>) -> Self {
+        Self::new(ExtensionErrorCategory::Protocol, message)
+    }
+}
+
+impl std::fmt::Display for ClientFault {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.message)
+    }
+}
+
+type ClientResult<T> = Result<T, ClientFault>;
 
 static CURRENT: OnceLock<RwLock<Option<Arc<ExtensionHostClient>>>> = OnceLock::new();
 
@@ -180,7 +208,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::AppOutput { output } => Ok(output),
-                _ => Err("extension host returned the wrong App result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong App result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::App,
@@ -192,7 +222,7 @@ impl ExtensionHostClient {
         );
         self.emit_result(
             super::protocol::ExtensionKind::App,
-            super::protocol::LifecycleAction::Call,
+            action_for_result(&result),
             &app_id,
             digest.as_deref(),
             started.elapsed(),
@@ -206,7 +236,7 @@ impl ExtensionHostClient {
             started.elapsed(),
             &result,
         );
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn open_app(&self, app_id: String) -> Result<usize, String> {
@@ -219,7 +249,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::AppOpened { tool_count } => Ok(tool_count),
-                _ => Err("extension host returned the wrong App-open result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong App-open result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::App,
@@ -239,7 +271,7 @@ impl ExtensionHostClient {
                 &result,
             );
         }
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn call_app(
@@ -264,7 +296,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::AppCall { value } => Ok(value),
-                _ => Err("extension host returned the wrong App-call result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong App-call result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::App,
@@ -274,7 +308,7 @@ impl ExtensionHostClient {
             started.elapsed(),
             &result,
         );
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn close_app(&self, app_id: String) -> Result<bool, String> {
@@ -286,7 +320,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::AppClosed { closed } => Ok(closed),
-                _ => Err("extension host returned the wrong App-close result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong App-close result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::App,
@@ -296,7 +332,7 @@ impl ExtensionHostClient {
             started.elapsed(),
             &result,
         );
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn attach_mcp(
@@ -311,7 +347,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::McpAttached { tools } => Ok(tools),
-                _ => Err("extension host returned the wrong MCP-attach result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong MCP-attach result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::Mcp,
@@ -331,7 +369,7 @@ impl ExtensionHostClient {
                 &result,
             );
         }
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn call_mcp(
@@ -359,7 +397,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::McpCall { value } => Ok(value),
-                _ => Err("extension host returned the wrong MCP-call result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong MCP-call result",
+                )),
             });
         self.emit_mcp_result(
             action_for_result(&result),
@@ -369,7 +409,7 @@ impl ExtensionHostClient {
             started.elapsed(),
             &result,
         );
-        result
+        result.map_err(|error| error.message)
     }
 
     pub async fn detach_mcp(&self, server: String) -> Result<bool, String> {
@@ -381,7 +421,9 @@ impl ExtensionHostClient {
             .await
             .and_then(|result| match result {
                 HostResult::McpDetached { detached } => Ok(detached),
-                _ => Err("extension host returned the wrong MCP-detach result".to_string()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong MCP-detach result",
+                )),
             });
         self.emit_result(
             super::protocol::ExtensionKind::Mcp,
@@ -391,10 +433,10 @@ impl ExtensionHostClient {
             started.elapsed(),
             &result,
         );
-        result
+        result.map_err(|error| error.message)
     }
 
-    async fn request(&self, action: HostAction) -> Result<HostResult, String> {
+    async fn request(&self, action: HostAction) -> ClientResult<HostResult> {
         self.request_with_timeout(
             action,
             Duration::from_millis(DEFAULT_REQUEST_TIMEOUT_MS),
@@ -408,11 +450,12 @@ impl ExtensionHostClient {
         action: HostAction,
         timeout: Duration,
         cancel_on_timeout: bool,
-    ) -> Result<HostResult, String> {
+    ) -> ClientResult<HostResult> {
         self.binding.validate_worker(
             std::process::id(),
             crate::proc::read_start_time_ticks_pub(std::process::id()),
-        )?;
+        )
+        .map_err(ClientFault::protocol)?;
         let request = ControlRequest::new(
             &self.binding,
             action,
@@ -428,53 +471,83 @@ impl ExtensionHostClient {
                 if cancel_on_timeout {
                     self.cancel_best_effort(request_id);
                 }
-                Err(format!(
-                    "extension host request timed out after {}ms",
-                    timeout.as_millis()
+                Err(ClientFault::new(
+                    ExtensionErrorCategory::Timeout,
+                    format!(
+                        "extension host request timed out after {}ms",
+                        timeout.as_millis()
+                    ),
                 ))
             }
         }
     }
 
-    async fn exchange(&self, request: ControlRequest) -> Result<HostResult, String> {
+    async fn exchange(&self, request: ControlRequest) -> ClientResult<HostResult> {
         let path = Path::new(&self.binding.control_socket);
         let mut stream = UnixStream::connect(path)
             .await
-            .map_err(|error| format!("connect extension host {}: {error}", path.display()))?;
-        verify_host_peer(&stream, &self.binding)?;
+            .map_err(|error| {
+                ClientFault::new(
+                    ExtensionErrorCategory::Connect,
+                    format!("connect extension host {}: {error}", path.display()),
+                )
+            })?;
+        verify_host_peer(&stream, &self.binding)
+            .map_err(|error| ClientFault::new(ExtensionErrorCategory::Crash, error))?;
         let body = serde_json::to_vec(&request)
-            .map_err(|error| format!("encode extension-host request: {error}"))?;
+            .map_err(|error| ClientFault::protocol(format!("encode extension-host request: {error}")))?;
         if body.len() > MAX_CONTROL_FRAME_BYTES {
-            return Err("extension-host request exceeds its frame limit".to_string());
+            return Err(ClientFault::protocol(
+                "extension-host request exceeds its frame limit",
+            ));
         }
         crate::clawd::transport::frame::write_request_async(&mut stream, &body)
             .await
-            .map_err(|error| format!("write extension-host request: {error}"))?;
+            .map_err(|error| {
+                ClientFault::new(
+                    ExtensionErrorCategory::Crash,
+                    format!("write extension-host request: {error}"),
+                )
+            })?;
         let body = crate::clawd::transport::frame::read_response_async(
             &mut stream,
             MAX_CONTROL_FRAME_BYTES,
         )
         .await
-        .map_err(|fault| format!("read extension-host response: {}", fault.message()))?;
+        .map_err(|fault| {
+            let category = response_fault_category(fault);
+            ClientFault::new(
+                category,
+                format!("read extension-host response: {}", fault.message()),
+            )
+        })?;
         let response: ControlResponse = serde_json::from_slice(&body)
-            .map_err(|_| "extension-host response is not a valid envelope".to_string())?;
+            .map_err(|_| ClientFault::protocol("extension-host response is not a valid envelope"))?;
         if response.protocol != PROTOCOL_VERSION {
-            return Err(format!(
+            return Err(ClientFault::protocol(format!(
                 "extension-host response protocol is v{}, expected v{}",
                 response.protocol, PROTOCOL_VERSION
-            ));
+            )));
         }
         if response.id != request.id {
-            return Err("extension-host response did not correlate with the request".to_string());
+            return Err(ClientFault::protocol(
+                "extension-host response did not correlate with the request",
+            ));
         }
         if !response.ok {
-            return Err(response
-                .error
-                .unwrap_or_else(|| "extension host request failed".to_string()));
+            let category = response
+                .error_category
+                .unwrap_or(ExtensionErrorCategory::Protocol);
+            return Err(ClientFault::new(
+                category,
+                response
+                    .error
+                    .unwrap_or_else(|| "extension host request failed".to_string()),
+            ));
         }
         response
             .result
-            .ok_or_else(|| "extension host response omitted its result".to_string())
+            .ok_or_else(|| ClientFault::protocol("extension host response omitted its result"))
     }
 
     fn cancel_best_effort(&self, request_id: RequestId) {
@@ -596,7 +669,7 @@ impl ExtensionHostClient {
         stage: super::protocol::AuditStage,
         mcp: &super::protocol::McpInvocationAudit,
         latency: Duration,
-        result: &Result<T, String>,
+        result: &ClientResult<T>,
     ) {
         self.emit_mcp(
             action,
@@ -605,7 +678,7 @@ impl ExtensionHostClient {
             mcp,
             result.is_ok(),
             latency,
-            result.as_ref().err().map(String::as_str),
+            result.as_ref().err().map(|error| error.message.as_str()),
         );
     }
 
@@ -616,7 +689,7 @@ impl ExtensionHostClient {
         extension_id: &str,
         manifest_digest: Option<&str>,
         latency: Duration,
-        result: &Result<T, String>,
+        result: &ClientResult<T>,
     ) {
         self.emit(
             kind,
@@ -625,22 +698,33 @@ impl ExtensionHostClient {
             manifest_digest,
             result.is_ok(),
             latency,
-            result.as_ref().err().map(String::as_str),
+            result.as_ref().err().map(|error| error.message.as_str()),
         );
     }
 }
 
-fn action_for_result<T>(result: &Result<T, String>) -> super::protocol::LifecycleAction {
+fn response_fault_category(fault: crate::clawd::wire::Fault) -> ExtensionErrorCategory {
+    match fault {
+        crate::clawd::wire::Fault::TruncatedFrame => ExtensionErrorCategory::Crash,
+        crate::clawd::wire::Fault::ReadTimeout
+        | crate::clawd::wire::Fault::WriteTimeout
+        | crate::clawd::wire::Fault::RouteTimeout => ExtensionErrorCategory::Timeout,
+        _ => ExtensionErrorCategory::Protocol,
+    }
+}
+
+fn action_for_result<T>(result: &ClientResult<T>) -> super::protocol::LifecycleAction {
     match result {
-        Err(error) if error.contains("timed out") => super::protocol::LifecycleAction::Timeout,
-        Err(error)
-            if error.contains("connect extension host")
-                || error.contains("different process")
-                || error.contains("closed") =>
-        {
-            super::protocol::LifecycleAction::Crash
-        }
-        _ => super::protocol::LifecycleAction::Call,
+        Ok(_) => super::protocol::LifecycleAction::Call,
+        Err(error) => match error.category {
+            ExtensionErrorCategory::Connect => super::protocol::LifecycleAction::Connect,
+            ExtensionErrorCategory::Timeout => super::protocol::LifecycleAction::Timeout,
+            ExtensionErrorCategory::Crash => super::protocol::LifecycleAction::Crash,
+            ExtensionErrorCategory::RemoteCallFailure => {
+                super::protocol::LifecycleAction::RemoteCallFailure
+            }
+            ExtensionErrorCategory::Protocol => super::protocol::LifecycleAction::Protocol,
+        },
     }
 }
 

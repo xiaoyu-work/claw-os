@@ -717,6 +717,9 @@ Every resolved hosted invocation emits correlated gateway and host lifecycle
 records containing the internal policy identity, server, handle/descriptor
 digests, capability generation, and signed binding/lease references. Remote
 display text is represented only by an untrusted keyed digest.
+Lifecycle outcome categories are carried on the versioned host protocol.
+Transport connect/timeout, host crash, protocol, and remote-call failures are
+assigned by trusted code paths; remote text never selects an audit action.
 
 ### Image and package publication
 

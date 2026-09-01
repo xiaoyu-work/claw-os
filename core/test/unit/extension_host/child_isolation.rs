@@ -60,6 +60,20 @@ fn isolated_prepare_clean(
     )
 }
 
+fn privileged_test_ready(require_bwrap: bool) -> bool {
+    let root = unsafe { libc::geteuid() } == 0;
+    let bwrap = Path::new("/usr/bin/bwrap").exists();
+    if root && (!require_bwrap || bwrap) {
+        return true;
+    }
+    if std::env::var("COS_REQUIRE_PRIVILEGED_CHILD_TESTS").as_deref() == Ok("1") {
+        panic!(
+            "privileged child-isolation prerequisite missing: root={root}, bwrap={bwrap}, required={require_bwrap}"
+        );
+    }
+    false
+}
+
 #[test]
 fn disabled_child_isolation_preserves_the_original_command() {
     let _lock = crate::test_env::lock_env();
@@ -142,7 +156,7 @@ fn arbitrary_srv_is_not_an_approved_extension_root() {
 fn reserved_uid_and_execution_gid_objects_are_rejected_from_owner_snapshots() {
     use std::os::unix::ffi::OsStrExt;
 
-    if unsafe { libc::geteuid() } != 0 {
+    if !privileged_test_ready(false) {
         return;
     }
     for (uid, gid) in [(EXTENSION_UID_START, 0), (0, 60_999)] {
@@ -249,7 +263,7 @@ fn hostile_siblings_get_private_proc_and_cannot_see_host_mounts() {
     use std::os::unix::ffi::OsStrExt;
     use std::process::Stdio;
 
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -383,7 +397,7 @@ print(json.dumps({{'seen':seen,'signalled':signalled,'root':readable({root:?}),'
 
 #[test]
 fn authorized_snapshot_script_still_executes() {
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -422,7 +436,7 @@ fn authorized_snapshot_script_still_executes() {
 
 #[test]
 fn verified_private_script_executes_with_pinned_interpreter() {
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -453,7 +467,7 @@ fn verified_private_script_executes_with_pinned_interpreter() {
 
 #[test]
 fn authorized_sdk_snapshot_remains_importable() {
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -513,7 +527,7 @@ fn private_network_blocks_host_and_sibling_endpoints() {
     use std::os::linux::net::SocketAddrExt;
     use std::os::unix::net::{SocketAddr, UnixListener};
 
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -618,7 +632,7 @@ fn inherited_connected_socket_is_closed_before_bwrap_exec() {
     use std::os::fd::AsRawFd;
     use std::time::Duration;
 
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -663,7 +677,7 @@ fn isolated_siblings_cannot_reach_each_others_network_endpoints() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
 
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();
@@ -751,7 +765,7 @@ print(json.dumps({{"tcp":tcp(),"udp":udp(),"abstract":abstract()}}))
 fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
     use std::os::unix::ffi::OsStrExt;
 
-    if unsafe { libc::geteuid() } != 0 {
+    if !privileged_test_ready(false) {
         return;
     }
     let source = tempfile::tempdir().unwrap();
@@ -846,7 +860,7 @@ fn runtime_snapshot_rejects_reserved_owners_writable_entries_and_mounts() {
 fn exact_broker_socket_remains_reachable_inside_the_empty_root() {
     use std::os::unix::net::UnixListener;
 
-    if unsafe { libc::geteuid() } != 0 || !Path::new("/usr/bin/bwrap").exists() {
+    if !privileged_test_ready(true) {
         return;
     }
     let _lock = crate::test_env::lock_env();

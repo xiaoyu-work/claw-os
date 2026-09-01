@@ -185,6 +185,11 @@ Gateway and host invocation audit records share the internal policy identity,
 server identity, opaque-handle digest, descriptor digest, capability
 generation, binding digest, and lease digest. Remote display names are stored
 only as keyed untrusted-text digests; arguments and secrets are not logged.
+Lifecycle classification is versioned typed data, not text inference:
+connect, transport timeout, host crash, protocol failure, and remote-call
+failure are assigned by their trusted observer. Remote App/MCP messages remain
+`remote-call-failure` even when they contain words such as `timeout`, `closed`,
+`connect`, or `crash`.
 Stdout/stderr-derived errors and tool results remain untrusted and wrapped.
 
 ## Configuration
@@ -213,7 +218,10 @@ cd ..
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
 
-The two process-boundary suites run through a dedicated `sudo` CI step. It
-copies the test and host binaries into a root-owned, non-world-writable
-fixture, runs the root broker with a dropped-uid worker child, and removes only
-that exact fixture on exit.
+The two process-boundary suites and the root-gated
+`extension_host::child_isolation` library module run through a dedicated
+`sudo` CI step. It copies the test and host binaries into a root-owned,
+non-world-writable
+fixture, requires every privileged network/mount/FD test to execute rather
+than skip, runs the root broker with a dropped-uid worker child, and removes
+only that exact fixture on exit.

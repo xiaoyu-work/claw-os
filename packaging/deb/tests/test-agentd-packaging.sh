@@ -62,6 +62,10 @@ assert_contains "$CARGO_TOML" 'path = "src/bin/claw-extension-host.rs"' \
     "the extension host binary must have an entry point"
 [ -f "$PROJECT_DIR/core/src/bin/claw-extension-host.rs" ] ||
     fail "core/src/bin/claw-extension-host.rs is missing"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'Depends: acl,' \
+    "the package must install getfacl for execution-gid collision scans"
+assert_contains "$PROJECT_DIR/packaging/deb/claw-os-agent/control" 'findutils' \
+    "the package must install find for per-mount ownership scans"
 
 assert_contains "$BUILD_DEBS" 'ensure_bin claw-agentd cos' \
     "claw-os-agent must build the agent worker"
@@ -97,6 +101,10 @@ assert_contains "$IDENTITY_HELPER" 'identity_select_gid' \
     "upgrades must safely retain a provable legacy package gid"
 assert_contains "$IDENTITY_HELPER" 'COS_EXT_DYNAMIC_UID_FIRST=61184' \
     "package policy must encode systemd DynamicUser boundaries"
+assert_contains "$IDENTITY_HELPER" '/proc/self/mountinfo' \
+    "execution-gid validation must enumerate the live mount topology"
+assert_contains "$IDENTITY_HELPER" 'getfacl -R -P -n -p -s -x' \
+    "execution-gid validation must inspect named access and default ACLs"
 assert_contains "$IDENTITY_RS" 'FIRST_UID: u32 = 61_000' \
     "runtime and packaged uid-range start must agree"
 assert_contains "$IDENTITY_RS" 'GROUP_GID: u32 = 60_999' \
@@ -143,6 +151,12 @@ assert_contains "$TEST_WORKFLOW" 'COS_PRIVILEGED_EXTENSION_HOST_BIN' \
     "installed-system tests must use the root-owned extension host fixture"
 assert_contains "$TEST_WORKFLOW" '"$root/extension_host_boundary" --test-threads=1' \
     "CI must run the repaired extension-host lifecycle test"
+assert_contains "$TEST_WORKFLOW" 'COS_REQUIRE_PRIVILEGED_CHILD_TESTS=1' \
+    "CI must fail when a root-gated child-isolation test skips"
+assert_contains "$TEST_WORKFLOW" 'extension_host::child_isolation::tests' \
+    "CI must run the root-gated child-isolation library tests"
+assert_contains "$TEST_WORKFLOW" '"$lib_test" "$root/cos_lib_tests"' \
+    "CI must copy the lib test binary into the root-owned fixture"
 
 bash "$SCRIPT_DIR/test-extension-identities.sh"
 

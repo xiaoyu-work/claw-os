@@ -20,7 +20,7 @@ use crate::clawd::transport::peer;
 use crate::clawd::wire::RequestId;
 
 use super::protocol::{
-    ControlRequest, ControlResponse, HostAction, HostBootstrap, HostResult,
+    ControlRequest, ControlResponse, ExtensionErrorCategory, HostAction, HostBootstrap, HostResult,
     MAX_CONTROL_CONNECTIONS, MAX_CONTROL_FRAME_BYTES, MAX_REQUEST_TIMEOUT_MS, PROTOCOL_VERSION,
 };
 
@@ -184,6 +184,7 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
                         &mut stream,
                         ControlResponse::error(
                             RequestId::unknown(),
+                            ExtensionErrorCategory::Protocol,
                             "invalid extension-host request",
                         ),
                     )
@@ -198,7 +199,11 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
 
     let id = request.id.clone();
     if let Err(error) = validate_request(&request, process, &state) {
-        write_response(&mut stream, ControlResponse::error(id, error)).await;
+        write_response(
+            &mut stream,
+            ControlResponse::error(id, ExtensionErrorCategory::Protocol, error),
+        )
+        .await;
         return;
     }
     if let HostAction::Cancel { request_id } = &request.action {
@@ -236,11 +241,17 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
     }
     let response = match result {
         Ok(Ok(Ok(result))) => ControlResponse::ok(id, result),
-        Ok(Ok(Err(error))) => ControlResponse::error(id, error),
+        Ok(Ok(Err(error))) => {
+            ControlResponse::error(id, ExtensionErrorCategory::RemoteCallFailure, error)
+        }
         Ok(Err(join)) => {
             state.shutting_down.store(true, Ordering::SeqCst);
             state.fatal_shutdown.store(true, Ordering::SeqCst);
-            ControlResponse::error(id, format!("extension host action crashed: {join}"))
+            ControlResponse::error(
+                id,
+                ExtensionErrorCategory::Crash,
+                format!("extension host action crashed: {join}"),
+            )
         }
         Err(_) => {
             abort.abort();
@@ -248,6 +259,7 @@ async fn serve_control(stream: UnixStream, state: Arc<HostState>) {
             state.fatal_shutdown.store(true, Ordering::SeqCst);
             ControlResponse::error(
                 id,
+                ExtensionErrorCategory::Timeout,
                 format!(
                     "extension host action timed out after {}ms",
                     timeout.as_millis()
@@ -325,7 +337,11 @@ async fn write_response(stream: &mut PeerStream, response: ControlResponse) {
         return;
     };
     if body.len() > MAX_CONTROL_FRAME_BYTES {
-        let fallback = ControlResponse::error(response.id, "extension-host response is too large");
+        let fallback = ControlResponse::error(
+            response.id,
+            ExtensionErrorCategory::Protocol,
+            "extension-host response is too large",
+        );
         if let Ok(body) = serde_json::to_vec(&fallback) {
             let _ =
                 tokio::time::timeout(RESPONSE_WRITE_TIMEOUT, stream.write_response(&body)).await;

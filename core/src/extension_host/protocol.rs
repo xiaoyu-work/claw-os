@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -109,6 +109,9 @@ pub enum LifecycleAction {
     Call,
     Cancel,
     Crash,
+    Connect,
+    Protocol,
+    RemoteCallFailure,
     Timeout,
     Detach,
     TaskComplete,
@@ -182,11 +185,25 @@ impl LifecycleAction {
             Self::Call => "call",
             Self::Cancel => "cancel",
             Self::Crash => "crash",
+            Self::Connect => "connect",
+            Self::Protocol => "protocol",
+            Self::RemoteCallFailure => "remote-call-failure",
             Self::Timeout => "timeout",
             Self::Detach => "detach",
             Self::TaskComplete => "task-complete",
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtensionErrorCategory {
+    Connect,
+    Timeout,
+    Crash,
+    RemoteCallFailure,
+    #[default]
+    Protocol,
 }
 
 impl ExtensionKind {
@@ -409,6 +426,8 @@ pub struct ControlResponse {
     pub result: Option<HostResult>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_category: Option<ExtensionErrorCategory>,
 }
 
 impl ControlResponse {
@@ -419,16 +438,22 @@ impl ControlResponse {
             ok: true,
             result: Some(result),
             error: None,
+            error_category: None,
         }
     }
 
-    pub fn error(id: RequestId, message: impl Into<String>) -> Self {
+    pub fn error(
+        id: RequestId,
+        category: ExtensionErrorCategory,
+        message: impl Into<String>,
+    ) -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
             id,
             ok: false,
             result: None,
             error: Some(clamp_text(&message.into(), 2048)),
+            error_category: Some(category),
         }
     }
 }
