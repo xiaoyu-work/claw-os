@@ -44,8 +44,15 @@ extension execution fails closed unless per-task CPU, memory, pids, and
 failures retain a durable per-uid quarantine record until restart recovery
 proves process, mount, task-state, and routed-ACL residue is gone.
 `preinst` validates all name/UID/GID/NSS/shadow/systemd-homed and subordinate-ID
-collisions before provisioning, rolls back partial attempts, and `postinst`
-writes the exact root-owned runtime reservation manifest. Purge removes only
+collisions before provisioning. It snapshots `/proc/self/mountinfo`, safely
+decodes mount paths, and scans every non-kernel-virtual mount independently
+with `find -xdev` plus numeric POSIX access/default ACL inspection. Nested,
+bind, tmpfs, persistent, and network mounts remain separate scan roots;
+malformed or changed mount topology, inaccessible mounts, traversal errors,
+timeouts, ownership matches, or ACL qualifiers fail closed. The Agent package
+depends explicitly on `acl`, `findutils`, and `coreutils` for this proof.
+Partial attempts are rolled back, and `postinst` writes the exact root-owned
+runtime reservation manifest. Purge removes only
 accounts recorded as package-created, still matching policy, and owning no
 live process or runtime/quarantine state; preexisting correct accounts or
 changed records are retained.

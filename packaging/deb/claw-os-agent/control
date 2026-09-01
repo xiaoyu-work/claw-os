@@ -5,7 +5,7 @@ Priority: optional
 Architecture: __ARCH__
 Maintainer: Claw OS <noreply@github.com>
 Homepage: https://github.com/xiaoyu-work/claw-os
-Depends: bash, coreutils, ca-certificates, bubblewrap, curl, passwd, python3,
+Depends: acl, bash, coreutils, findutils, ca-certificates, bubblewrap, curl, passwd, python3,
  python3-idna (>= 3.3), python3-idna (<< 4), sudo, systemd,
  init-system-helpers (>= 1.52),
  libnss3, libxss1, libasound2, libatk1.0-0, libatk-bridge2.0-0,

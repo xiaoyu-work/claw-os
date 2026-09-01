@@ -15,7 +15,8 @@ mkdir -p "$SCRATCH/bin" "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/scan" "$SCRATCH
 export MOCK_ETC="$SCRATCH/etc"
 export COS_IDENTITY_ETC_DIR="$SCRATCH/etc"
 export COS_IDENTITY_PROC_DIR="$SCRATCH/proc"
-export COS_IDENTITY_SCAN_ROOTS="$SCRATCH/scan"
+export COS_IDENTITY_MOUNTINFO="$SCRATCH/mountinfo"
+export COS_IDENTITY_SCAN_TIMEOUT=5
 export COS_IDENTITY_SYSTEMD_DIR="$SCRATCH/systemd"
 export COS_IDENTITY_STATE_DIR="$SCRATCH/state"
 export PATH="$SCRATCH/bin:$PATH"
@@ -157,17 +158,47 @@ EOF
 
 cat > "$SCRATCH/bin/find" <<'EOF'
 #!/bin/sh
+root=$1
 gid=
 previous=
 for argument in "$@"; do
     [ "$previous" != -gid ] || gid=$argument
     previous=$argument
 done
-if [ -n "${MOCK_GID_FILE-}" ] && [ "$MOCK_GID_FILE" = "$gid" ]; then
+echo "$root" >> "$MOCK_ETC/find.log"
+if [ "${MOCK_MOUNTINFO_MUTATE-0}" = 1 ] &&
+    [ ! -e "$MOCK_ETC/mountinfo-mutated" ]; then
+    : > "$MOCK_ETC/mountinfo-mutated"
+    echo "malformed mutation" >> "$COS_IDENTITY_MOUNTINFO"
+fi
+if [ -n "${MOCK_FIND_FAIL_ROOT-}" ] && [ "$MOCK_FIND_FAIL_ROOT" = "$root" ]; then
+    exit 2
+fi
+if [ -n "${MOCK_GID_FILE-}" ] && [ "$MOCK_GID_FILE" = "$gid" ] &&
+    { [ -z "${MOCK_GID_FILE_ROOT-}" ] || [ "$MOCK_GID_FILE_ROOT" = "$root" ]; }; then
     echo "$MOCK_ETC/unrelated-group-owned-file"
     exit 0
 fi
 exec /usr/bin/find "$@"
+EOF
+
+cat > "$SCRATCH/bin/getfacl" <<'EOF'
+#!/bin/sh
+root=
+for argument in "$@"; do
+    root=$argument
+done
+echo "$root" >> "$MOCK_ETC/getfacl.log"
+if [ -n "${MOCK_GETFACL_FAIL_ROOT-}" ] &&
+    [ "$MOCK_GETFACL_FAIL_ROOT" = "$root" ]; then
+    exit 2
+fi
+if [ -n "${MOCK_GID_ACL-}" ]; then
+    case "${MOCK_ACL_KIND-access}" in
+        access) echo "group:$MOCK_GID_ACL:r--" ;;
+        default) echo "default:group:$MOCK_GID_ACL:rwx" ;;
+    esac
+fi
 EOF
 
 cat > "$SCRATCH/bin/deb-systemd-invoke" <<'EOF'
@@ -196,6 +227,17 @@ fail() {
     exit 1
 }
 
+append_mount() {
+    mount_id=$1
+    device=$2
+    mount_path=$3
+    fs_type=$4
+    encoded=$(printf '%s' "$mount_path" |
+        sed -e 's/\\/\\134/g' -e 's/ /\\040/g')
+    printf '%s 1 %s / %s rw,relatime - %s mock rw\n' \
+        "$mount_id" "$device" "$encoded" "$fs_type" >> "$COS_IDENTITY_MOUNTINFO"
+}
+
 reset_fixture() {
     rm -rf "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/scan" "$SCRATCH/state" "$SCRATCH/systemd"
     mkdir -p "$SCRATCH/etc" "$SCRATCH/proc" "$SCRATCH/scan" "$SCRATCH/state" "$SCRATCH/systemd"
@@ -205,6 +247,10 @@ reset_fixture() {
     : > "$SCRATCH/etc/subuid"
     : > "$SCRATCH/etc/subgid"
     unset MOCK_FAIL_USER MOCK_PARTIAL_USERADD MOCK_HOMED_IDENTITY MOCK_GID_FILE
+    unset MOCK_GID_FILE_ROOT MOCK_GID_ACL MOCK_ACL_KIND MOCK_FIND_FAIL_ROOT
+    unset MOCK_GETFACL_FAIL_ROOT MOCK_MOUNTINFO_MUTATE
+    printf '10 1 0:1 / %s rw,relatime - ext4 /dev/mock rw\n' "$SCRATCH/scan" \
+        > "$COS_IDENTITY_MOUNTINFO"
     identity_effective_gid=$COS_EXT_GID
 }
 
@@ -229,6 +275,85 @@ grep -q '^user:cos-ext-00:61000:60999$' "$identity_owned_manifest" ||
 identity_provision || fail "safe upgrade of package-owned users failed"
 identity_finalize || fail "safe upgrade finalize failed"
 [ "$(wc -l < "$SCRATCH/etc/passwd")" -eq 4 ] || fail "upgrade duplicated users"
+
+reset_fixture
+mkdir -p "$SCRATCH/scan/nested"
+append_mount 11 0:2 "$SCRATCH/scan/nested" tmpfs
+export MOCK_GID_FILE=60999
+export MOCK_GID_FILE_ROOT="$SCRATCH/scan/nested"
+identity_provision &&
+    fail "nested mounted filesystem gid ownership was missed"
+
+reset_fixture
+mkdir -p "$SCRATCH/scan/bind"
+append_mount 11 0:1 "$SCRATCH/scan/bind" ext4
+export MOCK_GID_FILE=60999
+export MOCK_GID_FILE_ROOT="$SCRATCH/scan/bind"
+identity_provision &&
+    fail "separate bind mount gid ownership was missed"
+
+reset_fixture
+space_mount="$SCRATCH/scan/space dir"
+mkdir -p "$space_mount"
+append_mount 11 0:3 "$space_mount" tmpfs
+identity_provision || fail "escaped-space mount path was rejected"
+grep -Fxq "$space_mount" "$SCRATCH/etc/find.log" ||
+    fail "escaped-space mount path was not decoded exactly"
+identity_rollback_pending
+
+for acl_kind in access default; do
+    reset_fixture
+    export MOCK_GID_ACL=60999
+    export MOCK_ACL_KIND=$acl_kind
+    identity_provision &&
+        fail "$acl_kind ACL entry for fixed gid was missed"
+done
+
+for legacy_gid in 61064 61183; do
+    reset_fixture
+    echo "cos-extension:x:$legacy_gid:" > "$SCRATCH/etc/group"
+    export MOCK_GID_ACL=$legacy_gid
+    identity_provision upgrade 0.1.0 &&
+        fail "ACL entry for retained endpoint gid $legacy_gid was missed"
+done
+
+reset_fixture
+mkdir -p "$SCRATCH/scan/network"
+append_mount 11 0:4 "$SCRATCH/scan/network" nfs
+export MOCK_GETFACL_FAIL_ROOT="$SCRATCH/scan/network"
+identity_provision &&
+    fail "inaccessible network-like mount was accepted"
+
+reset_fixture
+mkdir -p "$SCRATCH/scan/unreadable"
+append_mount 11 0:4 "$SCRATCH/scan/unreadable" ext4
+export MOCK_FIND_FAIL_ROOT="$SCRATCH/scan/unreadable"
+identity_provision &&
+    fail "incomplete ownership traversal was accepted"
+
+reset_fixture
+export MOCK_MOUNTINFO_MUTATE=1
+identity_provision &&
+    fail "mountinfo mutation during gid scan was accepted"
+
+reset_fixture
+echo "malformed mountinfo" > "$COS_IDENTITY_MOUNTINFO"
+identity_provision &&
+    fail "malformed mountinfo was accepted"
+
+reset_fixture
+append_mount 11 0:1 "$SCRATCH/scan" ext4
+identity_provision || fail "duplicate mount record was rejected"
+[ "$(grep -Fxc "$SCRATCH/scan" "$SCRATCH/etc/find.log")" -eq 1 ] ||
+    fail "duplicate mount record was scanned more than once"
+identity_rollback_pending
+
+reset_fixture
+append_mount 11 0:5 /proc proc
+identity_provision || fail "documented kernel virtual mount rule failed"
+! grep -Fxq /proc "$SCRATCH/etc/find.log" ||
+    fail "kernel virtual mount was traversed"
+identity_rollback_pending
 
 reset_fixture
 echo "cos-extension:x:998:" > "$SCRATCH/etc/group"

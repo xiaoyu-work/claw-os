@@ -52,8 +52,15 @@ The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs
 `61000..61063`. Fresh installs use `cos-extension` GID `60999`. Upgrades from
 the prior dynamic sysusers definition stop `clawd` and retain the existing GID
 instead of rewriting it, but only when it has no unrelated group members,
-primary users, processes, subordinate-ID overlap, or group-owned files. The
-retained GID is recorded in `/var/lib/cos/extension-group.gid` and revalidated
+primary users, processes, subordinate-ID overlap, group-owned files, or named
+POSIX ACL entries. The ownership/ACL proof snapshots mountinfo and scans every
+mounted filesystem independently, including nested, bind, tmpfs, persistent,
+and network mounts. Package configuration aborts if mountinfo is malformed or
+changes, a mount cannot be traversed, `find`/`getfacl` fails or times out, or
+the candidate GID appears as an access/default ACL qualifier. Kernel-generated
+virtual filesystems are skipped only by the maintained allowlist because they
+cannot retain discretionary ownership or POSIX ACL state across recreation.
+The retained GID is recorded in `/var/lib/cos/extension-group.gid` and revalidated
 on every later upgrade. `preinst` checks every name, UID, and GID,
 the existing `cos-extension` group, shadow locking, systemd-homed, and all
 `/etc/subuid`/`/etc/subgid` ranges before making changes. A collision aborts
@@ -62,6 +69,8 @@ without modifying the unrelated record; a partial attempt is rolled back.
 `/var/lib/cos/extension-identities.reserved`, which `clawd` requires.
 Subordinate-GID checks cover both the fixed UID pool and the exact retained
 GID as separate intervals, including legacy GIDs `61064..61183`.
+The package now depends on `acl` and `findutils`; these tools are mandatory
+rather than optional fallbacks.
 Each active slot also has a root-owned durable cleanup record under
 `/var/lib/cos/extension-quarantine/`. It is removed only after the host cgroup
 is empty and gone, private tmpfs mounts are unmounted, task-local state is
