@@ -37,6 +37,7 @@
 //!   - Telegram/Discord adapters (Q1 plan) can drop jobs without
 //!     opening sockets — the FS is the message bus.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -604,6 +605,7 @@ impl Store {
     /// no pending jobs exist or every candidate was lost to another
     /// worker.
     pub fn claim_one(&self) -> io::Result<Option<Job>> {
+        self.reconcile_duplicate_job_ids()?;
         let pending = self.bucket_dir(JobStatus::Pending);
         // Iterate all current pending entries. If a rename fails with
         // NotFound (another worker beat us) try the next; any other
@@ -646,7 +648,7 @@ impl Store {
                 continue;
             }
             let dst = self.path_for(JobStatus::Running, &id);
-            match fs::rename(&src, &dst) {
+            match durable_rename(&src, &dst) {
                 Ok(()) => {
                     // We won — load, mutate, rewrite atomically.
                     let s = fs::read_to_string(&dst)?;
@@ -703,6 +705,7 @@ impl Store {
     /// Returns `(requeued, failed)` counts for logging. Best-effort: a
     /// single malformed job file is skipped, not fatal.
     pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
+        self.reconcile_duplicate_job_ids()?;
         let running = self.bucket_dir(JobStatus::Running);
         let mut requeued = 0usize;
         let mut failed = 0usize;
@@ -772,7 +775,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event(
                     "clawd.task.worker_identity_unverifiable",
@@ -798,7 +801,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 continue;
@@ -818,7 +821,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
                 failed += 1;
@@ -839,13 +842,127 @@ impl Store {
             job.execution_generation = None;
             write_json_atomic(&path, &job)?;
             let pending = self.path_for(JobStatus::Pending, &id);
-            fs::rename(&path, &pending)?;
+            durable_rename(&path, &pending)?;
             crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
             requeued += 1;
         }
 
         Ok((requeued, failed))
     }
+
+    fn reconcile_duplicate_job_ids(&self) -> io::Result<usize> {
+        let mut paths = BTreeMap::<String, Vec<(JobStatus, PathBuf)>>::new();
+        for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
+            for entry in fs::read_dir(self.bucket_dir(bucket))? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if validate_job_id(id).is_ok() {
+                    paths
+                        .entry(id.to_string())
+                        .or_default()
+                        .push((bucket, path));
+                }
+            }
+        }
+
+        let mut reconciled = 0usize;
+        for (id, candidates) in paths {
+            if candidates.len() < 2 {
+                continue;
+            }
+            let _lock = self.lock_for_id(&id)?;
+            let all_paths = candidates
+                .iter()
+                .map(|(_, path)| path.clone())
+                .collect::<Vec<_>>();
+            let mut records = Vec::new();
+            let mut corrupt = false;
+            for (bucket, path) in candidates {
+                match fs::read_to_string(&path)
+                    .and_then(|raw| serde_json::from_str::<Job>(&raw).map_err(io_other))
+                {
+                    Ok(job) if job.id == id => records.push((bucket, path, job)),
+                    Ok(_) | Err(_) => corrupt = true,
+                }
+            }
+            if records.len() < 2 && !corrupt {
+                continue;
+            }
+            let identity_conflict = records.first().is_some_and(|(_, _, first)| {
+                records
+                    .iter()
+                    .skip(1)
+                    .any(|(_, _, job)| !same_logical_job(first, job))
+            });
+            let unsafe_copy = records.iter().any(|(bucket, _, job)| {
+                *bucket == JobStatus::Ok
+                    || !job.execution_phase.replay_is_proven_safe()
+                    || matches!(
+                        job.status,
+                        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+                    )
+            });
+            if corrupt || identity_conflict || unsafe_copy {
+                let mut dominant = records
+                    .iter()
+                    .max_by_key(|(bucket, _, job)| {
+                        (
+                            execution_phase_rank(job.execution_phase),
+                            bucket_rank(*bucket),
+                        )
+                    })
+                    .map(|(_, _, job)| job.clone())
+                    .unwrap_or_else(|| corrupt_job(&id));
+                dominant.status = JobStatus::Error;
+                dominant.execution_phase = ExecutionPhase::Indeterminate;
+                dominant.error = Some(
+                    "conflicting or duplicate durable queue records make execution indeterminate; replay refused"
+                        .to_string(),
+                );
+                dominant.finished_at = Some(now_iso());
+                let done = self.path_for(JobStatus::Ok, &id);
+                write_json_atomic(&done, &dominant)?;
+                for path in &all_paths {
+                    if *path != done {
+                        durable_remove(path)?;
+                    }
+                }
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.duplicate_indeterminate",
+                    &dominant,
+                );
+            } else {
+                let Some((_, keep_path, keep_job)) =
+                    records.iter().max_by_key(|(bucket, _, job)| {
+                        (
+                            execution_phase_rank(job.execution_phase),
+                            bucket_rank(*bucket),
+                        )
+                    })
+                else {
+                    continue;
+                };
+                for (_, path, _) in &records {
+                    if path != keep_path {
+                        durable_remove(path)?;
+                    }
+                }
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.duplicate_precommit_reconciled",
+                    keep_job,
+                );
+            }
+            reconciled += 1;
+        }
+        Ok(reconciled)
+    }
+
     /// Rebind a claimed job from the broker that claimed it to the
     /// worker process that actually executes it. Recovery and audit
     /// then track the worker's kernel identity rather than `clawd`'s,
@@ -857,6 +974,7 @@ impl Store {
         worker_start_time_ticks: Option<u64>,
     ) -> io::Result<Job> {
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = fs::read_to_string(&path)?;
@@ -887,6 +1005,7 @@ impl Store {
     ) -> io::Result<Job> {
         validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = fs::read_to_string(&path)?;
@@ -923,6 +1042,7 @@ impl Store {
     ) -> io::Result<Job> {
         validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = fs::read_to_string(&path)?;
@@ -958,7 +1078,7 @@ impl Store {
         job.error = Some(reason.to_string());
         job.finished_at = Some(now_iso());
         write_json_atomic(path, &job)?;
-        fs::rename(path, self.path_for(JobStatus::Ok, id))?;
+        durable_rename(path, &self.path_for(JobStatus::Ok, id))?;
         finish_durable_session(&job)?;
         crate::clawd::audit::record_task_event("clawd.task.execution_indeterminate", &job);
         Ok(job)
@@ -973,6 +1093,7 @@ impl Store {
     /// longer running (already cancelled or finished).
     pub fn release_for_retry(&self, id: &str, reason: &str) -> io::Result<Option<Job>> {
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = match fs::read_to_string(&path) {
@@ -999,7 +1120,7 @@ impl Store {
             job.error = Some("cancelled by user".to_string());
             job.finished_at = Some(now_iso());
             write_json_atomic(&path, &job)?;
-            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
             return Ok(Some(job));
@@ -1014,7 +1135,7 @@ impl Store {
             ));
             job.finished_at = Some(now_iso());
             write_json_atomic(&path, &job)?;
-            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
             return Ok(Some(job));
@@ -1029,13 +1150,14 @@ impl Store {
         job.execution_commit_nonce = None;
         job.execution_generation = None;
         write_json_atomic(&path, &job)?;
-        fs::rename(&path, self.path_for(JobStatus::Pending, id))?;
+        durable_rename(&path, &self.path_for(JobStatus::Pending, id))?;
         crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
         Ok(Some(job))
     }
 
     pub fn finish(&self, job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         validate_job_id(&job.id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(&job.id)?;
         let running_path = self.path_for(JobStatus::Running, &job.id);
         let raw = fs::read_to_string(&running_path)?;
@@ -1089,7 +1211,7 @@ impl Store {
         job.finished_at = Some(now_iso());
         write_json_atomic(&running_path, &job)?;
         let done_path = self.path_for(JobStatus::Ok, &job.id);
-        fs::rename(&running_path, &done_path)?;
+        durable_rename(&running_path, &done_path)?;
         finish_durable_session(&job)?;
         crate::clawd::audit::record_task_event(
             if job.execution_phase == ExecutionPhase::Indeterminate {
@@ -1119,6 +1241,7 @@ impl Store {
         id: &str,
         owner_uid: Option<u32>,
     ) -> io::Result<Option<Job>> {
+        self.reconcile_duplicate_job_ids()?;
         // Per-id exclusive lock prevents claim_one and cancel_pending
         // from both succeeding for the same id. Without it, a worker
         // could claim_one the file while we still read it from
@@ -1137,7 +1260,7 @@ impl Store {
                 job.status = JobStatus::Cancelled;
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&src, &job)?;
-                fs::rename(&src, &dst)?;
+                durable_rename(&src, &dst)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 Ok(Some(job))
@@ -1152,6 +1275,7 @@ impl Store {
         id: &str,
         owner_uid: Option<u32>,
     ) -> io::Result<Option<(Job, bool)>> {
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let pending = self.path_for(JobStatus::Pending, id);
         let done = self.path_for(JobStatus::Ok, id);
@@ -1165,7 +1289,7 @@ impl Store {
                 job.cancel_requested_at = Some(now_iso());
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&pending, &job)?;
-                fs::rename(&pending, &done)?;
+                durable_rename(&pending, &done)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 return Ok(Some((job, true)));
@@ -1238,38 +1362,33 @@ impl Store {
 
             let stream_path = self.stream_path(&id);
             let record_path = self.path_for(JobStatus::Ok, &id);
-            let _ = crate::filelock::with_exclusive_path_lock(&stream_path, || {
+            crate::filelock::with_exclusive_path_lock(&stream_path, || {
                 let record_exists = path_exists(&record_path)
                     .map_err(|error| format!("inspect {}: {error}", record_path.display()))?;
                 let stream_exists = path_exists(&stream_path)
                     .map_err(|error| format!("inspect {}: {error}", stream_path.display()))?;
 
                 if record_exists && !stream_exists {
-                    fs::rename(&tombstone_path, &stream_path).map_err(|error| {
+                    durable_rename(&tombstone_path, &stream_path).map_err(|error| {
                         format!(
                             "restore {} to {}: {error}",
                             tombstone_path.display(),
                             stream_path.display()
                         )
                     })?;
-                    sync_directory_best_effort(&stream_dir);
                 } else if record_exists {
-                    if remove_file_if_exists(&tombstone_path)
-                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
-                    {
-                        sync_directory_best_effort(&stream_dir);
-                    }
-                } else {
-                    let stream_removed = remove_file_if_exists(&stream_path)
-                        .map_err(|error| format!("remove {}: {error}", stream_path.display()))?;
-                    let tombstone_removed = remove_file_if_exists(&tombstone_path)
+                    durable_remove(&tombstone_path)
                         .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
-                    if stream_removed || tombstone_removed {
-                        sync_directory_best_effort(&stream_dir);
-                    }
+                } else {
+                    let stream_removed = durable_remove(&stream_path)
+                        .map_err(|error| format!("remove {}: {error}", stream_path.display()))?;
+                    let tombstone_removed = durable_remove(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
+                    let _ = (stream_removed, tombstone_removed);
                 }
                 Ok(())
-            });
+            })
+            .map_err(io_other)?;
         }
 
         Ok(())
@@ -1353,14 +1472,13 @@ impl Store {
                                 stream_path.display()
                             ));
                         }
-                        fs::rename(&stream_path, &tombstone_path).map_err(|error| {
+                        durable_rename(&stream_path, &tombstone_path).map_err(|error| {
                             format!(
                                 "stage {} as {}: {error}",
                                 stream_path.display(),
                                 tombstone_path.display()
                             )
                         })?;
-                        sync_directory_best_effort(&self.root.join("streams"));
                         true
                     }
                     Err(error) if error.kind() == ErrorKind::NotFound => false,
@@ -1390,7 +1508,8 @@ impl Store {
                 };
 
                 if record_removed {
-                    sync_directory_best_effort(&dir);
+                    crate::agent::util::sync_dir(&dir)
+                        .map_err(|error| format!("sync {}: {error}", dir.display()))?;
                 } else {
                     match path_exists(&p) {
                         Ok(false) => {}
@@ -1427,11 +1546,9 @@ impl Store {
                     }
                 }
 
-                if stream_staged
-                    && remove_file_if_exists(&tombstone_path)
-                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
-                {
-                    sync_directory_best_effort(&self.root.join("streams"));
+                if stream_staged {
+                    durable_remove(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
                 }
                 Ok(record_removed)
             });
@@ -1494,6 +1611,54 @@ fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
         None => true,
         Some(uid) => job.owner_uid == Some(uid),
     }
+}
+
+fn same_logical_job(left: &Job, right: &Job) -> bool {
+    left.id == right.id
+        && left.prompt == right.prompt
+        && left.context == right.context
+        && left.branch_context == right.branch_context
+        && left.session_id == right.session_id
+        && left.max_turns == right.max_turns
+        && left.created_at == right.created_at
+        && left.owner_uid == right.owner_uid
+        && left.owner_home == right.owner_home
+        && left.client == right.client
+}
+
+fn execution_phase_rank(phase: ExecutionPhase) -> u8 {
+    match phase {
+        ExecutionPhase::Unprepared => 0,
+        ExecutionPhase::Preparing => 1,
+        ExecutionPhase::Prepared => 2,
+        ExecutionPhase::Committed => 3,
+        ExecutionPhase::LegacyUnknown => 4,
+        ExecutionPhase::Indeterminate => 5,
+    }
+}
+
+fn bucket_rank(status: JobStatus) -> u8 {
+    match status {
+        JobStatus::Pending => 0,
+        JobStatus::Running => 1,
+        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => 2,
+    }
+}
+
+fn corrupt_job(id: &str) -> Job {
+    let mut job = Job::new_pending(
+        "queue record corruption".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    job.id = id.to_string();
+    job.status = JobStatus::Error;
+    job.execution_phase = ExecutionPhase::Indeterminate;
+    job
 }
 
 fn validate_job_id(id: &str) -> io::Result<()> {
@@ -1646,18 +1811,8 @@ fn restore_staged_stream(
             ),
         ));
     }
-    fs::rename(tombstone_path, stream_path)?;
-    sync_directory_best_effort(stream_dir);
-    Ok(())
-}
-
-fn sync_directory_best_effort(path: &Path) {
-    #[cfg(unix)]
-    if let Ok(directory) = fs::File::open(path) {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
+    let _ = stream_dir;
+    durable_rename(tombstone_path, stream_path)
 }
 
 fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
@@ -1668,6 +1823,39 @@ fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
     // fsync entirely, so a power loss between write and rename could
     // expose a torn job file at recovery time.
     crate::agent::util::atomic_write_with_fsync(target, &bytes)
+}
+
+fn durable_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source has no parent"))?;
+    let destination_dir = destination
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
+    crate::agent::util::persistence_barrier("cross_rename")?;
+    fs::rename(source, destination)?;
+    crate::agent::util::persistence_barrier("after_cross_rename")?;
+    crate::agent::util::sync_dir(destination_dir)?;
+    crate::agent::util::persistence_barrier("after_destination_dir_fsync")?;
+    if source_dir != destination_dir {
+        crate::agent::util::persistence_barrier("before_source_dir_fsync")?;
+        crate::agent::util::sync_dir(source_dir)?;
+    }
+    Ok(())
+}
+
+fn durable_remove(path: &Path) -> io::Result<bool> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    match fs::remove_file(path) {
+        Ok(()) => {
+            crate::agent::util::sync_dir(parent)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
 }
 
 fn io_other<E: std::fmt::Display>(e: E) -> io::Error {

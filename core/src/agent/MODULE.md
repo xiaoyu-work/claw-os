@@ -22,6 +22,9 @@ surfaces.
 - Persist a versioned execution phase for every queued task. Workers acknowledge
   PREPARE while blocked; only a durable COMMIT record permits execution.
   Recovery requeues only phases that prove COMMIT was never issued.
+- Treat file and directory fsync as mandatory queue barriers. Cross-bucket
+  moves sync both directories, and recovery deduplicates resurrected records
+  by conservative execution-phase dominance before any mutation.
 
 ## Key Files
 

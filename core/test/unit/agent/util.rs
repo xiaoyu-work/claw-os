@@ -33,6 +33,26 @@ fn atomic_write_creates_parent_dir() {
 }
 
 #[test]
+fn atomic_write_propagates_every_durability_barrier_failure() {
+    let _lock = crate::test_env::lock_env();
+    for point in [
+        "file_open",
+        "file_write",
+        "file_fsync",
+        "rename",
+        "after_rename",
+        "dir_open",
+        "dir_fsync",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.json");
+        let _guard = crate::test_env::TestEnvVarGuard::set("COS_TEST_PERSISTENCE_FAILPOINT", point);
+        let error = atomic_write_with_fsync(&path, b"value").unwrap_err();
+        assert!(error.to_string().contains("failpoint"), "{point}: {error}");
+    }
+}
+
+#[test]
 fn char_safe_truncate_ascii_keeps_n_bytes() {
     assert_eq!(char_safe_truncate("hello world", 5), "hello");
     assert_eq!(char_safe_truncate("hello", 100), "hello");

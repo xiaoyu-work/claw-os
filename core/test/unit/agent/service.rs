@@ -530,6 +530,122 @@ fn success_without_commit_is_rejected() {
     assert!(finished.response.is_none());
 }
 
+#[test]
+fn duplicate_pending_and_committed_records_become_indeterminate() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let pending_job = store
+        .submit("one side effect".into(), None, None, None, None)
+        .unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    commit_claimed(&store, &claimed);
+    let running = store.path_for(JobStatus::Running, &claimed.id);
+    let mut committed: Job =
+        serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+    committed.worker_pid = Some(0);
+    write_json_atomic(&running, &committed).unwrap();
+    write_json_atomic(
+        &store.path_for(JobStatus::Pending, &pending_job.id),
+        &pending_job,
+    )
+    .unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 0));
+    let (bucket, job) = store.locate(&claimed.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Ok);
+    assert_eq!(job.execution_phase, ExecutionPhase::Indeterminate);
+    assert!(!store.path_for(JobStatus::Pending, &claimed.id).exists());
+    assert!(!store.path_for(JobStatus::Running, &claimed.id).exists());
+}
+
+#[test]
+fn duplicate_precommit_records_reconcile_then_requeue() {
+    let dir = fresh_root();
+    let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+    let job = store.submit("safe".into(), None, None, None, None).unwrap();
+    let claimed = store.claim_one().unwrap().unwrap();
+    let prepare = "0123456789abcdef0123456789abcdef";
+    let commit = "fedcba9876543210fedcba9876543210";
+    let generation = "c".repeat(64);
+    store
+        .record_execution_prepared(
+            &claimed.id,
+            claimed.worker_pid.unwrap(),
+            claimed.worker_start_time_ticks,
+            prepare,
+            commit,
+            &generation,
+        )
+        .unwrap();
+    let running = store.path_for(JobStatus::Running, &claimed.id);
+    let mut prepared: Job =
+        serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+    prepared.worker_pid = Some(0);
+    write_json_atomic(&running, &prepared).unwrap();
+    write_json_atomic(&store.path_for(JobStatus::Pending, &job.id), &prepared).unwrap();
+
+    assert_eq!(store.recover_orphaned_jobs().unwrap(), (1, 0));
+    let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+    assert_eq!(bucket, JobStatus::Pending);
+    assert_eq!(recovered.execution_phase, ExecutionPhase::Unprepared);
+}
+
+#[test]
+fn duplicate_conflict_or_corruption_fails_closed() {
+    for corrupt in [false, true] {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store.submit("safe".into(), None, None, None, None).unwrap();
+        let claimed = store.claim_one().unwrap().unwrap();
+        let running = store.path_for(JobStatus::Running, &claimed.id);
+        let mut stranded: Job =
+            serde_json::from_str(&std::fs::read_to_string(&running).unwrap()).unwrap();
+        stranded.worker_pid = Some(0);
+        write_json_atomic(&running, &stranded).unwrap();
+        let pending = store.path_for(JobStatus::Pending, &job.id);
+        if corrupt {
+            std::fs::write(&pending, b"not-json").unwrap();
+        } else {
+            let mut conflict = job.clone();
+            conflict.prompt = "different task".to_string();
+            write_json_atomic(&pending, &conflict).unwrap();
+        }
+
+        assert_eq!(store.recover_orphaned_jobs().unwrap(), (0, 0));
+        let (bucket, recovered) = store.locate(&job.id).unwrap().unwrap();
+        assert_eq!(bucket, JobStatus::Ok);
+        assert_eq!(recovered.execution_phase, ExecutionPhase::Indeterminate);
+    }
+}
+
+#[test]
+fn cross_bucket_rename_barrier_failures_never_commit_execution() {
+    let _lock = crate::test_env::lock_env();
+    for point in [
+        "cross_rename",
+        "after_cross_rename",
+        "dir_open",
+        "dir_fsync",
+        "after_destination_dir_fsync",
+        "before_source_dir_fsync",
+    ] {
+        let dir = fresh_root();
+        let store = Store::with_root(dir.path().to_path_buf()).unwrap();
+        let job = store
+            .submit("barrier".into(), None, None, None, None)
+            .unwrap();
+        {
+            let _guard =
+                crate::test_env::TestEnvVarGuard::set("COS_TEST_PERSISTENCE_FAILPOINT", point);
+            assert!(store.claim_one().is_err(), "{point} was accepted");
+        }
+        let _ = store.recover_orphaned_jobs().unwrap();
+        let (_, recovered) = store.locate(&job.id).unwrap().unwrap();
+        assert_ne!(recovered.execution_phase, ExecutionPhase::Committed);
+        assert_ne!(recovered.status, JobStatus::Ok);
+    }
+}
+
 /// A job whose worker is still alive must NOT be touched by recovery.
 #[test]
 fn recover_leaves_job_with_live_worker_alone() {
