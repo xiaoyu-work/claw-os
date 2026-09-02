@@ -14,9 +14,20 @@ surfaces.
 - Run model turns, dispatch authorized tools, and preserve provider state.
 - Maintain memory, sessions, checkpoints, audit views, and usage records.
 - Attach built-in, app, and MCP tools to one guarded registry.
+- Delegate dynamic App and MCP execution to the task-owned extension host when
+  running inside `claw-agentd`.
 - Expose CLI, task-queue, and authenticated local web surfaces. The queue's
   execution side runs in `claw-agentd`, never in the `clawd` broker — see
   [`../agentd/MODULE.md`](../agentd/MODULE.md).
+- Persist a versioned execution phase for every queued task. Workers acknowledge
+  PREPARE while blocked; only a durable COMMIT record permits execution.
+  Recovery requeues only phases that prove COMMIT was never issued.
+- Treat file and directory fsync as mandatory queue barriers. Cross-bucket
+  moves sync both directories, and recovery deduplicates resurrected records
+  by conservative execution-phase dominance before any mutation.
+- Durably create and fsync queue topology before accepting a submission.
+  Legacy, unsupported, or malformed Pending records become terminal
+  indeterminate instead of being upgraded into a replayable phase.
 
 ## Key Files
 
@@ -62,6 +73,11 @@ changes must preserve equivalent streaming/non-streaming text, tools, opaque
 reasoning state, usage, and error behavior. Tool schemas and calls use the same
 trusted per-request exposure context, then execute through registry
 reauthorization, guardrails, approvals, and hooks.
+Opaque MCP handles retain a non-model-visible internal policy identity; both
+catalog filtering and invocation use this same registry path.
+Hosted invocation audit records bind that identity to the server,
+handle/descriptor digest, capability generation, and signed extension lease at
+both gateway and host execution stages.
 
 ## Tests
 

@@ -266,9 +266,19 @@ impl Tool for CosAppTool {
         let data = data_dir();
         let apps = apps_root().to_string_lossy().to_string();
 
-        if crate::paths::is_routed_job()
-            || crate::paths::current_owner_uid_override().is_some()
-        {
+        if let Some(host) = crate::extension_host::client::current() {
+            return match host.run_app(app_name, command, args).await {
+                Ok(Some(text)) => ToolResult::ok(untrusted_app_output(&text)),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(untrusted_app_output(&message)),
+            };
+        }
+        if crate::paths::is_routed_job() {
+            return ToolResult::err(
+                "the task extension host is unavailable; refusing to execute App code in claw-agentd",
+            );
+        }
+        if crate::paths::current_owner_uid_override().is_some() {
             return match tokio::task::block_in_place(|| {
                 crate::bridge::run_python_app(&app_dir, &command, &args, &data, &apps)
             }) {
@@ -653,9 +663,19 @@ impl Tool for CosAppRun {
         let apps = apps_root().to_string_lossy().to_string();
         let app_dir_clone = app_dir.clone();
         let cmd = command.clone();
-        if crate::paths::is_routed_job()
-            || crate::paths::current_owner_uid_override().is_some()
-        {
+        if let Some(host) = crate::extension_host::client::current() {
+            return match host.run_app(app_name, command, args).await {
+                Ok(Some(text)) => ToolResult::ok(untrusted_app_output(&text)),
+                Ok(None) => ToolResult::ok(String::new()),
+                Err(message) => ToolResult::err(untrusted_app_output(&message)),
+            };
+        }
+        if crate::paths::is_routed_job() {
+            return ToolResult::err(
+                "the task extension host is unavailable; refusing to execute App code in claw-agentd",
+            );
+        }
+        if crate::paths::current_owner_uid_override().is_some() {
             return match tokio::task::block_in_place(|| {
                 crate::bridge::run_python_app(&app_dir_clone, &cmd, &args, &data, &apps)
             }) {
@@ -683,6 +703,13 @@ fn is_valid_app_id(s: &str) -> bool {
         && s.chars().next().is_some_and(|c| c.is_ascii_lowercase())
         && s.chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+}
+
+fn untrusted_app_output(value: &str) -> String {
+    crate::agent::safety::untrusted::wrap_untrusted(
+        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+        value,
+    )
 }
 
 /// Register the compact production-default app surface.

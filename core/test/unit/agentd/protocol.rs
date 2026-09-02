@@ -13,6 +13,9 @@ fn signed_grant() -> crate::agentd::grant::SignedGrant {
         client: crate::session::SessionClient::default(),
         presence: None,
         capability_generation: "empty".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
+        extension: None,
         owner_gid: 1000,
         worker_pid: 2,
         worker_start_time_ticks: None,
@@ -36,6 +39,7 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
     assert_eq!(
         WORKER_ROUTES,
         &[
+            ROUTE_PREPARED,
             ROUTE_HELLO,
             ROUTE_STREAM,
             ROUTE_PROGRESS,
@@ -105,6 +109,7 @@ fn every_worker_frame_names_its_route_and_task() {
             egid: 1000,
             supplementary_groups: Vec::new(),
             no_new_privs: true,
+            dumpable: false,
         })),
         WorkerFrame::Heartbeat {
             task_id: "task-a".to_string(),

@@ -3,6 +3,10 @@
 
 set -e
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+command -v identity_finalize >/dev/null 2>&1 ||
+    . "$SCRIPT_DIR/extension-identities.sh"
+
 enable_if_previously_enabled() {
     unit="$1"
     deb-systemd-helper unmask "$unit" >/dev/null || true
@@ -15,6 +19,17 @@ enable_if_previously_enabled() {
 
 case "$1" in
     configure)
+        if [ -n "$2" ]; then
+            identity_provision upgrade "$2"
+        else
+            identity_provision install
+        fi
+        if command -v systemd-sysusers >/dev/null 2>&1; then
+            systemd-sysusers /usr/lib/sysusers.d/claw-os-agent.conf
+        elif ! getent group cos-extension >/dev/null 2>&1; then
+            groupadd --system --gid 60999 cos-extension
+        fi
+        identity_finalize
         install -d -m 0700 /var/lib/cos /var/log/cos
         rmdir /var/log/aos 2>/dev/null || true
 
@@ -37,7 +52,7 @@ case "$1" in
 
         rm -f /etc/systemd/user/default.target.wants/clawd.service
 
-        if [ -d /run/systemd/system ]; then
+        if [ -d "$identity_systemd_dir" ]; then
             systemctl --system daemon-reload >/dev/null || true
             systemctl --global daemon-reload >/dev/null 2>&1 || true
             if [ -n "$2" ]; then
@@ -48,7 +63,12 @@ case "$1" in
             fi
         fi
         ;;
-    abort-upgrade|abort-remove|abort-deconfigure)
+    abort-upgrade)
+        if [ -d "$identity_systemd_dir" ]; then
+            deb-systemd-invoke start clawd.service >/dev/null || true
+        fi
+        ;;
+    abort-remove|abort-deconfigure)
         ;;
     *)
         echo "postinst called with unknown argument '$1'" >&2

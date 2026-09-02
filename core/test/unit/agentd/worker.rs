@@ -10,6 +10,7 @@ fn identity(uid: u32, gid: u32) -> LocalIdentity {
         egid: gid,
         groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }
 }
 
@@ -17,11 +18,15 @@ fn identity(uid: u32, gid: u32) -> LocalIdentity {
 fn the_worker_refuses_to_run_a_user_task_with_root_ids() {
     // A task owned by an ordinary account must never end up running
     // with root ids: that means the drop silently failed.
-    assert!(identity(0, 0).require_expected_identity(1000).is_err());
-    assert!(identity(1000, 0).require_expected_identity(1000).is_err());
+    assert!(identity(0, 0)
+        .require_expected_identity(1000, 1000)
+        .is_err());
+    assert!(identity(1000, 0)
+        .require_expected_identity(1000, 1000)
+        .is_err());
     let mut root_euid = identity(1000, 1000);
     root_euid.euid = 0;
-    assert!(root_euid.require_expected_identity(1000).is_err());
+    assert!(root_euid.require_expected_identity(1000, 1000).is_err());
 }
 
 #[test]
@@ -29,10 +34,12 @@ fn a_root_owned_task_is_refused_even_if_one_reaches_a_worker() {
     // The supervisor refuses root-owned tasks before spawning, so this
     // is the second line of the same rule.
     let error = identity(0, 0)
-        .require_expected_identity(0)
+        .require_expected_identity(0, 1000)
         .expect_err("a root-owned task must never run the model");
     assert_eq!(error, crate::agentd::spawn::ROOT_OWNER_REFUSAL);
-    assert!(identity(1000, 1000).require_expected_identity(0).is_err());
+    assert!(identity(1000, 1000)
+        .require_expected_identity(0, 1000)
+        .is_err());
 }
 
 #[test]
@@ -40,14 +47,30 @@ fn the_worker_refuses_to_run_without_no_new_privs() {
     let mut identity = identity(1000, 1000);
     identity.no_new_privs = false;
     let error = identity
-        .require_expected_identity(1000)
+        .require_expected_identity(1000, 1000)
         .expect_err("NNP is mandatory");
     assert!(error.contains("NO_NEW_PRIVS"), "{error}");
 }
 
 #[test]
 fn an_unprivileged_worker_is_accepted() {
-    assert!(identity(1000, 1000).require_expected_identity(1000).is_ok());
+    assert!(identity(1000, 1000)
+        .require_expected_identity(1000, 1000)
+        .is_ok());
+}
+
+#[test]
+fn the_worker_requires_the_dedicated_gid_and_no_supplementary_groups() {
+    assert!(identity(1000, 1000)
+        .require_expected_identity(1000, 2000)
+        .unwrap_err()
+        .contains("isolated execution gid"));
+    let mut with_groups = identity(1000, 2000);
+    with_groups.groups.push(27);
+    assert!(with_groups
+        .require_expected_identity(1000, 2000)
+        .unwrap_err()
+        .contains("supplementary groups"));
 }
 
 #[test]

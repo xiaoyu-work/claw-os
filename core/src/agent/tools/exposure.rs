@@ -110,7 +110,10 @@ impl ToolExposureContext {
             ToolTransport::McpStdio,
             ToolTransport::McpHttp,
         ]);
-        if host == ExecutionHost::Direct && session.client.local {
+        if (host == ExecutionHost::Direct && session.client.local)
+            || (host == ExecutionHost::AgentWorker
+                && crate::extension_host::client::is_available())
+        {
             transports.insert(ToolTransport::AppSession);
         }
         if session.client.local && (session.client.attended || presence.is_some()) {

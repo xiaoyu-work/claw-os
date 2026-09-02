@@ -22,6 +22,7 @@ use super::{Tool, ToolResult};
 use crate::agent::llm::{self, ToolCall};
 use crate::agent::runtime::approval::ApprovalGate;
 
+#[derive(Clone)]
 struct ToolEntry {
     tool: Arc<dyn Tool>,
     descriptor: Arc<llm::Tool>,
@@ -128,6 +129,7 @@ pub(crate) struct ResolvedToolCall {
     pub kind: ResolvedToolKind,
 }
 
+#[derive(Clone)]
 pub struct ToolRegistry {
     tools: HashMap<String, ToolEntry>,
     approval: ApprovalGate,
@@ -195,9 +197,31 @@ impl ToolRegistry {
         self.catalog_generation.load(Ordering::Acquire)
     }
 
+    /// Register an untrusted/dynamic tool without allowing it to replace an
+    /// existing immutable descriptor.
+    pub fn register_unique(&mut self, tool: Arc<dyn Tool>) -> Result<(), String> {
+        if self.tools.contains_key(tool.name()) {
+            return Err("tool name is already registered".to_string());
+        }
+        self.register(tool);
+        Ok(())
+    }
+
     /// Replace the active approval gate. Call once at construction time.
     pub fn set_approval(&mut self, approval: ApprovalGate) {
         self.approval = approval;
+    }
+
+    pub(crate) fn policy_fork(&self) -> Self {
+        Self {
+            tools: HashMap::new(),
+            approval: self.approval.clone(),
+            catalog_generation: Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    pub(crate) fn policy_visible(&self, context: &ToolExposureContext, name: &str) -> bool {
+        self.exposure_decision(context, name).is_visible() && !self.approval.is_auto_denied(name)
     }
 
     /// Returns the exposure decision for a registered tool.
@@ -235,9 +259,7 @@ impl ToolRegistry {
     }
 
     pub fn descriptor_unfiltered(&self, name: &str) -> Option<&llm::Tool> {
-        self.tools
-            .get(name)
-            .map(|entry| entry.descriptor.as_ref())
+        self.tools.get(name).map(|entry| entry.descriptor.as_ref())
     }
 
     /// Whether the named tool opts into concurrent dispatch with
@@ -538,6 +560,19 @@ impl ToolRegistry {
         input: Value,
         approval_reason: &str,
     ) -> ToolResult {
+        let approval_input = input.clone();
+        self.execute_with_approval_input(context, name, input, approval_input, approval_reason)
+            .await
+    }
+
+    pub(crate) async fn execute_with_approval_input(
+        &self,
+        context: &ToolExposureContext,
+        name: &str,
+        input: Value,
+        approval_input: Value,
+        approval_reason: &str,
+    ) -> ToolResult {
         let Some(tool) = self.get_for(context, name) else {
             let reason = self
                 .exposure_decision(context, name)
@@ -550,7 +585,12 @@ impl ToolRegistry {
         if self.approval.is_classified(name) {
             match self
                 .approval
-                .evaluate_for(name, &input, approval_reason, tool.approval_boundary())
+                .evaluate_for(
+                    name,
+                    &approval_input,
+                    approval_reason,
+                    tool.approval_boundary(),
+                )
                 .await
             {
                 crate::agent::runtime::approval::ApprovalOutcome::Approved { .. } => {}

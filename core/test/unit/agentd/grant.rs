@@ -8,6 +8,7 @@ fn claims(worker_pid: u32) -> GrantClaims {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,
@@ -20,7 +21,9 @@ fn claims(worker_pid: u32) -> GrantClaims {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
-        owner_gid: 1000,
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
+        extension: None,
         worker_pid,
         worker_start_time_ticks: Some(99),
         issued_at_ms: 1_000,
@@ -35,6 +38,7 @@ fn expectation(route: &str) -> GrantExpectation {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,
@@ -47,9 +51,43 @@ fn expectation(route: &str) -> GrantExpectation {
             expires_at_ms: 30_000,
         }),
         capability_generation: "caps-a".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
+        extension: None,
         worker_pid: 77,
         worker_start_time_ticks: Some(99),
         route: route.to_string(),
+    }
+}
+
+fn extension(
+    host_pid: u32,
+    task: &str,
+    session: &str,
+) -> crate::extension_host::protocol::ExtensionBinding {
+    crate::extension_host::protocol::ExtensionBinding {
+        protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        task_id: task.to_string(),
+        session_id: Some(session.to_string()),
+        owner_uid: 1000,
+        extension_uid: 61_000,
+        owner_gid: 1000,
+        capability_generation: "a".repeat(16),
+        approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
+            path: "/home/test".to_string(),
+            device: 1,
+            inode: 2,
+            owner_uid: 1000,
+            mode: 0o40755,
+        }],
+        worker_pid: 77,
+        worker_start_time_ticks: Some(99),
+        host_pid,
+        host_start_time_ticks: Some(123),
+        lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        expires_at_ms: 61_000,
+        control_socket: "/run/cos/extensions/control.sock".to_string(),
+        broker_socket: "/run/cos/extensions/broker.sock".to_string(),
     }
 }
 
@@ -81,6 +119,64 @@ fn a_worker_cannot_mint_or_edit_its_own_grant() {
 }
 
 #[test]
+fn an_extension_binding_cannot_be_replayed_for_another_host_or_session() {
+    let signer = GrantSigner::from_secret([7u8; 32]);
+    let mut claims = claims(77);
+    claims.extension = Some(extension(88, "task-a", "session-a"));
+    let grant = signer.issue(claims);
+    let mut expected = expectation("hello");
+    expected.extension = Some(extension(88, "task-a", "session-a"));
+    assert_eq!(signer.verify(&grant, &expected, 2_000), Ok(()));
+
+    expected.extension = Some(extension(89, "task-a", "session-a"));
+    assert_eq!(
+        signer.verify(&grant, &expected, 2_000),
+        Err(GrantError::Extension)
+    );
+
+    let mut replayed = grant.clone();
+    replayed.claims.extension = Some(extension(88, "task-a", "session-b"));
+    assert_eq!(
+        signer.verify(&replayed, &expectation("hello"), 2_000),
+        Err(GrantError::Signature)
+    );
+
+    let mut substituted_uid = grant.clone();
+    substituted_uid
+        .claims
+        .extension
+        .as_mut()
+        .unwrap()
+        .extension_uid += 1;
+    assert_eq!(
+        signer.verify(&substituted_uid, &expectation("hello"), 2_000),
+        Err(GrantError::Signature)
+    );
+
+    for mutate in [
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.owner_uid += 1;
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.owner_gid += 1;
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.capability_generation = "b".repeat(16);
+        },
+        |binding: &mut crate::extension_host::protocol::ExtensionBinding| {
+            binding.approved_paths[0].inode += 1;
+        },
+    ] {
+        let mut substituted = grant.clone();
+        mutate(substituted.claims.extension.as_mut().unwrap());
+        assert_eq!(
+            signer.verify(&substituted, &expectation("hello"), 2_000),
+            Err(GrantError::Signature)
+        );
+    }
+}
+
+#[test]
 fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
     let signer = GrantSigner::from_secret([7u8; 32]);
     let grant = signer.issue(claims(77));
@@ -99,6 +195,13 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
         Err(GrantError::Owner { .. })
     ));
 
+    let mut other_gid = expectation("hello");
+    other_gid.owner_gid = 2000;
+    assert!(matches!(
+        signer.verify(&grant, &other_gid, 2_000),
+        Err(GrantError::OwnerGid { .. })
+    ));
+
     let mut other_source = expectation("hello");
     other_source.client.source = crate::session::SessionSource::ExternalMcp;
     assert_eq!(
@@ -111,6 +214,13 @@ fn a_grant_is_bound_to_one_task_owner_and_worker_process() {
     assert_eq!(
         signer.verify(&grant, &other_generation, 2_000),
         Err(GrantError::CapabilityGeneration)
+    );
+
+    let mut other_commit = expectation("hello");
+    other_commit.commit_nonce = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+    assert_eq!(
+        signer.verify(&grant, &other_commit, 2_000),
+        Err(GrantError::ExecutionNonce)
     );
 
     let mut other_presence = expectation("hello");
@@ -183,18 +293,25 @@ fn a_worker_refuses_a_grant_minted_for_another_process() {
     let signer = GrantSigner::from_secret([7u8; 32]);
     let grant = signer.issue(claims(77));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1000, 78, Some(99)),
+        grant.validate_for_self(2_000, 1000, 1000, 78, Some(99)),
         Err(GrantError::WorkerPid { .. })
     ));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1001, 77, Some(99)),
+        grant.validate_for_self(2_000, 1001, 1000, 77, Some(99)),
         Err(GrantError::Owner { .. })
     ));
+    assert!(matches!(
+        grant.validate_for_self(2_000, 1000, 2000, 77, Some(99)),
+        Err(GrantError::OwnerGid { .. })
+    ));
     assert_eq!(
-        grant.validate_for_self(2_000, 1000, 77, Some(100)),
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(100)),
         Err(GrantError::WorkerIdentity)
     );
-    assert_eq!(grant.validate_for_self(2_000, 1000, 77, Some(99)), Ok(()));
+    assert_eq!(
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(99)),
+        Ok(())
+    );
 }
 
 #[test]
@@ -208,7 +325,7 @@ fn a_grant_for_a_different_audience_is_not_accepted_here() {
         Err(GrantError::Audience { .. })
     ));
     assert!(matches!(
-        grant.validate_for_self(2_000, 1000, 77, Some(99)),
+        grant.validate_for_self(2_000, 1000, 1000, 77, Some(99)),
         Err(GrantError::Audience { .. })
     ));
 }

@@ -452,6 +452,24 @@ impl Authority {
             .sum()
     }
 
+    /// Revoke only the grant that owns the session index and its descendants.
+    ///
+    /// App launch grants deliberately share the session subject but are not
+    /// indexed. Transient re-scoping must replace the bound child grant without
+    /// destroying that launch parent, because the replacement is attenuated
+    /// from the same opaque handle.
+    pub fn revoke_indexed_session(&self, session_id: &str) -> usize {
+        let mut inner = self.lock();
+        let Some(key) = inner.by_session.get(session_id).copied() else {
+            return 0;
+        };
+        let Some(id) = inner.grants.get(&key).map(|grant| grant.id) else {
+            inner.by_session.remove(session_id);
+            return 0;
+        };
+        inner.revoke_lineage(id)
+    }
+
     /// Revoke only approval-derived grants for one session.
     pub fn revoke_approvals_for_session(&self, session_id: &str) -> usize {
         let mut inner = self.lock();

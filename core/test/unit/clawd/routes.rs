@@ -183,6 +183,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         pid: Some(42),
         uid: Some(1000),
         gid: Some(1000),
+        execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
     };
@@ -190,6 +191,7 @@ fn root_only_commands_are_not_reachable_by_a_user_peer() {
         pid: Some(42),
         uid: Some(0),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks: Some(1),
         attended_local: false,
     };

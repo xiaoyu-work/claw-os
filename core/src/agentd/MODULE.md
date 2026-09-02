@@ -2,11 +2,12 @@
 
 ## Purpose
 
-`agentd/` isolates the agent runtime from the privileged broker. Everything the
-model can steer — provider HTTP clients, streaming parsers, prompt assembly,
-MCP attachment, dynamic App execution and tool orchestration — runs in a
-short-lived `claw-agentd` process owned by the task's submitter. Root `clawd`
-supervises, but does not execute it.
+`agentd/` isolates the model/tool runtime from the privileged broker. Provider
+HTTP clients, streaming parsers, prompt assembly, and tool orchestration run in
+a short-lived `claw-agentd` process owned by the task's submitter. Dynamic App
+and MCP code runs one boundary farther out under an exclusively leased,
+package-created locked uid in `claw-extension-host`. Root `clawd` supervises both but
+executes neither.
 
 ## Responsibilities
 
@@ -17,6 +18,8 @@ supervises, but does not execute it.
   (`protocol`).
 - Claim, lease, supervise, reconcile and finish tasks (`supervisor`).
 - Run exactly one task and report it back (`worker`).
+- Bind each worker grant to the exact extension host and install the host
+  client before constructing the model-visible tool projection.
 
 ## Key Files
 
@@ -28,6 +31,7 @@ supervises, but does not execute it.
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
+| `../extension_host/` | Dynamic App/MCP host, task-bound control, route-filtered broker proxy, cleanup |
 
 ## Threat Boundary
 
@@ -35,7 +39,9 @@ The worker starts as root only long enough to `exec`. In one `pre_exec`
 closure, in this order: `umask(0077)`; `dup2` the job channel to fd 3 and mark
 every other descriptor close-on-exec; `setgroups(0, NULL)` **before** the uid
 drop (this is what removes `sudo`); `setresgid` then `setresuid`; re-read all
-ids and the supplementary group list from the kernel and abort if any is wrong;
+ids and the empty supplementary group list from the kernel and abort if any is
+wrong; the uid is the task owner while the primary gid is the package-created
+`cos-extension` group;
 `PR_SET_PDEATHSIG` with a `getppid` re-check; `setsid`, so the runtime leads its
 own session and process group; `PR_SET_NO_NEW_PRIVS`. The environment is
 rebuilt from an allowlist and carries no credential value.
@@ -45,12 +51,15 @@ formats, logs or takes a lock: failures are reported as bare `errno` values via
 `Error::from_raw_os_error`, which is all `std` writes to its exec-status pipe
 anyway.
 
-`/run/cos/clawd.sock` is unchanged (`0660 root:sudo`). Because the worker's
-supplementary groups are cleared it cannot open that socket at all, so it has
-no broker route: no admin, App-session, scheduler or permission-decision
-surface is reachable. Its only authority is the grant, bound to owner uid,
-worker pid plus kernel start time, task and session id, a lease deadline and
-the routes in `protocol::WORKER_ROUTES`. The signing key never leaves the
+`/run/cos/clawd.sock` is unchanged (`0660 root:sudo`). Before each fork the
+broker pins that actual socket inode plus its canonical ancestors, rejects a
+task uid or isolated gid that can replace the path, and requires an actual
+post-drop connection attempt to fail before `exec`. The worker therefore has
+no broker route even when its passwd primary group is `sudo`: no admin,
+App-session, scheduler or permission-decision surface is reachable. Its only
+authority is the grant, bound to owner uid, isolated gid, worker pid plus
+kernel start time, task and session id, a lease deadline and the routes in
+`protocol::WORKER_ROUTES`. The signing key never leaves the
 broker process, so a grant cannot be minted, edited, replayed against another
 worker, or used past its lease. Executable path, TTY, `NoNewPrivs`, socket
 group and prompt text confer nothing.
@@ -62,6 +71,22 @@ close-on-exec, and only the sealed executable snapshot is explicitly retained.
 The pinned cwd descriptor closes at exec. A model-started descendant therefore
 cannot inherit, read, or write the private worker channel or impersonate task
 frames.
+
+The signed job grant also covers an `ExtensionBinding`: the owner, task,
+durable session, distinct extension uid, worker pid/start-time, host
+pid/start-time, protocol version, random lease nonce, deadline, and private
+socket paths. The host accepts
+control requests only from the exact worker credentials. Its broker proxy
+accepts lifecycle routes only from the exact host and provider routes only
+from a descendant's nearest registered App/MCP session.
+
+Assignment is a durable two-phase gate. `clawd` sends PREPARE with distinct
+grant-signed prepare/commit nonces; the worker verifies it, reports the exact
+prepared binding, and remains blocked. The broker then synchronously persists
+the queue's prepared phase and `execution_committed` phase before sending an
+authenticated COMMIT carrying the same task, session, worker identity,
+capability generation, grant, and nonces. Only a matching COMMIT releases the
+worker into provider/tool execution.
 
 `SO_PEERCRED` is deliberately *not* used on this channel: the socket pair is
 created before the fork, so the kernel stamps it with the broker's own uid and
@@ -143,19 +168,25 @@ one would put the model/tool loop back in a root process, which is the thing
 this module exists to prevent. Single-account container and WSL images must give
 the agent its own unprivileged account; there is no opt-out switch.
 
+This residual boundary no longer applies to dynamic App/MCP code. Each active
+extension containment domain has a distinct reserved host uid, so it cannot
+ptrace the task-owner worker, another user process, or another task's
+extension. An inherited seccomp filter also denies ptrace/process-vm/kcmp and
+pidfd descriptor borrowing, while `PR_SET_DUMPABLE=0` protects both worker and
+host. The broker temporarily grants only that extension uid read access to the
+owner's routed session registry; the ACL is revoked before uid reuse.
+
 ## Known Consequences
 
-Removing the worker's broker access is deliberate, and two things change with
-it:
+Removing the worker's broker access is deliberate:
 
 - **App and MCP sessions started from inside a task.** Registering one needs
-  either an `app_session.*` broker route or a write to the root-owned routed
-  capability registry at `/run/cos/caps/<uid>` (`0750 root:<gid>`, read-only to
-  the owner precisely so the delegated account cannot forge its own
-  capabilities). A worker has neither, so such a launch now fails closed
-  instead of running with the broker's authority. Restoring it needs a
-  sandboxed App/MCP host, which is tracked separately; widening either surface
-  here would put back the authority this change removes.
+  `claw-extension-host`. The worker still has no `app_session.*` route and
+  cannot write the root-owned routed registry. The host reaches only the
+  lifecycle allowlist on its private socket; hosted descendants reach only
+  session-scoped provider routes for their nearest registered child session.
+  If the host is absent, dynamic execution fails closed instead of falling
+  back into `claw-agentd`.
 - **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not
@@ -170,13 +201,30 @@ records correlate within a task rather than across the daemon's lifetime.
 
 ## Failure and Upgrade Behavior
 
-A worker that panics, is killed, exits without a result, stops heartbeating,
-sends a frame outside its grant, or speaks a different protocol version only
-ends its own task. The supervisor terminates the worker's whole process group —
-so no App, MCP server or shell it started survives — reaps it, then either
-releases the task for retry (bounded by the same recovery budget as orphan
-recovery) or fails it, and `clawd` keeps serving. `clawd` treats no worker exit
-— normal or not — as fatal.
+A worker or extension host that panics, is killed, exits unexpectedly, stops
+heartbeating, sends a frame outside its grant, or speaks a different protocol
+version only ends its own task. The supervisor terminates both process trees
+and reaps them. Extension execution starts only after a delegated cgroup-v2
+CPU/memory/pids subtree, finite limits, pre-exec host membership, and working
+`cgroup.kill` have all been verified. A mandatory private mount namespace
+provides task-private tmpfs instances for `/tmp`, `/var/tmp`, `/dev/shm`, and
+`/run/lock`; every other mount is read-only except the task's pinned runtime
+directory. Cleanup closes the proxy and authority, writes `cgroup.kill`,
+requires recursive `populated 0` and an empty `cgroup.procs`, removes the task
+cgroup, unmounts those filesystems, recursively removes task state without
+following links or crossing mounts, and revokes routed ACLs. Only then is the
+identity lock released. A durable quarantine marker preserves failed cleanup
+across broker restart. There is no `/proc`-ancestry fallback. Unavailable
+containment or unverifiable cleanup is a terminal task error; `clawd`
+continues serving non-agent primitives.
+
+Retry is limited to phases that durably prove execution was not committed:
+launch failure, PREPARE delivery/validation failure, or a dead prepared worker.
+Any failure while recording COMMIT, delivering COMMIT, or after the worker
+accepts COMMIT is terminal `indeterminate`; restart recovery never returns it
+to pending without operation-specific durable idempotency evidence. Legacy
+running records without phase metadata are also indeterminate rather than
+replayed.
 
 Mixed installs fail closed: both sides check `protocol::PROTOCOL_VERSION` and
 report a named mismatch that names the fix. `PR_SET_PDEATHSIG` means a worker
@@ -191,6 +239,10 @@ keeps working.
 | --- | --- |
 | `CLAWD_AGENTD` | `off` disables agent supervision (default on) |
 | `COS_AGENTD_BIN` | Worker executable (default: beside `clawd`, else `/usr/local/bin/claw-agentd`) |
+| `COS_EXTENSION_EXEC_GROUP` | Dedicated primary group for worker/host/App/MCP execution (packaged default `cos-extension`) |
+| `COS_EXTENSION_HOST_BIN` | Extension host executable (default: beside `clawd`, else `/usr/local/bin/claw-extension-host`) |
+| `CLAWD_EXTENSION_CGROUP_ROOT` | Optional pre-created empty, root-owned delegated cgroup-v2 root; normally `clawd` prepares its systemd unit subtree |
+| `CLAWD_EXTENSION_HOST_NAMESPACES` | `off` disables best-effort IPC/UTS namespaces; all other host isolation remains |
 | `CLAWD_AGENTD_MAX_WORKERS` | Concurrent workers, 1–64 (default 4) |
 | `CLAWD_AGENTD_LEASE_SECS` | Heartbeat lease, 30–86400 (default 900) |
 | `CLAWD_AGENTD_HEARTBEAT_GRACE_SECS` | Handshake grace, 10–3600 (default 120) |
@@ -202,6 +254,8 @@ keeps working.
 - `crate::caps::approval_gateway` for the consent seam `caps::require` consults.
 - `crate::approvals` and `crate::clawd::{audit, session_scope}` for consent
   mediation, the audit sink and capability derivation.
+- `crate::extension_host` for the task-owned dynamic process boundary and its
+  private broker proxy.
 - `crate::proc` for kernel process identity, `crate::storage` for owner state provisioning.
 
 ## Tests
@@ -210,12 +264,14 @@ keeps working.
 cargo test -p cos agentd -- --test-threads=1
 cargo test -p cos caps::enforcement -- --test-threads=1
 cargo test -p cos --test agentd_process_boundary -- --test-threads=1
+cargo test -p cos --test extension_host_boundary -- --test-threads=1
 bash packaging/deb/tests/test-agentd-packaging.sh
 ```
 
 `core/tests/agentd_process_boundary.rs` spawns a real worker and asserts the
 kernel's view of it (`/proc/<pid>/status`, `/proc/<pid>/fd`,
 `/proc/<pid>/environ`), and drives `supervisor::run_with_store` end to end —
-claim, spawn, handshake, assignment, result, finish — against a temporary
-queue, including the root-owner refusal, which must resolve the task without
-ever executing a worker image.
+claim, spawn, PREPARE, durable COMMIT, handshake, result, finish — against a
+temporary queue, including crash failpoints on every assignment boundary and
+the root-owner refusal, which must resolve the task without ever executing a
+worker image.

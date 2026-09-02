@@ -274,9 +274,27 @@ chmod 0755 "$AGENT_STAGE/DEBIAN"
 
 render_control "$SCRIPT_DIR/claw-os-agent/control" "$AGENT_STAGE/DEBIAN/control"
 install -m 644 "$SCRIPT_DIR/claw-os-agent/conffiles" "$AGENT_STAGE/DEBIAN/conffiles"
-install -m 755 "$SCRIPT_DIR/claw-os-agent/postinst" "$AGENT_STAGE/DEBIAN/postinst"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/preinst"
+} > "$AGENT_STAGE/DEBIAN/preinst"
+chmod 0755 "$AGENT_STAGE/DEBIAN/preinst"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/postinst"
+} > "$AGENT_STAGE/DEBIAN/postinst"
+chmod 0755 "$AGENT_STAGE/DEBIAN/postinst"
 install -m 755 "$SCRIPT_DIR/claw-os-agent/prerm" "$AGENT_STAGE/DEBIAN/prerm"
-install -m 755 "$SCRIPT_DIR/claw-os-agent/postrm" "$AGENT_STAGE/DEBIAN/postrm"
+{
+    cat "$SCRIPT_DIR/claw-os-agent/extension-identities.sh"
+    tail -n +2 "$SCRIPT_DIR/claw-os-agent/postrm"
+} > "$AGENT_STAGE/DEBIAN/postrm"
+chmod 0755 "$AGENT_STAGE/DEBIAN/postrm"
+install -d -m 755 "$AGENT_STAGE/usr/lib/sysusers.d"
+install -m 644 "$SCRIPT_DIR/claw-os-agent/claw-os-agent.sysusers" \
+    "$AGENT_STAGE/usr/lib/sysusers.d/claw-os-agent.conf"
+install -m 755 "$SCRIPT_DIR/claw-os-agent/extension-gid-scan.py" \
+    "$AGENT_STAGE/usr/lib/cos/extension-gid-scan.py"
 
 COS_BIN="$(ensure_bin cos cos)" || { echo "error: cos binary not built" >&2; exit 1; }
 CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&2; exit 1; }
@@ -284,6 +302,8 @@ CLAWD_BIN="$(ensure_bin clawd cos)" || { echo "error: clawd binary not built" >&
 # it, so it ships in lockstep with the broker it is spawned by.
 AGENTD_BIN="$(ensure_bin claw-agentd cos)" || {
     echo "error: claw-agentd binary not built" >&2; exit 1; }
+EXTENSION_HOST_BIN="$(ensure_bin claw-extension-host cos)" || {
+    echo "error: claw-extension-host binary not built" >&2; exit 1; }
 APPROVAL_HELPER_BIN="$(ensure_bin claw-approval-helper cos)" || {
     echo "error: claw-approval-helper binary not built" >&2; exit 1; }
 APP_RUNNER_BIN="$(ensure_bin claw-app-runner cos)" || {
@@ -294,12 +314,14 @@ MAIL_AI_HOST_BIN="$(ensure_bin claw-mail-ai-host cos)" || {
 echo "  :: cos                    <- $COS_BIN"
 echo "  :: clawd                  <- $CLAWD_BIN"
 echo "  :: claw-agentd            <- $AGENTD_BIN"
+echo "  :: claw-extension-host    <- $EXTENSION_HOST_BIN"
 echo "  :: claw-approval-helper   <- $APPROVAL_HELPER_BIN"
 echo "  :: claw-app-runner        <- $APP_RUNNER_BIN"
 echo "  :: claw-mail-ai-host      <- $MAIL_AI_HOST_BIN"
 install -m 755 "$COS_BIN" "$AGENT_STAGE/usr/local/bin/cos"
 install -m 755 "$CLAWD_BIN" "$AGENT_STAGE/usr/local/bin/clawd"
 install -m 755 "$AGENTD_BIN" "$AGENT_STAGE/usr/local/bin/claw-agentd"
+install -m 755 "$EXTENSION_HOST_BIN" "$AGENT_STAGE/usr/local/bin/claw-extension-host"
 install -m 755 "$APPROVAL_HELPER_BIN" "$AGENT_STAGE/usr/local/bin/claw-approval-helper"
 install -m 755 "$APP_RUNNER_BIN" "$AGENT_STAGE/usr/local/bin/claw-app-runner"
 install -m 755 "$MAIL_AI_HOST_BIN" "$AGENT_STAGE/usr/lib/cos/claw-mail-ai-host"

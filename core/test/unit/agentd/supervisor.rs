@@ -8,6 +8,7 @@ fn new_lease() -> Lease {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        execution_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
             true,
@@ -15,6 +16,9 @@ fn new_lease() -> Lease {
         ),
         presence: None,
         capability_generation: "caps-a".to_string(),
+        prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
+        extension: None,
         worker_pid: std::process::id(),
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(std::process::id()),
         deadline: Instant::now() + Duration::from_secs(60),
@@ -42,6 +46,7 @@ fn signer_and_hello(lease: &Lease) -> (GrantSigner, WorkerFrame) {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }));
     (signer, hello)
 }
@@ -92,6 +97,7 @@ fn a_grant_for_a_different_worker_is_refused_at_the_handshake() {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     }));
     let error = accept(&signer, std::process::id(), &mut lease, &hello, false)
         .expect_err("a grant bound to another pid must be refused");
@@ -191,6 +197,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
         egid: 1000,
         supplementary_groups: Vec::new(),
         no_new_privs: true,
+        dumpable: false,
     };
     assert!(check_hello_with(&hello, &lease, true).is_ok());
 
@@ -199,6 +206,12 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
         .unwrap_err()
         .contains("NO_NEW_PRIVS"));
     hello.no_new_privs = true;
+
+    hello.dumpable = true;
+    assert!(check_hello_with(&hello, &lease, true)
+        .unwrap_err()
+        .contains("dumpable"));
+    hello.dumpable = false;
 
     hello.supplementary_groups = vec![27];
     assert!(check_hello_with(&hello, &lease, true)
@@ -217,7 +230,7 @@ fn a_worker_that_did_not_shed_privilege_is_rejected() {
 }
 
 #[test]
-fn a_worker_that_dies_without_a_result_returns_its_task_to_the_queue() {
+fn a_pre_assignment_failure_can_return_its_task_to_the_queue() {
     let root = tempfile::tempdir().expect("tempdir");
     let store = Store::with_root(root.path().to_path_buf()).expect("store");
     let job = store
@@ -226,15 +239,68 @@ fn a_worker_that_dies_without_a_result_returns_its_task_to_the_queue() {
     let claimed = store.claim_one().expect("claim").expect("a pending job");
     assert_eq!(claimed.id, job.id);
 
+    finish_task_outcome(
+        &store,
+        &claimed,
+        TaskOutcome::Retry("assignment channel failed before delivery".to_string()),
+    );
     let released = store
-        .release_for_retry(&job.id, "agent worker exited early")
-        .expect("release")
-        .expect("job");
+        .locate(&job.id)
+        .expect("locate")
+        .expect("released job")
+        .1;
     assert_eq!(released.status, JobStatus::Pending);
     assert_eq!(released.recovery_count, 1);
     assert!(released.worker_pid.is_none());
     // Retryable, so the queue can hand it to a fresh worker.
     assert!(store.claim_one().expect("reclaim").is_some());
+}
+
+#[test]
+fn host_crash_after_a_side_effect_is_terminal_and_never_requeued() {
+    let root = tempfile::tempdir().expect("tempdir");
+    let marker_root = tempfile::tempdir().expect("marker tempdir");
+    let marker = marker_root.path().join("side-effect.log");
+    let store = Store::with_root(root.path().to_path_buf()).expect("store");
+    let job = store
+        .submit(
+            "mutating extension call".to_string(),
+            None,
+            None,
+            Some(1000),
+            None,
+        )
+        .expect("submit");
+    let claimed = store.claim_one().expect("claim").expect("a pending job");
+
+    std::fs::write(&marker, b"executed\n").expect("record simulated hosted side effect");
+    let outcome =
+        post_assignment_interruption("extension host exited after hosted call".to_string(), false);
+    finish_task_outcome(&store, &claimed, outcome);
+
+    let finished = store
+        .locate(&job.id)
+        .expect("locate")
+        .expect("terminal job")
+        .1;
+    assert_eq!(finished.status, JobStatus::Error);
+    assert_eq!(finished.recovery_count, 0);
+    assert!(
+        finished
+            .error
+            .unwrap_or_default()
+            .contains("extension host exited"),
+        "host failure must be persisted"
+    );
+    assert!(
+        store.claim_one().expect("requeue probe").is_none(),
+        "a post-assignment host crash must not re-enter the queue"
+    );
+    assert_eq!(
+        std::fs::read_to_string(marker).expect("side-effect marker"),
+        "executed\n",
+        "terminal handling must not execute the hosted action twice"
+    );
 }
 
 #[test]
@@ -290,6 +356,21 @@ fn a_cancelled_task_stays_cancelled_when_its_worker_is_released() {
         .expect("release")
         .expect("job");
     assert_eq!(released.status, JobStatus::Cancelled);
+}
+
+#[test]
+fn failed_containment_cleanup_overrides_a_reported_task_result() {
+    let outcome = apply_containment_cleanup(
+        TaskOutcome::Reported(Box::new(WorkerOutcome::Cancelled)),
+        Err("cgroup.kill failed".to_string()),
+    );
+    match outcome {
+        TaskOutcome::Failed(error) => {
+            assert!(error.contains("descendants may remain"), "{error}");
+            assert!(error.contains("cgroup.kill failed"), "{error}");
+        }
+        _ => panic!("cleanup failure must be terminal"),
+    }
 }
 
 #[test]

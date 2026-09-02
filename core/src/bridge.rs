@@ -11,6 +11,20 @@ use crate::caps::{Cap, CapSet, Scope, Verb};
 use crate::clawd::routes::Command as ClawdCommand;
 use crate::proc::{deregister_session, register_session, SessionInfo};
 
+thread_local! {
+    static APP_ISOLATION_AUTHORITY:
+        std::cell::RefCell<Option<crate::extension_host::child_isolation::IsolationAuthority>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+struct AppIsolationGuard;
+
+impl Drop for AppIsolationGuard {
+    fn drop(&mut self) {
+        APP_ISOLATION_AUTHORITY.with(|slot| *slot.borrow_mut() = None);
+    }
+}
+
 pub(crate) fn app_runner_path() -> std::path::PathBuf {
     if let Some(path) = std::env::var_os("CLAW_APP_RUNNER_BIN") {
         return path.into();
@@ -26,10 +40,23 @@ pub(crate) fn app_runner_path() -> std::path::PathBuf {
     "/usr/local/bin/claw-app-runner".into()
 }
 
-fn app_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
-    let mut command = Command::new(app_runner_path());
-    command.arg("--").arg(program);
-    command
+fn app_command(program: impl AsRef<std::ffi::OsStr>, app_dir: &Path) -> Result<Command, String> {
+    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
+        let authority = authority.borrow();
+        crate::extension_host::child_isolation::prepare(
+            app_runner_path(),
+            vec![
+                std::ffi::OsString::from("--"),
+                program.as_ref().to_os_string(),
+            ],
+            Some(app_dir),
+            authority.as_ref(),
+        )
+    })?;
+    let mut command = Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
+    command.env_clear().args(launch.args).envs(launch.env);
+    Ok(command)
 }
 
 fn manifest_app_id(app_dir: &Path) -> Result<String, String> {
@@ -583,8 +610,21 @@ pub fn run_native_app_host(
         ));
     }
     let mut app_session = AppIdentitySession::for_native_host(app_id)?;
-    let mut command = Command::new(&runner);
-    command.arg("--").arg(&program_path);
+    let launch = APP_ISOLATION_AUTHORITY.with(|authority| {
+        let authority = authority.borrow();
+        crate::extension_host::child_isolation::prepare(
+            &runner,
+            vec![
+                std::ffi::OsString::from("--"),
+                program_path.as_os_str().to_os_string(),
+            ],
+            Some(&app_dir),
+            authority.as_ref(),
+        )
+    })?;
+    let mut command = Command::new(launch.program);
+    crate::extension_host::child_isolation::close_unallowlisted_fds(&mut command);
+    command.env_clear().args(launch.args).envs(launch.env);
     reset_app_environment(&mut command, false);
     command
         .args(args)
@@ -1323,6 +1363,8 @@ const SAFE_APP_ENV_KEYS: &[&str] = &[
     "COS_SDK_PYTHON_DIR",
     "COS_SNAPSHOT",
     "COS_PERMS_MODE",
+    "COS_EXTENSION_CHILD_ISOLATION",
+    crate::extension_host::protocol::BROKER_SOCKET_ENV,
 ];
 
 const PANEL_APPLET_ENV_KEYS: &[&str] = &[
@@ -1565,6 +1607,12 @@ pub fn run_python_app_with_stdin(
     // Dynamic App execution is model-reachable, so it belongs in the
     // unprivileged worker, never in the root broker's address space.
     crate::agentd::guard::ensure_agent_runtime_allowed("Python App execution")?;
+    if crate::paths::is_routed_job() {
+        return Err(
+            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
 
     let main_py = app_dir.join("main.py");
     if !main_py.is_file() {
@@ -1579,7 +1627,7 @@ pub fn run_python_app_with_stdin(
     let wrapper = python_wrapper(&main_py, command, &effective_args, data_dir, apps_dir)?;
     let stdin_data = validated_operation_stdin(app_dir, command, stdin_data)?;
 
-    let mut command = app_command(python);
+    let mut command = app_command(python, app_dir)?;
     reset_app_environment(&mut command, false);
     command
         .arg("-c")
@@ -1740,6 +1788,24 @@ pub fn run_app(
     run_app_with_stdin(app_dir, command, args, data_dir, apps_dir, None)
 }
 
+pub(crate) fn run_app_with_isolation(
+    app_dir: &Path,
+    command: &str,
+    args: &[String],
+    data_dir: &str,
+    apps_dir: &str,
+    authority: crate::extension_host::child_isolation::IsolationAuthority,
+) -> Result<Option<String>, String> {
+    APP_ISOLATION_AUTHORITY.with(|slot| {
+        if slot.borrow().is_some() {
+            return Err("nested App isolation authority is not permitted".to_string());
+        }
+        *slot.borrow_mut() = Some(authority);
+        let _guard = AppIsolationGuard;
+        run_app(app_dir, command, args, data_dir, apps_dir)
+    })
+}
+
 pub fn run_app_with_stdin(
     app_dir: &Path,
     command: &str,
@@ -1748,6 +1814,12 @@ pub fn run_app_with_stdin(
     apps_dir: &str,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<Option<String>, String> {
+    if crate::paths::is_routed_job() {
+        return Err(
+            "App execution must be delegated to claw-extension-host; refusing to run it in claw-agentd"
+                .to_string(),
+        );
+    }
     // Load the manifest if present so we can pick a runtime. Apps
     // that ship without app.json default to the Python runtime — this
     // lets ad-hoc `main.py` apps in development still run.
@@ -1803,22 +1875,22 @@ pub fn run_app_with_stdin(
 
     let mut cmd = match runtime {
         Runtime::Node => {
-            let mut c = app_command("node");
+            let mut c = app_command("node", app_dir)?;
             c.arg(&entry_path);
             c
         }
         Runtime::Shell => {
             if cfg!(windows) {
-                let mut c = app_command("cmd");
+                let mut c = app_command("cmd", app_dir)?;
                 c.arg("/c").arg(&entry_path);
                 c
             } else {
-                let mut c = app_command("bash");
+                let mut c = app_command("bash", app_dir)?;
                 c.arg(&entry_path);
                 c
             }
         }
-        Runtime::Binary => app_command(&entry_path),
+        Runtime::Binary => app_command(&entry_path, app_dir)?,
         Runtime::Python => unreachable!("python handled above"),
     };
     let app_id = manifest_app_id(app_dir)?;
@@ -1951,7 +2023,7 @@ pub fn launch_gui(
         }
         let wrapper = python_wrapper(&main_py, exec, files, data_dir, apps_dir)?;
         let python = if cfg!(windows) { "python" } else { "python3" };
-        let mut c = app_command(python);
+        let mut c = app_command(python, app_dir)?;
         c.arg("-c").arg(wrapper);
         c
     } else {
@@ -1961,22 +2033,22 @@ pub fn launch_gui(
         }
         match runtime {
             Runtime::Node => {
-                let mut c = app_command("node");
+                let mut c = app_command("node", app_dir)?;
                 c.arg(&entry_path);
                 c
             }
             Runtime::Shell => {
                 if cfg!(windows) {
-                    let mut c = app_command("cmd");
+                    let mut c = app_command("cmd", app_dir)?;
                     c.arg("/c").arg(&entry_path);
                     c
                 } else {
-                    let mut c = app_command("bash");
+                    let mut c = app_command("bash", app_dir)?;
                     c.arg(&entry_path);
                     c
                 }
             }
-            Runtime::Binary => app_command(&entry_path),
+            Runtime::Binary => app_command(&entry_path, app_dir)?,
             Runtime::Python => unreachable!("python handled above"),
         }
     };

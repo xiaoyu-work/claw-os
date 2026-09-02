@@ -25,12 +25,49 @@ packaging/
 
 | Package | Contains | Architecture | Depends |
 |---|---|---|---|
-| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
+| `claw-os-agent` | `cos`, `clawd`, `claw-agentd`, `claw-extension-host`, browser/semantic binaries, headless apps, skills, SDKs, Agent system/user units | `amd64`, `arm64` | Debian/Ubuntu runtime libraries and `systemd` |
 | `claw-os-base` | `cos-init`, managed agent-home setup, Claw OS boot/service policy | `all` | `claw-os-agent` |
 | `claw-os-desktop` | COSMIC desktop, graphical Agent UI/bridge, desktop-only apps and assets | `amd64`, `arm64` | `claw-os-base` |
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
-`cos-browser` and all command-style apps. `claw-os-base` adds only behavior
+`cos-browser`, the per-task App/MCP extension host, and all command-style apps.
+Fresh installs create `cos-extension` at GID `60999`; safe upgrades may retain
+the prior package's arbitrary sysusers GID only after proving it has no
+unrelated ownership, membership, user, or process semantics. Supervised
+workers keep the task uid, while hosted extensions use an exclusive
+package-created locked account from `cos-ext-00..63` (`61000..61063`) plus
+that primary gid. This blocks process injection
+into the task owner or another extension domain. `clawd.service` also
+delegates its cgroup-v2 subtree and pins `KillMode=control-group`; dynamic
+extension execution fails closed unless per-task CPU, memory, pids, and
+`cgroup.kill` containment plus private tmpfs mounts can be verified. Cleanup
+failures retain a durable per-uid quarantine record until restart recovery
+proves process, mount, task-state, and routed-ACL residue is gone.
+`preinst` stops `clawd` for upgrades but does not run dependency-backed scans.
+After the new package and its ordinary dependencies are unpacked/configured,
+`postinst` invokes the single-link root-owned
+`/usr/lib/cos/extension-gid-scan.py`. The helper snapshots mountinfo, rejects
+stacked/duplicate mountpoints, opens each non-kernel-virtual mount, verifies
+its `mnt_id`, device, inode, mode, and ownership before and after scanning,
+then runs `find -xdev` and real numeric `getfacl` inspection through the pinned
+descriptor. Nested, bind, tmpfs, persistent, and network mounts remain
+separate roots. Each scan has a dedicated process group with bounded
+TERM/SIGKILL escalation and residue verification. Malformed or changed
+topology, inaccessible mounts, traversal errors, timeouts, ownership matches,
+or access/default ACL qualifiers fail closed. The Agent package depends
+explicitly on `acl`, `findutils`, `coreutils`, and Python for this proof.
+Partial attempts are rolled back, and `postinst` writes the exact root-owned
+runtime reservation manifest. Purge removes only
+accounts recorded as package-created, still matching policy, and owning no
+live process or runtime/quarantine state; preexisting correct accounts or
+changed records are retained.
+The systemd service runs with primary group `root`, so managed runtime/state
+roots are `root:root`; `clawd.sock` is independently assigned `root:sudo`
+mode `0660`.
+Legacy subordinate-GID validation covers the union of the fixed UID pool and
+the exact retained GID, including values in `61064..61183`, with
+overflow-safe endpoint, interior, and covering-range checks.
+`claw-os-base` adds only behavior
 that intentionally turns a Debian-family rootfs into a Claw OS system.
 When `claw-os-base` is removed, its maintainer script first snapshots the
 visible managed home, unmounts OverlayFS, and materializes that merged view in

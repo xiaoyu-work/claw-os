@@ -40,8 +40,9 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | Component | Responsibility | Primary source |
 | --- | --- | --- |
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
-| `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, agent-worker supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
+| `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
+| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -268,7 +269,9 @@ the `require` gate. It describes authority; the broker authority decides it.
 CLI / web UI / bridge
   -> clawd agent task client (for daemon-backed work)
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
-  -> claw-agentd (task owner, no supplementary groups, NoNewPrivs)
+  -> claw-agentd (task uid, dedicated cos-extension gid, no supplementary groups, NoNewPrivs)
+  -> clawd allocates an unmapped per-task extension uid and spawns
+     claw-extension-host for dynamic App/MCP processes
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
@@ -347,8 +350,9 @@ See [`docs/memory-recovery.md`](docs/memory-recovery.md).
 A daemon-backed task no longer runs inside root `clawd`. The broker claims the
 task, derives its capabilities, and hands the work to a `claw-agentd` process
 that starts as root only long enough to `exec`: `core/src/agentd/spawn.rs`
-clears supplementary groups (including `sudo`) before dropping gid and uid to
-the task owner, re-reads every id from the kernel, sets `PR_SET_NO_NEW_PRIVS`,
+clears supplementary groups (including `sudo`) before dropping uid to the task
+owner and gid to the package-created `cos-extension` group, re-reads every id
+from the kernel, sets `PR_SET_NO_NEW_PRIVS`,
 gives the runtime its own session and process group, applies a `0077` umask,
 rebuilds the environment from an allowlist and closes every inherited
 descriptor except a private `socketpair(2)` on fd 3. A task owned by root is
@@ -356,11 +360,16 @@ refused at `task.submit` and again before a worker could be forked: there is no
 lesser account to drop to, so running one would put the model back in a root
 process.
 
-Because the worker leaves the `sudo` group, `/run/cos/clawd.sock` (`0660
-root:sudo`) is unreachable from it, and the only authority it holds is the
-grant in `core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key
-and bound to owner uid, worker pid plus kernel start time, task and session id,
-a lease deadline, and the route allowlist in `core/src/agentd/protocol.rs`. No
+Before every spawn, `clawd` pins the actual primary socket inode and every
+canonical ancestor, verifies that neither the task uid nor `cos-extension` gid
+can replace the path, then requires an actual post-drop `connect(2)` to fail
+with `EACCES`/`EPERM` before `exec`. The worker therefore cannot reach
+`/run/cos/clawd.sock` even when the task account's passwd primary group is the
+broker's socket group. Its only authority is the grant in
+`core/src/agentd/grant.rs`: HMAC-signed with a per-broker-process key and bound
+to owner uid, isolated gid, worker pid plus kernel start time, task and session
+id, a lease deadline, and the route allowlist in
+`core/src/agentd/protocol.rs`. No
 admin, App-session, scheduler or permission-decision route exists on that
 channel. `SO_PEERCRED` is not used to authenticate it: the socket pair predates
 the fork, so the kernel stamps it with the broker's own identity.
@@ -371,6 +380,123 @@ every descriptor above stderr close-on-exec and clears agentd/clawd supervision
 hints from the child environment, preserving only the sealed executable memfd.
 Agent-started descendants therefore cannot forge worker frames or collide with
 the worker's approval traffic.
+
+Dynamic App and MCP code is not loaded into either `clawd` or `claw-agentd`.
+For every claimed task, the supervisor creates a private runtime directory,
+binds a second broker socket there, and spawns `claw-extension-host` as the task
+owner's authority but under a distinct, exclusively leased host-kernel uid.
+The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
+environment/descriptor allowlists, separate session/process group, finite
+rlimits, and non-dumpable process state. A private mount namespace is
+mandatory and replaces `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock` with
+task-private tmpfs mounts. The host sees the rest of the mount tree read-only;
+only its descriptor-verified task directory is remounted writable. IPC/UTS
+namespaces remain an optional additional layer. `clawd` also establishes a
+delegated CPU/memory/pids subtree, creates
+and verifies a bounded task cgroup, and moves the host into it in the pre-exec
+closure before any dynamic code can run. Every descendant inherits that
+membership. Teardown requires a successful `cgroup.kill`, `populated 0`, an
+empty `cgroup.procs`, removal of the task cgroup, successful private-mount
+unmounts, and descriptor-relative recursive removal of all task state.
+`setsid`, double-forking, host-first exit, clearing `PDEATHSIG`, symlinks,
+hardlinks, open descriptors, or nested mountpoints cannot produce a clean
+release while residue remains.
+
+Each App or stdio MCP process adds a second boundary through the trusted
+`claw-app-runner`/bubblewrap launch path: new PID and network namespaces with
+private procfs plus a mount namespace rooted at empty tmpfs. Exact pinned
+executables and ELF dependencies, filtered immutable language-runtime
+snapshots, generated minimal account files, exact live broker/session
+endpoints, and read-only snapshots of explicitly authorized App/MCP code are
+mounted. Broad live `/usr`, `/etc`, and `/usr/local`, plus `/home`, `/root`,
+`/mnt`, `/media`, arbitrary `/var`, and other host mounts are absent. Ambient network
+access is absent; native extensions use broker-mediated capabilities. Each
+child receives private writable
+home/data/cache/log/tmp trees. The cgroup remains the outer kill/reap
+authority, while private procfs prevents same-UID siblings from observing or
+signalling one another.
+
+The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
+its per-owner directory, and each task directory remain root-owned and
+non-writable. `openat2(RESOLVE_BENEATH|RESOLVE_NO_SYMLINKS|
+RESOLVE_NO_MAGICLINKS)`, pinned directory descriptors, `mkdirat`, `fchown`,
+`fchmod`, `fstatat(AT_SYMLINK_NOFOLLOW)`, and `unlinkat` cover creation,
+upgrade cleanup, socket metadata, and teardown. Only the final control
+subdirectory is transferred after the root-owned broker listener has been
+bound and its filesystem inode/type plus `/proc/net/unix` endpoint identity
+have been verified. No privileged `chown` or `chmod` follows a pathname below
+a task-writable directory.
+
+Host bootstrap authority crosses the root-to-extension boundary only through a
+private inherited descriptor carrying a typed versioned record. The worker
+grant signs the resulting exact binding, including owner/leased uid, isolated
+gid, capability generation, socket identities, and device/inode/mode-pinned
+approved roots. Child launch APIs require that typed authority; they never
+recover it from environment variables, effective ids, NSS, or fallback path
+resolution. Approved snapshots accept only root or the exact task owner and
+always reject reserved extension uid and execution-gid objects. Arbitrary
+`/srv` paths are absent unless an exact broker-pinned path capability exists.
+
+The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
+`61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
+the prior package may retain its arbitrary sysusers-assigned
+`cos-extension` GID only after proving it has no unrelated members, primary
+users, processes, subordinate-ID overlap, group-owned files, or named access/
+default ACLs. Upgrade preinstall stops `clawd`; postinstall uses the newly
+unpacked root-owned helper and configured dependencies to reject stacked
+mountpoints, pin each visible mount by descriptor/mount ID/device/inode, scan
+without crossing mounts, and recompare mountinfo. Timed scans own a dedicated
+process group and escalate TERM to SIGKILL before residue verification. Both
+identity policies remain outside systemd's `DynamicUser` range
+(`61184..=65519`). Postinstall also rejects NSS/name/UID collisions,
+systemd-homed records, and overlapping `/etc/subuid` or `/etc/subgid` ranges
+before creating anything; partial provisioning rolls back only records created
+in that attempt. `clawd` requires
+the exact name/uid/gid/home/shell/locked-shadow records plus a root-owned
+package reservation manifest on every start. It never reuses an identity until
+cgroup, private-mount, task-state, and routed-ACL cleanup succeed. A durable
+root-owned quarantine record is written before task state is created and
+removed only after every cleanup step succeeds. On restart, cgroup recovery
+runs first; quarantined identities remain locked until their process, runtime
+directory, `/run/user/<uid>`, and routed-reader state are all proven absent.
+The control socket admits the task-owner worker through the shared execution
+gid but checks its exact pid/start-time/task/nonce; the private broker socket
+belongs only to the extension uid. The proxy authenticates that kernel uid,
+then explicitly projects the already-bound task-owner principal into normal
+route/capability enforcement and records the execution uid in audit identity.
+The host and all descendants inherit a seccomp filter denying `ptrace`,
+`process_vm_readv`, `process_vm_writev`, `kcmp`, and `pidfd_getfd`. Both worker
+and host set `PR_SET_DUMPABLE=0` at process entry. Extension data, cache, log,
+and home paths are task-controlled directories rather than the owner's home.
+
+The signed worker grant includes the extension protocol version, owner, task,
+durable session, worker pid/start-time, host pid/start-time, random lease nonce,
+deadline, and both socket paths. The host's control listener accepts frames
+only from that exact worker identity. Its broker proxy uses per-message
+`SCM_CREDENTIALS`: the host may reach only App/MCP lifecycle plus
+`permission.status`, while descendants may reach only `Session` or
+`PeerSession` routes for their nearest root-maintained App/MCP row. Task,
+scheduler, permission-decision, admin, and sibling-session routes are absent.
+Accepted provider calls re-enter the normal typed route registry, global
+admission limits, capability authority, final provider checks, and audit path.
+The supervisor's retry boundary is a durable two-phase execution gate. The
+worker verifies PREPARE and remains blocked; `clawd` persists exact
+task/session/worker/generation/nonces as `execution_committed` before sending
+COMMIT. Recovery requeues only unprepared/prepared records. Commit persistence
+or delivery ambiguity, legacy running records, and worker/host failure after
+COMMIT become terminal indeterminate because an external side effect may have
+occurred.
+Every queue file replacement propagates file and parent-directory fsync
+failures. Cross-bucket moves fsync the destination directory and then the
+source directory before success is reported. Before claiming, committing,
+recovering, cancelling, or finishing, the store deduplicates identical IDs
+across pending/running/done: committed or conflicting copies dominate and
+become terminal indeterminate, while identical pre-COMMIT copies reconcile to
+one safe record. Queue roots and buckets are created bottom-up only after
+directory-fsync support is preflighted, with each new directory and parent
+synced. A Pending record is claimable only at the current schema in the
+explicit unprepared phase; legacy, unsupported, malformed, or phase-conflicting
+records become terminal indeterminate.
 
 Consent remains inside the capability boundary.
 `core/src/caps/approval_gateway.rs` is the seam `caps::require` consults instead
@@ -579,6 +705,15 @@ grant — launch authority dropped, bound to the App's own process tree — whic
 what every privileged provider route the App later calls is authorized against.
 Deregistration revokes the launch grant, and the session grant with it.
 
+Inside a supervised task, the tool registry sends one-shot App operations and
+stateful session calls over the extension-host control channel. The host
+re-reads the installed manifest, launches the declared entrypoint, and uses its
+private broker proxy for registration, binding, transient call scopes, and
+teardown. Returned stdout, stderr-derived failures, MCP descriptors, and tool
+results are bounded and treated as untrusted model data. A missing or crashed
+host fails dynamic execution closed; there is no fallback that runs App code
+inside `claw-agentd`.
+
 ### Proactive scheduling
 
 `cos cron` and `cos triggers` act on the root-owned job store the `clawd`
@@ -604,19 +739,39 @@ bounded by the same home-scoped ceiling the executor applies before it runs.
 
 ```text
 config or discovered agent-API sidecar
-  -> MCP transport/client initialization
+  -> direct process: MCP transport/client initialization
+  -> supervised task: claw-extension-host attach/ready
   -> tools/list
-  -> prefixed tool registration + attachment generation
-  -> session projection
-       -> small catalog: direct schemas
-       -> oversized catalog: stable search/describe/call bridge
-  -> original registry entry + normal guardrail dispatch
+  -> strict structural-schema sanitization + canonical descriptor-set digest
+  -> remote catalogue returned only as wrapped untrusted data
+  -> opaque owner/session/task/generation-bound handle
+  -> fixed local mcp_catalog / mcp_invoke registration
+  -> internal policy identity + shared registry exposure/guardrail/approval dispatch
+  -> attachment liveness + generation recheck
+  -> relist/digest verification
+  -> hosted tools/call -> extension host -> bounded untrusted result
 ```
 
 An MCP server is optional. Failure to attach one is logged and skipped rather
-than preventing the core agent from starting. Dropping its handle invalidates
-every proxy registered by that attachment before the child or transport is
-torn down, so stale catalog entries cannot be invoked.
+than preventing the core agent from starting. `ChatRequest.tools` contains no
+remote identifier, description, or property name; those values exist only in
+the wrapped `mcp_catalog` result. Structural descriptor drift, guessed handles,
+reconnect replay, owner/session/generation mismatch, hidden exposure,
+auto-deny, or missing approval blocks invocation.
+Dropping an attachment handle marks every internal policy entry unavailable
+and advances the shared catalogue generation before the child or hosted
+transport is detached, so a previously disclosed handle cannot race teardown.
+The registry's general `cos_tool_search` / `cos_tool_describe` /
+`cos_tool_call` schema-budget path remains available to other extension
+descriptors; MCP uses only its stricter opaque two-tool gateway and never
+creates a parallel raw-tool execution path.
+Every resolved hosted invocation emits correlated gateway and host lifecycle
+records containing the internal policy identity, server, handle/descriptor
+digests, capability generation, and signed binding/lease references. Remote
+display text is represented only by an untrusted keyed digest.
+Lifecycle outcome categories are carried on the versioned host protocol.
+Transport connect/timeout, host crash, protocol, and remote-call failures are
+assigned by trusted code paths; remote text never selects an audit action.
 
 ### Image and package publication
 
@@ -652,6 +807,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
+| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, spawned per task by `clawd` |
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
@@ -703,6 +859,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - [`docs/app-development.md`](docs/app-development.md)
 - [`docs/image-architecture.md`](docs/image-architecture.md)
 - [`docs/memory-recovery.md`](docs/memory-recovery.md)
+- [`docs/extension-host-isolation.md`](docs/extension-host-isolation.md)
 - [`docs/semantic-search-design.md`](docs/semantic-search-design.md)
 - [`docs/browser-attached-design.md`](docs/browser-attached-design.md)
 - [`packaging/README.md`](packaging/README.md)

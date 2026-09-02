@@ -21,6 +21,8 @@ Debian packages and a signed multi-architecture APT repository.
 | `deb/build-debs.sh` | Package staging and `.deb` assembly |
 | `deb/*/control` | Package metadata and runtime dependencies |
 | `deb/*/{postinst,prerm,postrm}` | Upgrade/install/remove behavior |
+| `deb/claw-os-agent/extension-gid-scan.py` | Root-owned mount/ownership/ACL proof used during Agent postinstall |
+| `deb/tests/test-extension-gid-scan.py` | Real getfacl, mount pinning, stacked mount, and timeout-process-group coverage |
 | `apt-repo/sync-existing-packages.sh` | Merge local artifacts without replacing equal or newer signed candidates |
 | `apt-repo/tests/test-sync-existing-packages.sh` | Package merge and first-publication regression scenarios |
 | `../rootfs/overlay/usr/lib/cos/init/remove-home-overlay.sh` | Safe managed-home flattening before Base removal |

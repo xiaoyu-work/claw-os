@@ -8,8 +8,13 @@ which tool calls are exposed and executed.
 ## Responsibilities
 
 - Register built-in, `cos` proxy, progressive app, memory, browser, and MCP tools.
+- Use host-backed proxy tools in supervised tasks so dynamic App/MCP code
+  never executes in the worker process.
 - Cache immutable name/description/schema descriptors separately from
   per-request visibility decisions.
+- Admit remote MCP descriptors only after safe-name normalization, recursive
+  schema annotation removal, strict structural-schema validation, and
+  collision-free registration. Remote prose never enters descriptor cache.
 - Project descriptors through trusted session owner, source, attendance,
   capabilities, host transports, enabled extensions, and guardrails.
 - Replace oversized permitted extension catalogs with fixed
@@ -53,6 +58,9 @@ dispatch; only immutable descriptors may be cached. Tools consume stable
 service/capability definitions and still perform exact argument-derived checks.
 Model output, client fields, process environment, and external tool results are
 untrusted; authority comes only from authenticated session/runtime facts.
+Hosted results are wrapped as untrusted model data before they enter the
+trajectory. Hosted descriptor calls carry the canonical sanitized descriptor
+set digest; relist drift fails closed for the rest of that attachment.
 
 Bridge calls are resolved to the original tool identity before hooks,
 parallelism, approval, and execution. Direct calls to deferred names are

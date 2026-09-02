@@ -29,7 +29,7 @@ release schedules:
 
 | Package | Contents |
 | --- | --- |
-| `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
+| `claw-os-agent` | Reusable Agent, `clawd`, `claw-agentd`, `claw-extension-host`, browser/semantic runtimes, headless apps, skills, SDKs, and Agent services |
 | `claw-os-base` | Claw OS recovery, managed agent home, and distribution boot/service policy |
 | `claw-os-desktop` | Desktop shell, graphical Agent UI, and graphical applications, when installed |
 
@@ -44,7 +44,85 @@ the running daemon is restarted automatically. `claw-os-base` separately
 restarts the managed-home service on Claw OS systems. Rebooting or replacing
 the system is not normally needed.
 
-`clawd` and `claw-agentd` ship in the same package and are replaced together.
+`clawd`, `claw-agentd`, and `claw-extension-host` ship in the same package and
+are replaced together. Package configuration creates the dedicated
+`cos-extension` system group before restarting `clawd`; existing user
+memberships are not changed.
+The package now provisions locked accounts `cos-ext-00..63` at fixed UIDs
+`61000..61063`. Fresh installs use `cos-extension` GID `60999`. Upgrades from
+the prior dynamic sysusers definition stop `clawd` and retain the existing GID
+instead of rewriting it, but only when it has no unrelated group members,
+primary users, processes, subordinate-ID overlap, group-owned files, or named
+POSIX ACL entries. The ownership/ACL proof snapshots mountinfo and scans every
+mounted filesystem independently, including nested, bind, tmpfs, persistent,
+and network mounts. Stacked/duplicate mountpoints are ambiguous and rejected.
+Each visible mount is opened and checked against the captured mount ID,
+device, inode, mode, and ownership before and after descriptor-relative
+scanning. Scans run in dedicated process groups with bounded TERM then SIGKILL
+escalation and no-descendant verification. Package configuration aborts if
+mountinfo is malformed or changes, a mount cannot be pinned/traversed,
+`find`/real numeric `getfacl` fails or times out, or the candidate GID appears
+as an access/default ACL qualifier. Kernel-generated
+virtual filesystems are skipped only by the maintained allowlist because they
+cannot retain discretionary ownership or POSIX ACL state across recreation.
+The retained GID is recorded in `/var/lib/cos/extension-group.gid` and revalidated
+on every later upgrade. Upgrade `preinst` stops `clawd`; provisioning moves to
+`postinst`, after the unpacked root-owned helper and ordinary `acl`,
+`findutils`, `coreutils`, and Python dependencies are guaranteed available.
+It checks every name, UID, and GID, the existing `cos-extension` group, shadow
+locking, systemd-homed, and all `/etc/subuid`/`/etc/subgid` ranges before
+making changes. A collision aborts without modifying the unrelated record; a
+partial attempt is rolled back. `postinst` then writes
+`/var/lib/cos/extension-identities.reserved`, which `clawd` requires.
+Subordinate-GID checks cover both the fixed UID pool and the exact retained
+GID as separate intervals, including legacy GIDs `61064..61183`.
+The package depends on `acl` and `findutils`; these tools are mandatory rather
+than optional fallbacks.
+Each active slot also has a root-owned durable cleanup record under
+`/var/lib/cos/extension-quarantine/`. It is removed only after the host cgroup
+is empty and gone, private tmpfs mounts are unmounted, task-local state is
+recursively deleted, and routed ACLs are revoked. After a crash or failed
+cleanup, the slot remains unavailable across restart until recovery proves all
+residue is gone; administrators should investigate repeated
+`cleanup-failed` audit events rather than deleting these records manually.
+The service runs with primary group `root`, so systemd's runtime/state/log
+directories are `root:root`; `clawd` also pins and repairs those roots through
+directory descriptors before use. The primary broker socket is separately
+assigned `root:sudo` mode `0660`. The service delegates its cgroup-v2 subtree and uses
+`KillMode=control-group`. Agent tasks now fail closed unless the CPU, memory,
+and pids controllers plus a working `cgroup.kill` are available; ordinary
+non-agent `clawd` primitives remain available. On supported systemd hosts no
+manual migration is required.
+
+On the first task after upgrading, `clawd` securely migrates any legacy
+task-owned `/run/cos/extension-hosts/<uid>` directory to a root-owned,
+non-writable parent. It pins the directory without following links and removes
+stale contents with descriptor-relative unlink operations; it never applies
+root ownership or mode changes to child pathnames. `/run` is ephemeral, so no
+operator migration is normally needed. A symlinked or otherwise unverifiable
+legacy parent fails agent execution closed and should be removed only after
+the administrator inspects it.
+Existing dynamic App/MCP tasks now receive task-local home/data/cache/log
+directories rather than task-owner home access, plus private tmpfs instances
+for `/tmp`, `/var/tmp`, `/dev/shm`, and `/run/lock`. The remaining filesystem
+is read-only except for the task-local runtime tree. Bundled and
+system-installed extensions continue to work; custom MCP commands and working
+directories must be system-readable, and direct writes outside the task tree
+must use brokered App/SDK operations instead.
+
+Dynamic App and stdio MCP children now see an empty allowlisted filesystem and
+private procfs. Custom extension code/config outside `/usr` is copied into a
+bounded read-only task snapshot; symlinks, mount crossings, special files,
+group/world-writable trees, oversized snapshots, and undeclared host paths are
+rejected. Extensions that previously read arbitrary owner-home, `/var`, or
+mounted paths must use explicit SDK/broker operations instead.
+
+On package purge, only users listed in the package ownership marker and still
+matching the exact account policy are removed. Preexisting correct accounts,
+an older unmarked `cos-extension` group, any identity changed after install, or
+an identity that still owns a process, runtime directory, or quarantine record
+is retained with a warning. No home is created, and the package does not
+delete files merely because their numeric ownership matches a reserved UID.
 `cos` ships beside them and speaks the same broker protocol version, so an
 upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 `clawd` supervises, so an upgrade behaves as follows:
@@ -72,7 +150,8 @@ upgrade replaces the whole set. Agent tasks run in `claw-agentd` processes that
 Confirm both binaries and the running daemon after an upgrade:
 
 ```bash
-dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd)$'
+dpkg-query -L claw-os-agent | grep -E '/(clawd|claw-agentd|claw-extension-host)$'
+getent group cos-extension
 sudo systemctl status clawd
 cos agent service list --status pending
 ```

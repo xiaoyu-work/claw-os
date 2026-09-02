@@ -37,6 +37,7 @@
 //!   - Telegram/Discord adapters (Q1 plan) can drop jobs without
 //!     opening sockets — the FS is the message bus.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
@@ -54,6 +55,7 @@ use crate::paths::agent_jobs_dir;
 /// [`Store::recover_orphaned_jobs`]). Stops a job that crashes every
 /// worker from looping forever and starving the queue.
 const MAX_RECOVERIES: u32 = 3;
+const JOB_SCHEMA_VERSION: u32 = 2;
 const STREAM_PRUNE_TOMBSTONE_SUFFIX: &str = ".jsonl.prune";
 
 // ---------------------------------------------------------------------------
@@ -71,6 +73,42 @@ pub enum JobStatus {
     Ok,
     Error,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPhase {
+    Unprepared,
+    Preparing,
+    Prepared,
+    Committed,
+    Indeterminate,
+    LegacyUnknown,
+}
+
+impl ExecutionPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unprepared => "unprepared",
+            Self::Preparing => "preparing",
+            Self::Prepared => "prepared",
+            Self::Committed => "committed",
+            Self::Indeterminate => "indeterminate",
+            Self::LegacyUnknown => "legacy_unknown",
+        }
+    }
+
+    fn replay_is_proven_safe(self) -> bool {
+        matches!(self, Self::Unprepared | Self::Preparing | Self::Prepared)
+    }
+}
+
+fn legacy_execution_phase() -> ExecutionPhase {
+    ExecutionPhase::LegacyUnknown
+}
+
+fn legacy_job_schema_version() -> u32 {
+    1
 }
 
 impl JobStatus {
@@ -96,6 +134,8 @@ impl JobStatus {
 /// Persistent representation of a single agent job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
+    #[serde(default = "legacy_job_schema_version")]
+    pub schema_version: u32,
     pub id: String,
     pub prompt: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -159,6 +199,14 @@ pub struct Job {
     /// [`MAX_RECOVERIES`]. Defaults to 0; absent in old on-disk files.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub recovery_count: u32,
+    #[serde(default = "legacy_execution_phase")]
+    pub execution_phase: ExecutionPhase,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_prepare_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_commit_nonce: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_generation: Option<String>,
 }
 
 /// serde skip predicate for the common `recovery_count == 0` case so
@@ -202,6 +250,7 @@ impl Job {
     ) -> Self {
         client.attended = false;
         Self {
+            schema_version: JOB_SCHEMA_VERSION,
             id: uuid::Uuid::new_v4().to_string(),
             prompt,
             context,
@@ -226,6 +275,10 @@ impl Job {
             owner_home,
             client,
             recovery_count: 0,
+            execution_phase: ExecutionPhase::Unprepared,
+            execution_prepare_nonce: None,
+            execution_commit_nonce: None,
+            execution_generation: None,
         }
     }
 
@@ -259,12 +312,9 @@ impl Store {
     }
 
     pub fn with_root(root: PathBuf) -> io::Result<Self> {
-        // The bucket dirs (pending/running/done) and a sibling
-        // `locks/` dir hold the per-job flock sentinels. Pre-creating
-        // them keeps the hot path (claim_one / cancel_pending /
-        // submit) lock-free at start-up.
+        crate::agent::util::ensure_durable_private_dir(&root)?;
         for sub in ["pending", "running", "done", "locks", "streams"] {
-            crate::storage::ensure_private_dir(&root.join(sub))?;
+            crate::agent::util::ensure_durable_private_dir(&root.join(sub))?;
         }
         Ok(Self { root })
     }
@@ -552,6 +602,7 @@ impl Store {
     /// no pending jobs exist or every candidate was lost to another
     /// worker.
     pub fn claim_one(&self) -> io::Result<Option<Job>> {
+        self.reconcile_duplicate_job_ids()?;
         let pending = self.bucket_dir(JobStatus::Pending);
         // Iterate all current pending entries. If a rename fails with
         // NotFound (another worker beat us) try the next; any other
@@ -584,34 +635,66 @@ impl Store {
             // is atomic but not mutually exclusive across different
             // destinations), letting a cancelled job still receive
             // a real response from a worker that won the race.
-            let _lock = match self.lock_for_id(&id) {
-                Ok(l) => l,
-                Err(_) => continue, // best-effort: never block forever on lock failure
-            };
+            let _lock = self.lock_for_id(&id)?;
             // Re-check existence after taking the lock — cancel may have
             // already moved the file while we were waiting.
             if !src.exists() {
                 continue;
             }
+            let raw = match fs::read_to_string(&src) {
+                Ok(raw) => raw,
+                Err(error) if error.kind() == ErrorKind::NotFound => continue,
+                Err(error) => return Err(error),
+            };
+            let mut job: Job = match serde_json::from_str(&raw) {
+                Ok(job) => job,
+                Err(_) => {
+                    self.finish_indeterminate(
+                        &src,
+                        &id,
+                        corrupt_job(&id),
+                        "pending queue record is malformed; execution history cannot be proven and replay is refused",
+                    )?;
+                    continue;
+                }
+            };
+            if job.id != id {
+                self.finish_indeterminate(
+                    &src,
+                    &id,
+                    corrupt_job(&id),
+                    "pending queue record identity conflicts with its filename; replay is refused",
+                )?;
+                continue;
+            }
+            if job.schema_version != JOB_SCHEMA_VERSION
+                || job.status != JobStatus::Pending
+                || job.execution_phase != ExecutionPhase::Unprepared
+            {
+                self.finish_indeterminate(
+                    &src,
+                    &id,
+                    job,
+                    "pending queue record lacks current durable pre-execution proof; legacy or unsupported jobs are not replayed",
+                )?;
+                continue;
+            }
             let dst = self.path_for(JobStatus::Running, &id);
-            match fs::rename(&src, &dst) {
+            match durable_rename(&src, &dst) {
                 Ok(()) => {
-                    // We won — load, mutate, rewrite atomically.
-                    let s = fs::read_to_string(&dst)?;
-                    let mut job: Job = serde_json::from_str(&s).map_err(io_other)?;
-                    validate_job_id(&job.id)?;
-                    if job.id != id {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("job id `{}` does not match queue filename `{id}`", job.id),
-                        ));
-                    }
+                    // We won — mutate the record already validated before
+                    // the move. Legacy/unsupported Pending records never
+                    // reach this phase transition.
                     job.status = JobStatus::Running;
                     job.started_at = Some(now_iso());
                     let worker_pid = std::process::id();
                     job.worker_pid = Some(worker_pid);
                     job.worker_start_time_ticks =
                         crate::proc::read_start_time_ticks_pub(worker_pid);
+                    job.execution_phase = ExecutionPhase::Preparing;
+                    job.execution_prepare_nonce = None;
+                    job.execution_commit_nonce = None;
+                    job.execution_generation = None;
                     write_json_atomic(&dst, &job)?;
                     crate::clawd::audit::record_task_event("clawd.task.started", &job);
                     return Ok(Some(job));
@@ -643,9 +726,10 @@ impl Store {
     ///     of being requeued forever.
     ///
     /// Intended to run once at worker start-up, before the claim loop.
-    /// Returns `(requeued, failed)` counts for logging. Best-effort: a
-    /// single malformed job file is skipped, not fatal.
+    /// Returns `(requeued, failed)` counts for logging. Malformed running
+    /// records are terminalized because their execution history is unknown.
     pub fn recover_orphaned_jobs(&self) -> io::Result<(usize, usize)> {
+        self.reconcile_duplicate_job_ids()?;
         let running = self.bucket_dir(JobStatus::Running);
         let mut requeued = 0usize;
         let mut failed = 0usize;
@@ -667,10 +751,7 @@ impl Store {
             };
             // Serialise against claim_one/cancel for this id so we can't
             // requeue a job another worker is mid-claim on.
-            let _lock = match self.lock_for_id(&id) {
-                Ok(l) => l,
-                Err(_) => continue,
-            };
+            let _lock = self.lock_for_id(&id)?;
             // Re-read under the lock; it may have moved since the listing.
             let raw = match fs::read_to_string(&path) {
                 Ok(s) => s,
@@ -679,11 +760,30 @@ impl Store {
             };
             let mut job: Job = match serde_json::from_str(&raw) {
                 Ok(j) => j,
-                Err(e) => {
-                    tracing::warn!("agent recovery: skipping malformed running job {path:?}: {e}");
+                Err(_) => {
+                    self.finish_indeterminate(
+                        &path,
+                        &id,
+                        corrupt_job(&id),
+                        "running queue record is malformed; execution history is indeterminate and replay is refused",
+                    )?;
+                    failed += 1;
                     continue;
                 }
             };
+
+            if job.schema_version != JOB_SCHEMA_VERSION
+                || !job.execution_phase.replay_is_proven_safe()
+            {
+                self.finish_indeterminate(
+                    &path,
+                    &id,
+                    job,
+                    "broker restarted after execution may have begun; outcome is indeterminate and replay is refused",
+                )?;
+                failed += 1;
+                continue;
+            }
 
             let mut unverifiable_identity = false;
             // Owner still alive with the exact same process identity ⇒ not
@@ -706,6 +806,7 @@ impl Store {
             }
             if unverifiable_identity {
                 job.status = JobStatus::Error;
+                job.execution_phase = ExecutionPhase::Indeterminate;
                 job.error = Some(
                     "worker PID is alive but its start-time identity is unavailable; \
                      refusing to retry a potentially active job"
@@ -714,7 +815,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event(
                     "clawd.task.worker_identity_unverifiable",
@@ -729,7 +830,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 continue;
@@ -749,7 +850,7 @@ impl Store {
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&path, &job)?;
                 let done = self.path_for(JobStatus::Ok, &id);
-                fs::rename(&path, &done)?;
+                durable_rename(&path, &done)?;
                 let _ = finish_durable_session(&job);
                 crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
                 failed += 1;
@@ -764,15 +865,134 @@ impl Store {
             job.worker_start_time_ticks = None;
             job.started_at = None;
             job.cancel_requested_at = None;
+            job.execution_phase = ExecutionPhase::Unprepared;
+            job.execution_prepare_nonce = None;
+            job.execution_commit_nonce = None;
+            job.execution_generation = None;
             write_json_atomic(&path, &job)?;
             let pending = self.path_for(JobStatus::Pending, &id);
-            fs::rename(&path, &pending)?;
+            durable_rename(&path, &pending)?;
             crate::clawd::audit::record_task_event("clawd.task.recovered", &audit_job);
             requeued += 1;
         }
 
         Ok((requeued, failed))
     }
+
+    fn reconcile_duplicate_job_ids(&self) -> io::Result<usize> {
+        let mut paths = BTreeMap::<String, Vec<(JobStatus, PathBuf)>>::new();
+        for bucket in [JobStatus::Pending, JobStatus::Running, JobStatus::Ok] {
+            for entry in fs::read_dir(self.bucket_dir(bucket))? {
+                let entry = entry?;
+                let path = entry.path();
+                if path.extension().and_then(|value| value.to_str()) != Some("json") {
+                    continue;
+                }
+                let Some(id) = path.file_stem().and_then(|value| value.to_str()) else {
+                    continue;
+                };
+                if validate_job_id(id).is_ok() {
+                    paths
+                        .entry(id.to_string())
+                        .or_default()
+                        .push((bucket, path));
+                }
+            }
+        }
+
+        let mut reconciled = 0usize;
+        for (id, candidates) in paths {
+            if candidates.len() < 2 {
+                continue;
+            }
+            let _lock = self.lock_for_id(&id)?;
+            let all_paths = candidates
+                .iter()
+                .map(|(_, path)| path.clone())
+                .collect::<Vec<_>>();
+            let mut records = Vec::new();
+            let mut corrupt = false;
+            for (bucket, path) in candidates {
+                match fs::read_to_string(&path)
+                    .and_then(|raw| serde_json::from_str::<Job>(&raw).map_err(io_other))
+                {
+                    Ok(job) if job.id == id => records.push((bucket, path, job)),
+                    Ok(_) | Err(_) => corrupt = true,
+                }
+            }
+            if records.len() < 2 && !corrupt {
+                continue;
+            }
+            let identity_conflict = records.first().is_some_and(|(_, _, first)| {
+                records
+                    .iter()
+                    .skip(1)
+                    .any(|(_, _, job)| !same_logical_job(first, job))
+            });
+            let unsafe_copy = records.iter().any(|(bucket, _, job)| {
+                *bucket == JobStatus::Ok
+                    || job.schema_version != JOB_SCHEMA_VERSION
+                    || !job.execution_phase.replay_is_proven_safe()
+                    || matches!(
+                        job.status,
+                        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled
+                    )
+            });
+            if corrupt || identity_conflict || unsafe_copy {
+                let mut dominant = records
+                    .iter()
+                    .max_by_key(|(bucket, _, job)| {
+                        (
+                            execution_phase_rank(job.execution_phase),
+                            bucket_rank(*bucket),
+                        )
+                    })
+                    .map(|(_, _, job)| job.clone())
+                    .unwrap_or_else(|| corrupt_job(&id));
+                dominant.status = JobStatus::Error;
+                dominant.execution_phase = ExecutionPhase::Indeterminate;
+                dominant.error = Some(
+                    "conflicting or duplicate durable queue records make execution indeterminate; replay refused"
+                        .to_string(),
+                );
+                dominant.finished_at = Some(now_iso());
+                let done = self.path_for(JobStatus::Ok, &id);
+                write_json_atomic(&done, &dominant)?;
+                for path in &all_paths {
+                    if *path != done {
+                        durable_remove(path)?;
+                    }
+                }
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.duplicate_indeterminate",
+                    &dominant,
+                );
+            } else {
+                let Some((_, keep_path, keep_job)) =
+                    records.iter().max_by_key(|(bucket, _, job)| {
+                        (
+                            execution_phase_rank(job.execution_phase),
+                            bucket_rank(*bucket),
+                        )
+                    })
+                else {
+                    continue;
+                };
+                for (_, path, _) in &records {
+                    if path != keep_path {
+                        durable_remove(path)?;
+                    }
+                }
+                crate::clawd::audit::record_task_event(
+                    "clawd.task.duplicate_precommit_reconciled",
+                    keep_job,
+                );
+            }
+            reconciled += 1;
+        }
+        Ok(reconciled)
+    }
+
     /// Rebind a claimed job from the broker that claimed it to the
     /// worker process that actually executes it. Recovery and audit
     /// then track the worker's kernel identity rather than `clawd`'s,
@@ -784,21 +1004,119 @@ impl Store {
         worker_start_time_ticks: Option<u64>,
     ) -> io::Result<Job> {
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = fs::read_to_string(&path)?;
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
-        if job.id != id {
+        if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
+            || job.status != JobStatus::Running
+            || job.execution_phase != ExecutionPhase::Preparing
+        {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidData,
-                format!("job id `{}` does not match queue filename `{id}`", job.id),
+                "worker bind requires a current preparing queue record",
             ));
         }
         job.worker_pid = Some(worker_pid);
         job.worker_start_time_ticks = worker_start_time_ticks;
         write_json_atomic(&path, &job)?;
         crate::clawd::audit::record_task_event("clawd.task.worker_bound", &job);
+        Ok(job)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_execution_prepared(
+        &self,
+        id: &str,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+        prepare_nonce: &str,
+        commit_nonce: &str,
+        generation: &str,
+    ) -> io::Result<Job> {
+        validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
+        validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
+            || job.worker_pid != Some(worker_pid)
+            || job.worker_start_time_ticks != worker_start_time_ticks
+            || job.execution_phase != ExecutionPhase::Preparing
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "job preparation does not match the running worker lease",
+            ));
+        }
+        job.schema_version = JOB_SCHEMA_VERSION;
+        job.execution_phase = ExecutionPhase::Prepared;
+        job.execution_prepare_nonce = Some(prepare_nonce.to_string());
+        job.execution_commit_nonce = Some(commit_nonce.to_string());
+        job.execution_generation = Some(generation.to_string());
+        write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_prepared", &job);
+        Ok(job)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn commit_execution(
+        &self,
+        id: &str,
+        worker_pid: u32,
+        worker_start_time_ticks: Option<u64>,
+        prepare_nonce: &str,
+        commit_nonce: &str,
+        generation: &str,
+    ) -> io::Result<Job> {
+        validate_execution_binding(prepare_nonce, commit_nonce, generation)?;
+        validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
+        let _lock = self.lock_for_id(id)?;
+        let path = self.path_for(JobStatus::Running, id);
+        let raw = fs::read_to_string(&path)?;
+        let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
+        if job.id != id
+            || job.schema_version != JOB_SCHEMA_VERSION
+            || job.worker_pid != Some(worker_pid)
+            || job.worker_start_time_ticks != worker_start_time_ticks
+            || job.execution_phase != ExecutionPhase::Prepared
+            || job.execution_prepare_nonce.as_deref() != Some(prepare_nonce)
+            || job.execution_commit_nonce.as_deref() != Some(commit_nonce)
+            || job.execution_generation.as_deref() != Some(generation)
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "job commit does not match the prepared worker lease",
+            ));
+        }
+        job.execution_phase = ExecutionPhase::Committed;
+        write_json_atomic(&path, &job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_committed", &job);
+        Ok(job)
+    }
+
+    fn finish_indeterminate(
+        &self,
+        path: &Path,
+        id: &str,
+        mut job: Job,
+        reason: &str,
+    ) -> io::Result<Job> {
+        job.status = JobStatus::Error;
+        job.execution_phase = ExecutionPhase::Indeterminate;
+        job.error = Some(reason.to_string());
+        job.finished_at = Some(now_iso());
+        write_json_atomic(path, &job)?;
+        durable_rename(path, &self.path_for(JobStatus::Ok, id))?;
+        finish_durable_session(&job)?;
+        crate::clawd::audit::record_task_event("clawd.task.execution_indeterminate", &job);
         Ok(job)
     }
 
@@ -811,6 +1129,7 @@ impl Store {
     /// longer running (already cancelled or finished).
     pub fn release_for_retry(&self, id: &str, reason: &str) -> io::Result<Option<Job>> {
         validate_job_id(id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let path = self.path_for(JobStatus::Running, id);
         let raw = match fs::read_to_string(&path) {
@@ -821,12 +1140,24 @@ impl Store {
         let mut job: Job = serde_json::from_str(&raw).map_err(io_other)?;
         validate_job_id(&job.id)?;
 
+        if job.schema_version != JOB_SCHEMA_VERSION || !job.execution_phase.replay_is_proven_safe()
+        {
+            return self
+                .finish_indeterminate(
+                    &path,
+                    id,
+                    job,
+                    "worker outcome is unknown after durable execution commit; refusing replay",
+                )
+                .map(Some);
+        }
+
         if job.cancel_requested_at.is_some() {
             job.status = JobStatus::Cancelled;
             job.error = Some("cancelled by user".to_string());
             job.finished_at = Some(now_iso());
             write_json_atomic(&path, &job)?;
-            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
             return Ok(Some(job));
@@ -841,7 +1172,7 @@ impl Store {
             ));
             job.finished_at = Some(now_iso());
             write_json_atomic(&path, &job)?;
-            fs::rename(&path, self.path_for(JobStatus::Ok, id))?;
+            durable_rename(&path, &self.path_for(JobStatus::Ok, id))?;
             let _ = finish_durable_session(&job);
             crate::clawd::audit::record_task_event("clawd.task.abandoned", &job);
             return Ok(Some(job));
@@ -851,14 +1182,19 @@ impl Store {
         job.worker_pid = None;
         job.worker_start_time_ticks = None;
         job.started_at = None;
+        job.execution_phase = ExecutionPhase::Unprepared;
+        job.execution_prepare_nonce = None;
+        job.execution_commit_nonce = None;
+        job.execution_generation = None;
         write_json_atomic(&path, &job)?;
-        fs::rename(&path, self.path_for(JobStatus::Pending, id))?;
+        durable_rename(&path, &self.path_for(JobStatus::Pending, id))?;
         crate::clawd::audit::record_task_event("clawd.task.recovered", &job);
         Ok(Some(job))
     }
 
     pub fn finish(&self, job: Job, outcome: FinishOutcome) -> io::Result<Job> {
         validate_job_id(&job.id)?;
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(&job.id)?;
         let running_path = self.path_for(JobStatus::Running, &job.id);
         let raw = fs::read_to_string(&running_path)?;
@@ -878,16 +1214,30 @@ impl Store {
                 evidence,
                 fallback,
             } => {
-                job.status = JobStatus::Ok;
-                job.response = Some(response);
-                job.turns_used = Some(turns_used);
-                job.provider = Some(provider);
-                job.model = Some(model);
-                job.evidence = *evidence;
-                job.fallback = *fallback;
+                if job.execution_phase != ExecutionPhase::Committed {
+                    job.status = JobStatus::Error;
+                    job.execution_phase = ExecutionPhase::Indeterminate;
+                    job.error = Some(
+                        "worker reported success without a durable execution commit; result rejected"
+                            .to_string(),
+                    );
+                } else {
+                    job.status = JobStatus::Ok;
+                    job.response = Some(response);
+                    job.turns_used = Some(turns_used);
+                    job.provider = Some(provider);
+                    job.model = Some(model);
+                    job.evidence = *evidence;
+                    job.fallback = *fallback;
+                }
             }
             FinishOutcome::Error(msg) => {
                 job.status = JobStatus::Error;
+                job.error = Some(msg);
+            }
+            FinishOutcome::Indeterminate(msg) => {
+                job.status = JobStatus::Error;
+                job.execution_phase = ExecutionPhase::Indeterminate;
                 job.error = Some(msg);
             }
             FinishOutcome::Cancelled => {
@@ -898,9 +1248,16 @@ impl Store {
         job.finished_at = Some(now_iso());
         write_json_atomic(&running_path, &job)?;
         let done_path = self.path_for(JobStatus::Ok, &job.id);
-        fs::rename(&running_path, &done_path)?;
+        durable_rename(&running_path, &done_path)?;
         finish_durable_session(&job)?;
-        crate::clawd::audit::record_task_event("clawd.task.finished", &job);
+        crate::clawd::audit::record_task_event(
+            if job.execution_phase == ExecutionPhase::Indeterminate {
+                "clawd.task.execution_indeterminate"
+            } else {
+                "clawd.task.finished"
+            },
+            &job,
+        );
         Ok(job)
     }
 
@@ -921,6 +1278,7 @@ impl Store {
         id: &str,
         owner_uid: Option<u32>,
     ) -> io::Result<Option<Job>> {
+        self.reconcile_duplicate_job_ids()?;
         // Per-id exclusive lock prevents claim_one and cancel_pending
         // from both succeeding for the same id. Without it, a worker
         // could claim_one the file while we still read it from
@@ -939,7 +1297,7 @@ impl Store {
                 job.status = JobStatus::Cancelled;
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&src, &job)?;
-                fs::rename(&src, &dst)?;
+                durable_rename(&src, &dst)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 Ok(Some(job))
@@ -954,6 +1312,7 @@ impl Store {
         id: &str,
         owner_uid: Option<u32>,
     ) -> io::Result<Option<(Job, bool)>> {
+        self.reconcile_duplicate_job_ids()?;
         let _lock = self.lock_for_id(id)?;
         let pending = self.path_for(JobStatus::Pending, id);
         let done = self.path_for(JobStatus::Ok, id);
@@ -967,7 +1326,7 @@ impl Store {
                 job.cancel_requested_at = Some(now_iso());
                 job.finished_at = Some(now_iso());
                 write_json_atomic(&pending, &job)?;
-                fs::rename(&pending, &done)?;
+                durable_rename(&pending, &done)?;
                 finish_durable_session(&job)?;
                 crate::clawd::audit::record_task_event("clawd.task.cancelled", &job);
                 return Ok(Some((job, true)));
@@ -1040,38 +1399,33 @@ impl Store {
 
             let stream_path = self.stream_path(&id);
             let record_path = self.path_for(JobStatus::Ok, &id);
-            let _ = crate::filelock::with_exclusive_path_lock(&stream_path, || {
+            crate::filelock::with_exclusive_path_lock(&stream_path, || {
                 let record_exists = path_exists(&record_path)
                     .map_err(|error| format!("inspect {}: {error}", record_path.display()))?;
                 let stream_exists = path_exists(&stream_path)
                     .map_err(|error| format!("inspect {}: {error}", stream_path.display()))?;
 
                 if record_exists && !stream_exists {
-                    fs::rename(&tombstone_path, &stream_path).map_err(|error| {
+                    durable_rename(&tombstone_path, &stream_path).map_err(|error| {
                         format!(
                             "restore {} to {}: {error}",
                             tombstone_path.display(),
                             stream_path.display()
                         )
                     })?;
-                    sync_directory_best_effort(&stream_dir);
                 } else if record_exists {
-                    if remove_file_if_exists(&tombstone_path)
-                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
-                    {
-                        sync_directory_best_effort(&stream_dir);
-                    }
-                } else {
-                    let stream_removed = remove_file_if_exists(&stream_path)
-                        .map_err(|error| format!("remove {}: {error}", stream_path.display()))?;
-                    let tombstone_removed = remove_file_if_exists(&tombstone_path)
+                    durable_remove(&tombstone_path)
                         .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
-                    if stream_removed || tombstone_removed {
-                        sync_directory_best_effort(&stream_dir);
-                    }
+                } else {
+                    let stream_removed = durable_remove(&stream_path)
+                        .map_err(|error| format!("remove {}: {error}", stream_path.display()))?;
+                    let tombstone_removed = durable_remove(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
+                    let _ = (stream_removed, tombstone_removed);
                 }
                 Ok(())
-            });
+            })
+            .map_err(io_other)?;
         }
 
         Ok(())
@@ -1155,14 +1509,13 @@ impl Store {
                                 stream_path.display()
                             ));
                         }
-                        fs::rename(&stream_path, &tombstone_path).map_err(|error| {
+                        durable_rename(&stream_path, &tombstone_path).map_err(|error| {
                             format!(
                                 "stage {} as {}: {error}",
                                 stream_path.display(),
                                 tombstone_path.display()
                             )
                         })?;
-                        sync_directory_best_effort(&self.root.join("streams"));
                         true
                     }
                     Err(error) if error.kind() == ErrorKind::NotFound => false,
@@ -1192,7 +1545,8 @@ impl Store {
                 };
 
                 if record_removed {
-                    sync_directory_best_effort(&dir);
+                    crate::agent::util::sync_dir(&dir)
+                        .map_err(|error| format!("sync {}: {error}", dir.display()))?;
                 } else {
                     match path_exists(&p) {
                         Ok(false) => {}
@@ -1229,11 +1583,9 @@ impl Store {
                     }
                 }
 
-                if stream_staged
-                    && remove_file_if_exists(&tombstone_path)
-                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?
-                {
-                    sync_directory_best_effort(&self.root.join("streams"));
+                if stream_staged {
+                    durable_remove(&tombstone_path)
+                        .map_err(|error| format!("remove {}: {error}", tombstone_path.display()))?;
                 }
                 Ok(record_removed)
             });
@@ -1268,7 +1620,7 @@ impl Store {
     fn lock_for_id(&self, id: &str) -> io::Result<JobLock> {
         validate_job_id(id)?;
         let lock_dir = self.root.join("locks");
-        crate::storage::ensure_private_dir(&lock_dir)?;
+        crate::agent::util::ensure_durable_private_dir(&lock_dir)?;
         let lock_path = self.job_lock_path(id);
         let mut options = fs::OpenOptions::new();
         options.create(true).write(true).truncate(false);
@@ -1298,6 +1650,54 @@ fn job_visible_to(job: &Job, owner_uid: Option<u32>) -> bool {
     }
 }
 
+fn same_logical_job(left: &Job, right: &Job) -> bool {
+    left.id == right.id
+        && left.prompt == right.prompt
+        && left.context == right.context
+        && left.branch_context == right.branch_context
+        && left.session_id == right.session_id
+        && left.max_turns == right.max_turns
+        && left.created_at == right.created_at
+        && left.owner_uid == right.owner_uid
+        && left.owner_home == right.owner_home
+        && left.client == right.client
+}
+
+fn execution_phase_rank(phase: ExecutionPhase) -> u8 {
+    match phase {
+        ExecutionPhase::Unprepared => 0,
+        ExecutionPhase::Preparing => 1,
+        ExecutionPhase::Prepared => 2,
+        ExecutionPhase::Committed => 3,
+        ExecutionPhase::LegacyUnknown => 4,
+        ExecutionPhase::Indeterminate => 5,
+    }
+}
+
+fn bucket_rank(status: JobStatus) -> u8 {
+    match status {
+        JobStatus::Pending => 0,
+        JobStatus::Running => 1,
+        JobStatus::Ok | JobStatus::Error | JobStatus::Cancelled => 2,
+    }
+}
+
+fn corrupt_job(id: &str) -> Job {
+    let mut job = Job::new_pending(
+        "queue record corruption".to_string(),
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    job.id = id.to_string();
+    job.status = JobStatus::Error;
+    job.execution_phase = ExecutionPhase::Indeterminate;
+    job
+}
+
 fn validate_job_id(id: &str) -> io::Result<()> {
     if id.is_empty()
         || id.len() > 128
@@ -1308,6 +1708,34 @@ fn validate_job_id(id: &str) -> io::Result<()> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("invalid job id: {id}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_execution_binding(
+    prepare_nonce: &str,
+    commit_nonce: &str,
+    generation: &str,
+) -> io::Result<()> {
+    let nonce_is_valid = |value: &str| {
+        value.len() == 32
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    };
+    if !nonce_is_valid(prepare_nonce)
+        || !nonce_is_valid(commit_nonce)
+        || prepare_nonce == commit_nonce
+        || generation.is_empty()
+        || generation.len() > 128
+        || !generation
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b':'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid durable execution binding",
         ));
     }
     Ok(())
@@ -1341,6 +1769,7 @@ pub enum FinishOutcome {
         fallback: Box<Option<crate::agent::llm::ProviderFallbackState>>,
     },
     Error(String),
+    Indeterminate(String),
     Cancelled,
 }
 
@@ -1419,18 +1848,8 @@ fn restore_staged_stream(
             ),
         ));
     }
-    fs::rename(tombstone_path, stream_path)?;
-    sync_directory_best_effort(stream_dir);
-    Ok(())
-}
-
-fn sync_directory_best_effort(path: &Path) {
-    #[cfg(unix)]
-    if let Ok(directory) = fs::File::open(path) {
-        let _ = directory.sync_all();
-    }
-    #[cfg(not(unix))]
-    let _ = path;
+    let _ = stream_dir;
+    durable_rename(tombstone_path, stream_path)
 }
 
 fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
@@ -1441,6 +1860,51 @@ fn write_json_atomic<T: Serialize>(target: &Path, value: &T) -> io::Result<()> {
     // fsync entirely, so a power loss between write and rename could
     // expose a torn job file at recovery time.
     crate::agent::util::atomic_write_with_fsync(target, &bytes)
+}
+
+fn durable_rename(source: &Path, destination: &Path) -> io::Result<()> {
+    let source_dir = source
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "source has no parent"))?;
+    let destination_dir = destination
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "destination has no parent"))?;
+    crate::agent::util::persistence_barrier("cross_rename")?;
+    fs::rename(source, destination)?;
+    let result = (|| {
+        crate::agent::util::persistence_barrier("after_cross_rename")?;
+        crate::agent::util::sync_dir(destination_dir)?;
+        crate::agent::util::persistence_barrier("after_destination_dir_fsync")?;
+        if source_dir != destination_dir {
+            crate::agent::util::persistence_barrier("before_source_dir_fsync")?;
+            crate::agent::util::sync_dir(source_dir)?;
+        }
+        Ok(())
+    })();
+    result.map_err(queue_visible_mutation_error)
+}
+
+fn durable_remove(path: &Path) -> io::Result<bool> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "path has no parent"))?;
+    match fs::remove_file(path) {
+        Ok(()) => crate::agent::util::sync_dir(parent)
+            .map_err(queue_visible_mutation_error)
+            .map(|()| true),
+
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error),
+    }
+}
+
+fn queue_visible_mutation_error(error: io::Error) -> io::Error {
+    io::Error::new(
+        error.kind(),
+        format!(
+            "queue durability is indeterminate after a visible mutation; do not retry until reconciliation: {error}"
+        ),
+    )
 }
 
 fn io_other<E: std::fmt::Display>(e: E) -> io::Error {
@@ -1487,6 +1951,8 @@ fn job_to_summary(job: &Job) -> Value {
     json!({
         "id": job.id,
         "status": job.status.as_str(),
+        "schema_version": job.schema_version,
+        "execution_phase": job.execution_phase.as_str(),
         "created_at": job.created_at,
         "cancel_requested": job.cancel_requested_at.is_some(),
         "preview": job.preview(80),
@@ -1846,7 +2312,33 @@ fn run_worker_loop_inner(
         }
         match store.claim_one().map_err(|e| e.to_string())? {
             Some(job) => {
-                let mut outcome = runtime.block_on(run_one_job(&job));
+                let prepare_nonce = uuid::Uuid::new_v4().simple().to_string();
+                let commit_nonce = uuid::Uuid::new_v4().simple().to_string();
+                let generation = crate::crypto::sha256_hex(b"cos.agent.service.direct-worker.v1");
+                let prepared = store.record_execution_prepared(
+                    &job.id,
+                    job.worker_pid.unwrap_or_default(),
+                    job.worker_start_time_ticks,
+                    &prepare_nonce,
+                    &commit_nonce,
+                    &generation,
+                );
+                let committed = prepared.and_then(|_| {
+                    store.commit_execution(
+                        &job.id,
+                        job.worker_pid.unwrap_or_default(),
+                        job.worker_start_time_ticks,
+                        &prepare_nonce,
+                        &commit_nonce,
+                        &generation,
+                    )
+                });
+                let mut outcome = match committed {
+                    Ok(_) => runtime.block_on(run_one_job(&job)),
+                    Err(error) => FinishOutcome::Indeterminate(format!(
+                        "direct worker could not durably commit execution: {error}"
+                    )),
+                };
                 if store.cancellation_requested(&job.id).unwrap_or(false) {
                     outcome = FinishOutcome::Cancelled;
                 }

@@ -27,6 +27,7 @@ pub mod cron;
 pub mod crypto;
 pub mod engine_pkg;
 pub mod errors;
+pub mod extension_host;
 pub mod filelock;
 pub mod i18n;
 pub mod ipc;

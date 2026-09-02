@@ -236,6 +236,9 @@ pub fn runtime_dir() -> PathBuf {
 }
 
 pub fn clawd_socket_path() -> PathBuf {
+    if let Some(path) = env::var_os(crate::extension_host::protocol::BROKER_SOCKET_ENV) {
+        return PathBuf::from(path);
+    }
     runtime_dir().join("clawd.sock")
 }
 

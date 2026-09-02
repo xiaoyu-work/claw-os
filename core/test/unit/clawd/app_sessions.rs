@@ -578,7 +578,7 @@ fn approved_grant_matching_stays_exact() {
 
     for (verb, scope) in [
         (Verb::SYS_IDENTITY, Scope::name("other")),
-        (Verb::SYS_CONFIG, Scope::name("accounts")),
+        (Verb::SYS_CONFIG, Scope::path("/etc/other")),
     ] {
         let id = crate::approvals::submit_owned(
             verb,
@@ -830,6 +830,30 @@ fn an_app_session_cannot_mint_further_sessions() {
     let error =
         launcher_authority(&rows, pid, ticks, &home()).expect_err("App launchers are rejected");
     assert!(error.contains("app-1"), "unexpected error: {error}");
+}
+
+#[test]
+fn only_the_exact_broker_registered_extension_host_may_launch_under_nonewprivs() {
+    let (pid, ticks) = this_process();
+    let mut host = session_row("extension-1", pid, None, home_reader_ceiling());
+    host.group = Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string());
+    host.start_time_ticks = ticks;
+    assert!(is_trusted_extension_host_launcher(
+        &[host.clone()],
+        pid,
+        ticks
+    ));
+
+    host.group = Some("worker".to_string());
+    assert!(!is_trusted_extension_host_launcher(
+        &[host.clone()],
+        pid,
+        ticks
+    ));
+
+    host.group = Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP.to_string());
+    host.app_id = Some("evil".to_string());
+    assert!(!is_trusted_extension_host_launcher(&[host], pid, ticks));
 }
 
 #[test]
@@ -1134,6 +1158,7 @@ fn test_client() -> ClientIdentity {
         pid: Some(pid),
         uid: Some(this_uid()),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks,
         attended_local: false,
     }
@@ -1405,6 +1430,7 @@ fn e2e_client() -> ClientIdentity {
         pid: Some(pid),
         uid: Some(E2E_UID),
         gid: Some(0),
+        execution_uid: None,
         start_time_ticks,
         attended_local: false,
     }

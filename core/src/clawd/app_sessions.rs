@@ -420,8 +420,11 @@ pub async fn bind(params: Value, client: &ClientIdentity) -> Result<Value, Strin
             "process {child_pid} is not descended from launcher {launcher_pid}"
         ));
     }
-    if process_uid(child_pid) != Some(uid) {
-        return Err(format!("App process {child_pid} is not owned by uid {uid}"));
+    let execution_uid = client.process_uid().unwrap_or(uid);
+    if process_uid(child_pid) != Some(execution_uid) {
+        return Err(format!(
+            "App process {child_pid} is not owned by execution uid {execution_uid}"
+        ));
     }
     let bind_id = session_id.clone();
     let bound_caps = crate::paths::with_user_override(uid, home, async move {
@@ -611,7 +614,7 @@ async fn rollback_transient_caps(
     // installed it, `reissue` revoked it, and the re-derivation is what
     // failed. Revoking again is idempotent and guarantees no live grant
     // outlives the transient state it was derived from.
-    authority::revoke_session(session_id);
+    authority::revoke_indexed_session(session_id);
 }
 
 pub async fn deregister(params: Value, client: &ClientIdentity) -> Result<Value, String> {
@@ -701,18 +704,38 @@ async fn authenticate_launcher(
     if pid <= 1 {
         return Err("clawd peer pid is not a launchable process".to_string());
     }
-    if process_uid(pid) != Some(uid) {
-        return Err(format!("clawd peer {pid} is not owned by uid {uid}"));
-    }
-    if process_no_new_privs(pid) != Some(false) {
-        return Err("App processes cannot manage App sessions".to_string());
+    let execution_uid = client.process_uid().unwrap_or(uid);
+    if process_uid(pid) != Some(execution_uid) {
+        return Err(format!(
+            "clawd peer {pid} is not owned by execution uid {execution_uid}"
+        ));
     }
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
     let sessions = crate::paths::with_user_override(uid, home.clone(), async {
         crate::proc::registry_sessions()
     })
     .await;
+    let trusted_extension_host =
+        is_trusted_extension_host_launcher(&sessions, pid, start_time_ticks);
+    if process_no_new_privs(pid) != Some(false) && !trusted_extension_host {
+        return Err("App processes cannot manage App sessions".to_string());
+    }
+
     launcher_authority(&sessions, pid, start_time_ticks, &home)
+}
+
+fn is_trusted_extension_host_launcher(
+    sessions: &[SessionInfo],
+    pid: u32,
+    start_time_ticks: Option<u64>,
+) -> bool {
+    sessions.iter().any(|session| {
+        session.group.as_deref() == Some(crate::extension_host::protocol::EXTENSION_HOST_GROUP)
+            && session.app_id.is_none()
+            && session.pid == pid
+            && session.start_time_ticks == start_time_ticks
+            && session_process_is_current(session)
+    })
 }
 
 fn launcher_authority(
@@ -1256,7 +1279,7 @@ fn reissue_session_grant(
     child_pid: u32,
     caps: &CapSet,
 ) -> Result<(), String> {
-    authority::authority().revoke_session(session_id);
+    authority::authority().revoke_indexed_session(session_id);
     issue_session_grant(launch_handle, session_id, app_id, uid, child_pid, caps)
 }
 

@@ -7,6 +7,14 @@ fn unknown_identity_has_no_uid_or_home() {
     assert!(id.home_dir().is_none());
 }
 
+#[test]
+fn delegated_identity_keeps_principal_and_kernel_uids_distinct() {
+    let identity = ClientIdentity::from_verified_delegation(42, 1000, 61_184, 61_183, 7);
+    assert_eq!(identity.uid, Some(1000));
+    assert_eq!(identity.execution_uid, Some(61_184));
+    assert_eq!(identity.process_uid(), Some(61_184));
+}
+
 #[cfg(unix)]
 #[test]
 fn resolve_home_for_current_uid_matches_passwd() {
@@ -17,9 +25,7 @@ fn resolve_home_for_current_uid_matches_passwd() {
     let uid = unsafe { libc::getuid() } as u32;
     let resolved = resolve_home(uid);
     assert!(resolved.is_some(), "getpwuid_r returned None for self uid");
-    if let (Some(env_home), Some(pwd_home)) =
-        (std::env::var_os("HOME"), resolved.as_ref())
-    {
+    if let (Some(env_home), Some(pwd_home)) = (std::env::var_os("HOME"), resolved.as_ref()) {
         if env_home != pwd_home.as_os_str() {
             // Possible in containers where HOME is set to /root
             // but passwd points elsewhere — log and move on.

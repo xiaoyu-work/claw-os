@@ -9,9 +9,18 @@ transports, discovery, and tool-registry integration.
 
 - Implement the validated JSON-RPC/MCP protocol subset.
 - Attach configured or discovered stdio/remote servers.
-- Prefix and register remote tools in the guarded registry.
-- Mark remote tools as budget-eligible extension descriptors and invalidate
-  their shared attachment generation when a server handle is dropped.
+- Route attachment and calls through `claw-extension-host` for supervised
+  tasks; direct CLI/web processes retain the local client path.
+- Register only the fixed locally-authored `mcp_catalog` and `mcp_invoke`
+  progressive-disclosure gateways. Remote names and argument-property names
+  are never `llm::Tool` names or schema keys.
+- Return remote names and sanitized structural schemas only inside the
+  standard untrusted-data envelope, paired with opaque random invocation
+  handles.
+- Bind calls to a canonical digest of the sanitized descriptor set and relist
+  before execution; structural drift requires a new authorized attachment.
+- Keep each internal policy identity behind shared attachment liveness and
+  advance the registry generation before local or hosted teardown.
 - Expose only the external client's session-projected local tools and repeat
   the same projection check on `tools/call`.
 - Bound frames, handshakes, requests, and optional-server failures.
@@ -33,8 +42,17 @@ transports, discovery, and tool-registry integration.
 MCP attachment is optional and must not prevent the agent from starting.
 Remote tool descriptors/results remain untrusted and pass through the normal
 registry, session exposure, capability, and prompt-injection boundaries.
-Large permitted catalogs are discovered through the stable tool bridge; bridge
-calls resolve the live MCP proxy again, preserving timeout and result wrapping.
+Handles are bound to owner, authority session, task, capability generation,
+server, and descriptor digest; reconnect, guessing, drift, and cross-session
+replay fail closed.
+Descriptor schemas are size/depth/node bounded and retain only structural
+object/property/required/item/combinator/cardinality constraints. `$ref` and
+logical reference cycles fail closed.
+The general `cos_tool_search` / `cos_tool_describe` / `cos_tool_call`
+schema-budget bridge remains available to other extension descriptors. MCP
+does not register remote descriptors into that catalogue: its internal policy
+registry is reachable only through `mcp_catalog` and `mcp_invoke`, preserving
+one exposure, approval, timeout, audit, and execution path.
 Equivalent first-party MCP failures use the generated codes owned by
 `claw-os-sdk/wire/v1/contract.json`.
 
@@ -42,4 +60,5 @@ Equivalent first-party MCP failures use the generated codes owned by
 
 ```bash
 cargo test -p cos agent::tools::mcp:: -- --test-threads=1
+cargo test -p cos agent::tools::registry:: -- --test-threads=1
 ```

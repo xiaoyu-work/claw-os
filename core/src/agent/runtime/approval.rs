@@ -284,6 +284,10 @@ impl ApprovalGate {
     pub fn is_classified(&self, tool_name: &str) -> bool {
         self.classified.contains(tool_name)
     }
+
+    pub(crate) fn is_auto_denied(&self, tool_name: &str) -> bool {
+        self.config.auto_deny.contains(tool_name)
+    }
 }
 
 #[cfg(test)]

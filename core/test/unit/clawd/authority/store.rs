@@ -666,6 +666,24 @@ fn revoking_a_session_retires_its_lineage() {
 }
 
 #[test]
+fn replacing_an_indexed_session_preserves_its_unindexed_launch_parent() {
+    let store = store();
+    let mut launch = issuance("app-1", &[Audience::AppLaunch, Audience::SystemService]);
+    launch.index_session = false;
+    let (handle, _) = store.issue(launch).unwrap();
+    let handle = handle.into_wire();
+    let mut child = attenuation(caps(&[read_cap()]), &[Audience::SystemService]);
+    child.index_session = true;
+    store.attenuate(&handle, child).unwrap();
+
+    assert_eq!(store.revoke_indexed_session("app-1"), 1);
+    assert_eq!(store.len(), 1);
+    store
+        .resolve(&handle, &presentation(Audience::AppLaunch))
+        .expect("launch parent must survive transient re-scoping");
+}
+
+#[test]
 fn revoking_a_session_retires_unindexed_approval_grants() {
     let store = store();
     let mut request = issuance("agent-session", &[Audience::AgentWorker]);

@@ -96,8 +96,13 @@ fn main() {
     let options = server::ServerOptions {
         socket_path: socket_path.unwrap_or_else(config::socket_path),
         socket_mode: socket_mode.unwrap_or_else(config::socket_mode),
+        socket_group: config::socket_group(),
     };
 
+    if let Err(err) = cos::storage::harden_clawd_runtime() {
+        eprintln!("clawd: failed to harden runtime root: {err}");
+        std::process::exit(1);
+    }
     if let Err(err) = cos::storage::harden_clawd_state() {
         eprintln!("clawd: failed to secure persistent state: {err}");
         std::process::exit(1);

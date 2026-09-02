@@ -11,6 +11,7 @@ fn peer(uid: u32) -> ClientIdentity {
         pid: Some(std::process::id()),
         uid: Some(uid),
         gid: Some(uid),
+        execution_uid: None,
         start_time_ticks: Some(7),
         attended_local: false,
     }

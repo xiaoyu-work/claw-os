@@ -1,6 +1,10 @@
+#[cfg(target_os = "linux")]
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+#[cfg(target_os = "linux")]
+use std::sync::{Mutex, OnceLock};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -29,12 +33,20 @@ pub fn set_private_file(path: &Path) -> io::Result<()> {
     }
 }
 
+pub fn harden_clawd_runtime() -> io::Result<()> {
+    let runtime = crate::paths::runtime_dir();
+    validate_clawd_root(&runtime)?;
+    harden_trusted_root(&runtime, 0o751)
+}
+
 pub fn harden_clawd_state() -> io::Result<()> {
     let data = crate::paths::data_dir();
     let logs = crate::paths::log_dir();
 
     validate_clawd_root(&data)?;
     validate_clawd_root(&logs)?;
+    harden_trusted_root(&data, 0o711)?;
+    harden_trusted_root(&logs, 0o700)?;
     // Traversable, never listable. The per-owner agent state each
     // `claw-agentd` worker runs against lives at `<data>/users/<uid>`
     // and is owned by that account, so both the daemon root and the
@@ -47,6 +59,7 @@ pub fn harden_clawd_state() -> io::Result<()> {
     if users.exists() {
         harden_owner_partitioned_tree(&users)?;
     }
+
     for root in [
         data.join("agent"),
         data.join("approvals"),
@@ -59,6 +72,58 @@ pub fn harden_clawd_state() -> io::Result<()> {
         }
     }
     harden_private_tree(&logs)
+}
+
+fn harden_trusted_root(path: &Path, mode: u32) -> io::Result<()> {
+    fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        use std::os::unix::fs::MetadataExt;
+
+        let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+        let fd = unsafe {
+            libc::open(
+                path.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let directory = unsafe { fs::File::from_raw_fd(fd) };
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "trusted daemon root is not a directory",
+            ));
+        }
+        if unsafe { libc::geteuid() } == 0 && unsafe { libc::fchown(fd, 0, 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if unsafe { libc::fchmod(fd, mode) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let metadata = directory.metadata()?;
+        let euid = unsafe { libc::geteuid() as u32 };
+        if metadata.uid() != euid
+            || euid == 0 && metadata.gid() != 0
+            || metadata.mode() & 0o7777 != mode
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "trusted daemon root ownership or mode did not apply",
+            ));
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = mode;
+    }
+    Ok(())
 }
 
 /// Prepare the per-owner agent state root an unprivileged worker writes
@@ -179,7 +244,6 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
                 format!("cannot prepare routed caps storage as uid {euid}"),
             ));
         }
-        let gid = primary_gid(uid)?;
         let runtime_root = Path::new("/run/cos");
         reject_symlink(runtime_root)?;
         fs::create_dir_all(runtime_root)?;
@@ -190,13 +254,15 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
         fs::set_permissions(caps_root, fs::Permissions::from_mode(0o711))?;
         reject_symlink(path)?;
         fs::create_dir_all(path)?;
-        chown(path, 0, gid)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o750))?;
+        chown(path, 0, 0)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        set_routed_acl(path, uid, true)?;
         let proc_dir = path.join("proc");
         reject_symlink(&proc_dir)?;
         fs::create_dir_all(&proc_dir)?;
-        chown(&proc_dir, 0, gid)?;
-        fs::set_permissions(&proc_dir, fs::Permissions::from_mode(0o750))?;
+        chown(&proc_dir, 0, 0)?;
+        fs::set_permissions(&proc_dir, fs::Permissions::from_mode(0o700))?;
+        set_routed_acl(&proc_dir, uid, true)?;
         Ok(())
     }
     #[cfg(not(unix))]
@@ -206,7 +272,7 @@ pub fn ensure_routed_caps_dir(path: &Path, uid: u32) -> io::Result<()> {
     }
 }
 
-pub fn set_group_readable_file(path: &Path, uid: u32) -> io::Result<()> {
+pub fn set_routed_registry_file(path: &Path, uid: u32) -> io::Result<()> {
     #[cfg(unix)]
     {
         let euid = unsafe { libc::geteuid() as u32 };
@@ -216,15 +282,129 @@ pub fn set_group_readable_file(path: &Path, uid: u32) -> io::Result<()> {
                 format!("cannot secure routed caps registry as uid {euid}"),
             ));
         }
-        let gid = primary_gid(uid)?;
-        chown(path, 0, gid)?;
-        fs::set_permissions(path, fs::Permissions::from_mode(0o640))
+        chown(path, 0, 0)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        set_routed_acl(path, uid, false)
     }
     #[cfg(not(unix))]
     {
         let _ = uid;
         set_private_file(path)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn routed_extension_readers() -> &'static Mutex<BTreeMap<u32, BTreeSet<u32>>> {
+    static READERS: OnceLock<Mutex<BTreeMap<u32, BTreeSet<u32>>>> = OnceLock::new();
+    READERS.get_or_init(|| Mutex::new(BTreeMap::new()))
+}
+
+#[cfg(target_os = "linux")]
+pub fn install_routed_extension_reader(owner_uid: u32, execution_uid: u32) -> Result<(), String> {
+    if unsafe { libc::geteuid() } != 0 || owner_uid == 0 || execution_uid == 0 {
+        return Err(
+            "routed extension ACLs require non-root identities and a root broker".to_string(),
+        );
+    }
+    {
+        let mut readers = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?;
+        readers.entry(owner_uid).or_default().insert(execution_uid);
+    }
+    if let Err(error) = refresh_routed_acl(owner_uid) {
+        if let Ok(mut readers) = routed_extension_readers().lock() {
+            if let Some(owner) = readers.get_mut(&owner_uid) {
+                owner.remove(&execution_uid);
+                if owner.is_empty() {
+                    readers.remove(&owner_uid);
+                }
+            }
+        }
+        let _ = refresh_routed_acl(owner_uid);
+        return Err(format!("install routed extension reader: {error}"));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+pub fn remove_routed_extension_reader(owner_uid: u32, execution_uid: u32) -> Result<(), String> {
+    {
+        let mut readers = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?;
+        if let Some(owner) = readers.get_mut(&owner_uid) {
+            owner.remove(&execution_uid);
+            if owner.is_empty() {
+                readers.remove(&owner_uid);
+            }
+        }
+    }
+    refresh_routed_acl(owner_uid)
+        .map_err(|error| format!("remove routed extension reader: {error}"))
+}
+
+#[cfg(target_os = "linux")]
+pub fn purge_routed_extension_reader(execution_uid: u32) -> Result<(), String> {
+    let root = Path::new("/run/cos/caps");
+    if !root.exists() {
+        return Ok(());
+    }
+    reject_symlink(root).map_err(|error| format!("inspect routed caps root: {error}"))?;
+    let owners = fs::read_dir(root).map_err(|error| format!("list routed caps owners: {error}"))?;
+    for entry in owners {
+        let entry = entry.map_err(|error| format!("read routed caps owner: {error}"))?;
+        let Some(owner_uid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let active = routed_extension_readers()
+            .lock()
+            .map_err(|_| "routed extension ACL registry is poisoned".to_string())?
+            .get(&owner_uid)
+            .is_some_and(|readers| readers.contains(&execution_uid));
+        if !active {
+            refresh_routed_acl(owner_uid).map_err(|error| {
+                format!("purge extension uid {execution_uid} from owner {owner_uid}: {error}")
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn install_routed_extension_reader(_owner_uid: u32, _execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn remove_routed_extension_reader(_owner_uid: u32, _execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn purge_routed_extension_reader(_execution_uid: u32) -> Result<(), String> {
+    Err("routed extension ACLs require Linux".to_string())
+}
+
+#[cfg(target_os = "linux")]
+fn refresh_routed_acl(owner_uid: u32) -> Result<(), String> {
+    let root = Path::new("/run/cos/caps").join(owner_uid.to_string());
+    if !root.exists() {
+        return Ok(());
+    }
+    ensure_routed_caps_dir(&root, owner_uid)
+        .map_err(|error| format!("refresh routed capability directories: {error}"))?;
+    let registry = root.join("proc/registry.json");
+    if registry.exists() {
+        reject_symlink(&registry).map_err(|error| error.to_string())?;
+        set_routed_registry_file(&registry, owner_uid)
+            .map_err(|error| format!("refresh routed capability registry: {error}"))?;
+    }
+    Ok(())
 }
 
 fn harden_private_tree(root: &Path) -> io::Result<()> {
@@ -279,15 +459,7 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
     if !path.is_absolute()
         || matches!(
             path.to_str(),
-            Some(
-                "/"
-                    | "/tmp"
-                    | "/var"
-                    | "/var/tmp"
-                    | "/var/lib"
-                    | "/var/log"
-                    | "/run"
-            )
+            Some("/" | "/tmp" | "/var" | "/var/tmp" | "/var/lib" | "/var/log" | "/run")
         )
     {
         return Err(io::Error::new(
@@ -295,9 +467,9 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
             format!("unsafe daemon storage root {}", path.display()),
         ));
     }
-    let mut existing = path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "daemon root has no parent")
-    })?;
+    let mut existing = path
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "daemon root has no parent"))?;
     while !existing.exists() {
         existing = existing.parent().ok_or_else(|| {
             io::Error::new(
@@ -330,7 +502,10 @@ fn validate_clawd_root(path: &Path) -> io::Result<()> {
             if metadata.uid() != unsafe { libc::geteuid() as u32 } {
                 return Err(io::Error::new(
                     io::ErrorKind::PermissionDenied,
-                    format!("daemon storage root is not owned by clawd: {}", path.display()),
+                    format!(
+                        "daemon storage root is not owned by clawd: {}",
+                        path.display()
+                    ),
                 ));
             }
         }
@@ -350,28 +525,95 @@ fn reject_symlink(path: &Path) -> io::Result<()> {
     }
 }
 
-#[cfg(unix)]
-fn primary_gid(uid: u32) -> io::Result<u32> {
-    const BUF_SIZE: usize = 16 * 1024;
-    let mut buffer = vec![0 as libc::c_char; BUF_SIZE];
-    let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-    let mut result: *mut libc::passwd = std::ptr::null_mut();
-    let rc = unsafe {
-        libc::getpwuid_r(
-            uid as libc::uid_t,
-            &mut pwd,
-            buffer.as_mut_ptr(),
-            buffer.len(),
-            &mut result,
-        )
-    };
-    if rc != 0 || result.is_null() {
+#[cfg(target_os = "linux")]
+fn set_routed_acl(path: &Path, uid: u32, directory: bool) -> io::Result<()> {
+    const ACL_XATTR_VERSION: u32 = 0x0002;
+    const ACL_USER_OBJ: u16 = 0x01;
+    const ACL_USER: u16 = 0x02;
+    const ACL_GROUP_OBJ: u16 = 0x04;
+    const ACL_MASK: u16 = 0x10;
+    const ACL_OTHER: u16 = 0x20;
+    const ACL_UNDEFINED_ID: u32 = u32::MAX;
+
+    use std::os::unix::fs::MetadataExt;
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.file_type().is_symlink()
+        || metadata.uid() != 0
+        || metadata.gid() != 0
+        || metadata.is_dir() != directory
+    {
         return Err(io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("passwd entry not found for uid {uid}"),
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "routed capability path has unsafe identity: {}",
+                path.display()
+            ),
         ));
     }
-    Ok(pwd.pw_gid as u32)
+
+    let read = 0o4u16;
+    let write = 0o2u16;
+    let execute = 0o1u16;
+    let owner_perm = if directory {
+        read | write | execute
+    } else {
+        read | write
+    };
+    let reader_perm = if directory { read | execute } else { read };
+    let mut readers = BTreeSet::from([uid]);
+    if let Ok(active) = routed_extension_readers().lock() {
+        if let Some(extension_uids) = active.get(&uid) {
+            readers.extend(extension_uids);
+        }
+    } else {
+        return Err(io::Error::other(
+            "routed extension ACL registry is poisoned",
+        ));
+    }
+    let mut entries = Vec::with_capacity(4 + readers.len());
+    entries.push((ACL_USER_OBJ, owner_perm, ACL_UNDEFINED_ID));
+    entries.extend(
+        readers
+            .into_iter()
+            .map(|reader| (ACL_USER, reader_perm, reader)),
+    );
+    entries.push((ACL_GROUP_OBJ, 0, ACL_UNDEFINED_ID));
+    entries.push((ACL_MASK, reader_perm, ACL_UNDEFINED_ID));
+    entries.push((ACL_OTHER, 0, ACL_UNDEFINED_ID));
+    let mut value = Vec::with_capacity(4 + entries.len() * 8);
+    value.extend_from_slice(&ACL_XATTR_VERSION.to_le_bytes());
+    for (tag, perm, id) in entries {
+        value.extend_from_slice(&tag.to_le_bytes());
+        value.extend_from_slice(&perm.to_le_bytes());
+        value.extend_from_slice(&id.to_le_bytes());
+    }
+
+    use std::os::unix::ffi::OsStrExt;
+    let path = std::ffi::CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
+    let name = b"system.posix_acl_access\0";
+    let rc = unsafe {
+        libc::setxattr(
+            path.as_ptr(),
+            name.as_ptr().cast::<libc::c_char>(),
+            value.as_ptr().cast::<libc::c_void>(),
+            value.len(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
+#[cfg(all(unix, not(target_os = "linux")))]
+fn set_routed_acl(_path: &Path, _uid: u32, _directory: bool) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "routed capability ACLs require Linux",
+    ))
 }
 
 #[cfg(unix)]
@@ -380,13 +622,7 @@ fn chown(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
 
     let path = std::ffi::CString::new(path.as_os_str().as_bytes())
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))?;
-    let rc = unsafe {
-        libc::chown(
-            path.as_ptr(),
-            uid as libc::uid_t,
-            gid as libc::gid_t,
-        )
-    };
+    let rc = unsafe { libc::chown(path.as_ptr(), uid as libc::uid_t, gid as libc::gid_t) };
     if rc == 0 {
         Ok(())
     } else {

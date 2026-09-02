@@ -21,6 +21,10 @@ name = "claw-agentd"
 path = "src/bin/claw-agentd.rs"
 
 [[bin]]
+name = "claw-extension-host"
+path = "src/bin/claw-extension-host.rs"
+
+[[bin]]
 name = "claw-approval-helper"
 path = "src/bin/claw-approval-helper.rs"
 
@@ -57,6 +61,7 @@ flate2 = "1.1"
 tar = "0.4"
 tempfile = "3.27.0"
 regex = "1"
+goblin = "0.10"
 bytes = "1"
 crc32fast = "1"
 cosmic-client-toolkit = { path = "../desktop/protocols/client-toolkit", default-features = false }

@@ -3442,8 +3442,7 @@ async fn chat_cmd_async(
                     *mlock(&self.last_finish) = Some(*finish);
                 }
                 StreamEvent::Warning { message } => {
-                    mlock(&self.terminal)
-                        .write_line(&mut e, &format!("[warning] {message}"));
+                    mlock(&self.terminal).write_line(&mut e, &format!("[warning] {message}"));
                     mlock(&self.warnings).push(message.clone());
                 }
             }
@@ -7216,11 +7215,7 @@ fn merge_mcp_overrides(
         out.tool_allow = Some(a);
     }
     out.tool_deny.extend(deny);
-    if !out
-        .tool_deny
-        .iter()
-        .any(|name| name == "cos_oauth_login")
-    {
+    if !out.tool_deny.iter().any(|name| name == "cos_oauth_login") {
         out.tool_deny.push("cos_oauth_login".to_string());
     }
     out
@@ -7371,18 +7366,34 @@ fn mcp_cmd(args: &[String]) -> Result<Value, String> {
                     };
                     let mut throwaway_registry =
                         crate::agent::tools::registry::ToolRegistry::new();
-                    match attach_server(&spec, &mut throwaway_registry).await {
+                    let exposure =
+                        crate::agent::tools::exposure::ToolExposureContext::isolated(
+                            crate::agent::tools::guardrails::Guardrails::permissive(),
+                        );
+                    match attach_server(&spec, &mut throwaway_registry, &exposure).await {
                         Ok(handle) => {
-                            let tools = throwaway_registry.names_unfiltered();
-                            let mut exposure = base_exposure.clone();
-                            exposure.enable_extension(format!("mcp:{}", handle.name()));
-                            let projection = throwaway_registry.projection_for(&exposure);
+                            let tools = handle
+                                .descriptors()
+                                .iter()
+                                .map(|descriptor| descriptor.name.as_str())
+                                .collect::<Vec<_>>();
+                            let mut projection_exposure = base_exposure.clone();
+                            projection_exposure
+                                .enable_extension(format!("mcp:{}", handle.name()));
+                            let projection =
+                                throwaway_registry.projection_for(&projection_exposure);
+                            let model_tools = projection
+                                .tools()
+                                .iter()
+                                .map(|tool| tool.name.as_str())
+                                .collect::<Vec<_>>();
                             out.push(json!({
                                 "name": s.name,
                                 "enabled": true,
                                 "ok": true,
                                 "tool_count": handle.tool_count(),
                                 "tools": tools,
+                                "model_tools": model_tools,
                                 "schema_tokens": projection.diagnostics().schema_tokens,
                                 "deferred_count": projection.diagnostics().deferred_count,
                                 "projection": projection.diagnostics(),

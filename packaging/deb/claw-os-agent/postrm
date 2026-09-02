@@ -3,6 +3,12 @@
 
 set -e
 
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if ! command -v identity_purge_owned >/dev/null 2>&1 &&
+    [ -f "$SCRIPT_DIR/extension-identities.sh" ]; then
+    . "$SCRIPT_DIR/extension-identities.sh"
+fi
+
 case "$1" in
     purge)
         rm -f /etc/systemd/user/default.target.wants/claw-recoll-index.service
@@ -11,8 +17,16 @@ case "$1" in
             deb-systemd-helper purge clawd.service >/dev/null || true
             deb-systemd-helper purge cos-browser.service >/dev/null || true
         fi
+        command -v identity_purge_owned >/dev/null 2>&1 &&
+            identity_purge_owned
         ;;
-    remove|upgrade|abort-install|abort-upgrade|disappear|failed-upgrade)
+    abort-install|abort-upgrade|failed-upgrade)
+        command -v identity_recover_partial >/dev/null 2>&1 &&
+            identity_recover_partial
+        command -v identity_rollback_pending >/dev/null 2>&1 &&
+            identity_rollback_pending
+        ;;
+    remove|upgrade|disappear)
         ;;
     *)
         echo "postrm called with unknown argument '$1'" >&2
