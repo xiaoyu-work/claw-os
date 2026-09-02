@@ -12,8 +12,11 @@ from unittest import mock
 from claw_os_sdk import ai, tools
 from claw_os_sdk.generated import (
     WIRE_ENUM,
+    WIRE_MAX_LENGTH,
     WIRE_MAXIMUM,
+    WIRE_MIN_LENGTH,
     WIRE_MINIMUM,
+    WIRE_PATTERN,
     WIRE_REQUIRED,
     WIRE_TYPE,
     WIRE_UNKNOWN_FIELD,
@@ -23,6 +26,7 @@ from claw_os_sdk.generated import (
     encode_wire_json,
     validate_ai,
     validate_budget_show,
+    validate_mcp_call_context,
     validate_tool,
     validate_tool_catalog,
     wire_integer_to_int,
@@ -156,7 +160,12 @@ class WireValidationTests(unittest.TestCase):
         )
 
     def test_root_type_and_budget_show_contract(self) -> None:
-        for validator in (validate_ai, validate_tool, validate_tool_catalog):
+        for validator in (
+            validate_ai,
+            validate_mcp_call_context,
+            validate_tool,
+            validate_tool_catalog,
+        ):
             with self.subTest(validator=validator.__name__):
                 with self.assertRaises(WireDecodeError) as raised:
                     validator(None)
@@ -177,6 +186,47 @@ class WireValidationTests(unittest.TestCase):
         self.assertEqual(budget.period, "2026-08")
         self.assertEqual(budget.units_used, 7)
         self.assertEqual(budget.units_cap, 0)
+
+    def test_mcp_call_context_is_closed_and_depth_bounded(self) -> None:
+        context = {
+            "wire_version": 1,
+            "call_id": "call-1",
+            "trace_id": "trace-1",
+            "depth": 0,
+            "caller": {
+                "kind": "system-agent",
+                "id": "session-1",
+                "owner_uid": 1000,
+            },
+        }
+        validate_mcp_call_context(context)
+
+        unknown = copy.deepcopy(context)
+        unknown["caller"]["token"] = "forged"
+        with self.assertRaises(WireDecodeError) as raised:
+            validate_mcp_call_context(unknown)
+        self.assertEqual(raised.exception.code, WIRE_UNKNOWN_FIELD)
+        self.assertEqual(raised.exception.path, "$.caller.token")
+
+        too_deep = copy.deepcopy(context)
+        too_deep["depth"] = 17
+        with self.assertRaises(WireDecodeError) as raised:
+            validate_mcp_call_context(too_deep)
+        self.assertEqual(raised.exception.code, WIRE_MAXIMUM)
+        self.assertEqual(raised.exception.path, "$.depth")
+
+        for call_id, code in (
+            ("", WIRE_MIN_LENGTH),
+            ("x" * 129, WIRE_MAX_LENGTH),
+            ("call id", WIRE_PATTERN),
+            ("call-1\n", WIRE_PATTERN),
+        ):
+            malformed = copy.deepcopy(context)
+            malformed["call_id"] = call_id
+            with self.assertRaises(WireDecodeError) as raised:
+                validate_mcp_call_context(malformed)
+            self.assertEqual(raised.exception.code, code)
+            self.assertEqual(raised.exception.path, "$.call_id")
 
     def test_adapter_rejects_scalar_root_with_stable_error(self) -> None:
         with self.assertRaises(ai.AiUnavailable) as raised:

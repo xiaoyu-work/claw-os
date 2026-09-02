@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 
 import {
   WIRE_ENUM,
+  WIRE_MAX_LENGTH,
   WIRE_MAXIMUM,
+  WIRE_MIN_LENGTH,
   WIRE_MINIMUM,
+  WIRE_PATTERN,
   WIRE_REQUIRED,
   WIRE_TYPE,
   WIRE_UNKNOWN_FIELD,
@@ -15,6 +18,7 @@ import {
   stringifyWireJson,
   validateAi,
   validateBudgetShow,
+  validateMcpCallContext,
   validateTool,
   validateToolCatalog,
 } from "./generated";
@@ -154,6 +158,7 @@ test("structured items are validated without skipping", () => {
 test("root types and budget show have stable contracts", () => {
   const validators: Array<(value: unknown) => void> = [
     validateAi,
+    validateMcpCallContext,
     validateTool,
     validateToolCatalog,
   ];
@@ -169,6 +174,53 @@ test("root types and budget show have stable contracts", () => {
   assert.doesNotThrow(() =>
     validateBudgetShow({ app: "notes", period: "2026-08", units_used: 7 }),
   );
+});
+
+test("MCP call context is closed and depth bounded", () => {
+  const context = {
+    wire_version: 1,
+    call_id: "call-1",
+    trace_id: "trace-1",
+    depth: 0,
+    caller: {
+      kind: "system-agent",
+      id: "session-1",
+      owner_uid: 1000,
+    },
+  };
+  assert.doesNotThrow(() => validateMcpCallContext(context));
+  assert.throws(
+    () =>
+      validateMcpCallContext({
+        ...context,
+        caller: { ...context.caller, token: "forged" },
+      }),
+    (error: unknown) =>
+      error instanceof WireDecodeError &&
+      error.code === WIRE_UNKNOWN_FIELD &&
+      error.path === "$.caller.token",
+  );
+  assert.throws(
+    () => validateMcpCallContext({ ...context, depth: 17 }),
+    (error: unknown) =>
+      error instanceof WireDecodeError &&
+      error.code === WIRE_MAXIMUM &&
+      error.path === "$.depth",
+  );
+  for (const [callId, code] of [
+    ["", WIRE_MIN_LENGTH],
+    ["x".repeat(129), WIRE_MAX_LENGTH],
+    ["call id", WIRE_PATTERN],
+    ["call-1\n", WIRE_PATTERN],
+  ]) {
+    assert.throws(
+      () => validateMcpCallContext({ ...context, call_id: callId }),
+      (error: unknown) =>
+        error instanceof WireDecodeError &&
+        error.code === code &&
+        error.path === "$.call_id",
+    );
+  }
 });
 
 test("compact huge exponents remain compact public wrappers", () => {

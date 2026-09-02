@@ -4,6 +4,7 @@
     "schemas": [
       "ai",
       "budget_show",
+      "mcp_call_context",
       "tool_catalog",
       "tool"
     ],
@@ -11,9 +12,12 @@
     "error_codes": {
       "const": "WIRE_CONST",
       "enum": "WIRE_ENUM",
+      "max_length": "WIRE_MAX_LENGTH",
       "maximum": "WIRE_MAXIMUM",
+      "min_length": "WIRE_MIN_LENGTH",
       "minimum": "WIRE_MINIMUM",
       "one_of": "WIRE_ONE_OF",
+      "pattern": "WIRE_PATTERN",
       "required": "WIRE_REQUIRED",
       "type": "WIRE_TYPE",
       "unknown_field": "WIRE_UNKNOWN_FIELD"

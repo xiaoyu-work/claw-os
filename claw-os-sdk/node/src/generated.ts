@@ -314,6 +314,34 @@ export interface Desktop {
 }
 
 /**
+ * MCP call context.
+ * Authenticated call identity and lineage injected by the Claw MCP Gateway
+ * over the private App-host transport. Caller-supplied MCP arguments must
+ * never populate this object.
+ */
+export interface McpCallContext {
+  wire_version: 1;
+  call_id: string;
+  trace_id: string;
+  parent_call_id?: string;
+  depth: number;
+  deadline_unix_ms?: number;
+  session_id?: string;
+  task_id?: string;
+  caller: McpPrincipal;
+}
+
+/**
+ * McpPrincipal.
+ */
+export interface McpPrincipal {
+  kind: "system-agent" | "app" | "app-agent" | "external-agent" | "cli";
+  id: string;
+  owner_uid: number;
+  app_id?: string;
+}
+
+/**
  * Permissions request / reply.
  * Shape of the success-path data field returned by policy checks. Apps call
  * this via SDK helpers (e.g. cos_runtime.policy.check).
@@ -373,9 +401,12 @@ export class WireDecodeError extends Error {
 
 export const WIRE_CONST = "WIRE_CONST" as const;
 export const WIRE_ENUM = "WIRE_ENUM" as const;
+export const WIRE_MAX_LENGTH = "WIRE_MAX_LENGTH" as const;
 export const WIRE_MAXIMUM = "WIRE_MAXIMUM" as const;
+export const WIRE_MIN_LENGTH = "WIRE_MIN_LENGTH" as const;
 export const WIRE_MINIMUM = "WIRE_MINIMUM" as const;
 export const WIRE_ONE_OF = "WIRE_ONE_OF" as const;
+export const WIRE_PATTERN = "WIRE_PATTERN" as const;
 export const WIRE_REQUIRED = "WIRE_REQUIRED" as const;
 export const WIRE_TYPE = "WIRE_TYPE" as const;
 export const WIRE_UNKNOWN_FIELD = "WIRE_UNKNOWN_FIELD" as const;
@@ -560,6 +591,25 @@ function validateWireSchema(
   if (Array.isArray(allowed) && !allowed.some((entry) => Object.is(entry, value))) {
     throw wireError(WIRE_ENUM, schemaName, path, "value is not in the allowed enum");
   }
+  if (typeof value === "string") {
+    const minimumLength = rule["minLength"];
+    const length = Array.from(value).length;
+    if (typeof minimumLength === "number" && length < minimumLength) {
+      throw wireError(WIRE_MIN_LENGTH, schemaName, path, `length must be >= ${minimumLength}`);
+    }
+    const maximumLength = rule["maxLength"];
+    if (typeof maximumLength === "number" && length > maximumLength) {
+      throw wireError(WIRE_MAX_LENGTH, schemaName, path, `length must be <= ${maximumLength}`);
+    }
+    const pattern = rule["pattern"];
+    if (typeof pattern === "string") {
+      const match = new RegExp(pattern, "u").exec(value);
+      const fullMatch = rule["x-full-match"] === true;
+      if (match === null || (fullMatch && (match.index !== 0 || match[0].length !== value.length))) {
+        throw wireError(WIRE_PATTERN, schemaName, path, "string does not match pattern");
+      }
+    }
+  }
   if (numberLexeme !== undefined) {
     const minimum = rule["minimum"];
     const minimumLexeme = wireNumberLexeme(minimum);
@@ -668,6 +718,17 @@ export function validateBudgetShow(value: unknown): asserts value is BudgetShow 
 
 export function normalizeBudgetShowIntegers(value: unknown): void {
   normalizeWireIntegers(_WIRE_SCHEMA_BUDGET_SHOW, _WIRE_SCHEMA_BUDGET_SHOW, value);
+}
+
+const _WIRE_SCHEMA_MCP_CALL_CONTEXT: WireRule = decodeWireJson("{\"$defs\":{\"McpPrincipal\":{\"additionalProperties\":false,\"properties\":{\"app_id\":{\"pattern\":\"^[a-z][a-z0-9_-]*$\",\"type\":\"string\",\"x-full-match\":true},\"id\":{\"maxLength\":256,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"kind\":{\"enum\":[\"system-agent\",\"app\",\"app-agent\",\"external-agent\",\"cli\"],\"type\":\"string\"},\"owner_uid\":{\"maximum\":4294967295,\"minimum\":0,\"type\":\"integer\"}},\"required\":[\"kind\",\"id\",\"owner_uid\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/mcp_call_context.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":false,\"description\":\"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.\",\"properties\":{\"call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"caller\":{\"$ref\":\"#/$defs/McpPrincipal\"},\"deadline_unix_ms\":{\"maximum\":9007199254740991,\"minimum\":1,\"type\":\"integer\"},\"depth\":{\"maximum\":16,\"minimum\":0,\"type\":\"integer\"},\"parent_call_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"session_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"task_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$\",\"type\":\"string\",\"x-full-match\":true},\"trace_id\":{\"maxLength\":128,\"minLength\":1,\"pattern\":\"^[A-Za-z0-9][A-Za-z0-9._:-]*$\",\"type\":\"string\",\"x-full-match\":true},\"wire_version\":{\"const\":1,\"maximum\":1,\"minimum\":1,\"type\":\"integer\"}},\"required\":[\"wire_version\",\"call_id\",\"trace_id\",\"depth\",\"caller\"],\"title\":\"MCP call context\",\"type\":\"object\"}") as WireRule;
+
+export function validateMcpCallContext(value: unknown): asserts value is McpCallContext & Record<string, unknown> {
+  validateWireSchema(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value, "McpCallContext", "$");
+  normalizeWireIntegers(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value);
+}
+
+export function normalizeMcpCallContextIntegers(value: unknown): void {
+  normalizeWireIntegers(_WIRE_SCHEMA_MCP_CALL_CONTEXT, _WIRE_SCHEMA_MCP_CALL_CONTEXT, value);
 }
 
 const _WIRE_SCHEMA_TOOL_CATALOG: WireRule = decodeWireJson("{\"$defs\":{\"WireCatalogEntry\":{\"additionalProperties\":true,\"properties\":{\"args_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"name\":{\"type\":\"string\"},\"returns_schema\":{\"additionalProperties\":true,\"type\":\"object\"},\"stability\":{\"enum\":[\"stable\",\"experimental\"],\"type\":\"string\"},\"summary\":{\"type\":\"string\"},\"verb\":{\"type\":\"string\"}},\"required\":[\"name\",\"summary\",\"verb\",\"stability\",\"args_schema\",\"returns_schema\"],\"type\":\"object\"}},\"$id\":\"https://claw-os.dev/wire/v1/tool_catalog.schema.json\",\"$schema\":\"https://json-schema.org/draft/2020-12/schema\",\"additionalProperties\":true,\"description\":\"Shape returned by `cos ai tools`.\",\"properties\":{\"tools\":{\"items\":{\"$ref\":\"#/$defs/WireCatalogEntry\"},\"type\":\"array\"}},\"required\":[\"tools\"],\"title\":\"Catalog tool list reply\",\"type\":\"object\"}") as WireRule;

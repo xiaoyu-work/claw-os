@@ -15,6 +15,27 @@ of agent-callable tools). This document is the **how to** counterpart.
 > Legacy `operations` and `session` remain accepted only while bundled Apps
 > are migrated; the final migration removes both duplicate surfaces.
 
+For Python, bind the manifest's tool names without duplicating their schemas:
+
+```python
+from claw_os_sdk.mcp import App, current_context
+
+app = App.from_manifest()
+
+@app.tool("hello.say")
+def say(message: str) -> dict:
+    current_context().raise_if_cancelled()
+    return {"message": message}
+
+app.serve()
+```
+
+The App Host points `COS_APP_MANIFEST` at the verified package snapshot.
+`current_context()` exposes Gateway-authenticated identity and call lineage;
+Apps must never accept caller identity through tool arguments. The runtime
+validates arguments and applies defaults from the manifest before invoking
+the handler.
+
 ## 1. What is a Claw OS app?
 
 A Claw OS app is a directory whose minimum contents are a manifest and an

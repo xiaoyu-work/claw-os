@@ -374,6 +374,37 @@ pub struct Desktop {
     pub panel_applet: Option<bool>,
 }
 
+/// MCP call context
+/// Authenticated call identity and lineage injected by the Claw MCP Gateway over
+/// the private App-host transport. Caller-supplied MCP arguments must never
+/// populate this object.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct McpCallContext {
+    pub wire_version: u8,
+    pub call_id: String,
+    pub trace_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_call_id: Option<String>,
+    pub depth: u8,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deadline_unix_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_id: Option<String>,
+    pub caller: McpPrincipal,
+}
+
+/// McpPrincipal
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct McpPrincipal {
+    pub kind: String,
+    pub id: String,
+    pub owner_uid: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_id: Option<String>,
+}
+
 /// Permissions request / reply
 /// Shape of the success-path data field returned by policy checks. Apps call this
 /// via SDK helpers (e.g. cos_runtime.policy.check).
@@ -503,9 +534,12 @@ impl std::error::Error for WireDecodeError {}
 
 pub const WIRE_CONST: &str = "WIRE_CONST";
 pub const WIRE_ENUM: &str = "WIRE_ENUM";
+pub const WIRE_MAX_LENGTH: &str = "WIRE_MAX_LENGTH";
 pub const WIRE_MAXIMUM: &str = "WIRE_MAXIMUM";
+pub const WIRE_MIN_LENGTH: &str = "WIRE_MIN_LENGTH";
 pub const WIRE_MINIMUM: &str = "WIRE_MINIMUM";
 pub const WIRE_ONE_OF: &str = "WIRE_ONE_OF";
+pub const WIRE_PATTERN: &str = "WIRE_PATTERN";
 pub const WIRE_REQUIRED: &str = "WIRE_REQUIRED";
 pub const WIRE_TYPE: &str = "WIRE_TYPE";
 pub const WIRE_UNKNOWN_FIELD: &str = "WIRE_UNKNOWN_FIELD";
@@ -624,6 +658,30 @@ fn validate_wire_schema(
     if let Some(allowed) = rule.get("enum").and_then(serde_json::Value::as_array) {
         if !allowed.contains(value) {
             return Err(wire_error(WIRE_ENUM, schema_name, path, "value is not in the allowed enum"));
+        }
+    }
+    if let Some(text) = value.as_str() {
+        if let Some(minimum) = rule.get("minLength").and_then(serde_json::Value::as_u64) {
+            if text.chars().count() < minimum as usize {
+                return Err(wire_error(WIRE_MIN_LENGTH, schema_name, path, format!("length must be >= {minimum}")));
+            }
+        }
+        if let Some(maximum) = rule.get("maxLength").and_then(serde_json::Value::as_u64) {
+            if text.chars().count() > maximum as usize {
+                return Err(wire_error(WIRE_MAX_LENGTH, schema_name, path, format!("length must be <= {maximum}")));
+            }
+        }
+        if let Some(pattern) = rule.get("pattern").and_then(serde_json::Value::as_str) {
+            let pattern = regex::Regex::new(pattern).map_err(|error| {
+                wire_error(WIRE_PATTERN, schema_name, path, format!("invalid schema pattern: {error}"))
+            })?;
+            let full_match = rule.get("x-full-match").and_then(serde_json::Value::as_bool) == Some(true);
+            let matches = pattern.find(text).is_some_and(|found| {
+                !full_match || (found.start() == 0 && found.end() == text.len())
+            });
+            if !matches {
+                return Err(wire_error(WIRE_PATTERN, schema_name, path, "string does not match pattern"));
+            }
         }
     }
     if let Some(number) = exact_integer(value) {
@@ -759,6 +817,19 @@ pub fn validate_budget_show(value: &serde_json::Value) -> Result<(), WireDecodeE
 
 pub fn normalize_budget_show_integers(value: &mut serde_json::Value) {
     let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_BUDGET_SHOW)
+        .expect("generated wire schema must be valid JSON");
+    normalize_wire_integers(&schema, &schema, value);
+}
+
+const _WIRE_SCHEMA_MCP_CALL_CONTEXT: &str = r###"{"$defs":{"McpPrincipal":{"additionalProperties":false,"properties":{"app_id":{"pattern":"^[a-z][a-z0-9_-]*$","type":"string","x-full-match":true},"id":{"maxLength":256,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"kind":{"enum":["system-agent","app","app-agent","external-agent","cli"],"type":"string"},"owner_uid":{"maximum":4294967295,"minimum":0,"type":"integer"}},"required":["kind","id","owner_uid"],"type":"object"}},"$id":"https://claw-os.dev/wire/v1/mcp_call_context.schema.json","$schema":"https://json-schema.org/draft/2020-12/schema","additionalProperties":false,"description":"Authenticated call identity and lineage injected by the Claw MCP Gateway over the private App-host transport. Caller-supplied MCP arguments must never populate this object.","properties":{"call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"caller":{"$ref":"#/$defs/McpPrincipal"},"deadline_unix_ms":{"maximum":9007199254740991,"minimum":1,"type":"integer"},"depth":{"maximum":16,"minimum":0,"type":"integer"},"parent_call_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"session_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"task_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:@/+%-]*$","type":"string","x-full-match":true},"trace_id":{"maxLength":128,"minLength":1,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$","type":"string","x-full-match":true},"wire_version":{"const":1,"maximum":1,"minimum":1,"type":"integer"}},"required":["wire_version","call_id","trace_id","depth","caller"],"title":"MCP call context","type":"object"}"###;
+pub fn validate_mcp_call_context(value: &serde_json::Value) -> Result<(), WireDecodeError> {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
+        .expect("generated wire schema must be valid JSON");
+    validate_wire_schema(&schema, &schema, value, "McpCallContext", "$")
+}
+
+pub fn normalize_mcp_call_context_integers(value: &mut serde_json::Value) {
+    let schema: serde_json::Value = serde_json::from_str(_WIRE_SCHEMA_MCP_CALL_CONTEXT)
         .expect("generated wire schema must be valid JSON");
     normalize_wire_integers(&schema, &schema, value);
 }

@@ -508,27 +508,32 @@ The same `needs[]` grammar from §5 applies. Every `from-arg` scope must
 reference a declared `arg`; the manifest parser rejects mismatches at
 install time.
 
-### 12.3 Python SDK: `claw_os_sdk.serve`
+### 12.3 Python SDK: `claw_os_sdk.mcp`
 
 App authors write:
 
 ```python
-from claw_os_sdk.serve import App
+from claw_os_sdk.mcp import App, current_context
 
-app = App()
+app = App.from_manifest()
 
-@app.tool("kv.get", args={"key": "string"}, required=["key"])
+@app.tool("kv.get")
 def kv_get(key: str) -> str:
+    current_context().raise_if_cancelled()
     return _load().get(key, "")
 
 app.serve()  # blocking; reads MCP frames on stdin, writes on stdout
 ```
 
-The SDK is stdlib-only. It speaks the MCP `initialize` / `tools/list`
-/ `tools/call` triplet and handles `notifications/initialized` plus
-`ping`. Return values are stringified (`str` / `dict` / `list` →
-`text` content); raised exceptions become `isError: true` responses
-the model can react to.
+The SDK is stdlib-only. `app.json.mcp.tools[]` is the sole descriptor
+source; decorators only bind handlers. The runtime speaks MCP
+`initialize`, `tools/list`, `tools/call`, and `ping`, emits progress,
+and handles cooperative cancellation. MCP-first calls require the
+Gateway-injected call context; caller identity is never read from tool
+arguments. The runtime validates arguments and applies manifest defaults
+before dispatch. Dict results include both text and `structuredContent`;
+raised exceptions become `isError: true` responses. Cancellation
+notifications suppress the obsolete response.
 
 ### 12.4 Kernel bring-up: `core/src/agent/tools/cos_apps_session.rs`
 
@@ -639,8 +644,8 @@ running event loop. Instead, the **same binary** flips into MCP
 server mode when launched with `COS_MCP_SERVER=1` in the environment
 (the kernel agent sets it automatically; see `bring_up_app`).
 
-`crates/cos-mcp-serve` is the Rust counterpart to `claw_os_sdk.serve`
-(`claw-os-sdk/python/src/claw_os_sdk/serve.py`). It exposes a tiny
+`crates/cos-mcp-serve` is the Rust counterpart to `claw_os_sdk.mcp`
+(`claw-os-sdk/python/src/claw_os_sdk/mcp.py`). It exposes a tiny
 builder API:
 
 ```rust
@@ -668,8 +673,10 @@ runs it directly with no interpreter. See
 
 ### 12.9 Out of scope (this iteration)
 
-- MCP progress notifications for long-running tools. Apps that need
-  background work should use the `start_task` / `poll` pattern (one
-  tool kicks off work and returns a handle; another polls).
+- Forced interruption of arbitrary synchronous Python code. Cancellation is
+  cooperative through `current_context().raise_if_cancelled()`; blocking
+  libraries still need their own timeout/cancellation mechanism.
+- MCP resource and prompt families. Stateful Apps currently expose those
+  views through manifest-declared tools.
 - Confidentiality between Apps in a shared agent session. The agent is
   the orchestrator and sees every value crossing the boundary.
