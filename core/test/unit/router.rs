@@ -598,6 +598,7 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
     let manifest = Manifest {
         id: "demo".into(),
         version: "0.0.1".into(),
+        schema_version: None,
         name: LocalizedText::en("Demo"),
         summary: LocalizedText::default(),
         icon: None,
@@ -613,6 +614,7 @@ fn consent_grant_yes_writes_record_and_show_reads_it_back() {
             tools: Vec::new(),
         }),
         session: None,
+        mcp: None,
         desktop: None,
         dependencies: serde_json::Value::Null,
     };

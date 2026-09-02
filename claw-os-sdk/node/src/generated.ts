@@ -102,14 +102,15 @@ export interface Envelope {
 
 /**
  * App manifest (app.json).
- * The manifest every app under COS_APPS_DIR must provide. The kernel parses
- * and validates this (core/src/caps/manifest.rs) to derive the app's
- * operations, optional MCP session tools, optional desktop GUI surface,
- * capability needs, and AI policy.
+ * The manifest every app under COS_APPS_DIR must provide. MCP-first Apps
+ * declare one versioned service with tools, lifecycle, caller restrictions,
+ * capability needs, and optional AI and desktop surfaces. Legacy operations
+ * and session remain during migration.
  */
 export interface Manifest {
   id: string;
   version: string;
+  schema_version?: 2;
   name: Localizedtext;
   summary?: Localizedtext;
   icon?: string;
@@ -118,6 +119,7 @@ export interface Manifest {
   operations?: Record<string, unknown>;
   ai?: Aipolicy;
   session?: Session;
+  mcp?: Session;
   desktop?: Desktop;
   dependencies?: Record<string, unknown>;
 }
@@ -268,7 +270,20 @@ export interface Aibudget {
 export interface Session {
   entry?: string;
   transport?: "stdio";
+  lifecycle?: "lazy" | "always-on" | "while-app-running";
+  access?: Mcpaccess;
   tools?: Sessiontool[];
+}
+
+/**
+ * mcpAccess.
+ * Caller restrictions for an MCP App service. Callers still require exact
+ * invoke authority.
+ */
+export interface Mcpaccess {
+  system_agent?: boolean;
+  apps?: string[];
+  external_agents?: boolean;
 }
 
 /**

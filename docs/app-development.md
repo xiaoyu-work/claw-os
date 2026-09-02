@@ -10,6 +10,11 @@ For the architectural background see
 audit) and [`app-ai-tool-catalog.md`](app-ai-tool-catalog.md) (catalog
 of agent-callable tools). This document is the **how to** counterpart.
 
+> **MCP-first migration:** New App contracts use `schema_version: 2` and one
+> top-level `mcp` service containing lifecycle, caller access, and tools.
+> Legacy `operations` and `session` remain accepted only while bundled Apps
+> are migrated; the final migration removes both duplicate surfaces.
+
 ## 1. What is a Claw OS app?
 
 A Claw OS app is a directory whose minimum contents are a manifest and an
