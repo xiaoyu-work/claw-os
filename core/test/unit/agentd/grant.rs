@@ -67,9 +67,11 @@ fn extension(
 ) -> crate::extension_host::protocol::ExtensionBinding {
     crate::extension_host::protocol::ExtensionBinding {
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        mode: crate::extension_host::protocol::ExtensionHostMode::Task,
         task_id: task.to_string(),
         session_id: Some(session.to_string()),
         owner_uid: 1000,
+        controller_uid: 1000,
         extension_uid: 61_000,
         owner_gid: 1000,
         capability_generation: "a".repeat(16),

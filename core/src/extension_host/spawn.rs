@@ -665,6 +665,87 @@ pub fn spawn_host(
     approved_paths: Vec<ApprovedPath>,
     paths: HostPaths,
 ) -> Result<SpawnedExtensionHost, String> {
+    spawn_host_for_controller(
+        owner,
+        extension,
+        isolation,
+        containment,
+        protocol::ExtensionHostMode::Task,
+        owner.uid,
+        task_id,
+        task_session_id,
+        host_session_id,
+        worker_pid,
+        worker_start_time_ticks,
+        lease_nonce,
+        expires_at_ms,
+        capability_generation,
+        approved_paths,
+        paths,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn spawn_persistent_owner_host(
+    owner: &WorkerIdentity,
+    extension: &ExtensionIdentity,
+    isolation: &ExecutionIsolation,
+    containment: &ContainmentRoot,
+    host_id: &str,
+    host_session_id: &str,
+    controller_pid: u32,
+    controller_start_time_ticks: Option<u64>,
+    lease_nonce: &str,
+    expires_at_ms: u64,
+    capability_generation: &str,
+    approved_paths: Vec<ApprovedPath>,
+    paths: HostPaths,
+) -> Result<SpawnedExtensionHost, String> {
+    spawn_host_for_controller(
+        owner,
+        extension,
+        isolation,
+        containment,
+        protocol::ExtensionHostMode::PersistentOwner,
+        0,
+        host_id,
+        None,
+        Some(host_session_id),
+        controller_pid,
+        controller_start_time_ticks,
+        lease_nonce,
+        expires_at_ms,
+        capability_generation,
+        approved_paths,
+        paths,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn spawn_host_for_controller(
+    owner: &WorkerIdentity,
+    extension: &ExtensionIdentity,
+    isolation: &ExecutionIsolation,
+    containment: &ContainmentRoot,
+    mode: protocol::ExtensionHostMode,
+    controller_uid: u32,
+    task_id: &str,
+    task_session_id: Option<&str>,
+    host_session_id: Option<&str>,
+    worker_pid: u32,
+    worker_start_time_ticks: Option<u64>,
+    lease_nonce: &str,
+    expires_at_ms: u64,
+    capability_generation: &str,
+    approved_paths: Vec<ApprovedPath>,
+    paths: HostPaths,
+) -> Result<SpawnedExtensionHost, String> {
+    let actual_controller_uid = unsafe { libc::geteuid() as u32 };
+    if actual_controller_uid != controller_uid {
+        return Err(format!(
+            "extension host controller uid mismatch: expected {controller_uid}, got {actual_controller_uid}"
+        ));
+    }
     if extension.uid == 0
         || extension.uid == owner.uid
         || extension.gid != isolation.execution_gid()
@@ -709,9 +790,11 @@ pub fn spawn_host(
     let enforce_groups = crate::agentd::spawn::broker_is_root();
     let bootstrap = HostBootstrap {
         protocol: protocol::PROTOCOL_VERSION,
+        mode,
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
         owner_uid: owner.uid,
+        controller_uid,
         extension_uid: extension.uid,
         execution_gid: isolation.execution_gid(),
         enforce_groups,
@@ -856,9 +939,11 @@ pub fn spawn_host(
     let start_time_ticks = crate::proc::read_start_time_ticks_pub(pid);
     let binding = ExtensionBinding {
         protocol: protocol::PROTOCOL_VERSION,
+        mode,
         task_id: task_id.to_string(),
         session_id: task_session_id.map(ToOwned::to_owned),
         owner_uid: owner.uid,
+        controller_uid,
         extension_uid: extension.uid,
         owner_gid: gid,
         capability_generation: capability_generation.to_string(),

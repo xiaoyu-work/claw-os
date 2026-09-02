@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -13,6 +13,14 @@ pub const DEFAULT_REQUEST_TIMEOUT_MS: u64 = 130_000;
 pub const READY_TIMEOUT_MS: u64 = 15_000;
 pub const EXTENSION_HOST_GROUP: &str = "extension-host";
 pub const BROKER_SOCKET_ENV: &str = "COS_EXTENSION_BROKER_SOCKET";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExtensionHostMode {
+    #[default]
+    Task,
+    PersistentOwner,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,10 +36,13 @@ pub struct ApprovedPath {
 #[serde(deny_unknown_fields)]
 pub struct HostBootstrap {
     pub protocol: u32,
+    #[serde(default)]
+    pub mode: ExtensionHostMode,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub owner_uid: u32,
+    pub controller_uid: u32,
     pub extension_uid: u32,
     pub execution_gid: u32,
     pub enforce_groups: bool,
@@ -72,9 +83,11 @@ impl HostBootstrap {
         let host_pid = std::process::id();
         let binding = ExtensionBinding {
             protocol: self.protocol,
+            mode: self.mode,
             task_id: self.task_id,
             session_id: self.session_id,
             owner_uid: self.owner_uid,
+            controller_uid: self.controller_uid,
             extension_uid: self.extension_uid,
             owner_gid: self.execution_gid,
             capability_generation: self.capability_generation,
@@ -281,10 +294,13 @@ impl ExtensionKind {
 #[serde(deny_unknown_fields)]
 pub struct ExtensionBinding {
     pub protocol: u32,
+    #[serde(default)]
+    pub mode: ExtensionHostMode,
     pub task_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     pub owner_uid: u32,
+    pub controller_uid: u32,
     pub extension_uid: u32,
     pub owner_gid: u32,
     pub capability_generation: String,
@@ -332,6 +348,19 @@ impl ExtensionBinding {
         {
             return Err("extension-host binding names a privileged or invalid process".to_string());
         }
+        match self.mode {
+            ExtensionHostMode::Task if self.controller_uid != self.owner_uid => {
+                return Err("task extension host controller is not its task owner".to_string())
+            }
+            ExtensionHostMode::PersistentOwner
+                if self.controller_uid != 0 || self.session_id.is_some() =>
+            {
+                return Err(
+                    "persistent extension host has an invalid daemon controller".to_string()
+                )
+            }
+            _ => {}
+        }
         if self.lease_nonce.len() != 32
             || !self
                 .lease_nonce
@@ -373,9 +402,24 @@ impl ExtensionBinding {
     }
 
     pub fn validate_worker(&self, pid: u32, start_time_ticks: Option<u64>) -> Result<(), String> {
+        if self.mode != ExtensionHostMode::Task {
+            return Err("persistent extension binding is not a worker binding".to_string());
+        }
+        self.validate_controller(pid, start_time_ticks)
+    }
+
+    pub fn validate_controller(
+        &self,
+        pid: u32,
+        start_time_ticks: Option<u64>,
+    ) -> Result<(), String> {
         self.validate_shape()?;
-        if self.worker_pid != pid || self.worker_start_time_ticks != start_time_ticks {
-            return Err("extension-host binding belongs to a different worker".to_string());
+        let uid = unsafe { libc::geteuid() as u32 };
+        if self.controller_uid != uid
+            || self.worker_pid != pid
+            || self.worker_start_time_ticks != start_time_ticks
+        {
+            return Err("extension-host binding belongs to a different controller".to_string());
         }
         Ok(())
     }
@@ -386,6 +430,18 @@ impl ExtensionBinding {
         start_time_ticks: Option<u64>,
     ) -> Result<(), String> {
         self.validate_worker(pid, start_time_ticks)?;
+        if crate::agentd::grant::now_ms() > self.expires_at_ms {
+            return Err("extension-host binding lease has expired".to_string());
+        }
+        Ok(())
+    }
+
+    pub fn validate_fresh_controller(
+        &self,
+        pid: u32,
+        start_time_ticks: Option<u64>,
+    ) -> Result<(), String> {
+        self.validate_controller(pid, start_time_ticks)?;
         if crate::agentd::grant::now_ms() > self.expires_at_ms {
             return Err("extension-host binding lease has expired".to_string());
         }

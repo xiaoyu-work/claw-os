@@ -6,9 +6,11 @@ fn binding() -> ExtensionBinding {
     let owner_gid = (unsafe { libc::getegid() }).max(60_999);
     ExtensionBinding {
         protocol: PROTOCOL_VERSION,
+        mode: super::super::protocol::ExtensionHostMode::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid,
+        controller_uid: owner_uid,
         extension_uid: 61_000,
         owner_gid,
         capability_generation: "a".repeat(16),
@@ -42,7 +44,37 @@ fn binding_rejects_replay_against_another_worker() {
             binding.worker_start_time_ticks,
         )
         .expect_err("another worker must not reuse the binding");
-    assert!(error.contains("different worker"), "{error}");
+    assert!(error.contains("different controller"), "{error}");
+}
+
+#[test]
+fn host_mode_fails_closed_across_task_and_daemon_controllers() {
+    let task = binding();
+    task.validate_shape().unwrap();
+
+    let mut persistent = task.clone();
+    persistent.mode = super::super::protocol::ExtensionHostMode::PersistentOwner;
+    persistent.session_id = None;
+    persistent.controller_uid = 0;
+    persistent.validate_shape().unwrap();
+    assert!(persistent
+        .validate_worker(persistent.worker_pid, persistent.worker_start_time_ticks)
+        .unwrap_err()
+        .contains("not a worker binding"));
+
+    let mut task_with_daemon = task.clone();
+    task_with_daemon.controller_uid = 0;
+    assert!(task_with_daemon
+        .validate_shape()
+        .unwrap_err()
+        .contains("task owner"));
+
+    let mut persistent_with_worker = persistent;
+    persistent_with_worker.controller_uid = task.owner_uid;
+    assert!(persistent_with_worker
+        .validate_shape()
+        .unwrap_err()
+        .contains("daemon controller"));
 }
 
 #[test]

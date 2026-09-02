@@ -461,7 +461,7 @@ impl ExtensionHostClient {
         timeout: Duration,
         cancel_on_timeout: bool,
     ) -> ClientResult<HostResult> {
-        self.binding.validate_worker(
+        self.binding.validate_fresh_controller(
             std::process::id(),
             crate::proc::read_start_time_ticks_pub(std::process::id()),
         )

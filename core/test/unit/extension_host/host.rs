@@ -13,9 +13,11 @@ fn state() -> HostState {
     }];
     let binding = super::super::protocol::ExtensionBinding {
         protocol: PROTOCOL_VERSION,
+        mode: super::super::protocol::ExtensionHostMode::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: worker_uid,
+        controller_uid: worker_uid,
         extension_uid: 61_000,
         owner_gid,
         capability_generation: "a".repeat(16),
@@ -38,8 +40,7 @@ fn state() -> HostState {
         binding,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
-        worker_uid,
-        owner_gid,
+        controller_uid: worker_uid,
         worker_pid: pid,
         worker_start_time_ticks: crate::proc::read_start_time_ticks_pub(pid),
         lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
@@ -109,7 +110,7 @@ fn another_process_cannot_drive_the_host_control_socket() {
     other.pid = other.pid.saturating_add(1);
     assert!(validate_request(&make_request(&state), other, &state)
         .unwrap_err()
-        .contains("different worker"));
+        .contains("different controller"));
 }
 
 #[test]

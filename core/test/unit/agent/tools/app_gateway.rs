@@ -42,9 +42,11 @@ fn principal(kind: McpPrincipalKind, app_id: Option<&str>) -> McpPrincipal {
 fn binding() -> ExtensionBinding {
     ExtensionBinding {
         protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        mode: crate::extension_host::protocol::ExtensionHostMode::Task,
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        controller_uid: 1000,
         extension_uid: 61_000,
         owner_gid: 1000,
         capability_generation: "a".repeat(16),

@@ -39,8 +39,7 @@ struct HostState {
     isolation: super::child_isolation::IsolationAuthority,
     task_id: String,
     session_id: Option<String>,
-    worker_uid: u32,
-    owner_gid: u32,
+    controller_uid: u32,
     worker_pid: u32,
     worker_start_time_ticks: Option<u64>,
     lease_nonce: String,
@@ -107,8 +106,7 @@ fn run() -> Result<(), String> {
         let state = Arc::new(HostState {
             task_id: binding.task_id.clone(),
             session_id: binding.session_id.clone(),
-            worker_uid: binding.owner_uid,
-            owner_gid: binding.owner_gid,
+            controller_uid: binding.controller_uid,
             worker_pid: binding.worker_pid,
             worker_start_time_ticks: binding.worker_start_time_ticks,
             lease_nonce: binding.lease_nonce.clone(),
@@ -301,12 +299,11 @@ fn validate_request(
             request.protocol, PROTOCOL_VERSION
         ));
     }
-    if process.uid != state.worker_uid
-        || process.gid != state.owner_gid
+    if process.uid != state.controller_uid
         || process.pid != state.worker_pid
         || Some(process.start_time_ticks) != state.worker_start_time_ticks
     {
-        return Err("extension-host request came from a different worker".to_string());
+        return Err("extension-host request came from a different controller".to_string());
     }
     if request.task_id != state.task_id
         || request.session_id != state.session_id
