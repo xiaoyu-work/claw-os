@@ -92,6 +92,10 @@ use super::verb::Verb;
 pub struct Manifest {
     pub id: String,
     pub version: String,
+    /// Version of the App contract. MCP-first manifests use version 2.
+    /// Legacy manifests omit this field until their migration commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<u32>,
     pub name: LocalizedText,
     #[serde(default)]
     pub summary: LocalizedText,
@@ -128,6 +132,12 @@ pub struct Manifest {
     /// [`Session`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
+
+    /// The single MCP-first App service contract. New Apps declare this
+    /// instead of separate one-shot `operations` and stateful `session`
+    /// surfaces.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Session>,
 
     /// Optional desktop GUI surface. Presence of this block is the
     /// single signal that the app wants a graphical entry: at
@@ -692,6 +702,16 @@ pub struct Session {
     #[serde(default)]
     pub transport: SessionTransport,
 
+    /// How long the App service remains available.
+    #[serde(default)]
+    pub lifecycle: McpLifecycle,
+
+    /// Which authenticated Claw principals may address this service.
+    /// This is a restriction only; callers still need exact invoke
+    /// authority and every tool's capabilities.
+    #[serde(default)]
+    pub access: McpAccess,
+
     /// Tools the app advertises through this session. The list is
     /// authoritative: the kernel only forwards `tools/call` requests
     /// for names that appear here, and runs the declared `needs[]` as
@@ -700,6 +720,10 @@ pub struct Session {
     pub tools: Vec<SessionTool>,
 }
 
+/// Public MCP-first name for the App service contract. The alias keeps the
+/// migration buildable while legacy `session` manifests are converted.
+pub type McpService = Session;
+
 /// Wire protocol for [`Session`]. Stdio is the de-facto MCP default
 /// and the one our integration already implements.
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -707,6 +731,46 @@ pub struct Session {
 pub enum SessionTransport {
     #[default]
     Stdio,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum McpLifecycle {
+    /// Start on first use and stop after the host's idle deadline.
+    #[default]
+    Lazy,
+    /// Keep one owner-scoped instance running across Agent sessions.
+    AlwaysOn,
+    /// Keep the service only while its desktop App is running.
+    WhileAppRunning,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct McpAccess {
+    /// The owner-scoped system Agent may discover and call this service.
+    #[serde(default = "default_mcp_system_agent")]
+    pub system_agent: bool,
+    /// Verified App identities allowed to request this service.
+    #[serde(default)]
+    pub apps: Vec<String>,
+    /// Authenticated agents entering through the external MCP gateway.
+    #[serde(default)]
+    pub external_agents: bool,
+}
+
+impl Default for McpAccess {
+    fn default() -> Self {
+        Self {
+            system_agent: true,
+            apps: Vec::new(),
+            external_agents: false,
+        }
+    }
+}
+
+fn default_mcp_system_agent() -> bool {
+    true
 }
 
 /// One MCP-callable tool the app exposes through its [`Session`].
@@ -738,6 +802,9 @@ pub struct SessionTool {
     #[serde(default)]
     pub needs: Vec<Need>,
 }
+
+/// Public MCP-first name for a manifest-declared service tool.
+pub type McpTool = SessionTool;
 
 // ---------------------------------------------------------------------------
 // Desktop GUI surface
@@ -1063,6 +1130,14 @@ pub enum ManifestError {
     AiUnknownTool { name: String },
     #[error("manifest `ai.tools[]`: tool `{name}` declared twice")]
     AiDuplicateTool { name: String },
+    #[error("manifest `mcp` requires `schema_version: 2`")]
+    McpSchemaVersion,
+    #[error("manifest cannot declare both `mcp` and legacy `session`")]
+    McpLegacySessionConflict,
+    #[error("manifest `mcp.access.apps[]`: invalid App id `{app}`")]
+    McpAccessInvalidApp { app: String },
+    #[error("manifest `mcp.access.apps[]`: App `{app}` declared twice")]
+    McpAccessDuplicateApp { app: String },
     #[error("session tool `{tool}`: name must match [a-z][a-z0-9._-]* — got `{tool}`")]
     SessionToolInvalidName { tool: String },
     #[error("session tool `{name}` declared twice")]
@@ -1406,6 +1481,13 @@ impl Manifest {
         Ok(m)
     }
 
+    /// The authoritative MCP service during the migration. New manifests use
+    /// `mcp`; legacy packages continue through `session` until the final
+    /// removal commit.
+    pub fn mcp_service(&self) -> Option<&McpService> {
+        self.mcp.as_ref().or(self.session.as_ref())
+    }
+
     /// Verify every entry in `ai.tools[]` exists in the kernel
     /// catalog. The caller passes the catalog (typically
     /// `crate::ai::tools::list_names()`) so this module stays free
@@ -1428,6 +1510,23 @@ impl Manifest {
     pub fn validate(&self) -> Result<(), ManifestError> {
         if !is_valid_id(&self.id) {
             return Err(ManifestError::InvalidId(self.id.clone()));
+        }
+        if self.mcp.is_some() && self.schema_version != Some(2) {
+            return Err(ManifestError::McpSchemaVersion);
+        }
+        if self.mcp.is_some() && self.session.is_some() {
+            return Err(ManifestError::McpLegacySessionConflict);
+        }
+        if let Some(service) = &self.mcp {
+            let mut seen_apps = std::collections::BTreeSet::new();
+            for app in &service.access.apps {
+                if !is_valid_id(app) {
+                    return Err(ManifestError::McpAccessInvalidApp { app: app.clone() });
+                }
+                if !seen_apps.insert(app.as_str()) {
+                    return Err(ManifestError::McpAccessDuplicateApp { app: app.clone() });
+                }
+            }
         }
         self.name
             .validate()
@@ -1660,7 +1759,7 @@ impl Manifest {
             }
         }
 
-        if let Some(session) = &self.session {
+        if let Some(session) = self.mcp_service() {
             let mut seen_tools: std::collections::BTreeSet<&str> =
                 std::collections::BTreeSet::new();
             for tool in &session.tools {
@@ -2074,8 +2173,7 @@ impl Manifest {
     ) -> Result<Vec<Vec<super::cap::Cap>>, ManifestError> {
         let args = self.resolve_session_tool_args(tool_name, args)?;
         let session = self
-            .session
-            .as_ref()
+            .mcp_service()
             .ok_or_else(|| ManifestError::SessionNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,
@@ -2192,8 +2290,7 @@ impl Manifest {
         paths: &super::args::PathContext,
     ) -> Result<EffectiveCall, ManifestError> {
         let tool = self
-            .session
-            .as_ref()
+            .mcp_service()
             .and_then(|session| session.tools.iter().find(|tool| tool.name == tool_name))
             .ok_or_else(|| ManifestError::SessionNeedInvalid {
                 tool: tool_name.to_string(),
@@ -2232,8 +2329,7 @@ impl Manifest {
         args: &BTreeMap<String, serde_json::Value>,
     ) -> Result<BTreeMap<String, serde_json::Value>, ManifestError> {
         let session = self
-            .session
-            .as_ref()
+            .mcp_service()
             .ok_or_else(|| ManifestError::SessionNeedInvalid {
                 tool: tool_name.to_string(),
                 idx: 0,

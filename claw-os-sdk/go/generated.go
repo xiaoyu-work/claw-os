@@ -105,13 +105,14 @@ type Envelope struct {
 }
 
 // Manifest — App manifest (app.json).
-// The manifest every app under COS_APPS_DIR must provide. The kernel parses and
-// validates this (core/src/caps/manifest.rs) to derive the app's operations,
-// optional MCP session tools, optional desktop GUI surface, capability needs,
-// and AI policy.
+// The manifest every app under COS_APPS_DIR must provide. MCP-first Apps declare
+// one versioned service with tools, lifecycle, caller restrictions, capability
+// needs, and optional AI and desktop surfaces. Legacy operations and session
+// remain during migration.
 type Manifest struct {
 	Id string `json:"id"`
 	Version string `json:"version"`
+	SchemaVersion int `json:"schema_version,omitempty"`
 	Name Localizedtext `json:"name"`
 	Summary *Localizedtext `json:"summary,omitempty"`
 	Icon string `json:"icon,omitempty"`
@@ -120,6 +121,7 @@ type Manifest struct {
 	Operations map[string]interface{} `json:"operations,omitempty"`
 	Ai *Aipolicy `json:"ai,omitempty"`
 	Session *Session `json:"session,omitempty"`
+	Mcp *Session `json:"mcp,omitempty"`
 	Desktop *Desktop `json:"desktop,omitempty"`
 	Dependencies map[string]interface{} `json:"dependencies,omitempty"`
 }
@@ -239,7 +241,18 @@ type Aibudget struct {
 type Session struct {
 	Entry string `json:"entry,omitempty"`
 	Transport string `json:"transport,omitempty"`
+	Lifecycle string `json:"lifecycle,omitempty"`
+	Access *Mcpaccess `json:"access,omitempty"`
 	Tools []Sessiontool `json:"tools,omitempty"`
+}
+
+// Mcpaccess — mcpAccess.
+// Caller restrictions for an MCP App service. Callers still require exact invoke
+// authority.
+type Mcpaccess struct {
+	SystemAgent bool `json:"system_agent,omitempty"`
+	Apps []string `json:"apps,omitempty"`
+	ExternalAgents bool `json:"external_agents,omitempty"`
 }
 
 // Sessiontool — sessionTool.

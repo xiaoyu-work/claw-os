@@ -9,7 +9,8 @@ separate description from system authority.
 
 - Maintain the capability catalog and risk metadata.
 - Parse, normalize, and compare scopes.
-- Validate app manifests and derive operation needs.
+- Validate legacy operation manifests and MCP-first App services, then derive
+  exact per-tool capability needs.
 - Enforce permissions for sessions, tools, apps, and broker requests.
 - Route denied Agent capabilities into attended, exact-scope consent
   without turning approval into ambient session authority.

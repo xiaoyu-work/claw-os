@@ -124,14 +124,16 @@ pub struct Envelope {
 }
 
 /// App manifest (app.json)
-/// The manifest every app under COS_APPS_DIR must provide. The kernel parses and
-/// validates this (core/src/caps/manifest.rs) to derive the app's operations,
-/// optional MCP session tools, optional desktop GUI surface, capability needs,
-/// and AI policy.
+/// The manifest every app under COS_APPS_DIR must provide. MCP-first Apps declare
+/// one versioned service with tools, lifecycle, caller restrictions, capability
+/// needs, and optional AI and desktop surfaces. Legacy operations and session
+/// remain during migration.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct Manifest {
     pub id: String,
     pub version: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub schema_version: Option<i64>,
     pub name: Localizedtext,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub summary: Option<Localizedtext>,
@@ -147,6 +149,8 @@ pub struct Manifest {
     pub ai: Option<Aipolicy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp: Option<Session>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desktop: Option<Desktop>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -316,7 +320,24 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transport: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lifecycle: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access: Option<Mcpaccess>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<Sessiontool>>,
+}
+
+/// mcpAccess
+/// Caller restrictions for an MCP App service. Callers still require exact invoke
+/// authority.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Mcpaccess {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_agent: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub apps: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub external_agents: Option<bool>,
 }
 
 /// sessionTool

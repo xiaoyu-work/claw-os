@@ -617,7 +617,8 @@ def test_positional_order_and_fixed_path_scopes_are_unambiguous() -> None:
             *manifest.get("operations", {}).items(),
             *(
                 (tool["name"], tool)
-                for tool in manifest.get("session", {}).get("tools", [])
+                for service_field in ("session", "mcp")
+                for tool in manifest.get(service_field, {}).get("tools", [])
             ),
         ]:
             optional_seen = False
@@ -1036,20 +1037,21 @@ def test_every_manifest_matches_published_schema_contract() -> None:
                 operation.get("needs", []),
                 operation.get("args", []),
             )
-        for tool in manifest.get("session", {}).get("tools", []):
-            check_args(
-                manifest_path,
-                manifest["id"],
-                tool["name"],
-                tool.get("args", []),
-                session=True,
-            )
-            check_needs(
-                manifest_path,
-                tool["name"],
-                tool.get("needs", []),
-                tool.get("args", []),
-            )
+        for service_field in ("session", "mcp"):
+            for tool in manifest.get(service_field, {}).get("tools", []):
+                check_args(
+                    manifest_path,
+                    manifest["id"],
+                    tool["name"],
+                    tool.get("args", []),
+                    session=True,
+                )
+                check_needs(
+                    manifest_path,
+                    tool["name"],
+                    tool.get("needs", []),
+                    tool.get("args", []),
+                )
     assert not drift, "\n".join(drift)
 
 
@@ -1086,6 +1088,44 @@ def test_published_schema_validates_all_manifests_and_rejects_alias_ambiguity() 
     }
     assert list(validator.iter_errors(ambiguous))
 
+    mcp_first = {
+        "schema_version": 2,
+        "id": "email",
+        "version": "1.0.0",
+        "name": {"en": "Email"},
+        "mcp": {
+            "entry": "server.py",
+            "lifecycle": "always-on",
+            "access": {
+                "system_agent": True,
+                "apps": ["crm"],
+                "external_agents": False,
+            },
+            "tools": [
+                {
+                    "name": "email.search",
+                    "summary": {"en": "Search mail"},
+                    "args": [
+                        {"name": "query", "kind": "text", "required": True}
+                    ],
+                }
+            ],
+        },
+    }
+    validator.validate(mcp_first)
+
+    missing_version = dict(mcp_first)
+    missing_version.pop("schema_version")
+    assert list(validator.iter_errors(missing_version))
+
+    conflicting = dict(mcp_first)
+    conflicting["session"] = {"tools": []}
+    assert list(validator.iter_errors(conflicting))
+
+    duplicate_callers = json.loads(json.dumps(mcp_first))
+    duplicate_callers["mcp"]["access"]["apps"] = ["crm", "crm"]
+    assert list(validator.iter_errors(duplicate_callers))
+
 
 def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:
     schema = json.loads(
@@ -1101,8 +1141,9 @@ def test_wire_capability_catalog_matches_kernel_and_manifests() -> None:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         for operation in manifest.get("operations", {}).values():
             declared.update(need["verb"] for need in operation.get("needs", []))
-        for tool in manifest.get("session", {}).get("tools", []):
-            declared.update(need["verb"] for need in tool.get("needs", []))
+        for service_field in ("session", "mcp"):
+            for tool in manifest.get(service_field, {}).get("tools", []):
+                declared.update(need["verb"] for need in tool.get("needs", []))
     assert wire == kernel
     assert declared <= wire
 

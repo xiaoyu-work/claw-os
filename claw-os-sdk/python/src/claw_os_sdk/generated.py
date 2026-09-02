@@ -134,11 +134,12 @@ class _ManifestRequired(TypedDict):
 class Manifest(_ManifestRequired, total=False):
     """App manifest (app.json).
 
-    The manifest every app under COS_APPS_DIR must provide. The kernel parses
-    and validates this (core/src/caps/manifest.rs) to derive the app's
-    operations, optional MCP session tools, optional desktop GUI surface,
-    capability needs, and AI policy.
+    The manifest every app under COS_APPS_DIR must provide. MCP-first Apps
+    declare one versioned service with tools, lifecycle, caller restrictions,
+    capability needs, and optional AI and desktop surfaces. Legacy operations
+    and session remain during migration.
     """
+    schema_version: int
     summary: "Localizedtext"
     icon: str
     runtime: str
@@ -146,6 +147,7 @@ class Manifest(_ManifestRequired, total=False):
     operations: Dict[str, Any]
     ai: "Aipolicy"
     session: "Session"
+    mcp: "Session"
     desktop: "Desktop"
     dependencies: Dict[str, Any]
 
@@ -293,7 +295,19 @@ class Session(TypedDict, total=False):
     """
     entry: str
     transport: str
+    lifecycle: str
+    access: "Mcpaccess"
     tools: List["Sessiontool"]
+
+class Mcpaccess(TypedDict, total=False):
+    """mcpAccess.
+
+    Caller restrictions for an MCP App service. Callers still require exact
+    invoke authority.
+    """
+    system_agent: bool
+    apps: List[str]
+    external_agents: bool
 
 class _SessiontoolRequired(TypedDict):
     name: str

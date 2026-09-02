@@ -1154,6 +1154,138 @@ fn session_block_parses_with_minimal_tool() {
 }
 
 #[test]
+fn mcp_first_service_parses_lifecycle_access_and_tools() {
+    let manifest = parse(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {
+                "entry": "server.py",
+                "lifecycle": "always-on",
+                "access": {
+                  "system_agent": true,
+                  "apps": ["crm"],
+                  "external_agents": false
+                },
+                "tools": [
+                  {
+                    "name": "email.search",
+                    "summary": "Search mail.",
+                    "args": [{"name":"query","kind":"text","required":true}]
+                  }
+                ]
+              }
+            }"#,
+    );
+    assert_eq!(manifest.schema_version, Some(2));
+    let service = manifest.mcp_service().expect("MCP service");
+    assert_eq!(service.entry.as_deref(), Some("server.py"));
+    assert_eq!(service.lifecycle, McpLifecycle::AlwaysOn);
+    assert!(service.access.system_agent);
+    assert_eq!(service.access.apps, vec!["crm"]);
+    assert!(!service.access.external_agents);
+    assert_eq!(service.tools[0].name, "email.search");
+}
+
+#[test]
+fn mcp_first_service_uses_restrictive_caller_defaults() {
+    let manifest = parse(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {"tools":[]}
+            }"#,
+    );
+    let service = manifest.mcp_service().expect("MCP service");
+    assert_eq!(service.lifecycle, McpLifecycle::Lazy);
+    assert!(service.access.system_agent);
+    assert!(service.access.apps.is_empty());
+    assert!(!service.access.external_agents);
+}
+
+#[test]
+fn mcp_first_service_requires_schema_version_two() {
+    let error = Manifest::from_json(
+        r#"{
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {"tools":[]}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(error, ManifestError::McpSchemaVersion));
+}
+
+#[test]
+fn mcp_first_service_rejects_legacy_session_and_invalid_callers() {
+    let conflict = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "session": {"tools":[]},
+              "mcp": {"tools":[]}
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(conflict, ManifestError::McpLegacySessionConflict));
+
+    let invalid = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {
+                "access": {"apps":["Bad/App"]},
+                "tools":[]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(invalid, ManifestError::McpAccessInvalidApp { .. }));
+
+    let duplicate = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {
+                "access": {"apps":["crm", "crm"]},
+                "tools":[]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(
+        duplicate,
+        ManifestError::McpAccessDuplicateApp { .. }
+    ));
+
+    let unknown_field = Manifest::from_json(
+        r#"{
+              "schema_version": 2,
+              "id": "email",
+              "version": "1.0.0",
+              "name": "Email",
+              "mcp": {
+                "access": {"systemAgent":false},
+                "tools":[]
+              }
+            }"#,
+    )
+    .unwrap_err();
+    assert!(matches!(unknown_field, ManifestError::Json(_)));
+}
+
+#[test]
 fn session_tool_default_entry_per_runtime() {
     assert_eq!(Runtime::Python.default_session_entry(), "server.py");
     assert_eq!(Runtime::Node.default_session_entry(), "server.js");
