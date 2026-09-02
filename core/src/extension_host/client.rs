@@ -295,7 +295,32 @@ impl ExtensionHostClient {
                 &result,
             );
         }
+
         result.map_err(|error| error.message)
+    }
+
+    pub(crate) async fn warm_app(&self, app_id: String, tool: String) -> Result<usize, String> {
+        self.request(HostAction::AppWarm { app_id, tool })
+            .await
+            .and_then(|result| match result {
+                HostResult::AppOpened { tool_count } => Ok(tool_count),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong App-warm result",
+                )),
+            })
+            .map_err(|error| error.message)
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), String> {
+        self.request_with_timeout(HostAction::Shutdown, Duration::from_secs(5), false)
+            .await
+            .and_then(|result| match result {
+                HostResult::Shutdown => Ok(()),
+                _ => Err(ClientFault::protocol(
+                    "extension host returned the wrong shutdown result",
+                )),
+            })
+            .map_err(|error| error.message)
     }
 
     pub async fn call_app(

@@ -185,6 +185,7 @@ pub(crate) struct AgentGatewayAuthority {
     pub session_id: String,
     pub worker_pid: u32,
     pub worker_start_time_ticks: Option<u64>,
+    pub lease_deadline_ms: u64,
     pub capability_generation: String,
     pub caps: CapSet,
 }

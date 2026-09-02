@@ -26,6 +26,7 @@ fn new_lease() -> Lease {
         task_id: "task-a".to_string(),
         session_id: Some("session-a".to_string()),
         owner_uid: 1000,
+        owner_home: std::path::PathBuf::from("/home/test"),
         execution_gid: 1000,
         client: crate::session::SessionClient::new(
             crate::session::SessionSource::BrokerTask,
@@ -34,6 +35,7 @@ fn new_lease() -> Lease {
         ),
         presence: None,
         capability_generation: "caps-a".to_string(),
+        caps: crate::caps::CapSet::new(),
         prepare_nonce: "0123456789abcdef0123456789abcdef".to_string(),
         commit_nonce: "fedcba9876543210fedcba9876543210".to_string(),
         extension: None,
@@ -183,6 +185,48 @@ fn approval_frames_require_a_nonzero_correlation_and_valid_nonce() {
         exchange: protocol::ApprovalExchange::new(ask),
     };
     assert!(accept(&signer, std::process::id(), &mut lease, &valid, true,).is_ok());
+}
+
+#[test]
+fn app_gateway_frames_are_task_bound_and_validated_before_dispatch() {
+    let mut lease = new_lease();
+    let (signer, _hello) = signer_and_hello(&lease);
+    let request = protocol::AppGatewayRequest {
+        app_id: "email".to_string(),
+        tool: "email.search".to_string(),
+        arguments: serde_json::json!({"query": "Acme"}),
+        timeout_ms: 30_000,
+    };
+    let valid = WorkerFrame::AppGateway {
+        task_id: lease.task_id.clone(),
+        correlation_id: 1,
+        exchange: protocol::AppGatewayExchange::new(request.clone()),
+    };
+    assert!(accept(&signer, std::process::id(), &mut lease, &valid, true).is_ok());
+
+    let zero = WorkerFrame::AppGateway {
+        task_id: lease.task_id.clone(),
+        correlation_id: 0,
+        exchange: protocol::AppGatewayExchange::new(request.clone()),
+    };
+    assert!(accept(&signer, std::process::id(), &mut lease, &zero, true)
+        .unwrap_err()
+        .contains("correlation"));
+
+    let other_task = WorkerFrame::AppGateway {
+        task_id: "task-b".to_string(),
+        correlation_id: 2,
+        exchange: protocol::AppGatewayExchange::new(request),
+    };
+    assert!(accept(
+        &signer,
+        std::process::id(),
+        &mut lease,
+        &other_task,
+        true,
+    )
+    .unwrap_err()
+    .contains("different task"));
 }
 
 #[test]

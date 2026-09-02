@@ -3,7 +3,8 @@
 //! The channel is a private `socketpair(2)` handed to the child as fd
 //! 3 and carries newline-delimited JSON. It exposes nothing but the
 //! lifecycle of the single task the worker was spawned for: there is no
-//! admin, App-session, scheduler or permission-decision route here, and
+//! admin, App-session, scheduler or permission-decision route here. The one
+//! App Gateway route carries only target work to `clawd`, and
 //! every payload is a typed, already policy-projected structure rather
 //! than free-form JSON, so a compromised worker cannot widen what it
 //! reports.
@@ -17,6 +18,7 @@ use serde_json::{json, Value};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt};
 
 use crate::agent::llm::{ProviderFallbackState, StreamEvent};
+use crate::agent::tools::mcp::protocol::CallToolResult;
 use crate::agent::runtime::evidence::EvidenceReport;
 use crate::agent::service::FinishOutcome;
 use crate::audit_policy::{TextDigest, ToolFacts};
@@ -28,7 +30,7 @@ use super::grant::SignedGrant;
 /// Bumped whenever a frame changes shape. `clawd` refuses a worker that
 /// reports a different version, and the worker refuses an assignment
 /// that carries one.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// Descriptor the broker dups the worker end of the channel onto.
 pub const CHANNEL_FD: i32 = 3;
@@ -61,6 +63,9 @@ pub const ROUTE_RESULT: &str = "result";
 /// plus an optional digest of validated operation inputs — never a
 /// session, an owner, a decision, raw arguments, or a capability set.
 pub const ROUTE_APPROVAL: &str = "approval";
+pub const ROUTE_APP_GATEWAY: &str = "app_gateway";
+pub const MAX_APP_GATEWAY_TIMEOUT_MS: u64 =
+    crate::extension_host::protocol::MAX_REQUEST_TIMEOUT_MS;
 
 /// The complete route surface a worker grant may carry. Nothing else
 /// exists on this channel, so a leaked descriptor is still only an
@@ -74,6 +79,7 @@ pub const WORKER_ROUTES: &[&str] = &[
     ROUTE_HEARTBEAT,
     ROUTE_RESULT,
     ROUTE_APPROVAL,
+    ROUTE_APP_GATEWAY,
 ];
 
 /// Hard ceiling on permission mediation for one task, so a looping
@@ -113,6 +119,75 @@ pub enum BrokerFrame {
         exchange: ApprovalExchange,
         reply: ApprovalReply,
     },
+    AppGatewayReply {
+        correlation_id: u64,
+        exchange: AppGatewayExchange,
+        reply: AppGatewayReply,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppGatewayRequest {
+    pub app_id: String,
+    pub tool: String,
+    #[serde(default)]
+    pub arguments: Value,
+    pub timeout_ms: u64,
+}
+
+impl AppGatewayRequest {
+    pub fn validate(&self) -> Result<(), String> {
+        crate::agent::tools::app_gateway::invoke_target(&self.app_id, &self.tool)?;
+        if !self.arguments.is_object()
+            || self.timeout_ms == 0
+            || self.timeout_ms > MAX_APP_GATEWAY_TIMEOUT_MS
+        {
+            return Err("agentd App Gateway request is invalid".to_string());
+        }
+        let size = serde_json::to_vec(&self.arguments)
+            .map_err(|error| format!("encode App Gateway arguments: {error}"))?
+            .len();
+        if size > MAX_FRAME_BYTES / 2 {
+            return Err("agentd App Gateway arguments exceed their limit".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AppGatewayExchange {
+    pub nonce: String,
+    pub request: AppGatewayRequest,
+}
+
+impl AppGatewayExchange {
+    pub fn new(request: AppGatewayRequest) -> Self {
+        Self {
+            nonce: uuid::Uuid::new_v4().simple().to_string(),
+            request,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        if self.nonce.len() != 32
+            || !self
+                .nonce
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("agentd App Gateway exchange nonce is invalid".to_string());
+        }
+        self.request.validate()
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum AppGatewayReply {
+    Completed { value: CallToolResult },
+    Failed { message: String },
 }
 
 /// What a worker may say when a capability check fails: the exact verb,
@@ -299,6 +374,11 @@ pub enum WorkerFrame {
         correlation_id: u64,
         exchange: ApprovalExchange,
     },
+    AppGateway {
+        task_id: String,
+        correlation_id: u64,
+        exchange: AppGatewayExchange,
+    },
     Result {
         task_id: String,
         outcome: Box<WorkerOutcome>,
@@ -315,6 +395,7 @@ impl WorkerFrame {
             WorkerFrame::Audit { .. } => ROUTE_AUDIT,
             WorkerFrame::Heartbeat { .. } => ROUTE_HEARTBEAT,
             WorkerFrame::Approval { .. } => ROUTE_APPROVAL,
+            WorkerFrame::AppGateway { .. } => ROUTE_APP_GATEWAY,
             WorkerFrame::Result { .. } => ROUTE_RESULT,
         }
     }
@@ -330,6 +411,7 @@ impl WorkerFrame {
             | WorkerFrame::Audit { task_id, .. }
             | WorkerFrame::Heartbeat { task_id }
             | WorkerFrame::Approval { task_id, .. }
+            | WorkerFrame::AppGateway { task_id, .. }
             | WorkerFrame::Result { task_id, .. } => Some(task_id.as_str()),
         }
     }

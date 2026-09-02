@@ -48,9 +48,9 @@ use crate::caps::approval_gateway::{ApprovalGateway, PendingApproval};
 use crate::caps::{ConsentContext, Scope, Verb};
 
 use super::protocol::{
-    self, ApprovalAsk, ApprovalExchange, ApprovalReply, Assignment, BrokerFrame, ExecutionCommit,
-    FrameReader, ProgressRecord, RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome,
-    WorkerPrepared,
+    self, AppGatewayExchange, AppGatewayReply, AppGatewayRequest, ApprovalAsk, ApprovalExchange,
+    ApprovalReply, Assignment, BrokerFrame, ExecutionCommit, FrameReader, ProgressRecord,
+    RuntimeAuditRecord, WorkerFrame, WorkerHello, WorkerOutcome, WorkerPrepared,
 };
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -104,6 +104,10 @@ fn run() -> Result<(), String> {
         consent_context,
         state: io.state.clone(),
     }));
+    super::app_gateway::install(Arc::new(ChannelAppGateway {
+        task_id: task_id.clone(),
+        state: io.state.clone(),
+    }))?;
 
     // Routed tool paths use `block_in_place`, which needs the
     // multi-thread scheduler — the same requirement the in-process
@@ -284,6 +288,7 @@ struct ChannelState {
     tx: UnboundedSender<WorkerFrame>,
     cancelled: Arc<AtomicBool>,
     waiters: Mutex<HashMap<u64, ApprovalWaiter>>,
+    app_waiters: Mutex<HashMap<u64, AppGatewayWaiter>>,
     next_correlation: AtomicU64,
     asks_used: AtomicU32,
 }
@@ -294,8 +299,18 @@ struct ApprovalWaiter {
     reply: SyncSender<ApprovalReply>,
 }
 
+#[derive(Debug)]
+struct AppGatewayWaiter {
+    exchange: AppGatewayExchange,
+    reply: tokio::sync::oneshot::Sender<AppGatewayReply>,
+}
+
 impl ChannelState {
-    fn register(&self, correlation_id: u64, exchange: ApprovalExchange) -> Receiver<ApprovalReply> {
+    fn register(
+        &self,
+        correlation_id: u64,
+        exchange: ApprovalExchange,
+    ) -> Receiver<ApprovalReply> {
         let (tx, rx) = sync_channel(1);
         if let Ok(mut waiters) = self.waiters.lock() {
             waiters.insert(
@@ -315,7 +330,12 @@ impl ChannelState {
         }
     }
 
-    fn deliver(&self, correlation_id: u64, exchange: &ApprovalExchange, reply: ApprovalReply) {
+    fn deliver(
+        &self,
+        correlation_id: u64,
+        exchange: &ApprovalExchange,
+        reply: ApprovalReply,
+    ) {
         let waiter = self.waiters.lock().ok().and_then(|mut waiters| {
             let matches = waiters
                 .get(&correlation_id)
@@ -324,6 +344,47 @@ impl ChannelState {
         });
         if let Some(waiter) = waiter {
             let _ = waiter.reply.try_send(reply);
+        }
+    }
+
+    fn register_app(
+        &self,
+        correlation_id: u64,
+        exchange: AppGatewayExchange,
+    ) -> tokio::sync::oneshot::Receiver<AppGatewayReply> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        if let Ok(mut waiters) = self.app_waiters.lock() {
+            waiters.insert(
+                correlation_id,
+                AppGatewayWaiter {
+                    exchange,
+                    reply: tx,
+                },
+            );
+        }
+        rx
+    }
+
+    fn forget_app(&self, correlation_id: u64) {
+        if let Ok(mut waiters) = self.app_waiters.lock() {
+            waiters.remove(&correlation_id);
+        }
+    }
+
+    fn deliver_app(
+        &self,
+        correlation_id: u64,
+        exchange: &AppGatewayExchange,
+        reply: AppGatewayReply,
+    ) {
+        let waiter = self.app_waiters.lock().ok().and_then(|mut waiters| {
+            let matches = waiters
+                .get(&correlation_id)
+                .is_some_and(|waiter| &waiter.exchange == exchange);
+            matches.then(|| waiters.remove(&correlation_id)).flatten()
+        });
+        if let Some(waiter) = waiter {
+            let _ = waiter.reply.send(reply);
         }
     }
 
@@ -337,6 +398,16 @@ impl ChannelState {
             .unwrap_or_default();
         for waiter in drained {
             let _ = waiter.try_send(ApprovalReply::Refused {
+                message: message.to_string(),
+            });
+        }
+        let app_waiters: Vec<tokio::sync::oneshot::Sender<AppGatewayReply>> = self
+            .app_waiters
+            .lock()
+            .map(|mut waiters| waiters.drain().map(|(_, waiter)| waiter.reply).collect())
+            .unwrap_or_default();
+        for waiter in app_waiters {
+            let _ = waiter.send(AppGatewayReply::Failed {
                 message: message.to_string(),
             });
         }
@@ -359,6 +430,7 @@ impl ChannelIo {
             tx,
             cancelled: Arc::new(AtomicBool::new(false)),
             waiters: Mutex::new(HashMap::new()),
+            app_waiters: Mutex::new(HashMap::new()),
             next_correlation: AtomicU64::new(1),
             asks_used: AtomicU32::new(0),
         });
@@ -704,6 +776,13 @@ where
             })) => {
                 state.deliver(correlation_id, &exchange, reply);
             }
+            Ok(Some(BrokerFrame::AppGatewayReply {
+                correlation_id,
+                exchange,
+                reply,
+            })) => {
+                state.deliver_app(correlation_id, &exchange, reply);
+            }
             Ok(Some(BrokerFrame::Cancel { task_id: target })) if target == task_id => break,
             Ok(Some(BrokerFrame::Shutdown)) => break,
             Ok(Some(_)) => continue,
@@ -718,6 +797,48 @@ where
     loop {
         crate::agent::runtime::interrupt::signal(&task_id);
         tokio::time::sleep(INTERRUPT_RETRY).await;
+    }
+}
+
+struct ChannelAppGateway {
+    task_id: String,
+    state: Arc<ChannelState>,
+}
+
+#[async_trait::async_trait]
+impl super::app_gateway::AppGateway for ChannelAppGateway {
+    async fn call(
+        &self,
+        request: AppGatewayRequest,
+    ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+        request.validate()?;
+        let timeout = Duration::from_millis(request.timeout_ms);
+        let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
+        let exchange = AppGatewayExchange::new(request);
+        exchange.validate()?;
+        let waiter = self.state.register_app(correlation_id, exchange.clone());
+        if self
+            .state
+            .tx
+            .send(WorkerFrame::AppGateway {
+                task_id: self.task_id.clone(),
+                correlation_id,
+                exchange,
+            })
+            .is_err()
+        {
+            self.state.forget_app(correlation_id);
+            return Err("agent worker lost its App Gateway channel".to_string());
+        }
+        match tokio::time::timeout(timeout, waiter).await {
+            Ok(Ok(AppGatewayReply::Completed { value })) => Ok(value),
+            Ok(Ok(AppGatewayReply::Failed { message })) => Err(message),
+            Ok(Err(_)) => Err("clawd closed the App Gateway reply".to_string()),
+            Err(_) => {
+                self.state.forget_app(correlation_id);
+                Err("timed out waiting for the daemon App Gateway".to_string())
+            }
+        }
     }
 }
 
@@ -751,7 +872,9 @@ impl ChannelApprovalGateway {
         }
         let correlation_id = self.state.next_correlation.fetch_add(1, Ordering::SeqCst);
         let exchange = ApprovalExchange::new(ask);
-        let waiter = self.state.register(correlation_id, exchange.clone());
+        let waiter = self
+            .state
+            .register(correlation_id, exchange.clone());
         if self
             .state
             .tx

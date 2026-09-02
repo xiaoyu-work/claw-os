@@ -402,6 +402,17 @@ async fn dispatch(action: HostAction, state: Arc<HostState>) -> Result<HostResul
             .await?;
             Ok(HostResult::AppOpened { tool_count })
         }
+        HostAction::AppWarm { app_id, tool } => {
+            validate_name(&app_id, "App id")?;
+            validate_text(&tool, "App tool", 256)?;
+            let tool_count = crate::agent::tools::cos_apps_session::host_warm_session(
+                &app_id,
+                &tool,
+                &state.isolation,
+            )
+            .await?;
+            Ok(HostResult::AppOpened { tool_count })
+        }
         HostAction::AppCall {
             app_id,
             tool,

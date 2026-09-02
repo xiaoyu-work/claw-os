@@ -3,11 +3,10 @@
 ## Purpose
 
 `extension_host/` keeps dynamic App and MCP code outside both privileged
-`clawd` and the model/tool worker. `clawd` leases one package-reserved locked
-system account per active task and spawns `claw-extension-host` with that uid plus the dedicated
-`cos-extension` primary gid; `claw-agentd`
-uses a separate task-bound control socket to attach, call, cancel, and detach
-extensions.
+`clawd` and the model/tool worker. `clawd` leases a package-reserved locked account and spawns
+`claw-extension-host` with that uid plus the dedicated `cos-extension` primary
+gid. Legacy extensions use a task-controlled Host; MCP-first App services use
+one daemon-controlled Host per owner and separate isolated children per App.
 
 ## Responsibilities
 
@@ -16,8 +15,8 @@ extensions.
   descriptor and environment allowlists, its own session/process group, finite
   rlimits, mandatory verified cgroup-v2 containment, and optional IPC/UTS
   namespaces.
-- Bind the worker control channel to owner, task, session, worker pid/start
-  time, host pid/start time, nonce, protocol version, and lease deadline.
+- Bind control to one explicit mode: exact task worker or exact root daemon
+  pid/start time. A binding cannot cross modes or owners.
 - Expose a second broker-owned Unix socket only to the host process and its
   descendants. The host may use only App/MCP lifecycle routes; descendants may
   use only session/peer-session provider routes for their nearest registered
@@ -32,12 +31,9 @@ extensions.
 - Return only sanitized MCP descriptors and require every hosted MCP call to
   carry the exact canonical descriptor-set digest held by that host session.
   A relist mismatch blocks the call rather than substituting a new schema.
-- Rebind every MCP-first App call to the signed task owner/session/worker
-  identity, exact App/tool target, capability generation, deadline, and root
-  call lineage before forwarding Gateway metadata to the child.
-- Hold target-capability approval waits inside the authenticated host and
-  retry the same transient-scope transaction without returning target
-  authority or credentials to the worker.
+- Require every persistent MCP-first call to present a one-use daemon grant
+  bound to Host pid/start time, owner, task/session, exact App/tool/effective
+  arguments, call id, capability generation, and deadline.
 - Tear down the host cgroup/process tree and every child session on task
   completion, cancellation, timeout, crash, or worker loss.
 - Treat descriptors and results returned by hosted code as untrusted.
@@ -56,21 +52,22 @@ extensions.
 | `client.rs` | `claw-agentd` client used by App and MCP registry adapters |
 | `host.rs` | Host process, control admission, App/MCP lifecycle and cancellation |
 | `broker.rs` | Per-task broker proxy socket, SCM credential verification, route/session allowlists |
+| `../clawd/app_host.rs` | Per-owner persistent Host manager and one-use Gateway dispatch |
 | `../bin/claw-extension-host.rs` | Installed host executable |
 
 ## Authority and Data Flow
 
 ```text
 clawd supervisor
-  -> spawn claw-agentd
-  -> bind private extension broker socket
-  -> lease unique extension uid and spawn host + descendants under it
-  -> register exact host pid/start-time as an extension-host session
-  -> sign host pid/start-time + socket paths + nonce into the worker grant
+  -> spawn claw-agentd and sign its task/channel lease
+  -> start or reuse one daemon-controlled owner Host
+  -> register exact Host pid/start-time and private broker
 
-claw-agentd registry call
-  -> versioned control request to exact host pid
-  -> verify Gateway caller context against the signed ExtensionBinding
+claw-agentd MCP-first call
+  -> typed private-channel request with App/tool/arguments only
+  -> clawd derives caller context and target authority from the task lease
+  -> one-use Host-bound dispatch grant
+  -> versioned control request from exact clawd pid
   -> host starts/calls App or MCP child
   -> child policy check reads its root-maintained session row
   -> child privileged request uses COS_EXTENSION_BROKER_SOCKET

@@ -20,9 +20,9 @@
 //!   `PR_SET_NO_NEW_PRIVS`, applies a `0077` umask, replaces the
 //!   environment with an allowlist and closes every inherited
 //!   descriptor except the job channel.
-//! * **`claw-extension-host`** is also spawned by [`supervisor`] as the
-//!   task owner. It owns dynamic processes and exposes only a worker-bound
-//!   control socket plus a broker-owned, route-filtered proxy.
+//! * **`claw-extension-host`** runs dynamic processes under a reserved uid.
+//!   Legacy instances are worker-bound; MCP-first Apps use a daemon-controlled
+//!   per-owner instance managed by [`crate::clawd::app_host`].
 //!
 //! ## Authority
 //!
@@ -37,8 +37,8 @@
 //!
 //! The channel itself is a private `socketpair(2)` created before the
 //! fork and handed to the child as fd 3. It carries the job lifecycle
-//! routes in [`protocol::WORKER_ROUTES`] plus one narrow permission
-//! mediation route — there is no admin, App-session, scheduler or
+//! routes in [`protocol::WORKER_ROUTES`] plus narrow permission and MCP App
+//! Gateway routes — there is no admin, App-session, scheduler or
 //! permission-decision route on it, and `/run/cos/clawd.sock` stays
 //! `0660 root:sudo` with the worker's supplementary groups cleared, so
 //! the worker cannot reach the broker socket at all. Even a leaked fd
@@ -83,6 +83,7 @@
 //! [`spawn::ROOT_OWNER_REFUSAL`].
 
 pub mod grant;
+pub mod app_gateway;
 pub mod guard;
 pub mod protocol;
 #[cfg(unix)]

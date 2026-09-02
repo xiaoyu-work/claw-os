@@ -15,7 +15,7 @@
 //! or not — as fatal.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -49,6 +49,7 @@ const CANCEL_GRACE: Duration = Duration::from_secs(15);
 /// image cannot turn the queue into a fork bomb.
 const SPAWN_BACKOFF_MAX: Duration = Duration::from_secs(60);
 const SPAWN_BACKOFF_BASE: Duration = Duration::from_secs(1);
+const MAX_APP_GATEWAY_CALLS: usize = 8;
 
 #[derive(Debug, Clone)]
 pub struct SupervisorConfig {
@@ -109,11 +110,7 @@ pub struct BrokerContext {
     pub admission: Arc<Admission>,
     pub primary_socket: std::path::PathBuf,
     pub isolated_execution_gid: u32,
-    extension_containment:
-        Arc<OnceLock<Result<Arc<crate::extension_host::spawn::ContainmentRoot>, Arc<str>>>>,
-    extension_identities: Arc<
-        OnceLock<Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, Arc<str>>>,
-    >,
+    app_hosts: Arc<crate::clawd::app_host::PersistentAppHostManager>,
 }
 
 impl BrokerContext {
@@ -122,27 +119,26 @@ impl BrokerContext {
         admission: Arc<Admission>,
         primary_socket: std::path::PathBuf,
     ) -> Result<Self, String> {
+        let isolated_execution_gid = spawn::resolve_isolated_execution_gid()?;
+        let app_hosts = Arc::new(crate::clawd::app_host::PersistentAppHostManager::new(
+            state.clone(),
+            admission.clone(),
+            primary_socket.clone(),
+            isolated_execution_gid,
+        ));
         Ok(Self {
             state,
             admission,
             primary_socket,
-            isolated_execution_gid: spawn::resolve_isolated_execution_gid()?,
-            extension_containment: Arc::new(OnceLock::new()),
-            extension_identities: Arc::new(OnceLock::new()),
+            isolated_execution_gid,
+            app_hosts,
         })
     }
 
     fn extension_containment(
         &self,
     ) -> Result<Arc<crate::extension_host::spawn::ContainmentRoot>, String> {
-        match self.extension_containment.get_or_init(|| {
-            crate::extension_host::spawn::ContainmentRoot::establish()
-                .map(Arc::new)
-                .map_err(Arc::<str>::from)
-        }) {
-            Ok(root) => Ok(root.clone()),
-            Err(error) => Err(error.to_string()),
-        }
+        self.app_hosts.containment()
     }
 
     fn prime_extension_containment(&self) {
@@ -157,15 +153,7 @@ impl BrokerContext {
     fn extension_identity_pool(
         &self,
     ) -> Result<Arc<crate::extension_host::identity::ExtensionIdentityPool>, String> {
-        match self.extension_identities.get_or_init(|| {
-            crate::extension_host::identity::ExtensionIdentityPool::load(
-                self.isolated_execution_gid,
-            )
-            .map_err(Arc::<str>::from)
-        }) {
-            Ok(pool) => Ok(pool.clone()),
-            Err(error) => Err(error.to_string()),
-        }
+        self.app_hosts.identity_pool()
     }
 
     fn prime_extension_identities(&self) {
@@ -183,8 +171,12 @@ impl BrokerContext {
         self,
         pool: Arc<crate::extension_host::identity::ExtensionIdentityPool>,
     ) -> Self {
-        let _ = self.extension_identities.set(Ok(pool));
+        self.app_hosts.install_test_identity_pool(pool);
         self
+    }
+
+    fn persistent_app_hosts(&self) -> Arc<crate::clawd::app_host::PersistentAppHostManager> {
+        self.app_hosts.clone()
     }
 }
 
@@ -326,7 +318,7 @@ pub async fn run_with_store_and_broker(
                 throttle,
                 shutdown,
                 broker_pid,
-                broker,
+                broker.clone(),
                 job,
                 presence,
             )
@@ -336,6 +328,7 @@ pub async fn run_with_store_and_broker(
             }
         });
     }
+    broker.persistent_app_hosts().shutdown_all().await;
     Ok(())
 }
 
@@ -393,10 +386,12 @@ struct Lease {
     task_id: String,
     session_id: Option<String>,
     owner_uid: u32,
+    owner_home: std::path::PathBuf,
     execution_gid: u32,
     client: crate::session::SessionClient,
     presence: Option<crate::session::SessionPresence>,
     capability_generation: String,
+    caps: crate::caps::CapSet,
     prepare_nonce: String,
     commit_nonce: String,
     extension: Option<crate::extension_host::protocol::ExtensionBinding>,
@@ -568,7 +563,7 @@ async fn supervise(
         start_time_ticks,
         config.lease,
         &capability_generation,
-        broker,
+        broker.clone(),
     )
     .await
     {
@@ -597,10 +592,15 @@ async fn supervise(
         task_id: job.id.clone(),
         session_id: job.session_id.clone(),
         owner_uid,
+        owner_home: identity.home.clone(),
         execution_gid: isolation.execution_gid(),
         client: effective_client,
         presence,
         capability_generation,
+        caps: session
+            .as_ref()
+            .and_then(|session| session.caps.clone())
+            .unwrap_or_default(),
         prepare_nonce: uuid::Uuid::new_v4().simple().to_string(),
         commit_nonce: uuid::Uuid::new_v4().simple().to_string(),
         extension: Some(extension.host.binding.clone()),
@@ -627,6 +627,7 @@ async fn supervise(
         &mut extension.host.child,
         &extension.host.cgroup,
         extension.lease.clone(),
+        broker.persistent_app_hosts(),
     )
     .await;
 
@@ -1006,6 +1007,7 @@ async fn pump(
     extension_child: &mut tokio::process::Child,
     extension_cgroup: &crate::extension_host::spawn::ResourceGroup,
     extension_lease: Arc<crate::extension_host::broker::ExtensionLease>,
+    app_hosts: Arc<crate::clawd::app_host::PersistentAppHostManager>,
 ) -> TaskOutcome {
     // Authority on this channel comes from the grant, not from the
     // socket: `socketpair` is created before the fork, so `SO_PEERCRED`
@@ -1142,6 +1144,8 @@ async fn pump(
     let mut cancelled_at: Option<Instant> = None;
     let mut approvals_used: u32 = 0;
     let mut last_progress = Instant::now();
+    let (app_reply_tx, mut app_reply_rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut app_calls = tokio::task::JoinSet::new();
     let mut ticker = tokio::time::interval(PUMP_TICK);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
@@ -1209,6 +1213,68 @@ async fn pump(
                             )
                             .await;
                         }
+                        WorkerFrame::AppGateway {
+                            correlation_id,
+                            exchange,
+                            ..
+                        } => {
+                            if app_calls.len() >= MAX_APP_GATEWAY_CALLS {
+                                let _ = send(
+                                    &mut writer,
+                                    &BrokerFrame::AppGatewayReply {
+                                        correlation_id,
+                                        exchange,
+                                        reply: protocol::AppGatewayReply::Failed {
+                                            message: "App Gateway concurrency limit reached"
+                                                .to_string(),
+                                        },
+                                    },
+                                )
+                                .await;
+                                continue;
+                            }
+                            let Some(session_id) = lease.session_id.clone() else {
+                                let _ = send(
+                                    &mut writer,
+                                    &BrokerFrame::AppGatewayReply {
+                                        correlation_id,
+                                        exchange,
+                                        reply: protocol::AppGatewayReply::Failed {
+                                            message: "agent task has no authenticated session"
+                                                .to_string(),
+                                        },
+                                    },
+                                )
+                                .await;
+                                continue;
+                            };
+                            let authority = crate::clawd::app_sessions::AgentGatewayAuthority {
+                                owner_uid: lease.owner_uid,
+                                owner_home: lease.owner_home.clone(),
+                                task_id: lease.task_id.clone(),
+                                session_id,
+                                worker_pid: lease.worker_pid,
+                                worker_start_time_ticks: lease.worker_start_time_ticks,
+                                lease_deadline_ms: unix_deadline_ms(lease.deadline),
+                                capability_generation: lease.capability_generation.clone(),
+                                caps: lease.caps.clone(),
+                            };
+                            let manager = app_hosts.clone();
+                            let replies = app_reply_tx.clone();
+                            app_calls.spawn(async move {
+                                let result = manager.call(&authority, exchange.request.clone()).await;
+                                let reply = match result {
+                                    Ok(value) => protocol::AppGatewayReply::Completed { value },
+                                    Err(message) => protocol::AppGatewayReply::Failed {
+                                        message: crate::extension_host::protocol::clamp_text(
+                                            &message,
+                                            2048,
+                                        ),
+                                    },
+                                };
+                                let _ = replies.send((correlation_id, exchange, reply));
+                            });
+                        }
                         WorkerFrame::Heartbeat { .. } => {
                             lease.deadline = Instant::now() + config.lease;
                             lease.approval_expires_at = approval_deadline(config.lease);
@@ -1228,6 +1294,18 @@ async fn pump(
                 Err(error) => {
                     return TaskOutcome::Indeterminate(format!("agent worker protocol fault: {error}"));
                 }
+            },
+            Some((correlation_id, exchange, reply)) = app_reply_rx.recv() => {
+                let _ = send(
+                    &mut writer,
+                    &BrokerFrame::AppGatewayReply {
+                        correlation_id,
+                        exchange,
+                        reply,
+                    },
+                )
+                .await;
+                while app_calls.try_join_next().is_some() {}
             },
             status = child.wait() => {
                 let detail = match status {
@@ -1354,6 +1432,11 @@ fn approval_deadline(ttl: Duration) -> u64 {
         .saturating_add(ttl.as_secs())
 }
 
+fn unix_deadline_ms(deadline: Instant) -> u64 {
+    super::grant::now_ms()
+        .saturating_add(deadline.saturating_duration_since(Instant::now()).as_millis() as u64)
+}
+
 fn grant_expectation(broker_pid: u32, lease: &Lease, route: &str) -> GrantExpectation {
     GrantExpectation {
         broker_pid,
@@ -1449,6 +1532,17 @@ fn accept(
         if !exchange.is_valid() {
             return Err("approval exchange nonce is invalid".to_string());
         }
+    }
+    if let WorkerFrame::AppGateway {
+        correlation_id,
+        exchange,
+        ..
+    } = frame
+    {
+        if *correlation_id == 0 {
+            return Err("App Gateway correlation id is invalid".to_string());
+        }
+        exchange.validate()?;
     }
     if Instant::now() > lease.deadline {
         return Err("worker lease has expired".to_string());

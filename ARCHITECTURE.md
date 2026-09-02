@@ -42,7 +42,7 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
-| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
+| `claw-extension-host` | Isolated-UID dynamic-code process, task-controlled for legacy extensions or daemon-controlled per owner for persistent MCP Apps | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/`, `core/src/clawd/app_host.rs` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -386,9 +386,11 @@ Agent-started descendants therefore cannot forge worker frames or collide with
 the worker's approval traffic.
 
 Dynamic App and MCP code is not loaded into either `clawd` or `claw-agentd`.
-For every claimed task, the supervisor creates a private runtime directory,
-binds a second broker socket there, and spawns `claw-extension-host` as the task
-owner's authority but under a distinct, exclusively leased host-kernel uid.
+Legacy extensions retain a task-controlled `claw-extension-host`. MCP-first
+Apps use one daemon-controlled Host per authenticated owner so App services can
+survive individual Agent tasks; each App remains a separately isolated child.
+Both modes use a private runtime directory, route-filtered broker socket, and a
+distinct, exclusively leased host-kernel uid.
 The host repeats the worker's group drop, `NoNewPrivs`, `0077` umask,
 environment/descriptor allowlists, separate session/process group, finite
 rlimits, and non-dumpable process state. A private mount namespace is
@@ -432,14 +434,14 @@ have been verified. No privileged `chown` or `chmod` follows a pathname below
 a task-writable directory.
 
 Host bootstrap authority crosses the root-to-extension boundary only through a
-private inherited descriptor carrying a typed versioned record. The worker
-grant signs the resulting exact binding, including owner/leased uid, isolated
-gid, capability generation, socket identities, and device/inode/mode-pinned
-approved roots. Child launch APIs require that typed authority; they never
-recover it from environment variables, effective ids, NSS, or fallback path
-resolution. Approved snapshots accept only root or the exact task owner and
-always reject reserved extension uid and execution-gid objects. Arbitrary
-`/srv` paths are absent unless an exact broker-pinned path capability exists.
+private inherited descriptor carrying a typed versioned record. Its mode binds
+the control peer either to the exact task worker or to the root daemon
+controller; the two bindings cannot be replayed across modes. The task grant
+signs task-host identity, while the persistent manager retains the owner Host
+binding in root memory. Both include owner/leased uid, isolated gid, socket
+identities, and device/inode/mode-pinned approved roots. Child launch APIs
+require that typed authority; they never recover it from environment
+variables, effective ids, NSS, or fallback path resolution.
 
 The package creates and locks `cos-ext-00` through `cos-ext-63` at fixed UIDs
 `61000..=61063`. Fresh installs reserve primary GID `60999`; an upgrade from
@@ -719,30 +721,33 @@ grant — launch authority dropped, bound to the App's own process tree — whic
 what every privileged provider route the App later calls is authorized against.
 Deregistration revokes the launch grant, and the session grant with it.
 
-Inside a supervised task, the tool registry sends one-shot legacy operations
-and MCP-first App calls over the extension-host control channel. For MCP-first
-Apps, the server must reproduce the manifest's exact names, descriptions, and
-input schemas; descriptor drift fails startup closed. The host re-reads the
-installed manifest, launches the declared entrypoint from its verified
-read-only snapshot, and uses its private broker proxy for registration,
-binding, transient target scopes, and teardown. Returned stdout,
-stderr-derived failures, MCP descriptors, and tool results are bounded and
-treated as untrusted model data. A missing or crashed host fails dynamic
-execution closed; there is no fallback that runs App code inside
-`claw-agentd`. Explicit open/close meta-tools remain only for legacy
-`session` manifests; MCP-first lifecycle belongs to the Gateway/host.
+Inside a supervised task, one-shot legacy operations still use the task Host.
+An MCP-first App call instead sends only App id, tool, arguments, timeout, and
+an unpredictable exchange nonce over the worker's grant-authenticated private
+channel. `clawd` derives owner/session/task/caller identity from the worker
+lease, rechecks exact `agent.invoke:<app>/<tool>`, re-reads the installed
+manifest, revalidates effective arguments and target needs, and dispatches
+through the owner's persistent Host. The worker cannot assert caller identity,
+capabilities, lineage, or Host selection.
 
-If a target tool needs authority the host session does not already cover,
-`clawd` files exact permission requests for the manifest-derived target
-capabilities. The authenticated host waits on those decisions and retries the
-same transient-scope transaction; it never returns a reusable grant or target
-credential to the calling Agent. The caller's exact `agent.invoke` capability
-is rechecked by `clawd` on every transient call, authorizes addressing the
-tool only, and is removed from the target App session's base and transient
-capabilities. `Issuer::AppGateway` mints the short-lived target grant directly
-from the daemon's authorized decision rather than trying to widen the
-invoke-only launch parent; clearing the call revokes it and restores the empty
-between-call grant.
+The MCP-first server must reproduce the manifest's exact names, descriptions,
+and input schemas; descriptor drift fails startup closed. The Host launches the
+declared entrypoint from its verified read-only snapshot and uses its private
+broker proxy for registration, binding, transient target scopes, and teardown.
+Returned failures and tool results are bounded and treated as untrusted model
+data. A missing or crashed Host fails dynamic execution closed; there is no
+fallback that runs App code inside `claw-agentd`.
+
+If a target tool needs additional authority, `clawd` files exact permission
+requests under the original task session and waits only until that call's
+absolute deadline. It then mints a one-use opaque dispatch grant bound to the
+exact persistent Host pid/start time, owner, task, session, App, tool,
+canonical arguments, call id, capability generation, and deadline. The Host
+can present but cannot alter that grant. The App session authority consumes it
+atomically and installs only its manifest-derived target capabilities around
+one serialized MCP call. Caller `agent.invoke` authority never enters the
+target session, and neither a reusable grant nor a target credential returns
+to the Agent.
 
 ### Proactive scheduling
 
@@ -837,7 +842,7 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, spawned per task by `clawd` |
+| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, task- or daemon-controlled by `clawd` |
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |

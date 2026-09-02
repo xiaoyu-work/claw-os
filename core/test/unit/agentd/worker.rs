@@ -100,6 +100,7 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         tx,
         cancelled: Arc::new(AtomicBool::new(false)),
         waiters: Mutex::new(HashMap::new()),
+        app_waiters: Mutex::new(HashMap::new()),
         next_correlation: AtomicU64::new(1),
         asks_used: AtomicU32::new(0),
     });
@@ -111,6 +112,55 @@ fn gateway() -> (ChannelApprovalGateway, mpsc::UnboundedReceiver<WorkerFrame>) {
         },
         rx,
     )
+}
+
+#[tokio::test]
+async fn app_gateway_reply_requires_exact_correlation_and_exchange() {
+    let (gateway, _frames) = gateway();
+    let state = gateway.state;
+    let request = AppGatewayRequest {
+        app_id: "email".to_string(),
+        tool: "email.search".to_string(),
+        arguments: serde_json::json!({"query": "Acme"}),
+        timeout_ms: 1_000,
+    };
+    let exchange = AppGatewayExchange::new(request);
+    let mut waiter = state.register_app(7, exchange.clone());
+    state.deliver_app(
+        8,
+        &exchange,
+        AppGatewayReply::Failed {
+            message: "wrong correlation".to_string(),
+        },
+    );
+    assert!(matches!(
+        waiter.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    let mut substituted = exchange.clone();
+    substituted.nonce = "f".repeat(32);
+    state.deliver_app(
+        7,
+        &substituted,
+        AppGatewayReply::Failed {
+            message: "wrong exchange".to_string(),
+        },
+    );
+    assert!(matches!(
+        waiter.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    state.deliver_app(
+        7,
+        &exchange,
+        AppGatewayReply::Failed {
+            message: "exact".to_string(),
+        },
+    );
+    assert!(matches!(
+        waiter.await.unwrap(),
+        AppGatewayReply::Failed { message } if message == "exact"
+    ));
 }
 
 fn scope() -> Scope {

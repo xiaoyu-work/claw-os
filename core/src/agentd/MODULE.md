@@ -16,6 +16,8 @@ executes neither.
 - Mint and verify the narrow per-task authority a worker holds (`grant`).
 - Define the only channel a worker has, and what may travel on it
   (`protocol`).
+- Route MCP-first App calls over that channel without accepting caller
+  identity or capabilities from the worker (`app_gateway`).
 - Claim, lease, supervise, reconcile and finish tasks (`supervisor`).
 - Run exactly one task and report it back (`worker`).
 - Bind each worker grant to the exact extension host and install the host
@@ -28,6 +30,7 @@ executes neither.
 | `guard.rs` | Process-wide broker flag; every runtime surface fails closed inside `clawd` |
 | `spawn.rs` | `socketpair` + `pre_exec` privilege drop, fd/env isolation, session/process-group isolation, worker image checks |
 | `grant.rs` | HMAC-signed job grant, its bindings, and both verification directions |
+| `app_gateway.rs` | Worker-side client for typed calls to the daemon-owned App Host manager |
 | `protocol.rs` | Frames, route allowlist, protocol version, bounded framing, permission-mediation types |
 | `supervisor.rs` | Broker-side claim → spawn → lease → pump → finish, permission mediation, reconciliation |
 | `worker.rs` | Worker-side handshake, dedicated channel thread, sinks, audit forwarding, approval gateway, cancellation |
@@ -180,13 +183,12 @@ owner's routed session registry; the ACL is revoked before uid reuse.
 
 Removing the worker's broker access is deliberate:
 
-- **App and MCP sessions started from inside a task.** Registering one needs
-  `claw-extension-host`. The worker still has no `app_session.*` route and
-  cannot write the root-owned routed registry. The host reaches only the
-  lifecycle allowlist on its private socket; hosted descendants reach only
-  session-scoped provider routes for their nearest registered child session.
-  If the host is absent, dynamic execution fails closed instead of falling
-  back into `claw-agentd`.
+- **App and MCP sessions started from inside a task.** Legacy extensions use
+  the task Host. MCP-first Apps use the typed `app_gateway` job-channel route;
+  `clawd` derives identity and authority from the signed task lease and calls
+  its per-owner persistent Host. The worker still has no `app_session.*` route
+  and cannot write the root-owned routed registry. If either Host is absent,
+  dynamic execution fails closed instead of falling back into `claw-agentd`.
 - **Scheduler mutation from inside a task.** `cos cron` / `cos triggers` state
   lives in the root-owned daemon tree, so a worker can read its own scope but
   cannot persist system schedules. `scheduler.run` is a broker route and is not

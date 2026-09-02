@@ -46,7 +46,8 @@ fn the_worker_channel_exposes_only_job_lifecycle_routes() {
             ROUTE_AUDIT,
             ROUTE_HEARTBEAT,
             ROUTE_RESULT,
-            ROUTE_APPROVAL
+            ROUTE_APPROVAL,
+            ROUTE_APP_GATEWAY,
         ]
     );
 }
@@ -93,6 +94,31 @@ fn approval_exchange_nonce_is_unpredictable_and_binds_the_exact_ask() {
     let encoded = serde_json::to_string(&first).unwrap();
     let decoded: ApprovalExchange = serde_json::from_str(&encoded).unwrap();
     assert_eq!(decoded, first);
+}
+
+#[test]
+fn app_gateway_request_carries_work_not_caller_authority() {
+    let request = AppGatewayRequest {
+        app_id: "email".to_string(),
+        tool: "email.search".to_string(),
+        arguments: serde_json::json!({"query": "Acme"}),
+        timeout_ms: 30_000,
+    };
+    request.validate().unwrap();
+    let exchange = AppGatewayExchange::new(request.clone());
+    exchange.validate().unwrap();
+    let encoded = serde_json::to_string(&exchange).unwrap();
+    for forbidden in ["owner_uid", "session_id", "task_id", "caller", "caps"] {
+        assert!(
+            !encoded.contains(forbidden),
+            "App Gateway request must not carry `{forbidden}`: {encoded}"
+        );
+    }
+    assert_ne!(
+        exchange.nonce,
+        AppGatewayExchange::new(request).nonce,
+        "each call needs an unpredictable correlation binding"
+    );
 }
 
 #[test]

@@ -1105,6 +1105,51 @@ impl Tool for AppSessionTool {
             return ToolResult::err(message);
         }
 
+        if self.manifest.mcp.is_some() && crate::agentd::app_gateway::available() {
+            return match crate::agentd::app_gateway::call(
+                self.app_id.clone(),
+                self.manifest_tool_name.clone(),
+                Value::Object(args_map.into_iter().collect()),
+                self.timeout,
+            )
+            .await
+            {
+                Ok(result) => {
+                    let (content, is_error) = render_call_result(result);
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        verb_csv(&caps).as_str(),
+                        "allowed",
+                        None,
+                        is_error.then_some(content.as_str()),
+                        started.elapsed(),
+                    );
+                    if is_error {
+                        ToolResult::err(content)
+                    } else {
+                        ToolResult::ok(content)
+                    }
+                }
+                Err(error) => {
+                    let message = crate::agent::safety::untrusted::wrap_untrusted(
+                        crate::agent::safety::untrusted::TOOL_RESULT_TAG,
+                        &error,
+                    );
+                    emit_audit(
+                        &self.app_id,
+                        &self.manifest_tool_name,
+                        verb_csv(&caps).as_str(),
+                        "allowed",
+                        None,
+                        Some(&message),
+                        started.elapsed(),
+                    );
+                    ToolResult::err(message)
+                }
+            };
+        }
+
         let host = crate::extension_host::client::current();
         let (context, gateway_timeout) = match host.as_ref() {
             Some(host) => (
@@ -1586,6 +1631,16 @@ pub(crate) async fn host_open_session(
 ) -> Result<usize, String> {
     require_legacy_session(app_id)?;
     open_session(app_id, None, DEFAULT_TIMEOUT, Some(isolation))
+        .await
+        .map(|(_, count)| count)
+}
+
+pub(crate) async fn host_warm_session(
+    app_id: &str,
+    tool_name: &str,
+    isolation: &crate::extension_host::child_isolation::IsolationAuthority,
+) -> Result<usize, String> {
+    open_session(app_id, Some(tool_name), DEFAULT_TIMEOUT, Some(isolation))
         .await
         .map(|(_, count)| count)
 }
