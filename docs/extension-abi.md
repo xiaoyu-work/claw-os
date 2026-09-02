@@ -1,0 +1,218 @@
+# Out-of-process Agent extension ABI
+
+The Agent extension ABI is an observation and proposal boundary, not an
+in-process plugin API and not an authorization-policy interface. Extension code
+runs as a child of the existing per-task `claw-extension-host` isolation
+domain. It never loads into `clawd` or `claw-agentd`.
+
+## Activation
+
+An extension activates only when all of the following are true:
+
+1. Its id is explicitly listed in `agent.extensions`.
+2. Its installed package passes
+   [extension provenance verification](extension-provenance.md).
+3. `extension.json` matches the signed package identity, version, content
+   digest, and executable entry.
+4. Its protocol/features, subscriptions, capabilities, and limits validate.
+5. The real task-owned `claw-extension-host` completes `initialize -> ready`.
+
+Selection is explicit in the ordinary per-user config:
+
+```json
+{
+  "agent": {
+    "extensions": ["example-observer"]
+  }
+}
+```
+
+The manifest schema is:
+
+```json
+{
+  "schema_version": 1,
+  "identity": {
+    "id": "example-observer",
+    "version": "1.0.0",
+    "content_digest": "<digest of signed files other than extension.json>"
+  },
+  "entry": "bin/observer",
+  "protocol": {
+    "min_version": 1,
+    "max_version": 1,
+    "required_features": [
+      "observational-events",
+      "proposed-actions"
+    ]
+  },
+  "subscriptions": [
+    "session-start",
+    "pre-model-call",
+    "post-model-call",
+    "pre-tool",
+    "post-tool",
+    "completion"
+  ],
+  "requested_capabilities": [
+    {
+      "verb": "ui.notify",
+      "scope": { "kind": "wild" }
+    }
+  ],
+  "limits": {
+    "event_timeout_ms": 1000,
+    "queue_capacity": 8,
+    "max_output_bytes": 4096,
+    "max_actions_per_event": 2,
+    "max_in_flight": 1
+  }
+}
+```
+
+Identity and version must match `provenance.json`. The content digest covers
+all signed payload files except `extension.json`, avoiding a self-referential
+digest while still binding the executable and assets. The entry is a signed
+executable file. ABI v1 permits 50–5000 ms event deadlines, 1–32 queued events,
+1–8192 bytes of output, at most four proposed actions, and exactly one
+in-flight event per extension.
+
+## Process and authority boundary
+
+The host reuses the complete
+[`claw-extension-host` isolation design](extension-host-isolation.md):
+exclusive package-created uid, non-broker gid, `NoNewPrivs`, non-dumpability,
+seccomp, finite rlimits, mandatory cgroup-v2 CPU/memory/PID bounds, private
+mount/PID/network namespaces, empty root, private writable state, and verified
+tree cleanup.
+
+The host re-verifies the transported package snapshot and materializes it under
+task-private storage. Only the signed package snapshot, exact system
+interpreter/ELF dependency closure, minimal account files, and private state
+enter the child. Agent extension children do **not** receive the private
+extension broker socket, the routed session registry, the primary broker,
+credentials, provider state, owner home, live package path, or ambient network.
+
+Every ABI binding includes the exact owner uid, task id, session id, extension
+id/version, package/manifest/entry digests, capability generation, host lease
+digest, and a 256-bit instance nonce. Every response must echo the complete
+binding and sequence. Cross-session or stale-instance substitution disables
+only that extension.
+
+## Framing and lifecycle
+
+Stdin/stdout carry typed JSON frames:
+
+```text
+4 bytes  magic "CEX1"
+1 byte   kind: 1 host request, 2 extension response
+1 byte   reserved, must be zero
+4 bytes  unsigned big-endian JSON length
+N bytes  UTF-8 JSON
+```
+
+The maximum frame is 65,536 bytes and the maximum event projection is 16 KiB.
+Length is checked before allocation. A short, malformed, wrong-kind, oversized,
+uncorrelated, or wrong-version frame fails closed.
+
+The state machine is exact:
+
+```text
+initialize -> ready -> (event -> result)* -> shutdown -> shutdown-ack
+```
+
+`ready` selects the negotiated protocol and accepts required features. An
+extension cannot select below the manifest minimum, above either maximum, or a
+version other than the host's current ABI. There is no legacy parse or
+downgrade fallback.
+
+Current ABI version: **1**.
+
+Compatibility policy:
+
+- New optional fields are additive and ignored by older readers.
+- New required behavior is named in `required_features`; an unknown or
+  unaccepted required feature rejects activation.
+- New lifecycle variants, changed field meanings, removals, and type changes
+  require a new protocol version.
+- When multiple versions exist, negotiation selects the highest mutually
+  supported version that satisfies every required feature. Silent downgrade is
+  always rejected.
+- The worker-to-host control protocol is separately versioned and replaced in
+  lockstep with the package.
+
+## Observational events
+
+Events never block or mutate the canonical model/tool path. Runtime hooks use
+bounded `try_send`; each extension has its own queue and worker. A full queue
+drops that extension's event and emits an audit record. Eight consecutive
+drops disable and detach only that extension. A crash, hang, malformed result,
+or limit violation has the same per-extension failure scope. The broker,
+another extension, and another session continue.
+
+Event projections are least-privilege:
+
+| Event | Projection |
+| --- | --- |
+| `session-start` | trusted source class, attended/delegated booleans |
+| `pre-model-call` | turn index and provider/model identities |
+| `post-model-call` | success, latency, token counts, error digest |
+| `pre-tool` | tool identity, call-id digest, input byte count/digest |
+| `post-tool` | tool identity, success, latency, result byte count/digest |
+| `completion` | success, turn count, answer byte count/digest |
+
+Prompts, messages, tool arguments/results, reasoning state, credentials, secret
+values, and answer text do not cross ABI v1. Extension output is bounded,
+treated as untrusted, represented by a keyed digest in audit/session mutation
+records, and never inserted into system/developer prompts or the conversation.
+A future model-visible surface must use a fixed trusted local tool-result
+envelope and the normal untrusted-data wrapper.
+
+## Proposed actions and capability references
+
+An extension result may contain explicit proposed actions. It cannot execute an
+action itself and cannot synchronously answer an authorization question.
+
+For each event the worker mints fresh 256-bit opaque references to the
+manifest-requested capabilities. Each reference is bound to owner, session,
+task, extension, manifest digest, capability generation, event id, and deadline.
+The store keeps only SHA-256 handle keys. Guessing, replay, cross-event,
+cross-session, wrong-index, and expired references return the same denial.
+Raw credentials and secret values are never references and never cross the
+ABI.
+
+For an accepted proposal, the worker:
+
+1. consumes the exact one-use capability reference;
+2. resolves the named tool in the normal `ToolRegistry` under the same trusted
+   owner/session/task/extension context;
+3. installs a task-local capability ceiling containing only that referenced
+   capability;
+4. runs normal exposure, guardrail, capability-risk approval, exact
+   argument-derived capability enforcement, provider checks, and audit;
+5. records only bounded result metadata/digests and does not return the tool
+   result to the extension or inject it into the model trajectory.
+
+The ceiling also suppresses approval requests outside the declared reference,
+so an extension cannot use consent UI as an authority-escalation channel.
+Each proposed action has a fixed 30-second worker deadline in addition to the
+owning tool/provider's normal deadline.
+Extensions cannot mutate the canonical system prompt, grants, approvals,
+authorization rules, or audit history.
+
+## Failure and shutdown
+
+Initialize has a five-second deadline; events use the signed manifest deadline;
+shutdown has two seconds. Host control timeouts are longer than child deadlines,
+so a hung child is killed without cancelling the whole host. The host tracks
+the sandbox process tree, kills and reaps adopted descendants, and verifies no
+known process identity survived before reporting detach success. Final task
+cleanup still applies `cgroup.kill` and proves the complete containment group
+empty before releasing the extension uid.
+
+Hostile coverage lives in:
+
+- `core/test/unit/agent_extensions/`
+- `core/test/unit/extension_host/abi.rs`
+- `core/tests/extension_provenance_process.rs`
+- `core/tests/extension_host_boundary.rs`

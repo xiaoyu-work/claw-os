@@ -11,6 +11,8 @@ library API exported by `core/src/lib.rs`.
 - Implement system primitives, capability enforcement, audit, and sessions.
 - Host the agent runtime and `clawd` broker.
 - Connect apps, packages, services, browser, process, and model subsystems.
+- Verify and host signed out-of-process Agent extensions without widening the
+  broker or prompt-authority boundary.
 
 ## Key Files
 
@@ -23,6 +25,8 @@ library API exported by `core/src/lib.rs`.
 | `lib.rs` | Library module surface |
 | `bin/` | `clawd` and helper binary entries |
 | `agent/` | Agent runtime and AI-facing tools |
+| `agent_extensions/`, `extension_host/` | Signed Agent extension ABI, isolation, event fanout, and action mediation |
+| `provenance.rs` | Compiled-root package verification and immutable snapshots |
 | `clawd/` | Privileged broker services |
 | `caps/` | Capability model and enforcement |
 | `proc.rs`, `proc/proc_spawn_allowlist.rs` | Session-scoped process lifecycle and root-owned, versioned, descriptor-pinned launch policy |

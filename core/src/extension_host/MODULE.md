@@ -2,7 +2,7 @@
 
 ## Purpose
 
-`extension_host/` keeps dynamic App and MCP code outside both privileged
+`extension_host/` keeps dynamic App, MCP, and Agent extension code outside both privileged
 `clawd` and the model/tool worker. `clawd` leases one package-reserved locked
 system account per active task and spawns `claw-extension-host` with that uid plus the dedicated
 `cos-extension` primary gid; `claw-agentd`
@@ -24,6 +24,8 @@ extensions.
   App/MCP session.
 - Run one-shot Apps, stateful App MCP servers, and configured MCP servers;
   never run their code in `clawd` or `claw-agentd`.
+- Reverify signed Agent extension snapshots, negotiate the versioned ABI, and
+  contain each observer in its own broker-less PID/mount/network sandbox.
 - Launch every dynamic child through the trusted isolation wrapper in its own
   PID and mount namespaces with private procfs. The child sees an empty
   filesystem root, a verified read-only runtime/snapshot allowlist, and
@@ -44,6 +46,8 @@ extensions.
 | Path | Role |
 | --- | --- |
 | `protocol.rs` | Versioned worker-control contract and signed binding fields |
+| `abi.rs` | `CEX1` framed initialize/event/result/shutdown ABI and compatibility checks |
+| `agent_extension.rs` | Verified package materialization, child lifecycle, deadlines, and descendant reaping |
 | `identity.rs` | Exact package-created account/manifest/subid validation, exclusive leasing, and safe reuse |
 | `spawn.rs` | Privilege drop, fd/env/resource isolation, mandatory cgroup-v2 containment, optional namespaces, verified descendant cleanup |
 | `child_isolation.rs` | Per-App/MCP bubblewrap PID/proc/empty-root isolation and verified snapshots |
@@ -126,6 +130,8 @@ timeout after COMMIT is terminal indeterminate rather than a queue replay.
 
 ```bash
 cargo test -p cos extension_host -- --test-threads=1
+cargo test -p cos agent_extensions -- --test-threads=1
+cargo test -p cos --test extension_provenance_process -- --test-threads=1
 cargo test -p cos --test extension_host_boundary -- --test-threads=1
 cargo test -p cos --test agentd_process_boundary -- --test-threads=1
 bash packaging/deb/tests/test-agentd-packaging.sh

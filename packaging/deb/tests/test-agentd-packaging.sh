@@ -75,6 +75,8 @@ assert_contains "$BUILD_DEBS" 'ensure_bin claw-extension-host cos' \
     "claw-os-agent must build the extension host"
 assert_contains "$BUILD_DEBS" '/usr/local/bin/claw-extension-host' \
     "claw-os-agent must install the extension host beside claw-agentd"
+assert_contains "$BUILD_DEBS" '/usr/lib/cos/extensions' \
+    "claw-os-agent must create the authenticated Agent extension package root"
 assert_contains "$BUILD_DEBS" '/usr/lib/sysusers.d/claw-os-agent.conf' \
     "claw-os-agent must install its dedicated extension group definition"
 assert_contains "$SYSUSERS" 'g cos-extension - -' \

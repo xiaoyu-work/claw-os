@@ -31,6 +31,11 @@ packaging/
 
 `claw-os-agent` is the exact same package on Ubuntu and Claw OS. It includes
 `cos-browser`, the per-task App/MCP extension host, and all command-style apps.
+It also creates the empty root-owned `/usr/lib/cos/extensions` registry.
+Executable Agent extension packages placed there remain inactive until their
+signed id is selected in user configuration; see
+[`docs/extension-provenance.md`](../docs/extension-provenance.md) and
+[`docs/extension-abi.md`](../docs/extension-abi.md).
 Fresh installs create `cos-extension` at GID `60999`; safe upgrades may retain
 the prior package's arbitrary sysusers GID only after proving it has no
 unrelated ownership, membership, user, or process semantics. Supervised

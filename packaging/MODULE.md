@@ -10,6 +10,8 @@ Debian packages and a signed multi-architecture APT repository.
 - Assemble and publish `claw-os-agent`, `claw-os-base`, and
   `claw-os-desktop` independently.
 - Preserve conffiles and run service-safe maintainer scripts.
+- Create the root-owned authenticated Agent extension package registry at
+  `/usr/lib/cos/extensions` without activating installed code.
 - Build and sign Debian repository metadata for amd64 and arm64.
 - Compose an independently built web artifact into the final Pages directory
   alongside `dists/` and `pool/`.

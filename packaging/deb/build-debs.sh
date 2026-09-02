@@ -264,6 +264,7 @@ mkdir -p \
     "$AGENT_STAGE/DEBIAN" \
     "$AGENT_STAGE/etc/cos" \
     "$AGENT_STAGE/usr/lib/cos/apps" \
+    "$AGENT_STAGE/usr/lib/cos/extensions" \
     "$AGENT_STAGE/usr/lib/cos/python" \
     "$AGENT_STAGE/usr/lib/cos/skills" \
     "$AGENT_STAGE/usr/lib/systemd/system" \

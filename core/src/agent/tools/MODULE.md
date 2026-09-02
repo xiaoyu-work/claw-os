@@ -35,6 +35,9 @@ which tool calls are exposed and executed.
 - Declare whether consent is enforced by an exact capability gate or
   by the legacy tool-name compatibility filter.
 - Keep untrusted tool output inside explicit model-data boundaries.
+- Execute extension-proposed actions only after consuming an exact
+  event/session/package-bound capability reference, under an attenuating
+  capability ceiling and the normal registry/approval/provider path.
 
 ## Key Files
 

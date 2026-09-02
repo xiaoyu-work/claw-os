@@ -16,6 +16,9 @@ surfaces.
 - Attach built-in, app, and MCP tools to one guarded registry.
 - Delegate dynamic App and MCP execution to the task-owned extension host when
   running inside `claw-agentd`.
+- Activate only explicitly selected, signed Agent extensions; publish
+  observation-only runtime projections without prompt mutation, and mediate
+  proposed actions through the guarded registry.
 - Expose CLI, task-queue, and authenticated local web surfaces. The queue's
   execution side runs in `claw-agentd`, never in the `clawd` broker — see
   [`../agentd/MODULE.md`](../agentd/MODULE.md).
@@ -39,6 +42,7 @@ surfaces.
 | `setup/media.rs` | TTS/STT/image/embedding specs, wizards, status, and probes |
 | `../../test/unit/agent/setup.rs` | Setup, status, apply, OAuth, and config regression tests |
 | `runtime/loop_.rs` | Multi-turn orchestration, prompt restore/freeze, compression, and persistence |
+| `../agent_extensions/` | Out-of-process observer activation, bounded event queues, capability references, and action mediation |
 | `runtime/turn.rs` | One provider turn, hooks, tool ordering, results |
 | `service.rs`, `../../test/unit/agent/service.rs` | Task queue, ownership/lease records, and `execute_job` — the runtime entry the `agentd` worker calls |
 | `llm/types.rs` | Provider-neutral request, response, content, and stream types |

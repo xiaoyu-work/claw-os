@@ -20,6 +20,9 @@ executes neither.
 - Run exactly one task and report it back (`worker`).
 - Bind each worker grant to the exact extension host and install the host
   client before constructing the model-visible tool projection.
+- Keep Agent extension activation generic: verified package snapshots and
+  typed lifecycle frames go to `claw-extension-host`; no extension code enters
+  the worker.
 
 ## Key Files
 

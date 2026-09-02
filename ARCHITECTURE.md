@@ -42,7 +42,8 @@ registry and capability/guardrail layers. Privileged execution crosses the
 | `cos` CLI and router | Parse output format, dispatch primitives, apps, hidden bridges, and `cos agent` subcommands | `core/src/main.rs`, `core/src/router.rs` |
 | `clawd` broker | Versioned framed Unix-socket RPC, per-message peer identity, declarative route registry, mandatory capability-authority middleware, privileged dispatch, task ownership/lease, worker/extension supervision, and audit hook | `core/src/bin/clawd.rs`, `core/src/clawd/server.rs`, `core/src/clawd/transport/`, `core/src/clawd/routes.rs`, `core/src/clawd/authority/` |
 | `claw-agentd` worker | Unprivileged per-task process that runs the model/tool loop after privilege drop; grant-authenticated private job channel | `core/src/bin/claw-agentd.rs`, `core/src/agentd/` |
-| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code behind a worker-only control socket and a broker-owned route-filtered proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
+| `claw-extension-host` | Per-task isolated-UID process that runs dynamic App/MCP code and signed Agent extension observers behind a worker-only control socket; only App/MCP children receive the route-filtered broker proxy | `core/src/bin/claw-extension-host.rs`, `core/src/extension_host/` |
+| Agent extension ABI | Explicit signed-package registry, observation-only event fanout, opaque capability references, and proposed-action mediation | `core/src/agent_extensions/`, `core/src/provenance.rs`, `core/src/extension_host/abi.rs` |
 | Agent runtime | Multi-turn model/tool loop, prompt assembly, hooks, progress, compression, and tool dispatch | `core/src/agent/runtime/` |
 | LLM abstraction | Provider registry, wire adapters, streaming accumulation, fallback chain, credentials, and usage | `core/src/agent/llm/` |
 | Tool/capability layer | Immutable tool descriptors, session-scoped model-visible projection, guardrails, MCP attachment, scope checks, and approval boundaries | `core/src/agent/tools/`, `core/src/caps/` |
@@ -271,7 +272,7 @@ CLI / web UI / bridge
   -> clawd claims the task, derives session capabilities, spawns claw-agentd
   -> claw-agentd (task uid, dedicated cos-extension gid, no supplementary groups, NoNewPrivs)
   -> clawd allocates an unmapped per-task extension uid and spawns
-     claw-extension-host for dynamic App/MCP processes
+     claw-extension-host for dynamic App/MCP/Agent-extension processes
   -> runtime::loop_
   -> restore the session's versioned content-addressed system prompt,
      or build + freeze it once with the metadata-only Skill catalogue
@@ -402,7 +403,7 @@ unmounts, and descriptor-relative recursive removal of all task state.
 hardlinks, open descriptors, or nested mountpoints cannot produce a clean
 release while residue remains.
 
-Each App or stdio MCP process adds a second boundary through the trusted
+Each App, stdio MCP, or Agent extension process adds a second boundary through the trusted
 `claw-app-runner`/bubblewrap launch path: new PID and network namespaces with
 private procfs plus a mount namespace rooted at empty tmpfs. Exact pinned
 executables and ELF dependencies, filtered immutable language-runtime
@@ -415,6 +416,39 @@ child receives private writable
 home/data/cache/log/tmp trees. The cgroup remains the outer kill/reap
 authority, while private procfs prevents same-UID siblings from observing or
 signalling one another.
+
+Agent extensions use a stricter child profile than Apps/MCP. The worker
+explicitly selects signed ids from `/usr/lib/cos/extensions`;
+`core/src/provenance.rs` reads the complete root-owned package without
+following links, verifies its compiled-root Ed25519 signature and inventory,
+and returns an immutable snapshot. The worker sends only that snapshot to the
+host, which re-verifies it before task-private materialization. The Agent
+extension child receives neither private broker/session endpoints nor provider
+authority.
+
+The child ABI is a 64 KiB maximum `CEX1` framed JSON stream over stdin/stdout:
+`initialize -> ready -> (event -> result)* -> shutdown -> shutdown-ack`.
+Every frame binds the exact owner, task, session, extension identity/version,
+package/manifest/entry digests, capability generation, lease digest, instance
+nonce, and sequence. Optional fields evolve additively; unknown required
+features, lifecycle variants, versions, or downgrades fail activation.
+
+Runtime hooks enqueue only least-privilege metadata/digests for session start,
+pre/post model calls, pre/post tools, and completion. Queues and workers are
+per extension, so observation never blocks or mutates the canonical runtime
+path. Full queues drop and audit events; repeated pressure disables only that
+extension. Crashes, hangs, malformed/oversized frames, and result-limit
+violations kill and reap that sandbox without terminating the host or another
+extension.
+
+An extension result is untrusted and never enters a prompt or conversation.
+A proposed action carries a fresh opaque capability reference bound to one
+event/session/task/package/generation. `claw-agentd` consumes it once, resolves
+the tool through the ordinary registry, installs an attenuating capability
+ceiling, and reruns exposure, guardrails, capability-risk approval, exact
+argument-derived enforcement, provider checks, and audit. The tool result is
+not returned to the extension. Extensions cannot author grants, approvals,
+authorization decisions, canonical prompts, or audit history.
 
 The runtime path is also part of the root boundary. `/run/cos/extension-hosts`,
 its per-owner directory, and each task directory remain root-owned and
@@ -807,7 +841,9 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 | `cos` | `core/src/main.rs` | User-facing CLI and structured primitive router |
 | `clawd` | `core/src/bin/clawd.rs` | System daemon and privileged broker |
 | `claw-agentd` | `core/src/bin/claw-agentd.rs` | Unprivileged agent worker, spawned per task by `clawd` |
-| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP host, spawned per task by `clawd` |
+| `claw-extension-host` | `core/src/bin/claw-extension-host.rs` | Isolated-UID dynamic App/MCP/Agent-extension host, spawned per task by `clawd` |
+| Agent extension registry | `core/src/agent_extensions/` | Signed manifest activation, bounded event fanout, capability references, action mediation |
+| Extension provenance | `core/src/provenance.rs` | Compiled trust roots and immutable verified package snapshots |
 | `cos agent ...` | `core/src/agent/mod.rs` | Agent CLI command family |
 | Agent loop | `core/src/agent/runtime/loop_.rs` | Multi-turn orchestration |
 | One agent turn | `core/src/agent/runtime/turn.rs` | Provider call and tool execution |
@@ -860,6 +896,8 @@ fans out to the combined Docker/WSL channel and the independent APT channel.
 - [`docs/image-architecture.md`](docs/image-architecture.md)
 - [`docs/memory-recovery.md`](docs/memory-recovery.md)
 - [`docs/extension-host-isolation.md`](docs/extension-host-isolation.md)
+- [`docs/extension-abi.md`](docs/extension-abi.md)
+- [`docs/extension-provenance.md`](docs/extension-provenance.md)
 - [`docs/semantic-search-design.md`](docs/semantic-search-design.md)
 - [`docs/browser-attached-design.md`](docs/browser-attached-design.md)
 - [`packaging/README.md`](packaging/README.md)

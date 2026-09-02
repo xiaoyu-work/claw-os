@@ -1,6 +1,6 @@
 # Dynamic Extension Host Isolation
 
-Claw OS runs dynamic App and MCP code in `claw-extension-host`, not in
+Claw OS runs dynamic App, MCP, and Agent extension code in `claw-extension-host`, not in
 privileged `clawd` and not in the `claw-agentd` model/tool worker.
 
 ## Process topology
@@ -19,7 +19,8 @@ For each daemon-backed task:
    variables are not authority. The resulting exact host binding is signed
    into the worker grant.
 4. `claw-agentd` verifies that binding and uses the host control socket for
-   one-shot Apps, stateful App sessions, and configured MCP servers.
+   one-shot Apps, stateful App sessions, configured MCP servers, and signed
+   Agent extension observers.
 5. Hosted children use `COS_EXTENSION_BROKER_SOCKET`; they never receive or
    open `/run/cos/clawd.sock`.
 
@@ -80,6 +81,13 @@ connected or listening socket cannot bypass the network namespace.
 The trusted app runner waits for the root-maintained session bind and reapplies
 non-dumpability immediately before final exec; isolation does not rely on
 dumpability surviving exec.
+
+Agent extension children use the same namespace/resource boundary with an even
+narrower mount profile. Their signed package snapshot is reverified and copied
+into task-private storage before launch. They do not receive
+`COS_EXTENSION_BROKER_SOCKET`, `COS_PROC_DATA_DIR`, or live App/MCP session
+endpoints. Their only channel is the bounded
+[`CEX1` ABI](extension-abi.md) on stdin/stdout.
 
 Runtime path setup is descriptor-relative. The runtime, per-owner, and task
 directories stay root-owned and non-writable. `openat2` rejects symlinks,
@@ -165,7 +173,7 @@ tree rather than leave an unknown child alive.
 The lifecycle is deterministic:
 
 ```text
-attach -> ready -> call* -> detach
+attach -> ready -> call/event* -> detach
                  \-> cancel | timeout | crash
 task completion -> shutdown -> proxy/session revocation
                  -> cgroup.kill -> verified empty -> detach

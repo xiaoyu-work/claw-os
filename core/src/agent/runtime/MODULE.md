@@ -31,6 +31,8 @@ through model turns, tools, hooks, progress, and final records.
 - Install a fresh task-local approval identity for every invocation and retire
   its consent state on completion or cancellation.
 - Run lifecycle hooks and progress/heartbeat reporting.
+- Fan out least-privilege Agent extension observations asynchronously; their
+  output never mutates prompts, turns, tool calls, or authorization decisions.
 - Record conversation, prompt injection, usage, and error state.
 
 ## Key Files

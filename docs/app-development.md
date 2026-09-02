@@ -27,6 +27,12 @@ my-app/
 The manifest's `runtime` selects how the entry point is launched. Current
 values are `python`, `node`, `shell`, and `binary`; the default is `python`.
 
+Apps are operation/tool packages, not general Agent lifecycle plugins. Use the
+separate signed, out-of-process
+[Agent extension ABI](extension-abi.md) for session/model/tool observations.
+That ABI cannot mutate prompts or authorization and does not trust an
+installed directory without [package provenance](extension-provenance.md).
+
 The `cos` CLI recursively scans `$COS_APPS_DIR` (default
 `/usr/lib/cos/apps/`) for valid `app.json` files, then exposes each operation
 as `cos app <id> <op>` ([`core/src/apps.rs`](../core/src/apps.rs)).

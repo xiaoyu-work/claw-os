@@ -37,6 +37,8 @@ editing additional surfaces.
 | Agent ask/chat loop | `core/src/agent/runtime/loop_.rs`, `core/src/agent/runtime/turn.rs` | `prompt/`, `tools/`, `memory/`, `llm/` |
 | Agent worker process / broker isolation | `core/src/agentd/`, `core/src/bin/claw-agentd.rs` | `clawd/server.rs`, `agent/service.rs`, `clawd.service`, `packaging/deb/build-debs.sh` |
 | Dynamic App/MCP extension isolation | `core/src/extension_host/`, `core/src/bin/claw-extension-host.rs` | `agentd/`, `clawd/server.rs`, App/MCP tool integration, `clawd.service`, packaging |
+| Out-of-process Agent extension ABI | `core/src/agent_extensions/`, `core/src/extension_host/abi.rs` | `extension_host/agent_extension.rs`, agent runtime hooks/tools, provenance, audit, packaging |
+| Extension package provenance | `core/src/provenance.rs`, `docs/extension-provenance.md` | Agent extension registry/host, package roots and adversarial process tests |
 | LLM provider or model setup | `core/src/agent/llm/providers/`, `core/src/agent/llm/registry.rs`, `core/src/agent/setup.rs` | `types.rs`, `accumulate.rs`, streaming and non-streaming tests |
 | Tool, guardrail, or approval | `core/src/agent/tools/registry.rs`, `core/src/agent/runtime/turn.rs` | `guardrails.rs`, hooks, capability checks, audit |
 | Memory, recall, or sessions | `core/src/agent/memory/`, `core/src/session/` | runtime recording, prompt injection, audit/session CLI |
@@ -158,6 +160,16 @@ Documentation-only changes do not require code tests.
 Trace the full chain: catalog/scope definition → enforcement/provider →
 consumer/tool or app manifest. Update policy-facing tests and audit behavior in
 the same change.
+
+### New or changed extension surface
+
+An executable extension package is authenticated before its manifest,
+subscriptions, capability requests, schemas, entrypoint, or model-visible text
+is trusted. A new package kind, discovery root, or install path must call
+`crate::provenance::verify`, consume only the returned snapshot, quarantine
+failures with diagnostics, keep trust roots compiled in, and add adversarial
+unit plus process coverage. Never reopen a mutable package path after
+verification or fall back to unsigned content.
 
 ### LLM provider change
 

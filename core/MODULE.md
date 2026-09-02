@@ -14,6 +14,8 @@ persistence, and structured primitive dispatch.
 - Broker privileged and session-scoped operations through `clawd`.
 - Run the multi-turn agent, tool registry, memory, and provider integrations.
 - Discover app manifests and bridge bundled app execution.
+- Verify signed extension packages and run selected Agent observers through
+  the out-of-process ABI.
 - Enforce capability scopes and write audit/session records.
 
 ## Key Files
@@ -27,6 +29,8 @@ persistence, and structured primitive dispatch.
 | `src/clawd/server.rs` | IPC broker, identity checks, RPC dispatch, audit hook |
 | `src/agentd/` | Broker/runtime process split: privilege drop, job grants, worker supervision, consent mediation |
 | `src/extension_host/` | Isolated App/MCP process host, task-bound control channel, route-filtered broker proxy, cleanup |
+| `src/agent_extensions/` | Verified manifest registry, event fanout, capability references, and proposed-action mediation |
+| `src/provenance.rs` | Compiled-root signature verification and immutable package snapshots |
 | `src/agent/` | Agent CLI, runtime, tools, LLM providers, memory, and web UI |
 | `src/caps/` | Capability catalog, scopes, manifests, and enforcement |
 | `src/apps.rs` | `app.json` discovery and side-effect-free schema generation |

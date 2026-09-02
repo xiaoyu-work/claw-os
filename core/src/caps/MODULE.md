@@ -13,6 +13,8 @@ separate description from system authority.
 - Enforce permissions for sessions, tools, apps, and broker requests.
 - Route denied Agent capabilities into attended, exact-scope consent
   without turning approval into ambient session authority.
+- Apply task-local attenuating ceilings to extension-originated actions so a
+  capability reference cannot spend or request approval outside its manifest.
 
 ## Key Files
 

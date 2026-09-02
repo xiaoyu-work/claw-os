@@ -18,6 +18,8 @@ and agent tasks.
   extension code in this process.
 - Install audit hooks around broker-visible work, including runtime audit
   forwarded by a worker.
+- Persist generic Agent-extension lifecycle/action metadata forwarded by the
+  bound worker; never load manifests or extension-specific handlers here.
 
 ## Key Files
 
