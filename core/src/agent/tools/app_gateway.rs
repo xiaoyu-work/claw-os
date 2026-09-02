@@ -6,6 +6,7 @@
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 use crate::caps::manifest::Manifest;
 use crate::caps::{Cap, Scope, Verb};
@@ -136,6 +137,22 @@ impl McpCallContext {
         Self::root_system_agent(owner_uid, &session.session_id, None, timeout, None)
     }
 
+    pub(crate) fn for_authenticated_system_agent(
+        owner_uid: u32,
+        session_id: &str,
+        task_id: &str,
+        timeout: Duration,
+        lease_deadline_ms: u64,
+    ) -> Result<Self, String> {
+        Self::root_system_agent(
+            owner_uid,
+            session_id,
+            Some(task_id.to_string()),
+            timeout,
+            Some(lease_deadline_ms),
+        )
+    }
+
     fn root_system_agent(
         owner_uid: u32,
         session_id: &str,
@@ -217,6 +234,28 @@ impl McpCallContext {
         self.validate_system_agent_binding_inner(binding, false)
     }
 
+    pub fn validate_persistent_owner_binding(
+        &self,
+        binding: &ExtensionBinding,
+    ) -> Result<(), String> {
+        self.validate()?;
+        binding.validate_shape()?;
+        if binding.mode
+            != crate::extension_host::protocol::ExtensionHostMode::PersistentOwner
+            || self.caller.owner_uid != binding.owner_uid
+            || self.session_id.is_none()
+            || self.task_id.is_none()
+            || self.deadline_unix_ms.is_none_or(|deadline| {
+                deadline <= crate::agentd::grant::now_ms() || deadline > binding.expires_at_ms
+            })
+        {
+            return Err(
+                "MCP call context does not match the authenticated persistent owner".to_string(),
+            );
+        }
+        Ok(())
+    }
+
     fn validate_system_agent_binding_inner(
         &self,
         binding: &ExtensionBinding,
@@ -243,8 +282,44 @@ impl McpCallContext {
         {
             return Err("MCP call context does not match the authenticated task".to_string());
         }
+
         Ok(())
     }
+}
+
+pub(crate) fn gateway_operation_id(
+    app_id: &str,
+    tool: &str,
+    args: &Value,
+    call_id: &str,
+    session_id: &str,
+    task_id: &str,
+    deadline_unix_ms: u64,
+    capability_generation: &str,
+) -> Result<String, String> {
+    invoke_target(app_id, tool)?;
+    if !args.is_object()
+        || !valid_call_id(call_id)
+        || !valid_workload_id(session_id, 128)
+        || !valid_workload_id(task_id, 128)
+        || deadline_unix_ms <= crate::agentd::grant::now_ms()
+        || capability_generation.len() != 16
+        || !capability_generation
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    {
+        return Err("MCP gateway operation identity is invalid".to_string());
+    }
+    crate::agent::tools::mcp::descriptor::canonical_json_digest(&json!({
+        "app_id": app_id,
+        "tool": tool,
+        "args": args,
+        "call_id": call_id,
+        "session_id": session_id,
+        "task_id": task_id,
+        "deadline_unix_ms": deadline_unix_ms,
+        "capability_generation": capability_generation,
+    }))
 }
 
 pub fn authorize_manifest(manifest: &Manifest, caller: &McpPrincipal) -> Result<(), String> {

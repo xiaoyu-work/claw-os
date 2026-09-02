@@ -566,7 +566,10 @@ async fn begin_active_session_call(
     tool: &str,
     args: &BTreeMap<String, Value>,
     caps: &[crate::caps::Cap],
+    context: &super::app_gateway::McpCallContext,
+    capability_generation: Option<&str>,
     deadline_unix_ms: u64,
+    gateway_handle: Option<&str>,
 ) -> Result<ActiveCallGuard, String> {
     let key = session_key(app_id)?;
     let (control, child_pid, call_lock, poisoned) = {
@@ -593,13 +596,23 @@ async fn begin_active_session_call(
         let control = control.clone();
         let tool = tool.to_string();
         let args = args.clone();
+        let call_id = context.call_id.clone();
+        let session_id = context.session_id.clone();
+        let task_id = context.task_id.clone();
+        let capability_generation = capability_generation.map(ToOwned::to_owned);
+        let gateway_handle = gateway_handle.map(ToOwned::to_owned);
         let caps = crate::caps::CapSet::from_caps(caps.iter().cloned());
         tokio::task::spawn_blocking(move || {
             control.set_transient_call(Some(crate::bridge::TransientCall {
                 tool: &tool,
                 args: &args,
                 caps,
+                call_id: &call_id,
+                session_id: session_id.as_deref(),
+                task_id: task_id.as_deref(),
+                capability_generation: capability_generation.as_deref(),
                 deadline_unix_ms: Some(deadline_unix_ms),
+                gateway_handle: gateway_handle.as_deref(),
             }))
         })
         .await
@@ -1235,7 +1248,10 @@ impl Tool for AppSessionTool {
             &self.manifest_tool_name,
             &args_map,
             &caps,
+            &context,
+            None,
             deadline_unix_ms,
+            None,
         )
         .await
         {
@@ -1582,6 +1598,8 @@ pub(crate) async fn host_call_session(
     tool_name: &str,
     input: Value,
     context: super::app_gateway::McpCallContext,
+    gateway_handle: Option<String>,
+    capability_generation: String,
     call_timeout: Duration,
 ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
     context.validate()?;
@@ -1607,8 +1625,17 @@ pub(crate) async fn host_call_session(
     let deadline_unix_ms = context
         .deadline_unix_ms
         .ok_or_else(|| "MCP App call context omitted its deadline".to_string())?;
-    let mut active =
-        begin_active_session_call(app_id, tool_name, &args, &caps, deadline_unix_ms).await?;
+    let mut active = begin_active_session_call(
+        app_id,
+        tool_name,
+        &args,
+        &caps,
+        &context,
+        Some(&capability_generation),
+        deadline_unix_ms,
+        gateway_handle.as_deref(),
+    )
+    .await?;
     let effective_timeout = match context.remaining(maximum_timeout) {
         Ok(timeout) => timeout,
         Err(error) => {

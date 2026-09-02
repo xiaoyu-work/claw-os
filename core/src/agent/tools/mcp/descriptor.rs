@@ -363,9 +363,13 @@ fn descriptor_digest(descriptors: &[ToolDescriptor]) -> Result<String, String> {
             })
             .collect(),
     );
-    let canonical = canonicalize(&value);
+    canonical_json_digest(&value)
+}
+
+pub(crate) fn canonical_json_digest(value: &Value) -> Result<String, String> {
+    let canonical = canonicalize(value);
     let encoded = serde_json::to_vec(&canonical)
-        .map_err(|error| format!("encode sanitized MCP descriptors: {error}"))?;
+        .map_err(|error| format!("encode canonical JSON: {error}"))?;
     Ok(crate::crypto::sha256_hex(&encoded))
 }
 

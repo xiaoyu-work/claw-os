@@ -81,6 +81,53 @@ fn invoke_scope_is_exact_to_app_and_tool() {
 }
 
 #[test]
+fn gateway_operation_identity_is_canonical_and_call_bound() {
+    let deadline = crate::agentd::grant::now_ms() + 60_000;
+    let first = serde_json::json!({"query": "Acme", "limit": 20});
+    let second: serde_json::Value =
+        serde_json::from_str(r#"{"limit":20,"query":"Acme"}"#).unwrap();
+    let digest = gateway_operation_id(
+        "email",
+        "email.search",
+        &first,
+        "call-0123456789abcdef",
+        "session-a",
+        "task-a",
+        deadline,
+        "0123456789abcdef",
+    )
+    .unwrap();
+    assert_eq!(
+        digest,
+        gateway_operation_id(
+            "email",
+            "email.search",
+            &second,
+            "call-0123456789abcdef",
+            "session-a",
+            "task-a",
+            deadline,
+            "0123456789abcdef",
+        )
+        .unwrap()
+    );
+    assert_ne!(
+        digest,
+        gateway_operation_id(
+            "email",
+            "email.search",
+            &first,
+            "call-fedcba9876543210",
+            "session-a",
+            "task-a",
+            deadline,
+            "0123456789abcdef",
+        )
+        .unwrap()
+    );
+}
+
+#[test]
 fn manifest_access_restricts_each_authenticated_principal_class() {
     let manifest = manifest();
     assert!(

@@ -290,6 +290,10 @@ pub struct AppSessionBind {
 pub struct AppSessionSetTransient {
     pub session_id: Token,
     pub handle: Token,
+    /// One-use App Gateway authorization bound to the authenticated Host
+    /// process and this exact call. Never supplied by an App or Agent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gateway_handle: Option<Token>,
     /// One MCP session tool invocation, validated against the installed
     /// manifest by the App session authority.
     #[serde(default, skip_serializing_if = "Option::is_none")]

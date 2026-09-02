@@ -150,7 +150,12 @@ pub(crate) struct TransientCall<'a> {
     pub tool: &'a str,
     pub args: &'a BTreeMap<String, serde_json::Value>,
     pub caps: CapSet,
+    pub call_id: &'a str,
+    pub session_id: Option<&'a str>,
+    pub task_id: Option<&'a str>,
+    pub capability_generation: Option<&'a str>,
     pub deadline_unix_ms: Option<u64>,
+    pub gateway_handle: Option<&'a str>,
 }
 
 #[derive(Clone)]
@@ -722,10 +727,18 @@ fn set_app_session_transient_call(
         }
         AppSessionBackend::Clawd { handle, .. } => {
             let deadline_unix_ms = call.as_ref().and_then(|call| call.deadline_unix_ms);
+            let gateway_handle = call
+                .as_ref()
+                .and_then(|call| call.gateway_handle)
+                .map(ToOwned::to_owned);
             let call = match call {
                 Some(call) => serde_json::json!({
                     "tool": call.tool,
                     "args": call.args,
+                    "call_id": call.call_id,
+                    "session_id": call.session_id,
+                    "task_id": call.task_id,
+                    "capability_generation": call.capability_generation,
                     "deadline_unix_ms": call.deadline_unix_ms,
                 }),
                 None => serde_json::Value::Null,
@@ -738,6 +751,9 @@ fn set_app_session_transient_call(
             if let Some(parent_caps) = parent_caps {
                 params["parent_caps"] = serde_json::to_value(parent_caps)
                     .map_err(|error| format!("failed to serialize parent capabilities: {error}"))?;
+            }
+            if let Some(gateway_handle) = gateway_handle {
+                params["gateway_handle"] = serde_json::Value::String(gateway_handle);
             }
             clawd_request_with_approval_wait(
                 ClawdCommand::AppSessionSetTransient,

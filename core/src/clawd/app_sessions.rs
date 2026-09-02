@@ -177,6 +177,24 @@ struct McpCallAuthority {
     deadline_unix_ms: u64,
 }
 
+#[derive(Clone)]
+pub(crate) struct AgentGatewayAuthority {
+    pub owner_uid: u32,
+    pub owner_home: std::path::PathBuf,
+    pub task_id: String,
+    pub session_id: String,
+    pub worker_pid: u32,
+    pub worker_start_time_ticks: Option<u64>,
+    pub capability_generation: String,
+    pub caps: CapSet,
+}
+
+pub(crate) struct AuthorizedGatewayCall {
+    pub arguments: Value,
+    pub target_caps: CapSet,
+    pub lifecycle: crate::caps::manifest::McpLifecycle,
+}
+
 impl LaunchPlan {
     fn require(&mut self, cap: Cap, delegation: &Delegation) {
         if !delegation.ceiling.covers(&cap) && !self.missing.contains(&cap) {
@@ -188,6 +206,86 @@ impl LaunchPlan {
     fn inherit(&mut self, caps: impl IntoIterator<Item = Cap>) {
         self.caps.extend(caps);
     }
+}
+
+pub(crate) fn authorize_agent_gateway_call(
+    authority: &AgentGatewayAuthority,
+    app_id: &str,
+    tool_name: &str,
+    supplied_arguments: &Value,
+    context: &crate::agent::tools::app_gateway::McpCallContext,
+) -> Result<AuthorizedGatewayCall, BrokerError> {
+    context.validate().map_err(BrokerError::authorization)?;
+    if authority.owner_uid == 0
+        || crate::proc::read_start_time_ticks_pub(authority.worker_pid)
+            != authority.worker_start_time_ticks
+        || authority.capability_generation
+            != crate::agent::tools::exposure::capability_generation(&authority.caps)
+        || context.caller.kind
+            != crate::agent::tools::app_gateway::McpPrincipalKind::SystemAgent
+        || context.caller.owner_uid != authority.owner_uid
+        || context.caller.id != authority.session_id
+        || context.session_id.as_deref() != Some(authority.session_id.as_str())
+        || context.task_id.as_deref() != Some(authority.task_id.as_str())
+    {
+        return Err(BrokerError::authorization(
+            "MCP App call does not match the authenticated agent task",
+        ));
+    }
+    let app = installed_app(app_id).map_err(BrokerError::execution)?;
+    crate::agent::tools::app_gateway::authorize_manifest(&app.manifest, &context.caller)
+        .map_err(BrokerError::authorization)?;
+    let service = app
+        .manifest
+        .mcp
+        .as_ref()
+        .ok_or_else(|| BrokerError::execution(format!("App `{app_id}` is not MCP-first")))?;
+    let tool = service
+        .tools
+        .iter()
+        .find(|declared| declared.name == tool_name)
+        .ok_or_else(|| {
+            BrokerError::execution(format!("App `{app_id}` has no MCP tool `{tool_name}`"))
+        })?;
+    let supplied = supplied_arguments
+        .as_object()
+        .ok_or_else(|| BrokerError::execution("MCP App arguments must be an object"))?
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let delegation = Delegation {
+        uid: authority.owner_uid,
+        grant_session: authority.session_id.clone(),
+        requester: format!(
+            "agent-task:{} pid:{}",
+            authority.task_id, authority.worker_pid
+        ),
+        ceiling: authority.caps.clone(),
+        paths: crate::caps::args::PathContext {
+            home: authority.owner_home.clone(),
+            cwd: process_cwd(authority.worker_pid),
+        },
+    };
+    let effective = app
+        .manifest
+        .resolve_session_tool_call(tool_name, &supplied, &delegation.paths)
+        .map_err(|error| {
+            BrokerError::execution(format!("resolve `{tool_name}` capabilities: {error}"))
+        })?;
+    let invoke = crate::agent::tools::app_gateway::invoke_cap(app_id, tool_name)
+        .map_err(BrokerError::execution)?;
+    if !authority.caps.covers(&invoke) {
+        return Err(BrokerError::authorization(format!(
+            "agent task cannot invoke `{app_id}/{tool_name}`"
+        )));
+    }
+    let plan = derive_plan(&tool.needs, &effective.needs, &delegation)?;
+    let target_caps = authorize_plan(&delegation, plan)?;
+    Ok(AuthorizedGatewayCall {
+        arguments: Value::Object(effective.values.into_iter().collect()),
+        target_caps,
+        lifecycle: service.lifecycle,
+    })
 }
 
 /// Identity an approval grant is bound to when the launcher belongs to
@@ -616,9 +714,24 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     // Derive and authorize the requested capabilities *before* anything
     // is written. A launch that cannot settle its approvals leaves both
     // the registry and the authority untouched.
-    let (caps, mcp_call_authority) = match params.get("call") {
-        None | Some(Value::Null) => (None, None),
-        Some(call) => {
+    let gateway_handle = params.get("gateway_handle").and_then(Value::as_str);
+    let (caps, mcp_deadline) = match (params.get("call"), gateway_handle) {
+        (None | Some(Value::Null), None) => (None, None),
+        (None | Some(Value::Null), Some(_)) => {
+            return Err("App Gateway authorization requires an exact call".to_string())
+        }
+        (Some(call), Some(gateway_handle)) => {
+            if params.get("parent_caps").is_some() {
+                return Err(
+                    "App Gateway authorization cannot be combined with caller capabilities"
+                        .to_string(),
+                );
+            }
+            let (caps, deadline) =
+                consume_gateway_dispatch_grant(client, gateway_handle, &app_id, call)?;
+            (Some(caps), Some(deadline))
+        }
+        (Some(call), None) => {
             let launcher = authenticate_launcher(client, uid, home.clone()).await?;
             // A serialized MCP call is answered in the caller's own
             // process, so a denial is retried under the same
@@ -628,14 +741,17 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
                 session_tool_plan(&app_id, call, &delegation).map_err(|error| error.message)?;
             let authorized =
                 authorize_plan(&delegation, plan).map_err(|error| error.message)?;
+            let deadline = caller_authority
+                .as_ref()
+                .map(|authority| authority.deadline_unix_ms);
             (
-                Some(match caller_authority.as_ref() {
+                Some(match caller_authority {
                     Some(authority) => {
                         target_session_caps(authorized, true, &authority.invoke)
                     }
                     None => authorized,
                 }),
-                caller_authority,
+                deadline,
             )
         }
     };
@@ -660,14 +776,14 @@ pub async fn set_transient(params: Value, client: &ClientIdentity) -> Result<Val
     })
     .await?;
 
-    let grant = if let Some(authority) = mcp_call_authority.filter(|_| !effective.is_empty()) {
+    let grant = if let Some(deadline_unix_ms) = mcp_deadline.filter(|_| !effective.is_empty()) {
         issue_gateway_target_grant(
             &session_id,
             &app_id,
             uid,
             child_pid,
             &effective,
-            authority.deadline_unix_ms,
+            deadline_unix_ms,
         )
     } else {
         reissue_session_grant(
@@ -779,6 +895,83 @@ fn require_launch_grant(
         return Err("App launch handle does not cover this session".to_string());
     }
     Ok(view)
+}
+
+fn consume_gateway_dispatch_grant(
+    client: &ClientIdentity,
+    handle: &str,
+    app_id: &str,
+    call: &Value,
+) -> Result<(CapSet, u64), String> {
+    let uid = client.require_uid()?;
+    let pid = client
+        .pid
+        .ok_or_else(|| "clawd peer pid is unavailable".to_string())?;
+    let tool = call
+        .get("tool")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its tool".to_string())?;
+    let args = call
+        .get("args")
+        .ok_or_else(|| "App Gateway call omitted its arguments".to_string())?;
+    let call_id = call
+        .get("call_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its call id".to_string())?;
+    let session_id = call
+        .get("session_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its session id".to_string())?;
+    let task_id = call
+        .get("task_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its task id".to_string())?;
+    let deadline_unix_ms = call
+        .get("deadline_unix_ms")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| "App Gateway call omitted its deadline".to_string())?;
+    let capability_generation = call
+        .get("capability_generation")
+        .and_then(Value::as_str)
+        .ok_or_else(|| "App Gateway call omitted its capability generation".to_string())?;
+    let operation_id = crate::agent::tools::app_gateway::gateway_operation_id(
+        app_id,
+        tool,
+        args,
+        call_id,
+        session_id,
+        task_id,
+        deadline_unix_ms,
+        capability_generation,
+    )?;
+    let presentation = authority::Presentation {
+        uid,
+        pid,
+        start_time_ticks: client.start_time_ticks,
+        audience: authority::Audience::AppLaunch,
+        route: "app_session.set_transient",
+        session_id: None,
+    };
+    let view = authority::authority()
+        .resolve(handle, &presentation)
+        .map_err(|error| error.to_string())?;
+    if view.issuer != authority::Issuer::AppGateway
+        || view.subject.session_id.as_deref() != Some(session_id)
+        || view.subject.app_id.as_deref() != Some(app_id)
+        || view.subject.task_id.as_deref() != Some(task_id)
+        || view.subject.operation_id.as_deref() != Some(operation_id.as_str())
+        || view
+            .caps
+            .iter()
+            .any(|cap| cap.verb == crate::caps::Verb::AGENT_INVOKE)
+    {
+        return Err("App Gateway authorization does not cover this exact call".to_string());
+    }
+    let caps = view.caps.clone();
+    authority::authority()
+        .consume(view.id, &caps.iter().cloned().collect::<Vec<_>>(), &presentation)
+        .map_err(|error| error.to_string())?;
+    Ok((caps, deadline_unix_ms))
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1578,81 @@ fn issue_session_grant(
         .map_err(|error| error.to_string())?;
     authority::audit::record_issued(&view, None);
     Ok(())
+}
+
+pub(crate) fn issue_gateway_dispatch_grant(
+    binding: &crate::extension_host::protocol::ExtensionBinding,
+    app_id: &str,
+    tool: &str,
+    args: &Value,
+    context: &crate::agent::tools::app_gateway::McpCallContext,
+    capability_generation: &str,
+    caps: CapSet,
+) -> Result<String, String> {
+    context.validate_persistent_owner_binding(binding)?;
+    if capability_generation.len() != 16
+        || !capability_generation
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        || caps
+            .iter()
+            .any(|cap| cap.verb == crate::caps::Verb::AGENT_INVOKE)
+    {
+        return Err("App Gateway dispatch authority is invalid".to_string());
+    }
+    let deadline_unix_ms = context
+        .deadline_unix_ms
+        .ok_or_else(|| "MCP App call context omitted its deadline".to_string())?;
+    let operation_id = crate::agent::tools::app_gateway::gateway_operation_id(
+        app_id,
+        tool,
+        args,
+        &context.call_id,
+        context
+            .session_id
+            .as_deref()
+            .ok_or_else(|| "MCP App call context omitted its session".to_string())?,
+        context
+            .task_id
+            .as_deref()
+            .ok_or_else(|| "MCP App call context omitted its task".to_string())?,
+        deadline_unix_ms,
+        capability_generation,
+    )?;
+    let remaining = deadline_unix_ms
+        .checked_sub(crate::agentd::grant::now_ms())
+        .filter(|remaining| *remaining > 0)
+        .ok_or_else(|| "MCP App Gateway dispatch deadline has expired".to_string())?;
+    let principal = authority::Principal::of_process(binding.owner_uid, binding.host_pid)
+        .ok_or_else(|| {
+            format!(
+                "persistent extension host {} could not be identified",
+                binding.host_pid
+            )
+        })?;
+    let (handle, view) = authority::authority()
+        .issue(authority::Issuance {
+            issuer: authority::Issuer::AppGateway,
+            principal,
+            binding: authority::Binding::Process,
+            subject: authority::Subject::session(
+                context
+                    .session_id
+                    .as_deref()
+                    .ok_or_else(|| "MCP App call context omitted its session".to_string())?,
+            )
+            .with_app(Some(app_id.to_string()))
+            .with_task(context.task_id.clone())
+            .with_operation(Some(operation_id)),
+            audience: authority::AudienceSet::of(&[authority::Audience::AppLaunch]),
+            caps,
+            lifetime: TARGET_CALL_GRANT_TTL.min(Duration::from_millis(remaining)),
+            uses: authority::Uses::Budget(1),
+            index_session: false,
+        })
+        .map_err(|error| error.to_string())?;
+    authority::audit::record_issued(&view, None);
+    Ok(handle.into_wire())
 }
 
 /// Mint one root-authorized target grant for an MCP-first App call.

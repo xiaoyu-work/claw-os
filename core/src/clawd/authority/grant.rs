@@ -215,6 +215,7 @@ pub struct Subject {
     pub session_id: Option<String>,
     pub app_id: Option<String>,
     pub task_id: Option<String>,
+    pub operation_id: Option<String>,
 }
 
 impl Subject {
@@ -232,6 +233,11 @@ impl Subject {
 
     pub fn with_task(mut self, task_id: Option<String>) -> Self {
         self.task_id = task_id;
+        self
+    }
+
+    pub fn with_operation(mut self, operation_id: Option<String>) -> Self {
+        self.operation_id = operation_id;
         self
     }
 }

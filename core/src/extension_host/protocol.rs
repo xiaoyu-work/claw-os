@@ -5,7 +5,7 @@ use crate::agent::tools::mcp::integration::McpServerSpec;
 use crate::agent::tools::mcp::protocol::{CallToolResult, ToolDescriptor};
 use crate::clawd::wire::RequestId;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 pub const MAX_CONTROL_FRAME_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_CONTROL_CONNECTIONS: usize = 8;
 pub const MAX_REQUEST_TIMEOUT_MS: u64 = 180_000;
@@ -236,10 +236,19 @@ impl AppInvocationAudit {
 
     pub fn validate_live_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
         self.validate_shape()?;
-        if self.capability_generation != binding.capability_generation {
-            return Err("App invocation used a substituted capability generation".to_string());
+        match binding.mode {
+            ExtensionHostMode::Task => {
+                if self.capability_generation != binding.capability_generation {
+                    return Err(
+                        "App invocation used a substituted capability generation".to_string()
+                    );
+                }
+                self.context.validate_system_agent_binding(binding)
+            }
+            ExtensionHostMode::PersistentOwner => {
+                self.context.validate_persistent_owner_binding(binding)
+            }
         }
-        self.context.validate_system_agent_binding(binding)
     }
 
     pub fn validate_audit_binding(&self, binding: &ExtensionBinding) -> Result<(), String> {
@@ -510,6 +519,8 @@ pub enum HostAction {
         #[serde(default)]
         arguments: Value,
         audit: AppInvocationAudit,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        gateway_handle: Option<String>,
     },
     AppClose {
         app_id: String,

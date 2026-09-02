@@ -149,6 +149,28 @@ async fn install_with_audit(
     Ok(InstallGuard { lease_nonce })
 }
 
+pub(crate) async fn connect_persistent_controller(
+    binding: ExtensionBinding,
+) -> Result<Arc<ExtensionHostClient>, String> {
+    if binding.mode != super::protocol::ExtensionHostMode::PersistentOwner {
+        return Err("persistent controller received a task extension binding".to_string());
+    }
+    binding.validate_fresh_controller(
+        std::process::id(),
+        crate::proc::read_start_time_ticks_pub(std::process::id()),
+    )?;
+    let binding_digest = binding.digest()?;
+    let lease_digest = crate::crypto::sha256_hex(binding.lease_nonce.as_bytes());
+    let client = Arc::new(ExtensionHostClient {
+        binding,
+        binding_digest,
+        lease_digest,
+        audit: None,
+    });
+    client.wait_ready().await?;
+    Ok(client)
+}
+
 impl ExtensionHostClient {
     pub fn binding(&self) -> &ExtensionBinding {
         &self.binding
@@ -284,12 +306,60 @@ impl ExtensionHostClient {
         context: crate::agent::tools::app_gateway::McpCallContext,
         timeout: Duration,
     ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+        self.call_app_inner(
+            app_id,
+            tool,
+            arguments,
+            context,
+            self.binding.capability_generation.clone(),
+            None,
+            timeout,
+        )
+        .await
+    }
+
+    pub(crate) async fn call_persistent_app(
+        &self,
+        app_id: String,
+        tool: String,
+        arguments: Value,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+        capability_generation: String,
+        gateway_handle: String,
+        timeout: Duration,
+    ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
+        if self.binding.mode != super::protocol::ExtensionHostMode::PersistentOwner {
+            return Err("persistent App call requires a daemon-controlled host".to_string());
+        }
+        self.call_app_inner(
+            app_id,
+            tool,
+            arguments,
+            context,
+            capability_generation,
+            Some(gateway_handle),
+            timeout,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn call_app_inner(
+        &self,
+        app_id: String,
+        tool: String,
+        arguments: Value,
+        context: crate::agent::tools::app_gateway::McpCallContext,
+        capability_generation: String,
+        gateway_handle: Option<String>,
+        timeout: Duration,
+    ) -> Result<crate::agent::tools::mcp::protocol::CallToolResult, String> {
         let started = std::time::Instant::now();
         let digest = app_manifest_digest(&app_id);
         let audit = super::protocol::AppInvocationAudit::new(
             app_id.clone(),
             tool.clone(),
-            self.binding.capability_generation.clone(),
+            capability_generation,
             context,
         )?;
         let result = self
@@ -299,6 +369,7 @@ impl ExtensionHostClient {
                     tool,
                     arguments,
                     audit: audit.clone(),
+                    gateway_handle,
                 },
                 timeout.saturating_add(Duration::from_secs(5)),
                 true,

@@ -227,6 +227,88 @@ fn mcp_first_launch_plan_requires_exact_tool_scope() {
 }
 
 #[test]
+fn persistent_gateway_grant_is_exact_and_one_use() {
+    let pid = std::process::id();
+    let start_time = crate::proc::read_start_time_ticks_pub(pid);
+    let owner_uid = 4242;
+    let expires_at_ms = crate::agentd::grant::now_ms() + 60_000;
+    let binding = crate::extension_host::protocol::ExtensionBinding {
+        protocol: crate::extension_host::protocol::PROTOCOL_VERSION,
+        mode: crate::extension_host::protocol::ExtensionHostMode::PersistentOwner,
+        task_id: "owner-host-4242".to_string(),
+        session_id: None,
+        owner_uid,
+        controller_uid: 0,
+        extension_uid: 61_000,
+        owner_gid: 1000,
+        capability_generation: "0000000000000000".to_string(),
+        approved_paths: vec![crate::extension_host::protocol::ApprovedPath {
+            path: "/usr/lib/cos/apps".to_string(),
+            device: 1,
+            inode: 1,
+            owner_uid: 0,
+            mode: 0o755,
+        }],
+        worker_pid: pid,
+        worker_start_time_ticks: start_time,
+        host_pid: pid,
+        host_start_time_ticks: start_time,
+        lease_nonce: "0123456789abcdef0123456789abcdef".to_string(),
+        expires_at_ms,
+        control_socket: "/run/cos/test/control.sock".to_string(),
+        broker_socket: "/run/cos/test/broker.sock".to_string(),
+    };
+    let context = crate::agent::tools::app_gateway::McpCallContext::
+        for_authenticated_system_agent(
+            owner_uid,
+            "agent-session",
+            "agent-task",
+            Duration::from_secs(30),
+            expires_at_ms,
+        )
+        .unwrap();
+    let capability_generation = "0123456789abcdef";
+    let arguments = serde_json::json!({"query": "Acme"});
+    let target = Cap::new(Verb::DATA_DB_READ, Scope::name("email"));
+    let handle = issue_gateway_dispatch_grant(
+        &binding,
+        "email",
+        "email.search",
+        &arguments,
+        &context,
+        capability_generation,
+        CapSet::from_iter([target.clone()]),
+    )
+    .unwrap();
+    let client = crate::clawd::client_identity::ClientIdentity::from_verified_delegation(
+        pid,
+        owner_uid,
+        unsafe { libc::geteuid() as u32 },
+        unsafe { libc::getegid() as u32 },
+        start_time.unwrap(),
+    );
+    let call = serde_json::json!({
+        "tool": "email.search",
+        "args": arguments,
+        "call_id": context.call_id,
+        "session_id": context.session_id,
+        "task_id": context.task_id,
+        "deadline_unix_ms": context.deadline_unix_ms,
+        "capability_generation": capability_generation,
+    });
+    let mut substituted = call.clone();
+    substituted["tool"] = serde_json::json!("email.send");
+    assert!(
+        consume_gateway_dispatch_grant(&client, &handle, "email", &substituted).is_err(),
+        "a substituted target must not spend the exact grant"
+    );
+    let (caps, _) =
+        consume_gateway_dispatch_grant(&client, &handle, "email", &call).unwrap();
+    assert!(caps.covers(&target));
+    assert!(consume_gateway_dispatch_grant(&client, &handle, "email", &call).is_err());
+}
+
+#[test]
 fn mcp_first_transient_plan_rechecks_and_removes_caller_invoke_cap() {
     let _lock = crate::caps::test_env_lock::env_lock();
     let apps = tempfile::tempdir().unwrap();

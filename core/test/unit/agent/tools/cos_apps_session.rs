@@ -377,12 +377,29 @@ async fn mcp_first_python_runtime_receives_bound_gateway_context() {
     );
     assert!(result.content.contains("\"call_id\":\"call-"));
 
+    let expired_context = crate::agent::tools::app_gateway::McpCallContext {
+        wire_version: crate::agent::tools::app_gateway::CALL_CONTEXT_WIRE_VERSION,
+        call_id: "call-expired".to_string(),
+        trace_id: "call-expired".to_string(),
+        parent_call_id: None,
+        depth: 0,
+        deadline_unix_ms: Some(1),
+        session_id: Some("session-expired".to_string()),
+        task_id: None,
+        caller: crate::agent::tools::app_gateway::McpPrincipal::system_agent(
+            1000,
+            "session-expired",
+        ),
+    };
     let expired = begin_active_session_call(
         "echo",
         "echo.context",
         &BTreeMap::from([("value".to_string(), serde_json::json!("late"))]),
         &[],
+        &expired_context,
+        None,
         1,
+        None,
     )
     .await;
     assert!(matches!(expired, Err(error) if error.contains("deadline")));
